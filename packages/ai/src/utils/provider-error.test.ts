@@ -484,11 +484,10 @@ describe("projectProviderError", () => {
   it.each([
     "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
     "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
+    "Cookie: sid=abc123",
+    "Set-Cookie: auth=x:y",
   ])("redacts arbitrary credential names inside cookie headers", (header) => {
-    const projected = projectProviderError(header).errorMessage;
-
-    expect(projected).not.toMatch(/0123456789abcdef|abcdefghijklmnop/u);
-    expect(projected).toContain("=<redacted>");
+    expect(projectProviderError(header).errorMessage).toMatch(/^(?:Set-)?Cookie: <redacted>$/u);
   });
 
   it.each([
@@ -511,6 +510,8 @@ describe("projectProviderError", () => {
 
   it.each([
     ["credential", false],
+    ["cookie", false],
+    ["setCookie", false],
     ["privateKey", false],
     ["signingKey", false],
     ["secretAccessKey", false],

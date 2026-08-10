@@ -10,7 +10,7 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "tokens",
 ]);
 const CREDENTIAL_FIELD_SUFFIX_RE =
-  /(?:apikey|credential|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
+  /(?:apikey|cookie|credential|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
 const MEDIA_PAYLOAD_SUFFIXES =
   "base64|blob|buffer|bytes|data|delta|frames?|output|result|(?:file|media|source)?(?:uri|url)";
 const MEDIA_FIELD_NAME_RE = new RegExp(
@@ -26,7 +26,6 @@ const QUOTED_CREDENTIAL_HEADER_RE =
   /(["'])((?:[A-Za-z][A-Za-z0-9_.-]*[_.-])?(?:api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token))\1\s*:\s*([^,}\r\n]+)/giu;
 const CREDENTIAL_HEADER_RE =
   /\b((?:[A-Za-z][A-Za-z0-9_.-]*[_.-])?(?:api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token))\s*:\s*([^\r\n]+)/giu;
-const COOKIE_VALUE_RE = /\b([A-Za-z][A-Za-z0-9_.-]{0,64})=([A-Za-z0-9+/._~%=-]{16,})/gu;
 const LOOSE_QUOTED_CREDENTIAL_PAIR_RE =
   /\b((?!(?:api|endpoint|method|model|provider|status|type)=)[A-Za-z][A-Za-z0-9_.-]{0,64})=(["'])([A-Za-z0-9+/._~%=-]{16,})\2/giu;
 const LOOSE_CREDENTIAL_PAIR_RE =
@@ -64,11 +63,7 @@ export function redactCredentialText(value: string): string {
   return value
     .replace(AUTHORIZATION_VALUE_RE, "$1 <redacted>")
     .replace(JWT_VALUE_RE, "<redacted-jwt>")
-    .replace(
-      COOKIE_HEADER_RE,
-      (_match, prefix: string, header: string) =>
-        `${prefix}${header.replace(COOKIE_VALUE_RE, "$1=<redacted>")}`,
-    )
+    .replace(COOKIE_HEADER_RE, "$1<redacted>")
     .replace(QUOTED_CREDENTIAL_HEADER_RE, "$1$2$1: <redacted>")
     .replace(CREDENTIAL_HEADER_RE, "$1: <redacted>")
     .replace(LOOSE_QUOTED_CREDENTIAL_PAIR_RE, "$1=$2<redacted>$2")

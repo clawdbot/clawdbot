@@ -121,6 +121,8 @@ describe("sanitizeDiagnosticPayload", () => {
 
   it.each([
     ["credential", false],
+    ["cookie", false],
+    ["setCookie", false],
     ["privateKey", false],
     ["signingKey", false],
     ["secretAccessKey", false],
@@ -137,6 +139,8 @@ describe("sanitizeDiagnosticPayload", () => {
   it.each([
     "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
     "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
+    "Cookie: sid=abc123",
+    "Set-Cookie: auth=x:y",
     "https://host.test/path?api_key=abcdefghijklmnop&mode=test",
     'token="abcdefghijklmnop"',
   ])("redacts credential pairs across text contexts", (header) => {
