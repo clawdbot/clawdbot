@@ -405,6 +405,7 @@ enum class GatewayMethod(
   CronRun("cron.run"),
   CronRuns("cron.runs"),
   GatewayIdentityGet("gateway.identity.get"),
+  GatewayRestartPreflight("gateway.restart.preflight"),
   GatewayRestartRequest("gateway.restart.request"),
   SystemPresence("system-presence"),
   SystemEvent("system-event"),

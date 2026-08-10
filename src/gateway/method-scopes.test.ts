@@ -87,6 +87,7 @@ describe("method scope resolution", () => {
     ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],
     ["skills.curator.pin", ["operator.admin"]],

@@ -148,6 +148,25 @@ describe("listGatewayMethods", () => {
     expect(coreGatewayHandlers["update.hold"]).toBeTypeOf("function");
   });
 
+  it("keeps deprecated restart preflight compatibility read-only and advertised", () => {
+    const methods = listGatewayMethods();
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "gateway.restart.preflight",
+    );
+
+    expect(methods).toContain("gateway.restart.preflight");
+    expect(methods.indexOf("gateway.restart.preflight")).toBe(
+      methods.indexOf("gateway.restart.request") - 1,
+    );
+    expect(coreGatewayHandlers["gateway.restart.preflight"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "gateway.restart.preflight",
+      scope: "operator.read",
+      since: "<=2026.7",
+    });
+    expect(descriptor?.controlPlaneWrite).toBeUndefined();
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
