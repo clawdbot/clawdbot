@@ -39,12 +39,6 @@ import {
 } from "../../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
-  CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-  createCliJsonlStreamingParser,
-  extractCliErrorMessage,
-  frameBoundedCliJsonlChunk,
-  normalizeClaudeCliStreamJsonRecord,
-  parseCliOutput,
   type CliOutput,
   type CliUsage,
   type CliStreamJsonOutputLimits,
@@ -53,8 +47,15 @@ import {
   type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
+} from "../cli-output-contracts.js";
+import {
+  CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+  createCliJsonlStreamingParser,
+  frameBoundedCliJsonlChunk,
+  normalizeClaudeCliStreamJsonRecord,
   resolveCliStreamJsonOutputLimits,
-} from "../cli-output.js";
+} from "../cli-output-stream.js";
+import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
   type CliTimeoutContext,

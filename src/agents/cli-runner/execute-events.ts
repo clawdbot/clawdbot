@@ -6,7 +6,7 @@ import type {
   CliThinkingDelta,
   CliThinkingProgress,
   CliToolUseStartDelta,
-} from "../cli-output.js";
+} from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-subscribe.tools.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
