@@ -1232,7 +1232,7 @@ describe("scripts/changed-lanes", () => {
 
   it("delegates generated docs baselines with heavy owner checks", () => {
     for (const changedPath of [
-      "docs/.generated/plugin-sdk-api-baseline.sha256",
+      "docs/.generated/plugin-sdk-api-baseline.jsonl",
       "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
     ]) {
       const result = detectChangedLanes([changedPath]);
@@ -1834,7 +1834,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/generate-plugin-sdk-api-baseline.ts",
         "scripts/lib/plugin-sdk-doc-metadata.ts",
         "scripts/lib/plugin-sdk-entries.mts",
-        "docs/.generated/plugin-sdk-api-baseline.sha256",
+        "docs/.generated/plugin-sdk-api-baseline.jsonl",
       ]),
     ).toBe(true);
     expect(shouldRunPluginSdkApiBaselineCheck(["docs/help/troubleshooting.md"])).toBe(false);
