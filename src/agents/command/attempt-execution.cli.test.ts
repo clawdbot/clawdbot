@@ -2130,6 +2130,11 @@ describe("CLI attempt execution", () => {
       sessionAgentId: "main",
       sessionCwd: tmpDir,
       config: {},
+      userMessage: {
+        role: "user",
+        content: "duplicate custom ask",
+        timestamp: Date.now(),
+      },
       skipUserTurn: true,
     });
 
