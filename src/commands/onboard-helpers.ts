@@ -13,14 +13,6 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  prepareLegacyWorkspaceStateReset,
-  removeLegacyWorkspaceStateForReset,
-} from "../agents/workspace-legacy-state.js";
-import {
-  deleteWorkspaceState,
-  prepareWorkspaceStateDeletion,
-} from "../agents/workspace-state-store.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -50,7 +42,7 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentSessionDirs } from "./cleanup-utils.js";
+import { listAgentSessionDirs, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
@@ -359,41 +351,12 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     failures.push(path.join(stateDir, "agents"));
   }
   if (scope === "full") {
-    let legacyPlan: ReturnType<typeof prepareLegacyWorkspaceStateReset> | undefined;
-    let statePlan: ReturnType<typeof prepareWorkspaceStateDeletion> | undefined;
-    try {
-      legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
-    } catch {
-      failures.push(`${workspaceDir} (retired workspace state)`);
-    }
-    try {
-      statePlan = prepareWorkspaceStateDeletion(workspaceDir);
-    } catch {
-      failures.push(`${workspaceDir} (workspace state)`);
-    }
-    const workspaceRemoved = await moveToTrash(workspaceDir, runtime);
-    if (workspaceRemoved) {
-      if (legacyPlan) {
-        try {
-          const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
-          for (const warning of legacyCleanup.warnings) {
-            runtime.log(warning);
-            failures.push(warning);
-          }
-        } catch {
-          failures.push(`${workspaceDir} (retired workspace state)`);
-        }
-      }
-      if (statePlan) {
-        try {
-          deleteWorkspaceState(statePlan);
-        } catch {
-          failures.push(`${workspaceDir} (workspace state)`);
-        }
-      }
-    } else {
-      failures.push(workspaceDir);
-    }
+    failures.push(
+      ...(await removeWorkspaceDirs([workspaceDir], runtime, {
+        removeStateRows: true,
+        removeWorkspace: (workspace) => moveToTrash(workspace, runtime),
+      })),
+    );
   }
   throwIfResetFailed(failures);
 }

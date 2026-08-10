@@ -13,7 +13,7 @@ import {
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { ConfigMutationConflictError } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -418,8 +418,53 @@ vi.mock("../config/config.js", async (importActual) => {
     ConfigMutationConflictError: actual.ConfigMutationConflictError,
     createConfigIO,
     readConfigFileSnapshot,
+    resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
     resolveGatewayPort,
     replaceConfigFile,
+    transformConfigFileWithRetry: async (params: {
+      base?: "runtime" | "source";
+      maxAttempts?: number;
+      writeOptions?: Record<string, unknown>;
+      transform: (
+        config: OpenClawConfig,
+        context: {
+          snapshot: Record<string, unknown>;
+          previousHash: string | null;
+          attempt: number;
+        },
+      ) => Promise<{ nextConfig: OpenClawConfig }> | { nextConfig: OpenClawConfig };
+      commit: (params: Record<string, unknown>) => Promise<{ config: OpenClawConfig }>;
+    }) => {
+      const maxAttempts = params.maxAttempts ?? 5;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const snapshot = (await readConfigFileSnapshot()) as ConfigFileSnapshot;
+        const previousHash = snapshot.hash ?? null;
+        const config =
+          params.base === "runtime"
+            ? (snapshot.runtimeConfig ?? snapshot.config)
+            : (snapshot.sourceConfig ?? snapshot.config);
+        try {
+          const transformed = await params.transform(config, { snapshot, previousHash, attempt });
+          const committed = await params.commit({
+            nextConfig: transformed.nextConfig,
+            snapshot,
+            ...(previousHash ? { baseHash: previousHash } : {}),
+            writeOptions: params.writeOptions,
+            afterWrite: { mode: "auto" },
+          });
+          return { nextConfig: committed.config };
+        } catch (error) {
+          if (
+            !(error instanceof actual.ConfigMutationConflictError) ||
+            !error.retryable ||
+            attempt === maxAttempts - 1
+          ) {
+            throw error;
+          }
+        }
+      }
+      throw new Error("unreachable");
+    },
   };
 });
 vi.mock("../commands/onboard-agent.js", async () => {
@@ -1644,8 +1689,8 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    // Migration write + conflicted persist + retry + post-channels write + final write.
-    expect(replaceConfigFile).toHaveBeenCalledTimes(5);
+    // Initial commit (including migration) + conflicted persist + retry + final write.
+    expect(replaceConfigFile).toHaveBeenCalledTimes(4);
     const migrationParams = requireRecord(
       getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
       "migration config replacement params",
@@ -1658,13 +1703,13 @@ describe("runSetupWizard", () => {
     });
     const migrationWriteOptions = expectRecordFields(
       migrationParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "migration config replacement write options",
     );
     expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
 
     const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, 4, 0, "config replacement"),
+      getMockCallArg(replaceConfigFile, 3, 0, "config replacement"),
       "config replacement params",
     );
     expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
@@ -1706,7 +1751,7 @@ describe("runSetupWizard", () => {
     applyAuthChoice.mockClear();
     promptDefaultModel.mockClear();
     replaceConfigFile.mockClear();
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
       raw: "{}",

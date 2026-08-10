@@ -55,7 +55,6 @@ import {
   runExclusiveSystemAgentSetupActivation,
   SETUP_ADMISSION_BUSY_MESSAGE,
   SetupAdmissionBusyError,
-  tryAcquireSetupAdmission,
 } from "./setup-admission.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
@@ -66,8 +65,6 @@ import {
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import type { RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
 
 /**
  * `openclaw.chat` lets clients (macOS app onboarding, future UIs) run the
@@ -334,17 +331,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respondRetryableSetupUnavailable(respond, "wizard already running");
       return;
     }
-    const releaseSetupAdmission = tryAcquireSetupAdmission();
-    if (!releaseSetupAdmission) {
-      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
-      return;
-    }
     const sessionId = params.sessionId;
     const session = createAdmittedSetupSession(
-      releaseSetupAdmission,
       () =>
         new WizardSession(
-          async (prompter, signal) => {
+          async (prompter, signal, runnerSession) => {
             // Match setup.activate's lock order: setup admission before the Gateway
             // queue. Both stay held for the session, so a relaunched client cannot
             // start competing setup work while this server-owned flow can commit.
@@ -365,7 +356,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 prompter,
                 signal,
                 isCancelled: () => signal.aborted,
-                onCommitStarted: () => session.lockCancellation(),
+                onCommitStarted: () => runnerSession.lockCancellation(),
               });
             });
             if (!result.ok) {
@@ -375,6 +366,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
         ),
     );
+    if (!session) {
+      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
+      return;
+    }
     context.wizardSessions.set(sessionId, session);
     // Return ownership immediately so the client can cancel while provider auth waits.
     respond(true, { sessionId, done: false, status: "running" }, undefined);
@@ -395,17 +390,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respondRetryableSetupUnavailable(respond, "wizard already running");
       return;
     }
-    const releaseSetupAdmission = tryAcquireSetupAdmission();
-    if (!releaseSetupAdmission) {
-      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
-      return;
-    }
     const sessionId = params.sessionId;
     const session = createAdmittedSetupSession(
-      releaseSetupAdmission,
       () =>
         new WizardSession(
-          async (prompter, signal) => {
+          async (prompter, signal, runnerSession) => {
             await runSystemAgentGatewayTask(async () => {
               const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
                 import("../../plugins/provider-auth-choice.js"),
@@ -440,28 +429,31 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 isRemote: true,
                 beforePersistentEffect: () => {
                   signal.throwIfAborted();
-                  session.lockCancellation();
+                  runnerSession.lockCancellation();
                 },
               });
               if (!applied || applied.retrySelection) {
                 throw new Error(`Provider prepare method is unavailable: ${params.authChoice}`);
               }
               signal.throwIfAborted();
-              session.lockCancellation();
+              runnerSession.lockCancellation();
               await setupShared.writeWizardConfigFile(applied.config, {
                 allowConfigSizeDrop: false,
                 baseSnapshot: snapshot,
                 ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
-                migrationBaseConfig: baseConfig,
               });
               if (applied.agentModelOverride) {
-                session.setPreparedModelRef(applied.agentModelOverride);
+                runnerSession.setPreparedModelRef(applied.agentModelOverride);
               }
             });
           },
           { timeoutMs: PROVIDER_PREPARE_SESSION_TIMEOUT_MS },
         ),
     );
+    if (!session) {
+      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
+      return;
+    }
     context.wizardSessions.set(sessionId, session);
     respond(true, { sessionId, done: false, status: "running" }, undefined);
   },

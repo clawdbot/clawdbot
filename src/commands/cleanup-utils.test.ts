@@ -302,6 +302,22 @@ describe("cleanup path removals", () => {
     expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
+  it("continues after an injected workspace remover rejects", async () => {
+    const runtime = createRuntimeMock();
+    const removeWorkspace = vi
+      .fn<(workspace: string) => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error("trash unavailable"))
+      .mockResolvedValueOnce(true);
+
+    const failures = await removeWorkspaceDirs(["/tmp/first", "/tmp/second"], runtime, {
+      removeWorkspace,
+    });
+
+    expect(removeWorkspace).toHaveBeenCalledTimes(2);
+    expect(failures).toEqual(["/tmp/first"]);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("trash unavailable"));
+  });
+
   it("refuses to remove the current working directory", async () => {
     const runtime = createRuntimeMock();
     const result = await removePath(process.cwd(), runtime, { dryRun: true });

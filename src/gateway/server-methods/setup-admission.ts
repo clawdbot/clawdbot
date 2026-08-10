@@ -6,26 +6,24 @@ let setupAdmissionInProgress = false;
 export class SetupAdmissionBusyError extends Error {}
 
 /** Acquire the process-wide setup mutation lease without queueing. */
-export function tryAcquireSetupAdmission(): (() => void) | undefined {
+function tryAcquireSetupAdmission(): (() => void) | undefined {
   if (setupAdmissionInProgress) {
     return undefined;
   }
   setupAdmissionInProgress = true;
-  let released = false;
   return () => {
-    if (released) {
-      return;
-    }
-    released = true;
     setupAdmissionInProgress = false;
   };
 }
 
-/** Build a setup session and hold its acquired lease until the runner settles. */
+/** Admit a setup session and hold its lease until the runner settles. */
 export function createAdmittedSetupSession<T extends { whenSettled(): Promise<unknown> }>(
-  releaseAdmission: () => void,
   createSession: () => T,
-): T {
+): T | undefined {
+  const releaseAdmission = tryAcquireSetupAdmission();
+  if (!releaseAdmission) {
+    return undefined;
+  }
   try {
     const session = createSession();
     void session.whenSettled().then(releaseAdmission, releaseAdmission);

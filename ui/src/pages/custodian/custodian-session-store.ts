@@ -67,7 +67,7 @@ export class CustodianSessionStore {
   private sessionVariant: CustodianSessionVariant | null = null;
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
-  private navigationGeneration = 0;
+  private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
   private sessionClient: GatewayBrowserClient | null = null;
@@ -325,7 +325,13 @@ export class CustodianSessionStore {
   }
 
   private revokeNavigationAuthority(): void {
-    this.navigationGeneration += 1;
+    this.requestAbort?.abort();
+    this.requestAbort = null;
+    this.requestEpoch += 1;
+    this.sending = false;
+    this.questionReplyUncertain = false;
+    this.retryParams = null;
+    this.error = null;
   }
 
   openModelSetup(): void {
@@ -598,8 +604,10 @@ export class CustodianSessionStore {
     ) {
       return "rejected";
     }
+    this.requestAbort?.abort();
+    const requestAbort = new AbortController();
+    this.requestAbort = requestAbort;
     const epoch = ++this.requestEpoch;
-    const navigationGeneration = this.navigationGeneration;
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
@@ -612,6 +620,7 @@ export class CustodianSessionStore {
       const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
         timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
         onSent: () => (delivery = "sent"),
+        signal: requestAbort.signal,
       });
       delivery = "received";
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
@@ -631,17 +640,10 @@ export class CustodianSessionStore {
         this.appendAssistant(silentReply ? "" : result.reply, question, step);
       }
       if (result.action === "open-agent") {
-        if (navigationGeneration !== this.navigationGeneration) {
-          return "sent";
-        }
         let sessionKey = context.gateway.snapshot.sessionKey?.trim();
         if (result.agentId) {
           const roster = await context.agents.refreshList();
-          if (
-            epoch !== this.requestEpoch ||
-            client !== this.activeClient ||
-            navigationGeneration !== this.navigationGeneration
-          ) {
+          if (epoch !== this.requestEpoch || client !== this.activeClient) {
             return "sent";
           }
           sessionKey = buildAgentMainSessionKey({
@@ -663,7 +665,7 @@ export class CustodianSessionStore {
         } else {
           this.exitSetup();
         }
-      } else if (result.action === "exit" && navigationGeneration === this.navigationGeneration) {
+      } else if (result.action === "exit") {
         this.exitSetup();
       }
       return "sent";
@@ -690,6 +692,9 @@ export class CustodianSessionStore {
       }
       return eventNudgeState.classifyCustodianSendFailure(error, delivery);
     } finally {
+      if (this.requestAbort === requestAbort) {
+        this.requestAbort = null;
+      }
       if (epoch === this.requestEpoch) {
         this.sending = false;
       }

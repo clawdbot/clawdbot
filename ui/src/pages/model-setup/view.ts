@@ -547,6 +547,10 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
 }
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
+  const onContinue =
+    props.firstRun && result.setupComplete && props.activation.phase !== "success"
+      ? props.onOpenChat
+      : undefined;
   const current = result.configuredModel
     ? renderConfiguredModel({
         result,
@@ -554,41 +558,21 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
         canVerify: props.canVerify,
         actionsDisabled: props.actionsDisabled,
         onVerify: props.onVerify,
+        onContinue,
       })
     : nothing;
-  const continueSetup =
-    props.firstRun &&
-    result.setupComplete &&
-    result.configuredModel &&
-    props.activation.phase !== "success"
-      ? html`
-          <section class="settings-section" aria-labelledby="model-setup-continue-title">
-            <div class="settings-section__header">
-              <div>
-                <h2 id="model-setup-continue-title">${t("modelSetup.success.title")}</h2>
-                <p>${t("modelSetup.success.body", { modelRef: result.configuredModel })}</p>
-              </div>
-              <div class="settings-section__actions">
-                <button type="button" class="btn primary" @click=${props.onOpenChat}>
-                  ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
-                </button>
-              </div>
-            </div>
-          </section>
-        `
-      : nothing;
   if (!props.canAdmin) {
-    return html`${current} ${continueSetup}
+    return html`${current}
       <div class="callout warning" role="note">${t("modelSetup.access.adminRequired")}</div>`;
   }
   if (props.gatewayTooOld) {
-    return html`${current} ${continueSetup}
+    return html`${current}
       <div class="callout warning" role="note">${t("modelSetup.access.gatewayTooOld")}</div>`;
   }
   return html`
-    ${current} ${continueSetup} ${renderEmptyState(props, result)}
-    ${renderCandidateRows(props, result)} ${renderUnavailable(props, result)}
-    ${renderPrepare(props, result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
+    ${renderUnavailable(props, result)} ${renderPrepare(props, result)}
+    ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }
 

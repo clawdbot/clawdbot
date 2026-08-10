@@ -32,7 +32,6 @@ import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.mod
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   hasQuickstartGatewayOverrides,
-  mergeWizardConfigOntoLatest,
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
@@ -94,44 +93,16 @@ async function runSetupWizardOnce(
   // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
-  let shouldMigratePendingPluginInstalls = true;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
     optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) => {
-    const maxAttempts = 3;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const latest = await readSetupConfigFileSnapshot();
-      if (!latest.valid) {
-        throw new Error("Setup target config became invalid. Run `openclaw doctor`.");
-      }
-      const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
-      const mergedConfig = mergeWizardConfigOntoLatest(latestConfig, setupConfigMergeBase, config);
-      try {
-        const committed = await writeWizardConfigFile(mergedConfig, {
-          ...optsLocal,
-          baseSnapshot: latest,
-          ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
-          // The migration payload must come from the same fresh snapshot as its
-          // CAS precondition, or an unrelated concurrent edit can be overwritten.
-          migrationBaseConfig: shouldMigratePendingPluginInstalls ? latestConfig : undefined,
-          onPendingPluginInstallMigration: () => {
-            shouldMigratePendingPluginInstalls = false;
-          },
-        });
-        setupConfigMergeBase = structuredClone(committed);
-        return committed;
-      } catch (error) {
-        if (
-          !(error instanceof ConfigMutationConflictError) ||
-          !error.retryable ||
-          attempt === maxAttempts - 1
-        ) {
-          throw error;
-        }
-      }
-    }
-    throw new Error("Setup config write retry limit exhausted.");
+    const committed = await writeWizardConfigFile(config, {
+      ...optsLocal,
+      mergeBase: setupConfigMergeBase,
+    });
+    setupConfigMergeBase = structuredClone(committed);
+    return committed;
   };
 
   if (snapshot.exists && !snapshot.valid) {
@@ -305,7 +276,6 @@ async function runSetupWizardOnce(
     currentSetupSnapshot = migratedSnapshot;
     baseConfig = migratedSnapshot.runtimeConfig ?? migratedSnapshot.config;
     setupConfigMergeBase = structuredClone(baseConfig);
-    shouldMigratePendingPluginInstalls = true;
     const importedModelRef = resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model);
     importedInferenceVerified =
       migrationOutcome.kind === "verified-inference" &&

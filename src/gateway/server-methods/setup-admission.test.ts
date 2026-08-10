@@ -3,7 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createAdmittedSetupSession,
   runExclusiveSystemAgentSetupActivation,
-  tryAcquireSetupAdmission,
 } from "./setup-admission.js";
 
 describe("setup admission", () => {
@@ -41,32 +40,30 @@ describe("setup admission", () => {
   });
 
   it("holds an admitted session lease until its runner settles", async () => {
-    const release = tryAcquireSetupAdmission();
-    expect(release).toBeDefined();
     const settled = createDeferred();
-    createAdmittedSetupSession(release as () => void, () => ({
+    createAdmittedSetupSession(() => ({
       whenSettled: () => settled.promise,
     }));
 
-    expect(tryAcquireSetupAdmission()).toBeUndefined();
+    expect(
+      createAdmittedSetupSession(() => ({ whenSettled: () => Promise.resolve() })),
+    ).toBeUndefined();
     settled.resolve();
     await settled.promise;
     await Promise.resolve();
-    const nextRelease = tryAcquireSetupAdmission();
-    expect(nextRelease).toBeTypeOf("function");
-    nextRelease?.();
+    const next = createAdmittedSetupSession(() => ({ whenSettled: () => Promise.resolve() }));
+    expect(next).toBeDefined();
+    await next?.whenSettled();
   });
 
   it("releases an admitted session lease when construction fails", () => {
-    const release = tryAcquireSetupAdmission();
-    expect(release).toBeDefined();
     expect(() =>
-      createAdmittedSetupSession(release as () => void, () => {
+      createAdmittedSetupSession(() => {
         throw new Error("construction failed");
       }),
     ).toThrow("construction failed");
-    const nextRelease = tryAcquireSetupAdmission();
-    expect(nextRelease).toBeTypeOf("function");
-    nextRelease?.();
+    expect(
+      createAdmittedSetupSession(() => ({ whenSettled: () => Promise.resolve() })),
+    ).toBeDefined();
   });
 });

@@ -82,12 +82,11 @@ describe("renderModelSetup first-run continuation", () => {
     const onOpenChat = vi.fn();
     const container = mount({ onOpenChat });
 
-    expect(container.textContent).toContain("Connection verified");
-    container
-      .querySelector<HTMLButtonElement>(
-        'section[aria-labelledby="model-setup-continue-title"] .primary',
-      )
-      ?.click();
+    const continueButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Continue setup",
+    );
+    expect(continueButton).toBeDefined();
+    continueButton?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
 
     const freshSuccess = mount({
@@ -98,5 +97,18 @@ describe("renderModelSetup first-run continuation", () => {
         (button) => button.textContent?.trim() === "Continue setup",
       ),
     ).toHaveLength(1);
+  });
+
+  it.each([{ canAdmin: false }, { gatewayTooOld: true }])(
+    "keeps continuation available with restricted setup controls",
+    (access) => {
+      const container = mount(access);
+      expect(container.textContent).toContain("Continue setup");
+    },
+  );
+
+  it("omits continuation outside first run", () => {
+    const container = mount({ firstRun: false });
+    expect(container.textContent).not.toContain("Continue setup");
   });
 });

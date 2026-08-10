@@ -21,11 +21,7 @@ import {
   type WizardStep,
 } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  createAdmittedSetupSession,
-  SETUP_ADMISSION_BUSY_MESSAGE,
-  tryAcquireSetupAdmission,
-} from "./setup-admission.js";
+import { createAdmittedSetupSession, SETUP_ADMISSION_BUSY_MESSAGE } from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -125,15 +121,6 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
-    const releaseSetupAdmission = flow === "setup" ? tryAcquireSetupAdmission() : undefined;
-    if (flow === "setup" && !releaseSetupAdmission) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, { retryable: true }),
-      );
-      return;
-    }
     const createSession = () =>
       flow === "channels"
         ? new WizardSession((prompter, _signal, wizardSession) =>
@@ -166,9 +153,15 @@ export const wizardHandlers: GatewayRequestHandlers = {
           );
     // The setup lease follows the runner, not the session map: cancellation can
     // purge ownership before a cancellation-locked persistent effect has settled.
-    const session = releaseSetupAdmission
-      ? createAdmittedSetupSession(releaseSetupAdmission, createSession)
-      : createSession();
+    const session = flow === "setup" ? createAdmittedSetupSession(createSession) : createSession();
+    if (!session) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, { retryable: true }),
+      );
+      return;
+    }
     retainGatewayWorkUntilSettled(session);
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
