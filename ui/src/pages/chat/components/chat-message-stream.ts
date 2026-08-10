@@ -5,6 +5,7 @@ import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
+import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -44,6 +45,7 @@ type StreamMessageOptions = Pick<
 export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
+  showAssistantAvatar?: boolean;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
   startupPhase?: ChatRunStartupPhase;
@@ -113,19 +115,28 @@ export function renderStreamGroupParts(
 }
 
 // One assistant group per contiguous run of streaming items: a reply that
-// arrives as several stream segments renders with one shared footer instead
-// of flashing a separate bubble per segment (#63956).
+// arrives as several stream segments renders under a single avatar/footer
+// instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const name = opts.assistant?.name ?? "Assistant";
+  const { assistant, basePath, assistantAttachmentAuthToken } = opts;
+  const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  // While the agent works with nothing streamed yet the run is pure claw: no
+  // avatar next to it - the punching pincer is the whole signal. The avatar
+  // arrives with the first stream part unless the presentation opts out.
   const workingOnly = parts.every((part) => part.kind !== "stream");
+  const avatar =
+    workingOnly || opts.showAssistantAvatar === false
+      ? nothing
+      : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
+      ${avatar}
       <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
       ${footerStartedAt !== null
         ? html`

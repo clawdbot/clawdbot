@@ -724,7 +724,9 @@ describe("grouped chat rendering", () => {
 
   it("renders assistant messages without an avatar and keeps actions in the footer row", () => {
     const container = document.createElement("div");
-    renderAssistantMessage(container, createAssistantMessage("Short reply", { timestamp: 1000 }));
+    renderAssistantMessage(container, createAssistantMessage("Short reply", { timestamp: 1000 }), {
+      showAssistantAvatar: false,
+    });
 
     const assistantGroup = expectElement(container, ".chat-group.assistant", HTMLElement);
     expect(assistantGroup.classList.contains("chat-group--with-footer")).toBe(true);
@@ -1677,10 +1679,19 @@ describe("grouped chat rendering", () => {
     const container = document.createElement("div");
 
     render(
-      renderStreamGroup([
-        { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
-        { kind: "reading-indicator", key: "reading", startedAt: 10 },
-      ]),
+      renderStreamGroup(
+        [
+          {
+            kind: "stream",
+            key: "stream:s:live",
+            text: "reply",
+            startedAt: 10,
+            isStreaming: true,
+          },
+          { kind: "reading-indicator", key: "reading", startedAt: 10 },
+        ],
+        { showAssistantAvatar: false },
+      ),
       container,
     );
 
