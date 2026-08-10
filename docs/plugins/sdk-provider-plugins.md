@@ -558,6 +558,53 @@ catalog, API-key auth, and dynamic model resolution.
       The same package-root pattern also backs `@openclaw/openai-provider` (provider builders, default-model helpers, realtime provider builders) and `@openclaw/openrouter-provider` (provider builder plus onboarding/config helpers).
     </Accordion>
 
+    ### Streaming tool-call arguments
+
+    A provider that owns its own stream path receives a tool call's JSON
+    arguments as fragments and has to expose the partial arguments as they
+    arrive. Do not accumulate a buffer and re-parse it on every fragment: that
+    re-scans everything received so far on each delta, so the total cost is
+    quadratic in the argument size and a large document body stalls the stream.
+
+    Use `createStreamingJsonPreview()` instead. It is the supported Plugin SDK
+    seam for this, and it keeps the same work linear:
+
+    ```typescript
+    import { createStreamingJsonPreview } from "openclaw/plugin-sdk/llm";
+
+    const preview = createStreamingJsonPreview();
+
+    // One call per streamed fragment; returns the arguments as they stand now.
+    for (const fragment of fragments) {
+      emitPartialToolCall(preview.push(fragment));
+    }
+
+    // Once, after the last fragment, at the provider's end-of-block event.
+    emitFinalToolCall(preview.finalize());
+    ```
+
+    `createStreamingJsonPreview` is a public Plugin SDK contract with these
+    behaviors:
+
+    | Area | Contract |
+    | --- | --- |
+    | Lifecycle | Create one preview per streamed tool call, call `push` once per fragment in arrival order, then `finalize()` exactly once after the last `push`. Do not reuse a preview across tool calls, and do not `push` after `finalize()`. |
+    | Return value | Both methods return the parsed arguments object. It is a fresh value on each call - treat it as read-only and do not mutate it or retain it expecting it to update in place. |
+    | Liveness | For a flat top-level object whose members are strings - the shape of essentially every tool-call argument schema - the exposed value reflects every fragment as it arrives, with no staleness window. Members the incremental path does not model (numbers, booleans, `null`, nested objects or arrays) may lag by a bounded amount while streaming. |
+    | Cost | Total work is linear in the final argument size for every input shape, rather than quadratic. Fragments that the incremental path fully covers do no whole-buffer work at all. |
+    | Correctness | `finalize()` always performs a full, unthrottled parse of the complete buffer, so the final arguments never depend on streaming timing, fragment cadence, or the bounds applied to intermediate values. Correctness of the final result does not depend on how often you called `push`. |
+    | Malformed input | Partial and unterminated JSON is expected and handled - a preview of an incomplete buffer is returned rather than throwing. A root that is not a JSON object yields the last usable parse. |
+
+    `StreamingJsonPreview` is the exported type for the returned object. The
+    mutable state helpers behind it are host internals and are deliberately not
+    exported to plugins, so this push/finalize pair is the compatibility surface
+    that will be kept stable; do not reach past it into
+    `@openclaw/ai/internal/*`.
+
+    The bundled `amazon-bedrock` provider uses exactly this seam for its
+    `contentBlockDelta` / `contentBlockStop` handling, and OpenClaw's own Worker
+    inference path uses the same underlying mechanism.
+
     <Tabs>
       <Tab title="Token exchange">
         For providers that need a token exchange before each inference call:
