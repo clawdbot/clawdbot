@@ -414,6 +414,34 @@ describe("createGatewayCloseHandler", () => {
     expect(result.warnings).toContain("acp-session-manager");
   });
 
+  it("keeps plugin services alive until a slow ACP session disposal settles", async () => {
+    vi.useFakeTimers();
+    let releaseDisposal!: () => void;
+    mocks.disposeAcpSessionManagerInstance.mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseDisposal = resolve;
+      }),
+    );
+    const pluginServices = { stop: vi.fn(async () => undefined) };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ pluginServices: pluginServices as never }),
+    );
+
+    try {
+      const closePromise = close({ reason: "test" });
+      await vi.advanceTimersByTimeAsync(5_001);
+
+      expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledOnce();
+      expect(pluginServices.stop).not.toHaveBeenCalled();
+
+      releaseDisposal();
+      await closePromise;
+      expect(pluginServices.stop).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears the secrets runtime snapshot only after channels stop (#112681)", async () => {
     const events: string[] = [];
     const stopChannel = vi.fn(async (channelId: string) => {

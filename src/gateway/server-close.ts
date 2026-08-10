@@ -582,12 +582,7 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
 }
 
 async function disposeRuntimeWithShutdownGrace(params: {
-  label:
-    | "acp-session-manager"
-    | "plugin-services"
-    | "bundle-mcp"
-    | "bundle-lsp"
-    | "embedding-providers";
+  label: "plugin-services" | "bundle-mcp" | "bundle-lsp" | "embedding-providers";
   dispose: () => Promise<void>;
   graceMs: number;
   warnings: string[];
@@ -862,14 +857,14 @@ export function createGatewayCloseHandler(
           }
         });
       }
+      // ACPX owns agent-process cleanup, so plugin teardown must not overtake
+      // the manager drain even when cancellation and handle close are slow.
       await measureCloseStep("acp-session-manager", () =>
-        disposeRuntimeWithShutdownGrace({
-          label: "acp-session-manager",
-          dispose: () =>
-            disposeAcpSessionManagerInstance(getAcpSessionManager(), "gateway-shutdown"),
-          graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
+        shutdownStep(
+          "acp-session-manager",
+          () => disposeAcpSessionManagerInstance(getAcpSessionManager(), "gateway-shutdown"),
           warnings,
-        }),
+        ),
       );
       if (params.pluginServices) {
         await measureCloseStep("plugin-services", () =>
