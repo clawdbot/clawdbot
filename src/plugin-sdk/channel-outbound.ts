@@ -171,7 +171,7 @@ export type {
   MessageReceiptSourceResult,
 } from "../channels/message/index.js";
 
-/** Lazily forwards inbound reply delivery through the channel turn kernel. */
+/** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
 export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContext"] =
   async (...args) => {
     const mod = await import("../channels/turn/durable-delivery.js");
