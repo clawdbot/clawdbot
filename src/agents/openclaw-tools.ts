@@ -263,9 +263,10 @@ export function createOpenClawTools(
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
-  // Scheduled turns keep delivery routing live, but Gateway authorization remains bound to the
-  // authenticated creator account captured in the immutable scheduled authority envelope.
+  // Scheduled turns authorize tools as their creator while retaining separate delivery routing.
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
+  const transcriptOptions = { ...options, agentAccountId: gatewayCallerAccountId };
+  Object.assign(transcriptOptions, { agentId: sessionAgentId, config: resolvedConfig });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -546,9 +547,7 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool
-      ? [createTranscriptsTool({ ...options, agentId: sessionAgentId, config: resolvedConfig })]
-      : []),
+    ...(includeTranscriptsTool ? [createTranscriptsTool(transcriptOptions)] : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
