@@ -2135,35 +2135,29 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(false);
   });
 
-  it("exposes the final delivery control only on Codex message-tool-only schemas", async () => {
+  it("forwards message-tool-only finality to the canonical message schema", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    // Mirror production createOpenClawCodingTools: attempt-fresh tool instances
-    // per build, never a shared object reused across delivery modes.
-    setOpenClawCodingToolsFactoryForTests(() => [
-      {
-        ...createRuntimeDynamicTool("message"),
-        parameters: {
-          type: "object",
-          properties: { message: { type: "string" } },
-          additionalProperties: false,
-        },
-      },
-    ]);
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return createOpenClawCodingTools(options).filter((tool) => tool.name === "message");
+    });
 
     params.sourceReplyDeliveryMode = "message_tool_only";
     const sourceReplyTools = await buildDynamicToolsForTest(params, workspaceDir);
     const sourceReplySchema = sourceReplyTools[0]?.parameters as {
       properties?: Record<string, unknown>;
-      additionalProperties?: unknown;
     };
 
+    expect(factoryOptions[0]).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sourceReplySchema.properties).toMatchObject({
       final: { type: "boolean" },
     });
-    expect(sourceReplySchema.additionalProperties).toBe(false);
 
     params.sourceReplyDeliveryMode = "automatic";
     const automaticTools = await buildDynamicToolsForTest(params, workspaceDir);
@@ -2171,6 +2165,9 @@ describe("Codex app-server dynamic tool build", () => {
       properties?: Record<string, unknown>;
     };
 
+    expect(factoryOptions[1]).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+    });
     expect(automaticSchema.properties).not.toHaveProperty("final");
   });
 });
