@@ -529,7 +529,6 @@ src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
-src/channels/turn/kernel.test.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
