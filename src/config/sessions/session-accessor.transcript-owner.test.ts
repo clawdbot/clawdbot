@@ -140,4 +140,44 @@ describe("transcript turn logical ownership", () => {
       ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
     });
   });
+
+  it("allows an explicit agent write to a different per-agent store", async () => {
+    await withTempHome(async (home) => {
+      const fixedStorePath = path.join(home, "shared-sessions.json");
+      const researchStorePath = path.join(home, "research-sessions.json");
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: fixedStorePath },
+      } satisfies OpenClawConfig;
+      const scope = {
+        agentId: "research",
+        sessionId: "research-global-session",
+        sessionKey: "global",
+        storePath: researchStorePath,
+      };
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: scope.sessionKey, storePath: researchStorePath },
+        { sessionId: scope.sessionId, updatedAt: 1 },
+      );
+
+      await expect(
+        persistSessionTranscriptTurn(scope, {
+          config: cfg,
+          expectedSessionId: scope.sessionId,
+          messages: [{ message: { role: "user", content: "research store" } }],
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({ appendedCount: 1 });
+      await expect(loadTranscriptEvents({ ...scope, agentId: "research" })).resolves.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "research store", role: "user" }),
+          type: "message",
+        }),
+      );
+    });
+  });
 });

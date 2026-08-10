@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -643,15 +644,32 @@ export function createSessionsSendTool(opts?: {
         isLiteralLegacyKeyInput && !resolvedKeyAgentId && !isUnscopedSessionKeySentinel(resolvedKey)
           ? tryResolveLegacyCompatibilityAgentId(cfg)
           : undefined;
-      const mayUseRequesterForLiteralSentinel =
+      const isLiteralUnscopedSentinel =
         isLiteralLegacyKeyInput && isUnscopedSessionKeySentinel(sessionKeyParam.trim());
+      const persistedSentinelOwner = isLiteralUnscopedSentinel
+        ? resolvePersistedSessionStoreOwnerForKey(cfg, resolvedKey)
+        : { kind: "none" as const };
+      if (persistedSentinelOwner.kind === "retired") {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error: "Session ownership could not be verified because its fixed-store owner retired.",
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
       const targetAgentId =
         visibleSession.agentId ??
         resolvedTargetAgentId ??
         resolvedKeyAgentId ??
         (labelParam && labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined) ??
-        (mayUseRequesterForLiteralSentinel ? requesterAgentId : undefined) ??
+        (persistedSentinelOwner.kind === "configured"
+          ? persistedSentinelOwner.agentId
+          : undefined) ??
+        (isLiteralUnscopedSentinel ? requesterAgentId : undefined) ??
         compatibilityTargetAgentId;
+      const mayUseRequesterForLiteralSentinel =
+        isLiteralUnscopedSentinel &&
+        (!targetAgentId || normalizeAgentId(targetAgentId) === requesterAgentId);
       if (
         !targetAgentId &&
         !resolvedKeyAgentId &&
@@ -796,7 +814,7 @@ export function createSessionsSendTool(opts?: {
       });
       const authorizationTargetKey = mayUseRequesterForLiteralSentinel
         ? effectiveRequesterKey
-        : targetAgentId && !parseAgentSessionKey(resolvedKey) && !mayUseRequesterForLiteralSentinel
+        : targetAgentId && !parseAgentSessionKey(resolvedKey)
           ? `agent:${targetAgentId}:${resolvedKey}`
           : resolvedKey;
       const access = visibilityGuard.check(authorizationTargetKey);

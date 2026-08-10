@@ -450,6 +450,55 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
   });
 });
 
+it("authorizes literal sentinels against their persisted fixed-store owner", async () => {
+  const config = {
+    session: { store: "/tmp/shared-sessions.sqlite" },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  const createTool = (ownerAgentId: string) =>
+    createSessionsSendTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config: {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: { sessionStore: { agentId: ownerAgentId } },
+        },
+      },
+    });
+
+  const denied = requireDetails(
+    await createTool("ops").execute("foreign-global", {
+      sessionKey: "global",
+      message: "status?",
+      timeoutSeconds: 0,
+    }),
+  );
+  expect(denied).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+  expect(callGatewayMock.mock.calls).not.toContainEqual([
+    expect.objectContaining({ method: "agent" }),
+  ]);
+
+  callGatewayMock.mockReset().mockResolvedValue({ runId: "self-global", acceptedAt: 1 });
+  const allowed = requireDetails(
+    await createTool("research").execute("self-global", {
+      sessionKey: "global",
+      message: "note",
+      timeoutSeconds: 0,
+    }),
+  );
+  expect(allowed.status).toBe("accepted");
+});
+
 describe("extractStoredAssistantText", () => {
   it("sanitizes blocks without injecting newlines", () => {
     const message = {

@@ -22,7 +22,7 @@ import {
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "./session-store-owner.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
@@ -42,6 +42,8 @@ function resolveTranscriptTurnAgentId(params: {
   config: OpenClawConfig;
   scopeAgentId?: string;
   sessionKey: string;
+  storePath?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
   const keyShape = classifySessionKeyShape(params.sessionKey);
   if (keyShape === "malformed_agent") {
@@ -57,10 +59,12 @@ function resolveTranscriptTurnAgentId(params: {
       `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
     );
   }
-  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(
-    params.config,
-    params.sessionKey,
-  );
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    env: params.env,
+  });
   if (
     scopedAgentId &&
     persistedStoreOwner.kind === "configured" &&
@@ -276,6 +280,8 @@ async function persistExpectedSessionTranscriptTurn(
     config: options.config ?? getRuntimeConfig(),
     scopeAgentId: scope.agentId,
     sessionKey,
+    storePath,
+    env: scope.env,
   });
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
@@ -371,14 +377,17 @@ async function resolveTranscriptTurnTarget(
   if (!sessionKey || !scope.sessionId) {
     throw new Error("Cannot persist a transcript turn without a session key and session id");
   }
+  const effectiveConfig = config ?? getRuntimeConfig();
   const agentId = resolveTranscriptTurnAgentId({
-    config: config ?? getRuntimeConfig(),
+    config: effectiveConfig,
     scopeAgentId: scope.agentId,
     sessionKey,
+    storePath: scope.storePath,
+    env: scope.env,
   });
   const storePath =
     scope.storePath ??
-    resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+    resolveSessionStorePathCore(effectiveConfig.session?.store, {
       agentId,
       env: scope.env,
     });

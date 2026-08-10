@@ -20,6 +20,7 @@ import {
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -228,6 +229,7 @@ export function resolveInitialTuiAgentId(params: {
 
   return normalizeAgentId(
     params.fallbackAgentId ??
+      tryResolveLegacyCompatibilityAgentId(params.cfg) ??
       resolveDefaultAgentId(params.cfg, {
         surface: "TUI startup",
         hint: "Pass an agent-scoped --session key.",
