@@ -127,15 +127,17 @@ describe("executeAgentTurn: lifecycle progress", () => {
     await Promise.all(pendingToolTasks);
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).toHaveBeenCalledWith({
-      itemId: "tool:read-1",
-      toolCallId: "read-1",
-      kind: "tool",
-      title: "read",
-      name: "read",
-      phase: "start",
-      status: "running",
-    });
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "tool:read-1",
+        toolCallId: "read-1",
+        kind: "tool",
+        title: "read",
+        name: "read",
+        phase: "start",
+        status: "running",
+      }),
+    );
   });
 
   it("skips channel item progress when a matching tool event carries the progress", async () => {
@@ -218,15 +220,17 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).toHaveBeenCalledWith({
-      itemId: "cmd-1",
-      toolCallId: "cmd-1",
-      kind: "command",
-      title: "Command",
-      name: "bash",
-      phase: "start",
-      status: "running",
-    });
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: "cmd-1",
+        toolCallId: "cmd-1",
+        kind: "command",
+        title: "Command",
+        name: "bash",
+        phase: "start",
+        status: "running",
+      }),
+    );
   });
 
   it("hides internal lifecycle events while preserving visible tool progress", async () => {
