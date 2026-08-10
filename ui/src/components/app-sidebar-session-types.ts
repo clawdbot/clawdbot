@@ -54,8 +54,6 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
-  /** Identity captured with the row so delayed mutations can prove their target. */
-  sessionId?: string;
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;

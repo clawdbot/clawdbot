@@ -1066,11 +1066,6 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async requestNewCategory(sessionKey?: string) {
-    // Identity is read before any await: a refresh during the dialog's chunk load
-    // would otherwise hand back the row that replaced the one acted on.
-    const expectedSessionId = sessionKey
-      ? this.result?.sessions.find((row) => row.key === sessionKey)?.sessionId
-      : undefined;
     await this.withDialogLifecycle(async (signal) => {
       const showInputDialog = await this.loadInputDialog();
       await showInputDialog?.({
@@ -1079,7 +1074,7 @@ class SessionsPage extends OpenClawLightDomElement {
         label: t("sessionsView.newGroupPrompt"),
         submitLabel: t("sessionsView.newGroupCreate"),
         requireValue: true,
-        submit: (name) => this.writeNewCategory(name, sessionKey, expectedSessionId),
+        submit: (name) => this.writeNewCategory(name, sessionKey),
       });
     });
   }
@@ -1089,11 +1084,7 @@ class SessionsPage extends OpenClawLightDomElement {
    * row moves, and a catalog write that outlived its connection must not be
    * followed by an assignment issued on the replacement one.
    */
-  private async writeNewCategory(
-    name: string,
-    sessionKey?: string,
-    expectedSessionId?: string,
-  ): Promise<string | null> {
+  private async writeNewCategory(name: string, sessionKey?: string): Promise<string | null> {
     this.error = null;
     const scope = this.captureRequestScope();
     if (!scope) {
@@ -1108,14 +1099,13 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!sessionKey) {
       return null;
     }
-    // The catalog write is awaited first, so the row can be replaced in between.
-    // The captured identity travels with the patch and the Gateway refuses a
-    // changed target, which the page's own filtered list cannot decide.
-    const assigned = await this.patchSession(
-      sessionKey,
-      { category: name, ...(expectedSessionId ? { expectedSessionId } : {}) },
-      scope,
-    );
+    // The catalog write is awaited first, so the row can disappear in between.
+    // sessions.patch would recreate a store entry for a key the list no longer
+    // has; assignCategory guards the same way before its own patch.
+    if (!this.result?.sessions.some((row) => row.key === sessionKey)) {
+      return null;
+    }
+    const assigned = await this.patchSession(sessionKey, { category: name }, scope);
     if (assigned === "failed") {
       return this.error ?? t("sessionsView.newGroupFailed");
     }

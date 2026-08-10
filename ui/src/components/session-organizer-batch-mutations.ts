@@ -107,9 +107,6 @@ export async function patchSessionRows(
       targets: chunkRows.map((row) => ({
         key: row.key,
         agentId: sessionRowAgentId(row, scope),
-        // Identity captured with the row: the Gateway drops a target whose
-        // session was replaced rather than applying this patch to the successor.
-        ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       })),
       patch,
     };

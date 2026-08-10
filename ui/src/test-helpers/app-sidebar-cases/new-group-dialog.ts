@@ -36,20 +36,10 @@ describe("AppSidebar new group dialog", () => {
 
       await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
       expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
-      // Each target carries the identity captured with its row, so a session
-      // replaced while the dialog was open is refused rather than reassigned.
       expect(harness.patchMany).toHaveBeenCalledWith(
         [
-          {
-            key: "agent:main:a",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:a",
-          },
-          {
-            key: "agent:main:b",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:b",
-          },
+          { key: "agent:main:a", agentId: "main" },
+          { key: "agent:main:b", agentId: "main" },
         ],
         { category: "Projects" },
       );
@@ -63,7 +53,7 @@ describe("AppSidebar new group dialog", () => {
     }
   });
 
-  it("assigns with captured identities when rows leave the projection mid-write", async () => {
+  it("does not assign selected sessions that were deleted while the dialog was open", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     try {
       const { sidebar, harness } = await mountMultiSelect([
@@ -88,29 +78,18 @@ describe("AppSidebar new group dialog", () => {
       await submitInputDialog("Projects");
       await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
 
-      // Both rows leave this bounded projection while the catalog write is still
-      // in flight. That is not evidence they were deleted, so the assignment must
-      // still go out — carrying the identity captured with each row, which is what
-      // lets the Gateway refuse a target that really was replaced.
+      // Both rows disappear while the catalog write is still in flight; patching
+      // their keys now would recreate the sessions that were just removed.
       harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
       landCatalogWrite();
 
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          {
-            key: "agent:main:a",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:a",
-          },
-          {
-            key: "agent:main:b",
-            agentId: "main",
-            expectedSessionId: "session-agent:main:b",
-          },
-        ],
-        { category: "Projects" },
+      // The dialog is removed only once the submit chain has run to completion,
+      // so waiting on that keeps the negative assertions below from passing
+      // before the continuation has had a chance to patch anything.
+      await waitForFast(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
       );
+      expect(harness.patchMany).not.toHaveBeenCalled();
       expect(harness.patch).not.toHaveBeenCalled();
     } finally {
       restoreDialogPolyfill();
