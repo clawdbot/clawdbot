@@ -6,17 +6,18 @@ import {
   configureFakeWebSockets,
   FakeWebSocket,
 } from "./background.test-support.js";
-import type { PageCaptureResult, RuntimeMessageListener } from "./background.test-support.js";
+import type { RuntimeMessageListener } from "./background.test-support.js";
 import { computeRelayAuthProof } from "./modules/relay-auth-v2-crypto.js";
+import { relayTestKey } from "./relay-key.test-support.js";
 
-export const RELAY_SECRET = "a".repeat(64);
-export const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
+export const TEST_RELAY_KEY = relayTestKey(1);
+export const REPLACEMENT_TEST_RELAY_KEY = relayTestKey(2);
 const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
 
 export async function loadBackground({
   deferTabAccessInitialization = false,
   deferSocketClose = false,
-  onConsentChanged,
+  nativeMessage,
   rejectStorageRemove = false,
   relayNegotiatedProtocol,
   sessionConfig,
@@ -25,7 +26,7 @@ export async function loadBackground({
 }: {
   deferTabAccessInitialization?: boolean;
   deferSocketClose?: boolean;
-  onConsentChanged?: () => Promise<void>;
+  nativeMessage?: (request: unknown) => Promise<unknown>;
   rejectStorageRemove?: boolean;
   relayNegotiatedProtocol?: string;
   sessionConfig?: Record<string, unknown>;
@@ -60,7 +61,7 @@ export async function loadBackground({
   const storageValues: Record<string, unknown> = {
     ...(storedConfig ?? {
       relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
+      token: TEST_RELAY_KEY,
       authVersion: 2,
       accessMode: "selected",
       groupColor: "orange",
@@ -80,7 +81,8 @@ export async function loadBackground({
   const clearAlarm = vi.fn(async () => true);
   const setBadgeText = vi.fn(async () => undefined);
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
-  const storageGet = vi.fn(async (keys: string[]) => {
+  const storageGet = vi.fn(async (requestedKeys: string[] | string) => {
+    const keys = Array.isArray(requestedKeys) ? requestedKeys : [requestedKeys];
     const pending = nextStorageGet;
     nextStorageGet = null;
     await pending;
@@ -113,14 +115,15 @@ export async function loadBackground({
     await pending;
     Object.assign(sessionStorageValues, values);
   });
+  const sendNativeMessage = vi.fn(async (_host: string, request: unknown) => {
+    if (nativeMessage) {
+      return await nativeMessage(request);
+    }
+    throw new Error("Specified native messaging host not found.");
+  });
+  let runtimeLastError: { message?: string } | undefined;
   const chromeMock = {
     action: { setBadgeText, setBadgeBackgroundColor },
-    commands: { onCommand: { addListener } },
-    contextMenus: {
-      create: vi.fn(),
-      removeAll: vi.fn(async () => undefined),
-      onClicked: { addListener },
-    },
     alarms: {
       create: createAlarm,
       clear: clearAlarm,
@@ -164,7 +167,54 @@ export async function loadBackground({
       sendCommand: vi.fn(async () => ({})),
     },
     runtime: {
+      get lastError() {
+        return runtimeLastError;
+      },
+      connectNative: vi.fn((host: string) => {
+        let disconnected = false;
+        let messageListener: ((response: unknown) => void) | undefined;
+        let disconnectListener: (() => void) | undefined;
+        const disconnect = () => {
+          if (disconnected) {
+            return;
+          }
+          disconnected = true;
+          disconnectListener?.();
+        };
+        return {
+          disconnect,
+          onDisconnect: {
+            addListener: (listener: () => void) => {
+              disconnectListener = listener;
+            },
+          },
+          onMessage: {
+            addListener: (listener: (response: unknown) => void) => {
+              messageListener = listener;
+            },
+          },
+          postMessage: (request: unknown) => {
+            void sendNativeMessage(host, request).then(
+              (response) => {
+                if (!disconnected) {
+                  messageListener?.(response);
+                }
+              },
+              (error) => {
+                if (!disconnected) {
+                  runtimeLastError = {
+                    message: error instanceof Error ? error.message : String(error),
+                  };
+                  disconnect();
+                  runtimeLastError = undefined;
+                }
+              },
+            );
+          },
+        };
+      }),
       getManifest: vi.fn(() => ({ version: "1.0.0" })),
+      openOptionsPage: vi.fn(async () => undefined),
       onConnect: { addListener },
       onMessage: {
         addListener: vi.fn((listener: RuntimeMessageListener) => {
@@ -192,9 +242,6 @@ export async function loadBackground({
           }
         }),
       },
-    },
-    scripting: {
-      executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
     },
     tabGroups: {
       query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
@@ -276,15 +323,6 @@ export async function loadBackground({
   vi.stubGlobal("navigator", { userAgent: "Chromium/125.0.0.0" });
   vi.stubGlobal("WebSocket", FakeWebSocket);
 
-  if (onConsentChanged) {
-    const copilotModule = await import("./modules/copilot-background.js");
-    const createCopilotController = copilotModule.createCopilotController;
-    vi.spyOn(copilotModule, "createCopilotController").mockImplementation((options) => ({
-      ...createCopilotController(options),
-      onConsentChanged,
-    }));
-  }
-
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
   await vi.waitFor(() => {
@@ -294,17 +332,17 @@ export async function loadBackground({
     expect(pairingReads.length).toBeGreaterThanOrEqual(2);
   });
   if (!deferTabAccessInitialization) {
-    for (let attempt = 0; attempt < 20 && sockets.length === 0; attempt += 1) {
+    await vi.waitFor(() => {
       const pairingWasCleared = storageRemove.mock.calls.some(([keys]) =>
         keys.includes("relayUrl"),
       );
-      if (pairingWasCleared) {
-        break;
-      }
-      await Promise.resolve();
-    }
-    const pairingWasCleared = storageRemove.mock.calls.some(([keys]) => keys.includes("relayUrl"));
-    expect(sockets.length > 0 || pairingWasCleared).toBe(true);
+      expect(
+        sockets.length > 0 ||
+          pairingWasCleared ||
+          sendNativeMessage.mock.calls.length > 0 ||
+          storageValues.nativeBootstrapDisabled === true,
+      ).toBe(true);
+    });
   }
 
   if (!alarmListener || !messageListener || !tabsUpdatedListener || !tabsReplacedListener) {
@@ -314,7 +352,6 @@ export async function loadBackground({
     alarmListener,
     clearAlarm,
     createAlarm,
-    executeScript: chromeMock.scripting.executeScript,
     debuggerAttach: chromeMock.debugger.attach,
     debuggerDetach: chromeMock.debugger.detach,
     debuggerDetachListener,
@@ -353,6 +390,7 @@ export async function loadBackground({
       return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
     },
     messageListener,
+    sendNativeMessage,
     releaseTabAccessInitialization,
     get relaySockets() {
       return sockets.filter((socket) => socket.protocols.includes("openclaw-extension-relay.v2"));

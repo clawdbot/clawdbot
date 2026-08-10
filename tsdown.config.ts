@@ -527,6 +527,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     "memory-core-local-embedding-worker":
       "packages/memory-host-sdk/src/host/embeddings-worker-child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
+    "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,
   };
 }

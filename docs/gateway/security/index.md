@@ -502,6 +502,15 @@ Enabling browser control gives the model a real browser. If that profile already
   OpenClaw tab group as its ACL. Existing pairings migrate to **Selected tabs**,
   while new personal-browser pairings recommend **All tabs**. Incognito and
   internal Chrome pages remain excluded in either mode.
+- Automatic Chrome extension setup uses an origin-locked native messaging
+  manifest discovered from an exact unpacked extension path in Chrome profile
+  metadata. The one-shot host accepts only a versioned request with a fresh
+  nonce, caps input at 4 KiB, validates the Chrome-supplied origin, and returns
+  only a locally owned pairing. It never transfers a remote Gateway key.
+- Native-host manifests, launchers, and status output contain no pairing key.
+  OpenClaw refuses symlinks, unsafe ownership/modes, wildcard origins, and
+  foreign registrations using the same host name. Windows uses the manual
+  pairing fallback until an executable native-host path is supported.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)

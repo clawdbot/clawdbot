@@ -5586,12 +5586,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(scenario.run).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
     );
-    const browserCopilot = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test browser copilot end-to-end"),
-      "browser copilot E2E suite",
+    const browserExtension = expectDefined(
+      uiE2e.steps.find(
+        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
+      ),
+      "browser extension bootstrap E2E suite",
     );
-    expect(browserCopilot.if).toBe("matrix.shard == 1");
-    expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
+    expect(browserExtension.if).toBe("matrix.shard == 1");
+    expect(browserExtension.run).toBe("pnpm test:e2e:browser-extension");
     for (const { job } of routedUiE2eJobs) {
       const jobContract = JSON.stringify(job);
       expect(jobContract).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
