@@ -20,7 +20,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { failTaskRunByRunId } from "../../tasks/task-executor.js";
+import { failTaskRunByRunIdCore } from "../../tasks/task-executor.js";
 import { createTaskRecord } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { ReplyPayload } from "../types.js";
@@ -371,7 +371,7 @@ describe("subagents info", () => {
       status: "running",
       deliveryStatus: "delivered",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId,
       endedAt: now - 1_000,
       error: [

@@ -36,7 +36,7 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
-  finalizeTaskRunByRunId,
+  finalizeTaskRecordByRunId,
   findTaskByRunId,
   getTaskById,
   isParentFlowLinkError,
@@ -364,9 +364,9 @@ const cancelTask = (taskId: string) => cancelTaskById({ cfg: {} as never, taskId
 
 function finalizeSubagentTask(
   task: TaskRecord,
-  params: Omit<Parameters<typeof finalizeTaskRunByRunId>[0], "runId" | "runtime">,
+  params: Omit<Parameters<typeof finalizeTaskRecordByRunId>[0], "runId" | "runtime">,
 ) {
-  return finalizeTaskRunByRunId({ runId: task.runId!, runtime: "subagent", ...params });
+  return finalizeTaskRecordByRunId({ runId: task.runId!, runtime: "subagent", ...params });
 }
 
 function createInMemoryTaskRegistryStore() {
@@ -744,7 +744,7 @@ describe("task-registry", () => {
         error: SUBAGENT_KILL_TASK_ERROR,
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-subagent-abort-race",
         runtime: "subagent",
         status: "succeeded",
@@ -787,7 +787,7 @@ describe("task-registry", () => {
         error: "agent run superseded by a newer session writer",
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-subagent-superseded",
         runtime: "subagent",
         status: "succeeded",
@@ -814,7 +814,7 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "cron:provisional:100",
         runtime: "cron",
         childSessionKey: null,
@@ -988,14 +988,14 @@ describe("task-registry", () => {
           runId: entry.runId,
           task: entry.runId,
         });
-        finalizeTaskRunByRunId({
+        finalizeTaskRecordByRunId({
           runId: entry.runId,
           runtime: entry.runtime,
           status: "cancelled",
           endedAt: 200,
           error: entry.error,
         });
-        finalizeTaskRunByRunId({
+        finalizeTaskRecordByRunId({
           runId: entry.runId,
           runtime: entry.runtime,
           status: entry.terminalStatus,
@@ -1031,7 +1031,7 @@ describe("task-registry", () => {
           aborted: true,
         },
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-timeout-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -1172,14 +1172,14 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "failed",
         endedAt: 200,
         error: "delivery failed",
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -1214,7 +1214,7 @@ describe("task-registry", () => {
           endedAt: 200,
         },
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-success-then-fail",
         runtime: "cli",
         status: "failed",
@@ -2996,7 +2996,7 @@ describe("task-registry", () => {
           deliveryStatus,
           lastEventAt: now - 60_000,
         });
-        finalizeTaskRunByRunId({
+        finalizeTaskRecordByRunId({
           runId,
           runtime: "acp",
           status,
@@ -3203,7 +3203,7 @@ describe("task-registry", () => {
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: "run-prune",
         runtime: "cli",
         status: "succeeded",
