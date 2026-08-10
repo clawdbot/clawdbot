@@ -86,7 +86,13 @@ export function resolveSessionStableReplyMode(params: {
   });
 }
 
-function resolveStableMessageToolAvailability(params: {
+/**
+ * Sender-independent message-tool availability for the session-stable mode.
+ * One owner for dispatch's stable-mode downgrade and synthetic-turn binding
+ * facts: sender-scoped denials apply to the sender's turn, never to the
+ * session policy every turn kind must hash identically (#121485).
+ */
+export function resolveStableMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   sessionAgentId: string;

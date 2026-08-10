@@ -46,6 +46,7 @@ import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./me
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
+import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
 import {
   isExplicitSourceReplyCommand,
   isUnauthorizedTextSlashCommand,
@@ -293,6 +294,19 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     subagentPolicy,
     inheritedToolPolicy,
   ]);
+  // The stable mode's tool-only downgrade must be sender-independent, or a
+  // sender-scoped message denial hashes a different binding policy than the
+  // sender-less synthetic turns on the same session. Only tool-only candidates
+  // can downgrade, so skip the second policy pass otherwise.
+  const sessionStableMessageToolAvailable =
+    effectiveVisibleReplies === "message_tool"
+      ? resolveStableMessageToolAvailability({
+          cfg,
+          ctx,
+          sessionAgentId,
+          sessionKey: acpDispatchSessionKey,
+        })
+      : undefined;
   const sourceReplyPolicyParams = {
     cfg,
     ctx,
@@ -302,6 +316,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
     shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
+    sessionStableMessageToolAvailable,
     isHeartbeat: params.replyOptions?.isHeartbeat,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
