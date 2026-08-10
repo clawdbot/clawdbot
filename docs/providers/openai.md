@@ -690,7 +690,7 @@ generation through the same `openai/gpt-image-2` model ref.
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-2" },
+      mediaModels: { image: { primary: "openai/gpt-image-2" } },
     },
   },
 }
@@ -786,7 +786,7 @@ uploaded video in the `video` field.
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "openai/sora-2" },
+      mediaModels: { video: { primary: "openai/sora-2" } },
     },
   },
 }

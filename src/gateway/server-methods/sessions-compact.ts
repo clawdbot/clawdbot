@@ -37,6 +37,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
@@ -50,7 +51,6 @@ import {
   emitSessionOperation,
   loadAccessorSessionEntryForGatewayTarget,
   requireSessionKey,
-  resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -163,15 +163,20 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-      agentId: requestedAgentId,
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      exactRead: true,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
+    const storePath = target.storePath;
     // Lock + read in a short critical section; transcript work happens outside.
     // The projection resolver re-runs gateway key migration on the writer
     // snapshot so alias promotion/pruning persists through the accessor.
     let compactPrimaryKey = target.canonicalKey;
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
+      sessionKeys: target.storeKeys,
       storePath,
       resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
@@ -527,6 +532,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               // while compaction ran (sessionId/lifecycleRevision/work-start).
               const persistProjection = await applySessionPatchProjection({
                 agentId: target.agentId,
+                sessionKeys: [compactTarget.primaryKey],
                 storePath,
                 resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
                 project: ({ existingEntry }) => {

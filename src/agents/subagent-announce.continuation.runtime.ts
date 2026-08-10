@@ -35,7 +35,7 @@ import {
 import { resolveContinuationRuntimeConfig } from "./subagent-announce.runtime.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "./subagent-continuation-ids.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 
 export { routeSubagentContinuationReturn } from "./subagent-announce.continuation-return.js";
 

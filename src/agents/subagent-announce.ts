@@ -66,7 +66,7 @@ import {
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SubagentRunOutcome } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {

@@ -18,8 +18,8 @@ import {
   removeUnacceptedDelegateArtifactPolicy,
 } from "../../agents/delegate-artifacts.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
-import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
-import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
+import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
+import type { SpawnSubagentContext } from "../../agents/subagents/spawn/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   emitContinuationDelegateFireSpan,

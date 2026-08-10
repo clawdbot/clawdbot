@@ -13,7 +13,7 @@ import {
   spawnSubagentDirect,
   type SpawnSubagentContext,
   type SpawnSubagentParams,
-} from "../../agents/subagent-spawn.js";
+} from "../../agents/subagents/spawn/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {

@@ -1,8 +1,8 @@
 // Covers task registry lifecycle, delivery, notification, and query behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
-import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
+import { startAcpSpawnParentStreamRelay } from "../agents/subagents/spawn/acp-spawn-parent-stream.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";

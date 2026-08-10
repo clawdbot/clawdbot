@@ -60,6 +60,10 @@ import {
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "./session-subscription-keys.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -638,24 +642,13 @@ export function createAgentEventHandler({
     };
   };
 
-  const resolveSessionDeliveryKey = (sessionKey: string, agentId?: string) => {
-    if (sessionKey !== "global") {
-      return sessionKey;
-    }
-    const scopedAgentId = agentId ?? resolveDefaultAgentId(getRuntimeConfig());
-    return `agent:${scopedAgentId}:global`;
-  };
-  const resolveNodeSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
-    if (sessionKey !== "global") {
-      return [sessionKey];
+  const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
+    const canonicalKey = resolveSessionSubscriptionKey(sessionKey, agentId ?? "");
+    if (canonicalKey === sessionKey) {
+      return [canonicalKey];
     }
     const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-    const scopedAgentId = agentId ?? defaultAgentId;
-    const keys = [`agent:${scopedAgentId}:global`];
-    if (scopedAgentId === defaultAgentId) {
-      keys.push("global");
-    }
-    return keys;
+    return resolveSessionSubscriptionKeys(sessionKey, agentId ?? defaultAgentId, defaultAgentId);
   };
   const sendNodeSessionPayloadForAgent = (
     sessionKey: string,
@@ -663,7 +656,7 @@ export function createAgentEventHandler({
     payload: unknown,
     agentId?: string,
   ) => {
-    for (const deliverySessionKey of resolveNodeSessionDeliveryKeys(sessionKey, agentId)) {
+    for (const deliverySessionKey of resolveSessionDeliveryKeys(sessionKey, agentId)) {
       nodeSendToSession(deliverySessionKey, event, payload);
     }
   };
@@ -732,9 +725,9 @@ export function createAgentEventHandler({
       isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.runs.get(evt.runId)?.abortMarker, chatLink);
     const lifecycleAborted = evt.data?.aborted === true;
-    const deliverySessionKey = sessionKey
-      ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
-      : undefined;
+    const deliverySessionKeys = sessionKey
+      ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
+      : [];
     const restartRecoveryState =
       opts?.restartRecoveryState ??
       (restartRecoverySessionKey
@@ -800,7 +793,9 @@ export function createAgentEventHandler({
       !suppressRestartRecoveryProjection &&
       sessionKey &&
       (isControlUiVisible ||
-        (deliverySessionKey ? sessionMessageSubscribers.get(deliverySessionKey).size > 0 : false))
+        deliverySessionKeys.some(
+          (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
+        ))
     ) {
       if (!isAborted) {
         const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
@@ -1125,20 +1120,22 @@ export function createAgentEventHandler({
     payload: unknown,
     opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
   ) => {
-    const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
+    const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
       broadcast("chat", payload, {
         dropIfSlow: opts?.dropIfSlow,
-        sessionKeys: [deliverySessionKey],
+        sessionKeys: deliverySessionKeys,
       });
       sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
       return;
     }
-    const recipients = sessionMessageSubscribers.get(deliverySessionKey);
+    const recipients = new Set(
+      deliverySessionKeys.flatMap((deliveryKey) => [...sessionMessageSubscribers.get(deliveryKey)]),
+    );
     if (recipients.size > 0) {
       broadcastToConnIds("chat", payload, recipients, {
         dropIfSlow: opts?.dropIfSlow,
-        sessionKeys: [deliverySessionKey],
+        sessionKeys: deliverySessionKeys,
       });
     }
   };
@@ -1216,9 +1213,7 @@ export function createAgentEventHandler({
   ) => {
     if (opts?.controlUiVisible ?? true) {
       broadcast("agent", payload, {
-        sessionKeys: sessionKey
-          ? [resolveSessionDeliveryKey(sessionKey, opts?.agentId)]
-          : undefined,
+        sessionKeys: sessionKey ? resolveSessionDeliveryKeys(sessionKey, opts?.agentId) : undefined,
       });
       if (sessionKey) {
         sendNodeSessionPayloadForAgent(sessionKey, "agent", payload, opts?.agentId);
@@ -1228,12 +1223,14 @@ export function createAgentEventHandler({
     if (!sessionKey) {
       return;
     }
-    const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
-    const recipients = sessionMessageSubscribers.get(deliverySessionKey);
+    const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
+    const recipients = new Set(
+      deliverySessionKeys.flatMap((deliveryKey) => [...sessionMessageSubscribers.get(deliveryKey)]),
+    );
     if (recipients.size > 0) {
       broadcastToConnIds("agent", payload, recipients, {
         dropIfSlow: opts?.dropIfSlow,
-        sessionKeys: [deliverySessionKey],
+        sessionKeys: deliverySessionKeys,
       });
     }
   };
@@ -1456,8 +1453,9 @@ export function createAgentEventHandler({
           ...(isHeartbeat !== undefined && { isHeartbeat }),
         };
     const hasSessionMessageSubscribers = sessionKey
-      ? sessionMessageSubscribers.get(resolveSessionDeliveryKey(sessionKey, sessionAgentId)).size >
-        0
+      ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId).some(
+          (deliverySessionKey) => sessionMessageSubscribers.get(deliverySessionKey).size > 0,
+        )
       : false;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
@@ -1496,7 +1494,7 @@ export function createAgentEventHandler({
         },
         {
           sessionKeys: sessionKey
-            ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+            ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
             : undefined,
         },
       );
@@ -1587,7 +1585,7 @@ export function createAgentEventHandler({
           runToolRecipients,
           {
             sessionKeys: sessionKey
-              ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+              ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
               : undefined,
           },
         );

@@ -9,8 +9,9 @@ title: "Plugin inventory"
 
 # Plugin inventory
 
-This page is generated from `extensions/*/package.json`, `openclaw.plugin.json`,
-and the root npm package `files` exclusions. Regenerate it with:
+This page is generated from top-level `extensions/*/openclaw.plugin.json`
+manifests and the root npm package `files` exclusions. Optional `package.json`
+metadata enriches package and distribution details. Regenerate it with:
 
 ```bash
 pnpm plugins:inventory:gen
@@ -51,7 +52,9 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-55 plugins
+58 plugins
+
+- **[active-memory](/plugins/reference/active-memory)** (`openclaw`) - included in OpenClaw. Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -78,6 +81,8 @@ Each entry lists the package, distribution route, and description.
 - **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver SDK computer control for Windows and Linux node hosts.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support.
+
+- **[device-pair](/plugins/reference/device-pair)** (`openclaw`) - included in OpenClaw. Generate setup codes and approve device pairing requests.
 
 - **[document-extract](/plugins/reference/document-extract)** (`@openclaw/document-extract-plugin`) - included in OpenClaw. Extract text and fallback page images from local document attachments.
 
@@ -144,6 +149,8 @@ Each entry lists the package, distribution route, and description.
 - **[senseaudio](/plugins/reference/senseaudio)** (`@openclaw/senseaudio-provider`) - included in OpenClaw. Adds media understanding provider support.
 
 - **[sglang](/plugins/reference/sglang)** (`@openclaw/sglang-provider`) - included in OpenClaw. Adds SGLang model provider support to OpenClaw.
+
+- **[talk-voice](/plugins/reference/talk-voice)** (`openclaw`) - included in OpenClaw. Manage Talk voice selection (list/set).
 
 - **[telegram](/plugins/reference/telegram)** (`@openclaw/telegram`) - included in OpenClaw. Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 

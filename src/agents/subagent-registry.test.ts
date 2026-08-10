@@ -63,7 +63,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "./subagent-test-fixtures.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
+import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 
 const noop = () => {};
 

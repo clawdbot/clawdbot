@@ -319,8 +319,8 @@ packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
-src/agents/acp-spawn-parent-stream.test.ts
-src/agents/acp-spawn.test.ts
+src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
+src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
@@ -454,7 +454,7 @@ src/agents/subagent-registry-lifecycle.test.ts
 src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
-src/agents/subagent-spawn.test.ts
+src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts

@@ -17,7 +17,7 @@
   border: 0;
   background: transparent;
   border-radius: var(--radius-lg);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: transform 160ms ease;
 }
 
@@ -251,7 +251,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     opacity var(--duration-fast, 120ms) ease,
     color var(--duration-fast, 120ms) ease,

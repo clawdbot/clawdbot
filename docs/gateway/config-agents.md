@@ -1290,7 +1290,6 @@ Membership and visibility changes are written into the session transcript as sys
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
-      debounceMs: 500,
       cap: 20,
       drop: "summarize", // old | new | summarize (default)
       byChannel: {
@@ -1346,11 +1345,11 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
   - `followup`: run the new prompt after the active run finishes.
   - `collect`: batch compatible messages and run them together later.
   - `interrupt`: abort the active run before starting the newest prompt.
-- `debounceMs`: delay before dispatching a queued/steered message. Default: `500`.
+- The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
-- `debounceMsByChannel`: per-channel `debounceMs` overrides keyed by provider id.
+- `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
 
 ### Inbound debounce
 

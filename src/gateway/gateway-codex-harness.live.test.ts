@@ -1857,7 +1857,7 @@ async function verifyCodexSubagentProbe(params: {
   });
   try {
     const { testing: subagentSpawnTesting, spawnSubagentDirect } =
-      await import("../agents/subagent-spawn.test-support.js");
+      await import("../agents/subagents/spawn/subagent-spawn.test-support.js");
     const noOpContextEngine: ContextEngine = {
       info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
       ingest: async () => ({ ingested: false }),
@@ -1980,7 +1980,7 @@ async function verifyCodexSubagentProbe(params: {
     });
   } finally {
     const { testing: subagentSpawnTesting } =
-      await import("../agents/subagent-spawn.test-support.js");
+      await import("../agents/subagents/spawn/subagent-spawn.test-support.js");
     subagentSpawnTesting.setDepsForTest();
     unsubscribe();
   }

@@ -827,7 +827,7 @@
   font-family: inherit;
   font-size: 12px; /* was 9px */
   line-height: 1;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   opacity: 0.7;
   transition:
     border-color 0.15s var(--ease-out),
@@ -1090,7 +1090,7 @@
 .usage-hour-cell {
   min-height: 46px;
   padding: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   appearance: none;
   transition:
     transform 0.18s var(--ease-out),
@@ -1536,7 +1536,7 @@
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .session-bar-selection:focus-visible {

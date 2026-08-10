@@ -10,6 +10,9 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 - **Operators** (you, or the macOS app): direct LAN/Tailnet WebSocket is simplest when the Gateway is reachable; SSH tunneling is the universal fallback.
 - **Nodes** (iOS/Android and other devices): connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel).
 
+Remote clients can continue the same Gateway-owned conversation by URL or short
+reference. See [Session synchronization and attachment](/concepts/session-attachment).
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.

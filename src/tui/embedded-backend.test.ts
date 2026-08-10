@@ -238,8 +238,9 @@ vi.mock("../gateway/session-utils.js", () => ({
     primaryKey: key,
     target: { storeKeys: [key] },
   }),
-  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+  resolveGatewaySessionStoreTargetWithStore: ({ key }: { key: string }) => ({
     canonicalKey: key,
+    storeKeys: [key],
     storePath: "/tmp/openclaw-sessions.json",
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
@@ -763,6 +764,9 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:main",
     });
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKeys: ["agent:main:main"] }),
+    );
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
@@ -782,6 +786,9 @@ describe("EmbeddedTuiBackend", () => {
       AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
     );
 
+    expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sessionKeys: expect.anything() }),
+    );
     expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({ storeKey: sessionKey, existingEntry: undefined }),
     );

@@ -30,7 +30,7 @@ import {
   resolveCompletionFromSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
-import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
+import { terminateAcceptedCollectorRun } from "./subagents/spawn/subagent-spawn-cleanup.js";
 
 function findNextSubagentRunCreatedAt(
   candidates: Iterable<SubagentRunRecord>,

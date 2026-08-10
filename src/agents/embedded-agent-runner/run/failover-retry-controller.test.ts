@@ -1,76 +1,110 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../failover-error.js";
+
+const mocks = vi.hoisted(() => ({
+  sleepWithAbort: vi.fn(async () => {}),
+}));
+
+vi.mock("../../../infra/backoff.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../infra/backoff.js")>(
+    "../../../infra/backoff.js",
+  );
+  return { ...actual, sleepWithAbort: mocks.sleepWithAbort };
+});
+
 import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 
-const { sleepWithAbortMock } = vi.hoisted(() => ({
-  sleepWithAbortMock: vi.fn(async () => {}),
-}));
+type ControllerInput = Parameters<typeof createEmbeddedRunFailoverRetryController>[0];
 
-vi.mock("../../../infra/backoff.js", () => ({
-  sleepWithAbort: sleepWithAbortMock,
-}));
-
-function createController(fallbackConfigured: boolean) {
+function createController(
+  advanceAuthProfile: ControllerInput["advanceAuthProfile"],
+  fallbackConfigured = false,
+) {
   return createEmbeddedRunFailoverRetryController({
     runParams: {
-      sessionId: "session:rate-limit-controller",
-      runId: "run:rate-limit-controller",
-    } as never,
+      runId: "run:failover-retry-controller-test",
+    } as ControllerInput["runParams"],
     provider: "openai",
-    modelId: "mock-1",
+    modelId: "gpt-5.6-luna",
     globalLane: "test",
-    agentDir: "/tmp/openclaw-rate-limit-controller-test",
+    agentDir: "/tmp/openclaw-failover-retry-controller-test",
     fallbackConfigured,
-    profileFailureStore: { version: 1, profiles: {} } as never,
+    profileFailureStore: { version: 1, profiles: {} },
     getLastProfileId: () => "openai:p1",
-    getSessionId: () => "session:rate-limit-controller",
+    getSessionId: () => "session:failover-retry-controller-test",
     harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "pi",
+    getRuntimeAuthOwnerId: () => "embedded",
     getApiKeyInfo: () => null,
+    advanceAuthProfile,
   });
 }
 
+const rateLimitContext = {
+  failoverProvider: "openai",
+  failoverModel: "gpt-5.6-luna",
+  logFallbackDecision: vi.fn(),
+};
+
 describe("createEmbeddedRunFailoverRetryController", () => {
   beforeEach(() => {
-    sleepWithAbortMock.mockClear();
+    mocks.sleepWithAbort.mockClear();
+    rateLimitContext.logFallbackDecision.mockClear();
   });
 
-  it("keeps the full same-model retry budget when no fallback rotation is configured", async () => {
-    const controller = createController(false);
+  it("preserves the full same-model retry budget when rate-limit rotation does not advance", async () => {
+    const advanceAuthProfile = vi.fn(async () => false);
+    const controller = createController(advanceAuthProfile);
 
-    controller.maybeEscalateRateLimitProfileFallback({
-      failoverProvider: "openai",
-      failoverModel: "mock-1",
-      logFallbackDecision: vi.fn(),
-    });
-
-    expect(controller.rateLimitProfileRotations).toBe(0);
-    expect(controller.rateLimitProfileRotations).toBeLessThan(
-      controller.rateLimitProfileRotationLimit,
-    );
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(false);
     await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
     await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
     await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
     await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(false);
+
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(3);
   });
 
-  it("counts one actual rotation and does not increment while enforcing the cap", () => {
-    const controller = createController(true);
-    const logFallbackDecision = vi.fn();
-    const escalation = {
-      failoverProvider: "groq",
-      failoverModel: "mock-2",
-      logFallbackDecision,
-    };
+  it("consumes same-model retry eligibility after a successful rate-limit rotation", async () => {
+    const advanceAuthProfile = vi.fn(async () => true);
+    const controller = createController(advanceAuthProfile);
 
-    controller.maybeEscalateRateLimitProfileFallback(escalation);
-    expect(controller.rateLimitProfileRotations).toBe(1);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(false);
 
-    expect(() => controller.maybeEscalateRateLimitProfileFallback(escalation)).toThrow(
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("does not spend rate-limit rotation eligibility on an ordinary profile advance", async () => {
+    const advanceAuthProfile = vi.fn(async () => true);
+    const controller = createController(advanceAuthProfile);
+
+    await expect(controller.advanceAuthProfile()).resolves.toBe(true);
+    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
+
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.sleepWithAbort).toHaveBeenCalledWith(10_000, undefined);
+  });
+
+  it("escalates after one successful rate-limit rotation without advancing again", async () => {
+    const advanceAuthProfile = vi.fn(async () => true);
+    const controller = createController(advanceAuthProfile, true);
+
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "rate_limit",
+      status: 429,
+    } satisfies Partial<FailoverError>);
+    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).rejects.toBeInstanceOf(
       FailoverError,
     );
-    expect(controller.rateLimitProfileRotations).toBe(1);
-    expect(logFallbackDecision).toHaveBeenCalledOnce();
-    expect(logFallbackDecision).toHaveBeenCalledWith("fallback_model", { status: 429 });
+
+    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    expect(rateLimitContext.logFallbackDecision).toHaveBeenCalledTimes(2);
+    expect(rateLimitContext.logFallbackDecision).toHaveBeenNthCalledWith(1, "fallback_model", {
+      status: 429,
+    });
   });
 });

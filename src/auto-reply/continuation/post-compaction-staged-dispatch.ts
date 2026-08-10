@@ -7,7 +7,7 @@ import {
   removeUnacceptedDelegateArtifactPolicy,
   UnavailableDelegateArtifactPolicyError,
 } from "../../agents/delegate-artifacts.js";
-import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
+import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
 import {
   emitContinuationDisabledSpan,
   resolveContinuationTraceparent,

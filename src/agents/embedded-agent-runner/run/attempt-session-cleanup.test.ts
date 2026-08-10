@@ -20,7 +20,7 @@ vi.mock("./attempt.subscription-cleanup.js", () => ({
   cleanupEmbeddedAttemptResources: hoisted.cleanupEmbeddedAttemptResources,
 }));
 
-import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-cleanup.js";
+import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 
 const attempt = {
   runId: "run-1",

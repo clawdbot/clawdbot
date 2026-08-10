@@ -29,6 +29,13 @@ export type {
   RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 
+export type SuccessfulGitUpdateReceipt = {
+  root: string;
+  sha: string;
+  upstreamRef?: string;
+  installedAtMs: number;
+};
+
 const sentinelLog = createSubsystemLogger("restart-sentinel");
 
 export function formatDoctorNonInteractiveHint(
@@ -245,7 +252,7 @@ export async function readRestartSentinel(
   }
 }
 
-export async function readUpdateInstallReceipt(
+async function readUpdateInstallReceiptPayload(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinelPayload | null> {
   try {
@@ -255,6 +262,40 @@ export async function readUpdateInstallReceipt(
     sentinelLog.warn(`Failed to read update install receipt: ${formatErrorMessage(err)}`);
     return null;
   }
+}
+
+function normalizeSuccessfulGitUpdateReceipt(
+  payload: RestartSentinelPayload | null,
+): SuccessfulGitUpdateReceipt | null {
+  if (
+    payload?.kind !== "update" ||
+    payload.status !== "ok" ||
+    payload.stats?.mode !== "git" ||
+    !isPlainRecord(payload.stats.after)
+  ) {
+    return null;
+  }
+  const root = typeof payload.stats.root === "string" ? payload.stats.root.trim() : "";
+  const sha = typeof payload.stats.after.sha === "string" ? payload.stats.after.sha.trim() : "";
+  if (!root || !sha) {
+    return null;
+  }
+  const upstreamRef =
+    typeof payload.stats.after.upstreamRef === "string"
+      ? payload.stats.after.upstreamRef.trim()
+      : "";
+  return {
+    root,
+    sha,
+    ...(upstreamRef ? { upstreamRef } : {}),
+    installedAtMs: payload.ts,
+  };
+}
+
+export async function readSuccessfulGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<SuccessfulGitUpdateReceipt | null> {
+  return normalizeSuccessfulGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {

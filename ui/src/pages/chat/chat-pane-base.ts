@@ -6,7 +6,6 @@ import type {
   SessionDiscussionState,
   SessionSharingRole,
   SessionSuggestion,
-  TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionBranch,
@@ -291,16 +290,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   >();
   protected nativeDraftCleanup: (() => void) | null = null;
   protected readonly unreadPatchGuard = new SessionUnreadPatchGuard();
-  protected taskSuggestions: TaskSuggestion[] = [];
-  protected readonly taskSuggestionBusyIds = new Set<string>();
-  protected readonly taskSuggestionOperations = new Map<string, symbol>();
-  protected taskSuggestionsRequestVersion = 0;
-  protected taskSuggestionCloudProfiles: Array<{ id: string }> = [];
-  protected taskSuggestionCloudProfileGeneration = -1;
-  protected resetTaskSuggestionCloudProfiles(): void {
-    this.taskSuggestionCloudProfiles = [];
-    this.taskSuggestionCloudProfileGeneration = -1;
-  }
   protected sessionSuggestions: SessionSuggestion[] = [];
   protected sessionSuggestionRole: SessionSharingRole | undefined;
   protected readonly sessionSuggestionBusyIds = new Set<string>();

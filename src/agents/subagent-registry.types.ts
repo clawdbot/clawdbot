@@ -5,7 +5,7 @@ import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.j
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
 
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";

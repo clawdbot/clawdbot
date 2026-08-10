@@ -1,4 +1,4 @@
-import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
+import { spawnSubagentDirect } from "../../agents/subagents/spawn/subagent-spawn.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   emitContinuationDisabledSpan,

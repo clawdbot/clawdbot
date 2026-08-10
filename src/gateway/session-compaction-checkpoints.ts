@@ -66,10 +66,14 @@ export function resolveCompactionCheckpointTranscriptPosition(params: {
   };
 }
 
-type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
+type CompactionCheckpointSessionMutationResult =
+  | SessionCompactionCheckpointMutationResult
+  | { status: "conflict" };
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
 type BranchCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sourceKey: string;
   sourceStoreKey?: string;
@@ -79,6 +83,7 @@ type BranchCheckpointSessionParams = {
 
 type RestoreCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sessionKey: string;
   sessionStoreKey?: string;
@@ -540,6 +545,7 @@ async function branchCheckpointSessionFromStoredBoundary(
     sourceKey: params.sourceKey,
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -561,6 +567,7 @@ async function restoreCheckpointSessionFromStoredBoundary(
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });

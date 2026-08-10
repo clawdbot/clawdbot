@@ -85,6 +85,7 @@ type ModelSetupViewProps = {
   canVerify: boolean;
   canPrepare: boolean;
   gatewayTooOld: boolean;
+  refreshWarning: string | null;
   actionsDisabled: boolean;
   manualProviderId: string;
   manualApiKey: string;
@@ -612,11 +613,15 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
             </button>`
           : nothing}
       </div>
+      ${props.refreshWarning
+        ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+        : nothing}
       ${body}
     </div>
     ${renderModelSetupWizard({
       mode: props.wizardMode,
       state: props.wizard,
+      refreshWarning: props.refreshWarning,
       value: props.wizardValue,
       onValueChange: props.onWizardValueChange,
       onAnswer: props.onWizardAnswer,
