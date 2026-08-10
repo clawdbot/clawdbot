@@ -149,18 +149,26 @@ struct AuthenticatedControlUIOrigin: Equatable {
         default: return nil
         }
         self.scheme = scheme
-        self.host = rawHost.lowercased()
+        // Foundation may retain IPv6 URL brackets while WebKit protection spaces omit them.
+        // Keep one unbracketed form or pinned challenges can fall through to platform trust.
+        self.host = Self.canonicalHost(rawHost)
         self.port = url.port ?? defaultPort
     }
 
     func matches(host: String, port: Int) -> Bool {
-        self.host.caseInsensitiveCompare(host) == .orderedSame && self.port == port
+        self.host == Self.canonicalHost(host) && self.port == port
     }
 
     var serialized: String {
         let hostPart = self.host.contains(":") ? "[\(self.host)]" : self.host
         let defaultPort = self.scheme == "https" ? 443 : 80
         return "\(self.scheme)://\(hostPart)" + (self.port == defaultPort ? "" : ":\(self.port)")
+    }
+
+    private static func canonicalHost(_ rawHost: String) -> String {
+        let host = rawHost.lowercased()
+        guard host.hasPrefix("["), host.hasSuffix("]") else { return host }
+        return String(host.dropFirst().dropLast())
     }
 }
 

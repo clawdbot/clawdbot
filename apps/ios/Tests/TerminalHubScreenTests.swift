@@ -187,6 +187,17 @@ struct TerminalHubScreenTests {
         #expect(expected != AuthenticatedControlUIOrigin(url: insecureURL))
     }
 
+    @Test func `authenticated Control UI canonicalizes IPv6 authorities`() throws {
+        let controlURL = try #require(URL(string: "https://[2001:db8::1]:8443/control"))
+        let expected = try #require(AuthenticatedControlUIOrigin(url: controlURL))
+
+        #expect(expected.serialized == "https://[2001:db8::1]:8443")
+        #expect(expected.matches(host: "2001:DB8::1", port: 8443))
+        #expect(expected.matches(host: "[2001:db8::1]", port: 8443))
+        #expect(!expected.matches(host: "2001:db8::2", port: 8443))
+        #expect(!expected.matches(host: "2001:db8::1", port: 443))
+    }
+
     @Test func `authenticated Control UI navigation keeps the main frame on its origin`() throws {
         let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
         let sameOriginURL = try #require(URL(string: "https://gateway.example.com/chat?session=main"))
