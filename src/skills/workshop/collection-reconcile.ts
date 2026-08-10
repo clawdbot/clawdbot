@@ -21,6 +21,10 @@ import {
   type PreparedWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import {
+  assertCollectionReadsCurrent,
+  assertResultCollectionBytes,
+} from "./collection-byte-limits.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
@@ -133,7 +137,11 @@ export async function reconcileSkillCollection(params: {
         throw new Error("Writable skill names must be unique before collection reconciliation.");
       }
       const plan = validatePlan(params.plan, current, params.readSkillHashes);
-      await assertReadsAreCurrent(current, params.readSkillHashes);
+      await assertCollectionReadsCurrent(
+        current,
+        params.readSkillHashes,
+        MAX_RECONCILED_SKILL_BYTES,
+      );
       if (plan.every((entry) => entry.action === "keep")) {
         clearCuratedSkillLifecycle(
           current.map((skill) => skill.filePath),
@@ -167,6 +175,7 @@ export async function reconcileSkillCollection(params: {
         plan,
         config: params.config,
       });
+      await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
       const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
@@ -417,25 +426,6 @@ function validatePlan(
   return [...input];
 }
 
-async function assertReadsAreCurrent(
-  current: readonly WritableSkillCollectionEntry[],
-  readSkillHashes: ReadonlyMap<string, string>,
-): Promise<void> {
-  let totalBytes = 0;
-  for (const skill of current) {
-    const content = await fs.readFile(skill.filePath, "utf8");
-    totalBytes += Buffer.byteLength(content);
-    if (totalBytes > MAX_RECONCILED_SKILL_BYTES) {
-      throw new Error(
-        `Writable skill collection exceeds the ${MAX_RECONCILED_SKILL_BYTES}-byte review limit.`,
-      );
-    }
-    if (readSkillHashes.get(skill.name) !== sha256Hex(content)) {
-      throw new Error(`Skill changed after it was read: ${skill.name}`);
-    }
-  }
-}
-
 async function prepareWrites(params: {
   workspaceDir: string;
   current: readonly WritableSkillCollectionEntry[];
@@ -660,14 +650,21 @@ function readBackupSkillDirs(value: unknown, label: string, workspaceDir: string
   ) {
     throw new Error(`Invalid skill collection backup ${label}.`);
   }
-  const skillsDir = path.join(workspaceDir, "skills");
+  const skillRoots = [
+    path.join(workspaceDir, "skills"),
+    path.join(workspaceDir, ".agents", "skills"),
+  ];
   for (const relativeDir of value) {
-    const relativeToSkills = path.relative(skillsDir, path.resolve(workspaceDir, relativeDir));
-    if (
-      !relativeToSkills ||
-      path.isAbsolute(relativeToSkills) ||
-      relativeToSkills.startsWith(`..${path.sep}`)
-    ) {
+    const absoluteDir = path.resolve(workspaceDir, relativeDir);
+    const insideWritableRoot = skillRoots.some((rootDir) => {
+      const relativeToRoot = path.relative(rootDir, absoluteDir);
+      return (
+        relativeToRoot &&
+        !path.isAbsolute(relativeToRoot) &&
+        !relativeToRoot.startsWith(`..${path.sep}`)
+      );
+    });
+    if (!insideWritableRoot) {
       throw new Error(`Skill collection backup path is outside the workspace: ${relativeDir}`);
     }
   }

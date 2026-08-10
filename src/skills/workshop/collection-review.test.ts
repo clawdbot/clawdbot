@@ -68,7 +68,12 @@ describe("skill collection review", () => {
     await expect(
       runSkillCollectionReview({
         agentId: "main",
-        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        config: {
+          agents: {
+            list: [{ id: "main", default: true, model: "openai/gpt-5.6-sol@openai:work" }],
+          },
+          skills: { workshop: { autonomous: { mode: "auto" } } },
+        },
         workspaceDir,
         env: testState.env,
       }),
@@ -76,6 +81,8 @@ describe("skill collection review", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: "cron",
+        authProfileId: "openai:work",
+        authProfileIdSource: "user",
         toolsAllow: ["skill_workshop"],
         disableMessageTool: true,
         disableTrajectory: true,
@@ -287,13 +294,13 @@ describe("skill collection review", () => {
               default: true,
               workspace: workspaceDir,
               skills: ["alpha"],
-              model: "openai/gpt-5.5",
+              model: "openai/gpt-5.5@openai:alpha",
             },
             {
               id: "beta-agent",
               workspace: workspaceDir,
               skills: ["beta"],
-              model: "anthropic/claude-opus-4-6",
+              model: "openai/gpt-5.5@openai:beta",
             },
           ],
         },
@@ -303,9 +310,52 @@ describe("skill collection review", () => {
       onError,
     });
 
-    expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review models");
+    expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review identities");
     expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("claims a due workspace before dispatching the model", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-claim-");
+    await writeWorkspaceSkills(workspaceDir, [{ name: "useful", description: "Useful procedure" }]);
+    let releaseReview: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      markStarted?.();
+      await new Promise<void>((resolve) => {
+        releaseReview = resolve;
+      });
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await tool.execute("read", { action: "read", skill_name: "useful" });
+      await tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [{ action: "keep", name: "useful" }],
+      });
+      return {};
+    });
+    const config = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+      skills: { workshop: { autonomous: { mode: "auto" as const } } },
+    };
+    const first = runScheduledSkillCollectionReviews({ config, env: testState.env });
+    await started;
+    const secondError = vi.fn();
+
+    await runScheduledSkillCollectionReviews({ config, env: testState.env, onError: secondError });
+
+    expect(secondError).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    releaseReview?.();
+    await first;
   });
 
   it("admits and reports each workspace independently", async () => {

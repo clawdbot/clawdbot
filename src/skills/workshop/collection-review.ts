@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,6 +23,7 @@ import {
 import {
   isSkillCollectionReviewDue,
   recordSkillCollectionReviewSuccess,
+  withSkillCollectionReviewClaim,
 } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 
@@ -81,7 +87,7 @@ export async function runSkillCollectionReview(params: {
       `Writable skill collection is ${totalBytes} bytes; the review limit is ${MAX_RECONCILED_SKILL_BYTES}.`,
     );
   }
-  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
+  const model = resolveCollectionReviewModel(params.config, params.agentId);
   const sessionId = randomUUID();
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const collectionReconcile: SkillCollectionReconcileContext = {
@@ -104,6 +110,9 @@ export async function runSkillCollectionReview(params: {
     prompt: buildCollectionReviewPrompt(skills),
     provider: model.provider,
     model: model.model,
+    ...(model.authProfileId
+      ? { authProfileId: model.authProfileId, authProfileIdSource: "user" as const }
+      : {}),
     modelSelectionLocked: true,
     modelFallbacksOverride: [],
     timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
@@ -150,37 +159,46 @@ export async function runScheduledSkillCollectionReviews(params: {
   for (const [workspaceDir, agentIds] of workspaceAgents) {
     const agentId = agentIds[0]!;
     const stateOptions = params.env ? { env: params.env } : {};
-    if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
-      continue;
-    }
-    const reviewModels = agentIds.map((id) =>
-      resolveDefaultModelForAgent({
-        cfg: params.config,
-        agentId: id,
-      }),
-    );
-    const reviewModel = reviewModels[0]!;
-    if (
-      reviewModels.some(
-        (candidate) =>
-          candidate.provider !== reviewModel.provider || candidate.model !== reviewModel.model,
-      )
-    ) {
-      reportError(
-        new Error("Shared workspace agents use different collection-review models."),
-        workspaceDir,
-      );
-      continue;
-    }
     try {
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
-        await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
-        recordSkillCollectionReviewSuccess(workspaceDir, Date.now(), stateOptions);
-      });
+      await withSkillCollectionReviewClaim(
+        workspaceDir,
+        async () => {
+          if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
+            return;
+          }
+          const reviewModels = agentIds.map((id) =>
+            resolveCollectionReviewModel(params.config, id),
+          );
+          const reviewModel = reviewModels[0]!;
+          if (
+            reviewModels.some(
+              (candidate) =>
+                candidate.provider !== reviewModel.provider ||
+                candidate.model !== reviewModel.model ||
+                candidate.authProfileId !== reviewModel.authProfileId,
+            )
+          ) {
+            throw new Error("Shared workspace agents use different collection-review identities.");
+          }
+          await runWithGatewayIndependentRootWorkAdmission(async () => {
+            await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
+            recordSkillCollectionReviewSuccess(workspaceDir, Date.now(), stateOptions);
+          });
+        },
+        stateOptions,
+      );
     } catch (error) {
       reportError(error, workspaceDir);
     }
   }
+}
+
+function resolveCollectionReviewModel(config: OpenClawConfig, agentId: string) {
+  const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const authProfileId = splitTrailingAuthProfile(
+    resolveAgentEffectiveModelPrimary(config, agentId) ?? "",
+  ).profile;
+  return { ...model, authProfileId };
 }
 
 function buildCollectionReviewPrompt(

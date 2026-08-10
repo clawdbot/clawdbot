@@ -12,13 +12,34 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 
 const CURATOR_STATE_ID = 1;
 const REVIEW_INTERVAL_MS = 24 * 60 * 60_000;
+const REVIEW_CLAIM_MS = 11 * 60_000;
 type CollectionReviewDatabase = Pick<OpenClawStateDatabase, "skill_curator_state">;
 
 function workspaceKey(workspaceDir: string): string {
   return sha256Hex(path.resolve(workspaceDir));
+}
+
+export async function withSkillCollectionReviewClaim<T>(
+  workspaceDir: string,
+  run: () => Promise<T>,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<T> {
+  return await withOpenClawStateLease(
+    {
+      scope: "skill-collection-review",
+      key: workspaceKey(workspaceDir),
+      database: { scope: "shared", options },
+      leaseMs: REVIEW_CLAIM_MS,
+      waitMs: 0,
+      leaseLabel: "skill collection review claim",
+      operationLabel: "skill-collection.review",
+    },
+    async () => await run(),
+  );
 }
 
 function parseReviewTimes(value: string | null | undefined): Record<string, number> {

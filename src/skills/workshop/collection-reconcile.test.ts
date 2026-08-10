@@ -8,7 +8,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
+import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   listWritableSkillCollection,
   reconcileSkillCollection,
@@ -258,6 +258,57 @@ describe("skill collection reconciliation", () => {
       restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
     ).rejects.toThrow("changed after cleanup");
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
+  });
+
+  it("restores project-agent skills from their writable root", async () => {
+    const skillDir = path.join(workspaceDir, ".agents", "skills", "project-procedure");
+    await writeSkill({
+      dir: skillDir,
+      name: "project-procedure",
+      description: "Project procedure",
+      body: "# Project procedure\n",
+    });
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      readSkillHashes: await readCollectionHashes(),
+      plan: [{ action: "drop", name: "project-procedure", reason: "cleanup test" }],
+    });
+    await expect(fs.access(skillDir)).rejects.toThrow();
+
+    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
+
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "# Project procedure",
+    );
+  });
+
+  it("rejects a plan whose resulting collection exceeds the aggregate byte limit", async () => {
+    await writeWorkspaceSkills(
+      workspaceDir,
+      Array.from({ length: 7 }, (_, index) => ({
+        name: `large-${index}`,
+        description: `Large procedure ${index}`,
+      })),
+    );
+    const plan = Array.from({ length: 7 }, (_, index) => ({
+      action: "write" as const,
+      name: `large-${index}`,
+      description: `Rewritten large procedure ${index}`,
+      content: `# Large ${index}\n\n${"x".repeat(39_000)}\n`,
+    }));
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        readSkillHashes: await readCollectionHashes(),
+        plan,
+      }),
+    ).rejects.toThrow("Resulting skill collection exceeds");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "large-0", "SKILL.md"), "utf8"),
+    ).resolves.not.toContain("x".repeat(100));
   });
 });
 
