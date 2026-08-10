@@ -270,7 +270,7 @@ export async function proposeUpdateSkill(
     sha256Hex(currentContent) !== input.expectedCurrentContentHash
   ) {
     throw new Error(
-      "Patch target changed since the reviewer's read: read the skill again and redraft the patch.",
+      "Skill changed since the reviewer's read: read it again and redraft the update.",
     );
   }
   // Composition uses the same read that currentContentHash binds the proposal to, so a

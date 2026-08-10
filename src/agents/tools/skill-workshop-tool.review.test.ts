@@ -115,6 +115,14 @@ describe("skill_workshop review mode", () => {
       updateProposals: true,
       proposalMutationBudget,
     });
+    await expect(
+      reviewTool.execute("update-without-read", {
+        action: "update",
+        skill_name: "weather-planner",
+        proposal_content: "# Weather Planner\n\nCheck alerts and timing.\n",
+      }),
+    ).rejects.toThrow("read the live skill first");
+    await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
     const update = await reviewTool.execute("review-update", {
       action: "update",
       skill_name: "weather-planner",
@@ -183,7 +191,6 @@ describe("skill_workshop review mode", () => {
       kind: "update",
       skillKey: "weather-planner",
     });
-    expect(proposalMutationBudget.patchProposalIds?.size).toBe(1);
     expect((extended.details as { description?: string }).description ?? "").not.toContain(
       "Replacement",
     );
@@ -265,7 +272,7 @@ describe("skill_workshop review mode", () => {
         old_string: "A detailed operational line.",
         new_string: "A rewritten operational line.",
       }),
-    ).rejects.toThrow("cannot be patched autonomously");
+    ).rejects.toThrow("cannot be updated autonomously");
   });
 
   it("does not refund the review mutation budget after a failed mutation", async () => {

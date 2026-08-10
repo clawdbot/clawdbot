@@ -302,13 +302,13 @@ are stored in the shared OpenClaw state database; transcript content is not copi
 into scan state.
 
 In `propose` and `auto` modes, OpenClaw can also perform a conservative review after successful,
-substantial work and after the whole agent system becomes idle. That isolated review can draft at
-most one pending proposal — a new skill, a patch of an existing workspace skill, a full-body
-update, or a revision of a pending proposal. It never writes a live skill directly and cannot
-apply, reject, or quarantine a proposal. Patch proposals quote the exact live text to change; the
-tool composes the full body from the live skill. In `auto` mode, the orchestrating capture
-pipeline applies new-skill and patch results afterward through the normal scanner-gated service;
-full-body update proposals always stay pending for operator review.
+substantial work and after the whole agent system becomes idle. The review receives an
+authoritative receipt of skills the foreground run actually used. It can draft at most one pending
+proposal: a new skill, a patch or full-body rewrite of an existing workspace skill, or a revision
+of a pending proposal. Existing skills must be read before either update form, and the proposal is
+bound to that exact content hash. The reviewer never writes a live skill directly and cannot
+apply, reject, or quarantine a proposal. In `auto` mode, the orchestrating pipeline applies every
+autonomous result afterward through the normal scanner-gated service, without operator review.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.
@@ -343,9 +343,9 @@ In `propose` and `auto` modes, an isolated run of the selected model decides whe
 completed trajectory clears the evidence-gated proposal bar. The foreground model is not prompted
 to learn before it replies. The background reviewer preserves the foreground run as proposal
 provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
-mode, the capture pipeline applies resulting new-skill and patch proposals only after the
-isolated run completes; full-body update proposals always stay pending for operator review,
-because the reviewer authors them without a mechanical preservation guarantee. The review starts
+mode, the capture pipeline applies every autonomous proposal only after the isolated run
+completes. Existing-skill changes require a complete read receipt and content-hash binding before
+they are eligible for that apply step. The review starts
 only when the foreground runtime reports its resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.

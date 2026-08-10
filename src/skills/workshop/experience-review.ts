@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -71,6 +72,7 @@ type ExperienceReviewAgentContext = {
 export type SkillExperienceReviewParams = {
   event: ExperienceReviewAgentEndEvent;
   ctx: ExperienceReviewAgentContext;
+  usedSkills?: readonly RunSkillUsage[];
   config?: OpenClawConfig;
 };
 
@@ -79,6 +81,7 @@ export type ExperienceReviewCandidate = {
   config?: OpenClawConfig;
   transcript: string;
   modelIterations: number;
+  usedSkills?: readonly RunSkillUsage[];
   turnAborted?: boolean;
 };
 
@@ -103,6 +106,18 @@ type PendingExperienceReview = {
   generation: number;
   timer?: ExperienceReviewTimer;
 };
+
+function mergeRunSkillUsage(
+  ...groups: Array<readonly RunSkillUsage[] | undefined>
+): RunSkillUsage[] {
+  const merged = new Map<string, RunSkillUsage>();
+  for (const group of groups) {
+    for (const usage of group ?? []) {
+      merged.set(`${usage.source}\u0000${usage.name}\u0000${usage.activation}`, usage);
+    }
+  }
+  return [...merged.values()];
+}
 
 function isAuthProfileMigrationRequiredError(
   error: unknown,
@@ -216,6 +231,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       senderScope: string;
       iterations: number;
       messages: unknown[];
+      usedSkills: RunSkillUsage[];
       aborted: boolean;
       lastRunId?: string;
     }
@@ -335,6 +351,11 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       }
 
       const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
+      // Direct sessions keep the complete trajectory so the reviewer can connect
+      // repeated skill use and corrections across turns. Group reviews stay on the
+      // current sender's turn to avoid mixing participants into one review identity.
+      const trajectoryMessages =
+        params.ctx.chatType === "group" ? turnMessages : params.event.messages;
       // Native harnesses can report exact provider iterations even when their
       // transcript projection has a different assistant-message cardinality.
       const reportedModelIterations = params.ctx.modelIterations;
@@ -345,8 +366,15 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             ? reportedModelIterations
             : 0;
       let reviewIterations = modelIterations;
-      let reviewMessages = turnMessages;
+      let reviewMessages = trajectoryMessages;
       let reviewAborted = !params.event.success;
+      let reviewUsedSkills = mergeRunSkillUsage(
+        existing &&
+          (params.ctx.chatType !== "group" || existing.candidate.ctx.runId === params.ctx.runId)
+          ? existing.candidate.usedSkills
+          : undefined,
+        params.usedSkills,
+      );
       if (modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
         shallowBySession.delete(sessionKey);
       } else {
@@ -393,7 +421,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
               shallowBySession.delete(oldestKey);
             }
           }
-          accumulator = { senderScope, iterations: 0, messages: [], aborted: false };
+          accumulator = {
+            senderScope,
+            iterations: 0,
+            messages: [],
+            usedSkills: [],
+            aborted: false,
+          };
           shallowBySession.set(sessionKey, accumulator);
         }
         const runId = params.ctx.runId?.trim();
@@ -405,6 +439,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         accumulator.lastRunId = runId;
         accumulator.iterations += modelIterations;
         accumulator.aborted = accumulator.aborted || !params.event.success;
+        accumulator.usedSkills = mergeRunSkillUsage(accumulator.usedSkills, params.usedSkills);
         accumulator.messages = [...accumulator.messages, ...turnMessages].slice(
           -EXPERIENCE_REVIEW_MAX_SHALLOW_MESSAGES,
         );
@@ -418,6 +453,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         reviewIterations = accumulator.iterations;
         reviewMessages = accumulator.messages;
         reviewAborted = accumulator.aborted;
+        reviewUsedSkills = accumulator.usedSkills;
       }
       {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
@@ -462,6 +498,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           ...(params.config ? { config: params.config } : {}),
           transcript: formatSkillExperienceReviewTranscript(reviewMessages),
           modelIterations: reviewIterations,
+          usedSkills: reviewUsedSkills,
           turnAborted: reviewAborted,
         };
         const pending = existing ?? { candidate, generation: 0 };
@@ -514,7 +551,6 @@ async function runSkillExperienceReviewInner(
   const sessionId = randomUUID();
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
     remaining: 1,
-    patchProposalIds: new Set(),
     readSkillHashes: new Map(),
   };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
@@ -604,18 +640,6 @@ async function runSkillExperienceReviewInner(
       proposal.record.status !== "pending" ||
       proposal.record.autonomousCapture !== true
     ) {
-      continue;
-    }
-    // Patch proposals auto-apply: the service composed them by replacing only the span
-    // the reviewer quoted from the live body (or appending), so untouched content
-    // survives by construction. Full-body update proposals stay pending for review.
-    if (
-      proposal.record.kind === "update" &&
-      proposalMutationBudget.patchProposalIds?.has(proposalId) !== true
-    ) {
-      log.info(
-        `skill experience review left full-body update proposal ${proposalId} pending for operator review`,
-      );
       continue;
     }
     await autoApplySkillProposal({
