@@ -506,7 +506,8 @@ app-server routes keep Codex-owned base/model instructions instead of this
 overlay. See [GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution).
 
 The retired `agents.defaults.promptOverlays` key is rejected by config
-validation; `openclaw doctor --fix` removes it from older config files.
+validation; `openclaw doctor --fix` migrates its personality value into
+`plugins.entries.openai.config.personality` when that key is unset.
 
 ### `agents.defaults.heartbeat`
 

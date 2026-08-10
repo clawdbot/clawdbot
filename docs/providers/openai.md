@@ -866,8 +866,8 @@ friendly style layer.
 
 <Note>
 The retired `agents.defaults.promptOverlays` key is no longer read; config
-validation rejects it, and `openclaw doctor --fix` removes it from older
-config files.
+validation rejects it, and `openclaw doctor --fix` migrates its personality
+value into `plugins.entries.openai.config.personality` when that key is unset.
 </Note>
 
 ## Voice and speech
