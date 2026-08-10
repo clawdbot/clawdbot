@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -12,6 +13,7 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { setSourceReplyDeliveryModeOrigin } from "./source-reply-delivery-runtime.js";
 
 const state = setupAgentRunnerExecutionTestState();
@@ -202,10 +204,22 @@ describe("executeAgentTurn: message tool progress", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
-  it("releases a runtime-derived tool owner for an embedded fallback", async () => {
+  it("composes fallback ownership through final channel settlement", async () => {
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "custom-tool-owner",
+      label: "Custom tool owner",
+      deliveryDefaults: { visibleReplies: "message_tool" },
+      supports: ({ provider }) =>
+        provider === "custom"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "custom provider only" },
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params.run("anthropic", "primary").catch(() => undefined);
+      await params.run("custom", "plugin-fallback").catch(() => undefined);
       return {
         result: await params.run("openai", "fallback"),
         provider: "openai",
@@ -214,17 +228,19 @@ describe("executeAgentTurn: message tool progress", () => {
       };
     });
     state.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Short fallback final" }],
-      meta: {},
-    });
+    state.runEmbeddedAgentMock
+      .mockRejectedValueOnce(new Error("plugin fallback failed"))
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Short fallback final" }],
+        meta: {},
+      });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
     setSourceReplyDeliveryModeOrigin(followupRun.run, "runtime_default");
     const onCandidateMode = vi.fn();
-    await executeAgentTurn({
+    const execution = await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
@@ -248,15 +264,44 @@ describe("executeAgentTurn: message tool progress", () => {
       resolvedVerboseLevel: "off",
     });
 
-    const embeddedParams = state.runEmbeddedAgentMock.mock.calls[0]?.[0] as {
+    const pluginParams = state.runEmbeddedAgentMock.mock.calls[0]?.[0] as {
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
       forceMessageTool?: boolean;
     };
+    const embeddedParams = state.runEmbeddedAgentMock.mock.calls[1]?.[0] as {
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      forceMessageTool?: boolean;
+    };
+    expect(pluginParams).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+      forceMessageTool: true,
+    });
     expect(embeddedParams).toMatchObject({
       sourceReplyDeliveryMode: "automatic",
       forceMessageTool: false,
     });
-    expect(onCandidateMode.mock.calls).toEqual([["message_tool_only"], ["automatic"]]);
+    expect(onCandidateMode.mock.calls).toEqual([
+      ["message_tool_only"],
+      ["message_tool_only"],
+      ["automatic"],
+    ]);
+
+    expect(execution.kind).toBe("success");
+    if (execution.kind !== "success") {
+      throw new Error("expected settled fallback execution");
+    }
+    const finalPayload = execution.runResult.payloads[0];
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    expect(dispatcher.sendFinalReply(finalPayload)).toBe(true);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Short fallback final" }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    expect(dispatcher.getFailedCounts().final).toBe(0);
+    clearAgentHarnesses();
   });
 
   it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
