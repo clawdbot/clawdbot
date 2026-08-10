@@ -52,7 +52,7 @@ export type GatewayConfigSummary = {
     tailscaleMode: string | null;
   };
   discovery: {
-    wideAreaEnabled: boolean | null;
+    wideAreaEnabled: boolean;
   };
 };
 
@@ -228,7 +228,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   const remoteTokenConfigured = hasConfiguredSecretInput(remote.token, secretDefaults);
   const remotePasswordConfigured = hasConfiguredSecretInput(remote.password, secretDefaults);
 
-  const wideAreaEnabled = typeof wideArea.enabled === "boolean" ? wideArea.enabled : null;
+  const wideAreaEnabled = Boolean(normalizeOptionalString(wideArea.domain));
 
   return {
     path,

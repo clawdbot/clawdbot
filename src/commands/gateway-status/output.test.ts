@@ -131,7 +131,7 @@ function createReachableTarget(
         tailscaleMode: null,
       },
       discovery: {
-        wideAreaEnabled: null,
+        wideAreaEnabled: false,
       },
     },
   };

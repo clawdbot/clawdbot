@@ -16,6 +16,22 @@ import {
 import { createSecretRefGatewayConfig } from "./test-support.js";
 
 describe("extractConfigSummary", () => {
+  it.each([
+    ["canonical domain", { discovery: { wideArea: { domain: "openclaw.internal" } } }, true],
+    ["no domain", {}, false],
+  ] as const)("derives wide-area discovery state from %s", (_label, config, expected) => {
+    const summary = extractConfigSummary({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: true,
+      issues: [],
+      legacyIssues: [],
+      config,
+    });
+
+    expect(summary.discovery.wideAreaEnabled).toBe(expected);
+  });
+
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
     const summary = extractConfigSummary({
       path: "/tmp/openclaw.json",

@@ -36,6 +36,7 @@ vi.mock("../config/config.js", async () => {
 });
 
 import { Command } from "commander";
+import { defaultRuntime } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { registerDnsCli } from "./dns-cli.js";
 
@@ -70,7 +71,7 @@ describe("dns-cli probe bounds", () => {
     vi.restoreAllMocks();
   });
 
-  async function runDnsSetupApply(): Promise<void> {
+  async function runDnsSetup(options?: { apply?: boolean }): Promise<void> {
     const program = new Command();
     program.exitOverride();
     registerDnsCli(program);
@@ -83,13 +84,24 @@ describe("dns-cli probe bounds", () => {
         "setup",
         "--domain",
         "openclaw.internal",
-        "--apply",
+        ...(options?.apply ? ["--apply"] : []),
       ]),
     );
   }
 
+  it("prints the canonical wide-area discovery config", async () => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+
+    await runDnsSetup();
+
+    expect(writeJson).toHaveBeenCalledWith({
+      gateway: { bind: "auto" },
+      discovery: { wideArea: { domain: "openclaw.internal." } },
+    });
+  });
+
   it("bounds the brew prefix probe with a SIGKILL-backed timeout", async () => {
-    await runDnsSetupApply();
+    await runDnsSetup({ apply: true });
 
     const probeCall = spawnSyncMock.mock.calls.find(isBrewPrefixProbe);
     expect(probeCall).toBeDefined();
@@ -97,7 +109,7 @@ describe("dns-cli probe bounds", () => {
   });
 
   it("leaves long-running setup subprocesses unbounded", async () => {
-    await runDnsSetupApply();
+    await runDnsSetup({ apply: true });
 
     const nonProbeCalls = spawnSyncMock.mock.calls.filter((call) => !isBrewPrefixProbe(call));
     expect(nonProbeCalls.length).toBeGreaterThan(0);

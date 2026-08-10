@@ -23,6 +23,7 @@ import {
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+import { validateConfigObjectRaw } from "../../src/config/validation.ts";
 
 const tempDirs: string[] = [];
 
@@ -226,6 +227,22 @@ describe("dev tooling safety helpers", () => {
 });
 
 describe("script-specific dev tooling hardening", () => {
+  it.each([
+    ["direct", undefined],
+    ["capture proxy", 12_345],
+  ] as const)(
+    "builds a strict-valid Anthropic gateway prompt probe config for %s",
+    (_mode, proxyPort) => {
+      const config = promptProbeTesting.buildGatewayPromptConfig({
+        profileId: "anthropic:test",
+        proxyPort,
+      });
+      const result = validateConfigObjectRaw(config, { validateBundledChannels: true });
+
+      expect(result.ok, result.ok ? undefined : JSON.stringify(result.issues)).toBe(true);
+    },
+  );
+
   it("rejects unknown Discord smoke drivers instead of silently using token mode", () => {
     expect(discordSmokeTesting.parseDriverMode("webhook")).toBe("webhook");
     expect(() => discordSmokeTesting.parseDriverMode("curl")).toThrow(/Invalid --driver/u);

@@ -815,6 +815,42 @@ async function readLogTail(logPath: string, maxBytes = GATEWAY_LOG_TAIL_BYTES): 
   }
 }
 
+function buildGatewayPromptConfig(params: { profileId: string; proxyPort: number | undefined }) {
+  return {
+    gateway: {
+      mode: "local",
+      controlUi: { enabled: false },
+      tailscale: { mode: "off" },
+    },
+    discovery: {
+      mdns: { mode: "off" },
+    },
+    ...(params.proxyPort
+      ? {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: `http://127.0.0.1:${params.proxyPort}`,
+                api: "anthropic-messages",
+                models: [],
+              },
+            },
+          },
+        }
+      : {}),
+    auth: {
+      profiles: { [params.profileId]: { provider: "anthropic", mode: "token" } },
+      order: { anthropic: [params.profileId] },
+    },
+    agents: {
+      defaults: {
+        model: "anthropic/claude-sonnet-4-6",
+      },
+      entries: { main: { default: true } },
+    },
+  };
+}
+
 async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
   const tokenSource = await resolveSetupTokenSource();
   const [{ callGateway }, { extractPayloadText }] = await Promise.all([
@@ -846,42 +882,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
     await fs.writeFile(
       configPath,
       `${JSON.stringify(
-        {
-          gateway: {
-            mode: "local",
-            controlUi: { enabled: false },
-            tailscale: { mode: "off" },
-          },
-          discovery: {
-            mdns: { mode: "off" },
-            wideArea: { enabled: false },
-          },
-          ...(proxyPort
-            ? {
-                models: {
-                  providers: {
-                    anthropic: {
-                      baseUrl: `http://127.0.0.1:${proxyPort}`,
-                      api: "anthropic-messages",
-                      models: [],
-                    },
-                  },
-                },
-              }
-            : {}),
-          auth: {
-            profiles: { [tokenSource.profileId]: { provider: "anthropic", mode: "token" } },
-            order: { anthropic: [tokenSource.profileId] },
-          },
-          agents: {
-            defaults: {
-              model: "anthropic/claude-sonnet-4-6",
-              heartbeat: {
-                includeSystemPromptSection: false,
-              },
-            },
-          },
-        },
+        buildGatewayPromptConfig({ profileId: tokenSource.profileId, proxyPort }),
         null,
         2,
       )}\n`,
@@ -1006,6 +1007,7 @@ async function main() {
 }
 
 export const testing = {
+  buildGatewayPromptConfig,
   cleanupPromptProbeTmpDir,
   installGatewayPromptParentSignalHandlers,
   matchesExtraUsage400,
