@@ -861,22 +861,4 @@ describe("terminal gateway policy", () => {
     });
     expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
   });
-
-  it("sanitizes terminal snapshots before returning plain text", async () => {
-    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
-    const finals = Array.from({ length: 0x7e - 0x40 + 1 }, (_, offset) =>
-      String.fromCharCode(0x40 + offset),
-    );
-    const sequences = ["\u001B[", "\u009B"]
-      .flatMap((introducer) => finals.map((finalByte) => introducer + finalByte))
-      .join("");
-    sessions.snapshot.mockReturnValue(`before${sequences}after`);
-
-    await expectDefined(
-      terminalHandlers["terminal.text"],
-      'terminalHandlers["terminal.text"] test invariant',
-    )(opts);
-
-    expect(respond).toHaveBeenCalledWith(true, { text: "beforeafter" });
-  });
 });

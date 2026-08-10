@@ -26,7 +26,6 @@ const CURRENT_TRAIN_METHODS = [
   "terminal.close",
   "terminal.attach",
   "terminal.list",
-  "terminal.text",
   "terminal.upload",
   "worktrees.list",
   "worktrees.branches",

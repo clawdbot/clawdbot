@@ -7,7 +7,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -914,12 +913,6 @@ describe("openclaw.chat", () => {
     await approvalStarted.promise;
     try {
       expect(systemAgentLane()).toMatchObject({ activeCount: 1, queuedCount: 0 });
-      const restartPreflight = createSafeGatewayRestartPreflight();
-      expect(restartPreflight.safe).toBe(false);
-      expect(restartPreflight.counts.queueSize).toBe(1);
-      expect(restartPreflight.blockers).toContainEqual(
-        expect.objectContaining({ kind: "queue", count: 1 }),
-      );
     } finally {
       releaseApproval.resolve();
     }
@@ -936,7 +929,6 @@ describe("openclaw.chat", () => {
       summary: "Scheduled Gateway restart",
     });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(createSafeGatewayRestartPreflight().counts.queueSize).toBe(0);
   });
 
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
