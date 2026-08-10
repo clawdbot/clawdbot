@@ -150,6 +150,7 @@ export function renderCustodianTranscriptEntry(params: {
   wizardValue: unknown;
   wizardDisabled: boolean;
   wizardSecretVisible: boolean;
+  showWizardCancel: boolean;
   onSelect: (label: string) => void;
   onSkip: () => void;
   onWizardValueChange: (value: unknown) => void;
@@ -195,16 +196,18 @@ export function renderCustodianTranscriptEntry(params: {
             onAnswer: params.onWizardAnswer,
             onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
           })}
-          <div class="custodian__wizard-actions">
-            <button
-              class="btn btn--ghost custodian__wizard-cancel"
-              type="button"
-              ?disabled=${params.wizardDisabled}
-              @click=${params.onWizardCancel}
-            >
-              ${t("custodian.cancel")}
-            </button>
-          </div>
+          ${params.showWizardCancel
+            ? html`<div class="custodian__wizard-actions">
+                <button
+                  class="btn btn--ghost custodian__wizard-cancel"
+                  type="button"
+                  ?disabled=${params.wizardDisabled}
+                  @click=${params.onWizardCancel}
+                >
+                  ${t("custodian.cancel")}
+                </button>
+              </div>`
+            : nothing}
         </section>`
       : nothing}
   `;

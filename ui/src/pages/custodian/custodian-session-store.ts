@@ -1,4 +1,5 @@
 import {
+  GATEWAY_SERVER_CAPS,
   readSystemAgentInferenceUnavailableErrorDetails,
   type SystemAgentChatParams,
   type SystemAgentChatResult,
@@ -8,7 +9,11 @@ import type { WizardStep } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  canCallGatewayMethod,
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
@@ -164,6 +169,15 @@ export class CustodianSessionStore {
 
   get setupRequired(): boolean {
     return this.setupIssue !== null;
+  }
+
+  get wizardCancelAvailable(): boolean {
+    const snapshot = this.context?.gateway.snapshot;
+    return (
+      snapshot !== undefined &&
+      isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL) ===
+        true
+    );
   }
 
   retry(): void {
@@ -327,6 +341,7 @@ export class CustodianSessionStore {
       !this.wizardInputPending ||
       !client ||
       !this.chatAvailable ||
+      !this.wizardCancelAvailable ||
       this.sending ||
       this.setupRequired
     ) {

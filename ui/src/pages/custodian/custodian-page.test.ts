@@ -248,6 +248,36 @@ describe("custodian page", () => {
     expect(page.querySelector(".agent-chat__composer-shell")).not.toBeNull();
   });
 
+  it("hides typed cancel when the Gateway does not advertise it", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      sessionId: "old-gateway-wizard-session",
+      reply: "Enter the secret.",
+      action: "none",
+      sensitive: true,
+      wizardInputPending: true,
+      step: {
+        id: "secret",
+        type: "text",
+        message: "Twitch client secret",
+        sensitive: true,
+      },
+    });
+    const { context } = createContext(request, ["openclaw.chat"], {
+      gatewayCapabilities: [],
+    });
+    const { page } = await mountPage(context);
+
+    await waitForFast(() => {
+      expect(page.querySelector(".custodian__wizard-step")).not.toBeNull();
+    });
+    expect(page.querySelector(".custodian__wizard-cancel")).toBeNull();
+
+    page.store.cancelWizardStep(page.store.messages.at(-1)!);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("wizardCancel");
+  });
+
   it("collapses an empty transcript around a blocking startup error", async () => {
     const request = vi
       .fn()
