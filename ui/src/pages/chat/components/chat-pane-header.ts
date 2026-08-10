@@ -124,6 +124,118 @@ export function resolveChatPaneWorkspace(params: {
   return { root, label };
 }
 
+/**
+ * Header identity trail: which project, then which session inside it. Segments
+ * and separators are rendered from one list so a further segment — the parent
+ * session of a nested thread (#121700), yielding project / parent / child —
+ * slots in without moving the project chip or the title.
+ */
+function renderIdentityCrumbs(
+  props: ChatPaneHeaderProps,
+  copied: boolean,
+  copyPathLabel: string,
+  copyBranchLabel: string,
+) {
+  const segments = [
+    renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel),
+    renderSessionCrumb(props),
+  ].filter((segment): segment is TemplateResult => segment !== nothing);
+  return html`
+    <div class="chat-pane__crumbs">
+      ${segments.map(
+        (segment, index) =>
+          html`${index > 0
+            ? html`<span class="chat-pane__crumb-sep" aria-hidden="true">/</span>`
+            : nothing}${segment}`,
+      )}
+    </div>
+  `;
+}
+
+function renderSessionCrumb(props: ChatPaneHeaderProps) {
+  if (props.editing) {
+    return html`<input
+      class="chat-pane__session-title-input"
+      .value=${props.renameValue}
+      aria-label=${t("chat.sessionHeader.renameInputAria")}
+      placeholder=${t("chat.sessionHeader.renameInputPlaceholder")}
+      @input=${(event: InputEvent) =>
+        props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
+      @keydown=${(event: KeyboardEvent) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          props.onCommitRename();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+      @blur=${props.onCommitRename}
+    />`;
+  }
+  return props.catalog || !props.session || props.renameDisabledReason
+    ? html`<span class="chat-pane__session-title" title=${props.renameDisabledReason ?? props.title}
+        ><span class="chat-pane__session-title-text">${props.title}</span></span
+      >`
+    : html`<button
+        class="chat-pane__session-title chat-pane__session-title-button"
+        type="button"
+        title=${t("chat.sessionHeader.renameTooltip")}
+        aria-label=${t("chat.sessionHeader.renameAria", { title: props.title })}
+        @click=${props.onBeginRename}
+      >
+        <span class="chat-pane__session-title-text">${props.title}</span>
+      </button>`;
+}
+
+function renderProjectCrumb(
+  props: ChatPaneHeaderProps,
+  copied: boolean,
+  copyPathLabel: string,
+  copyBranchLabel: string,
+) {
+  if (props.catalog || !props.workspaceLabel) {
+    return nothing;
+  }
+  return html`
+    <wa-dropdown
+      class="chat-pane__workspace-menu"
+      placement="bottom-start"
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        const value = event.detail.item.value;
+        if (value === "reveal" || value === "copy-path" || value === "copy-branch") {
+          props.onMenuAction(value);
+        }
+      }}
+      @wa-show=${() => props.onMenuOpenChange(true)}
+      @wa-hide=${() => props.onMenuOpenChange(false)}
+    >
+      <button
+        slot="trigger"
+        class="chat-pane__workspace-chip"
+        type="button"
+        title=${props.workspaceRoot ?? props.workspaceLabel}
+        aria-label=${t("chat.sessionHeader.workspaceAria", {
+          workspace: props.workspaceLabel,
+        })}
+      >
+        ${copied ? icons.check : renderWorkspaceChipIcon(props.workspaceIcon)}<span
+          >${copied ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span
+        >
+      </button>
+      ${props.canReveal && props.workspaceRoot
+        ? html`<wa-dropdown-item value="reveal">${revealLabel(props.platform)}</wa-dropdown-item>`
+        : nothing}
+      ${props.workspaceRoot
+        ? html`<wa-dropdown-item value="copy-path">${copyPathLabel}</wa-dropdown-item>`
+        : nothing}
+      ${props.branch
+        ? html`<wa-dropdown-item value="copy-branch">${copyBranchLabel}</wa-dropdown-item>`
+        : nothing}
+    </wa-dropdown>
+  `;
+}
+
 function renderWorkspaceChipIcon(icon: ChatPaneHeaderProps["workspaceIcon"]) {
   return icon
     ? html`<openclaw-workspace-icon
@@ -294,86 +406,12 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             >${icons.lock}</span
           >`
         : nothing}
-      ${props.editing
-        ? html`<input
-            class="chat-pane__session-title-input"
-            .value=${props.renameValue}
-            aria-label=${t("chat.sessionHeader.renameInputAria")}
-            placeholder=${t("chat.sessionHeader.renameInputPlaceholder")}
-            @input=${(event: InputEvent) =>
-              props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                props.onCommitRename();
-              } else if (event.key === "Escape") {
-                event.preventDefault();
-                props.onCancelRename();
-              }
-            }}
-            @blur=${props.onCommitRename}
-          />`
-        : props.catalog || !props.session || props.renameDisabledReason
-          ? html`<span
-              class="chat-pane__session-title"
-              title=${props.renameDisabledReason ?? props.title}
-              ><span class="chat-pane__session-title-text">${props.title}</span></span
-            >`
-          : html`<button
-              class="chat-pane__session-title chat-pane__session-title-button"
-              type="button"
-              title=${t("chat.sessionHeader.renameTooltip")}
-              aria-label=${t("chat.sessionHeader.renameAria", { title: props.title })}
-              @click=${props.onBeginRename}
-            >
-              <span class="chat-pane__session-title-text">${props.title}</span>
-            </button>`}
+      ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
       ${renderSessionOwnerChip(
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
         "created",
       )}
-      ${!props.catalog && props.workspaceLabel
-        ? html`
-            <wa-dropdown
-              class="chat-pane__workspace-menu"
-              placement="bottom-start"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                const value = event.detail.item.value;
-                if (value === "reveal" || value === "copy-path" || value === "copy-branch") {
-                  props.onMenuAction(value);
-                }
-              }}
-              @wa-show=${() => props.onMenuOpenChange(true)}
-              @wa-hide=${() => props.onMenuOpenChange(false)}
-            >
-              <button
-                slot="trigger"
-                class="chat-pane__workspace-chip"
-                type="button"
-                title=${props.workspaceRoot ?? props.workspaceLabel}
-                aria-label=${t("chat.sessionHeader.workspaceAria", {
-                  workspace: props.workspaceLabel,
-                })}
-              >
-                ${copied ? icons.check : renderWorkspaceChipIcon(props.workspaceIcon)}<span
-                  >${copied ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span
-                >
-              </button>
-              ${props.canReveal && props.workspaceRoot
-                ? html`<wa-dropdown-item value="reveal"
-                    >${revealLabel(props.platform)}</wa-dropdown-item
-                  >`
-                : nothing}
-              ${props.workspaceRoot
-                ? html`<wa-dropdown-item value="copy-path">${copyPathLabel}</wa-dropdown-item>`
-                : nothing}
-              ${props.branch
-                ? html`<wa-dropdown-item value="copy-branch">${copyBranchLabel}</wa-dropdown-item>`
-                : nothing}
-            </wa-dropdown>
-          `
-        : nothing}
       ${props.presence ?? nothing} ${props.faceControl ?? nothing}
       ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1

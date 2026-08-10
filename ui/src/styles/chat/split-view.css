@@ -162,8 +162,33 @@ openclaw-chat-pane {
   -webkit-user-select: none;
 }
 
-/* The title hugs its text so the workspace chip sits right after it (the
-   header's shared 8px gap provides the spacing); it may shrink with ellipsis
+/* Identity trail: project, then session. One flex row owns the alignment of
+   every segment, so the 26px project chip and the 12px text segments centre on
+   a single line and a future parent-session segment inherits it for free. */
+.chat-pane__crumbs {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Renaming needs the row's spare width, which the trail must pass through:
+   without this the input is trapped inside a shrink-only container. */
+.chat-pane__crumbs:has(.chat-pane__session-title-input) {
+  flex: 1 1 auto;
+}
+
+/* House separator treatment: an aria-hidden glyph tinted with --muted, spacing
+   from the row gap, no size or color of its own beyond matching the title. */
+.chat-pane__crumb-sep {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The title hugs its text so the segments after it stay adjacent (the trail's
+   shared 8px gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
   flex: 0 1 auto;
@@ -251,18 +276,18 @@ openclaw-chat-pane {
 }
 
 /* Project icons are arbitrary artwork, so they keep their own pixels: matched to
-   the glyph box, contained rather than stretched, never restyled by icon rules.
-   Many favicons are one flat color on transparency and are drawn for a light
-   browser tab, so on a dark chip they would sink into the background. The halo
-   is drawn in the theme's text color, which contrasts with the chip in every
-   theme, and traces the artwork's own alpha instead of boxing it in a plate. */
+   the glyph box, contained rather than stretched, and deliberately unstyled —
+   no shadow, plate, or filter. Accepted tradeoff: a favicon that is one flat
+   dark color on transparency loses contrast against a dark chip. Rescuing it
+   unconditionally would cost every normal full-color icon, so if it ever
+   matters in practice the escape hatch is a plate applied conditionally, not a
+   blanket effect here. */
 .chat-pane__workspace-chip .workspace-icon {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
   border-radius: 2px;
   object-fit: contain;
-  filter: drop-shadow(0 0 1px color-mix(in srgb, var(--text) 45%, transparent));
 }
 
 .chat-pane__workspace-menu {
@@ -524,6 +549,12 @@ openclaw-chat-pane {
   }
 
   .chat-pane__workspace-chip span {
+    display: none;
+  }
+
+  /* The project name is gone at this width, so the separator would trail an
+     icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__crumb-sep {
     display: none;
   }
 

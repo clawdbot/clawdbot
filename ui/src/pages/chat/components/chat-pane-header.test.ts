@@ -299,15 +299,45 @@ describe("chat pane header", () => {
     expect(props.onBeginRename).toHaveBeenCalledOnce();
   });
 
-  it("places pane presence between the workspace chip and face control", () => {
+  it("places pane presence between the identity trail and face control", () => {
     const { container } = mount({
       presence: html`<span data-slot="presence"></span>`,
       faceControl: html`<span data-slot="face"></span>`,
     });
-    const workspace = container.querySelector(".chat-pane__workspace-menu");
-    expect(workspace?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
-    expect(workspace?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe(
-      "face",
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
+    expect(crumbs?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe("face");
+  });
+
+  it("leads with the project, then a separator, then the session title", () => {
+    const { container } = mount();
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    const segments = [...(crumbs?.children ?? [])].map((child) => child.className);
+    expect(segments).toEqual([
+      "chat-pane__workspace-menu",
+      "chat-pane__crumb-sep",
+      "chat-pane__session-title chat-pane__session-title-button",
+    ]);
+    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.textContent).toBe("/");
+    expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+  });
+
+  it("drops the separator when the session has no project segment", () => {
+    const { container } = mount({ workspaceLabel: null, workspaceRoot: null });
+    expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
+    expect(container.querySelector(".chat-pane__crumbs")?.firstElementChild?.className).toContain(
+      "chat-pane__session-title",
+    );
+  });
+
+  it("keeps the rename input inside the trail so the project stays visible", () => {
+    const { container } = mount({ editing: true, renameValue: "Renaming" });
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.querySelector(".chat-pane__workspace-chip")).not.toBeNull();
+    expect(crumbs?.querySelector<HTMLInputElement>(".chat-pane__session-title-input")?.value).toBe(
+      "Renaming",
     );
   });
 
