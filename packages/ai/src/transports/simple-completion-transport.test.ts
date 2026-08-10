@@ -312,20 +312,41 @@ describe("prepareModelForSimpleCompletion", () => {
     resolveProviderStreamFn.mockReturnValueOnce(undefined);
     createTransportAwareStreamFnForModel.mockReturnValueOnce(pluginStreamFn);
     wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(({ context }) => context.streamFn);
+    ensureCustomApiRegistered.mockImplementation(
+      (registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
+        if (registry.getApiProvider(api)) {
+          return false;
+        }
+        registry.registerApiProvider({ api, stream: streamFn, streamSimple: streamFn });
+        return true;
+      },
+    );
 
     const result = prepareModelForSimpleCompletion({ model });
+    const dispatchApi =
+      "openclaw-provider-stream:meta:muse-spark-1.2:openai-responses:https%3A%2F%2Fapi.meta.ai%2Fv1";
 
     expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
       expect.objectContaining({
         context: expect.objectContaining({
-          model: expect.objectContaining({
-            api: expect.stringMatching(/^openclaw-provider-stream:/),
-          }),
+          model: expect.objectContaining({ api: dispatchApi }),
           sourceApi: "openai-responses",
         }),
       }),
     );
     expect(result.api).toMatch(/^openclaw-provider-simple:/);
+    const finalStreamFn = apiRegistry.getApiProvider(result.api)?.streamSimple;
+    if (!finalStreamFn) {
+      throw new Error("Expected projected simple completion stream");
+    }
+
+    void finalStreamFn(result, { messages: [] }, {});
+
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ api: dispatchApi }),
+      { messages: [] },
+      {},
+    );
   });
 
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {

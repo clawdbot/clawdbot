@@ -104,7 +104,7 @@ describe("meta provider", () => {
     });
   });
 
-  it("does not wrap non-Responses Meta models for either stream hook", () => {
+  it("does not wrap projected non-Responses Meta models for either stream hook", () => {
     const captured = capturePluginRegistration(plugin);
     const [provider] = captured.providers;
     if (!provider) {
@@ -112,8 +112,8 @@ describe("meta provider", () => {
     }
     const model = {
       ...resolveCatalogModel(CATALOG_CAP_MODEL_ID),
-      api: "openai-completions",
-    } as Model<"openai-completions">;
+      api: "openclaw-provider-stream:meta:muse-spark-1.2",
+    } as Model;
 
     for (const hook of [provider.wrapStreamFn, provider.wrapSimpleCompletionStreamFn]) {
       if (!hook) {
@@ -130,6 +130,7 @@ describe("meta provider", () => {
         provider: "meta",
         modelId: model.id,
         model,
+        sourceApi: "openai-completions",
         streamFn: baseStreamFn,
       });
 

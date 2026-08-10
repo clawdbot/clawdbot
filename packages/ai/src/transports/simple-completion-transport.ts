@@ -95,7 +95,7 @@ function applyProviderSimpleCompletionWrapper(
   registry: ApiRegistry,
   model: Model,
   cfg?: unknown,
-  sourceApi: Api = model.api,
+  hookSourceApi: Api = model.api,
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -105,9 +105,9 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const sourceApi = model.api;
+  const dispatchApi = model.api;
   const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
-    sourceProvider.streamSimple(projectModel(runtimeModel, { api: sourceApi }), context, options);
+    sourceProvider.streamSimple(projectModel(runtimeModel, { api: dispatchApi }), context, options);
   const streamFn = getAiTransportHost().plugin.wrapSimpleCompletionStream({
     provider: model.provider,
     config: cfg,
@@ -116,7 +116,7 @@ function applyProviderSimpleCompletionWrapper(
       provider: model.provider,
       modelId: model.id,
       model,
-      sourceApi,
+      sourceApi: hookSourceApi,
       streamFn: sourceStreamFn,
     },
   });
