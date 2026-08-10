@@ -1584,20 +1584,6 @@ openclaw-chat-session-rail {
   border-radius: var(--radius-xl);
 }
 
-.chat-session-rail--restore {
-  width: 28px;
-  border-radius: var(--radius-md);
-  color: var(--muted);
-  opacity: 0.45;
-  transition: opacity 0.15s var(--ease-out);
-}
-
-.chat-session-rail--restore:hover,
-.chat-session-rail--restore:focus-visible {
-  color: var(--text);
-  opacity: 1;
-}
-
 .chat-session-rail__header {
   display: flex;
   align-items: flex-start;
@@ -1824,10 +1810,6 @@ openclaw-chat-session-rail {
 .chat-session-rail__pr-checks,
 .chat-session-rail__timestamp,
 .chat-session-rail__hint,
-.chat-session-rail__empty {
-  color: var(--muted);
-}
-
 .chat-session-rail__thread {
   display: flex;
   flex: 1 1 auto;
@@ -1841,11 +1823,60 @@ openclaw-chat-session-rail {
   overscroll-behavior-y: contain;
 }
 
-.chat-session-rail__empty {
+/* No digest means no digest block, so the thread would otherwise stack its own
+   border directly under the header's and open with a hanging 12px gap. */
+.chat-session-rail__header + .chat-session-rail__thread {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.chat-session-rail__starters {
+  display: grid;
+  gap: 12px;
   margin: auto 0;
+  justify-items: center;
+}
+
+.chat-session-rail__empty {
+  margin: 0;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
   text-align: center;
+}
+
+.chat-session-rail__starter-row {
+  justify-content: center;
+  gap: 6px;
+}
+
+.chat-session-rail__starter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chat-session-rail__starter svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.chat-session-rail__starter:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.chat-session-rail__starter:disabled:hover {
+  border-color: var(--border);
+  transform: none;
 }
 
 .chat-session-rail__exchange {
@@ -1917,6 +1948,7 @@ openclaw-chat-session-rail {
   flex: 0 0 auto;
   padding: 10px 10px 11px 14px;
   border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 40%, transparent);
 }
 
 .chat-session-rail__prompt {
@@ -1928,9 +1960,9 @@ openclaw-chat-session-rail {
   width: 100%;
   min-height: 34px;
   padding: 7px 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--secondary);
+  background: var(--card);
   color: var(--text);
   font: inherit;
   font-size: 12.5px;
@@ -1970,11 +2002,6 @@ openclaw-chat-session-rail {
 
   .chat-session-rail--expanded {
     max-height: min(58vh, 460px);
-  }
-
-  .chat-session-rail--restore {
-    left: auto;
-    width: 28px;
   }
 }
 

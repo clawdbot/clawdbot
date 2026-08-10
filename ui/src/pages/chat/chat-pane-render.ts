@@ -298,7 +298,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       sessionRailCompanion: catalogKey
         ? undefined
         : this.sessionCompanionThreads.view(state.sessionKey),
-      ...this.sessionRailOpenRequestProps(state.sessionKey),
+      ...this.sessionRailCommandProps(state.sessionKey),
       sessionRailMode: selectedSessionRailMode,
       sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),

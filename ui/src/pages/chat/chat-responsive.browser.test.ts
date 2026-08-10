@@ -657,16 +657,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             draft: string;
           };
           connected: boolean;
-          consumedOpenRequest: number;
-          onOpenRequestConsumed: (openRequest: number) => void;
+          command: { generation: number; intent: "open" | "toggle" } | null;
+          consumedCommandGeneration: number;
+          onCommandConsumed: (generation: number) => void;
           onVisibilityChange: (visible: boolean) => void;
-          openRequest: number;
           sessionKey: string;
           updateComplete: Promise<boolean>;
         };
         const createRail = () => document.createElement("openclaw-chat-session-rail") as Rail;
         let rail = createRail();
-        let consumedOpenRequest = 0;
+        let consumedGeneration = 0;
         let visibleReports = 0;
         const configureRail = (nextRail: Rail) => {
           nextRail.companion = {
@@ -677,9 +677,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             draft: "What changed?",
           };
           nextRail.connected = true;
-          nextRail.consumedOpenRequest = consumedOpenRequest;
-          nextRail.onOpenRequestConsumed = (openRequest) => {
-            consumedOpenRequest = openRequest;
+          nextRail.consumedCommandGeneration = consumedGeneration;
+          nextRail.onCommandConsumed = (generation) => {
+            consumedGeneration = generation;
           };
           nextRail.onVisibilityChange = (visible) => {
             if (visible) {
@@ -693,10 +693,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await rail.updateComplete;
         const mode = () =>
           rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
-        const update = async (sessionKey: string, openRequest: number) => {
+        const update = async (sessionKey: string, generation: number) => {
           rail.sessionKey = sessionKey;
-          rail.openRequest = openRequest;
-          rail.consumedOpenRequest = consumedOpenRequest;
+          rail.command = generation > 0 ? { generation, intent: "open" } : null;
+          rail.consumedCommandGeneration = consumedGeneration;
           await rail.updateComplete;
           return mode();
         };
@@ -711,7 +711,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         rail = createRail();
         configureRail(rail);
         rail.sessionKey = "agent:main:a";
-        rail.openRequest = 2;
+        rail.command = { generation: 2, intent: "open" };
         document.body.append(rail);
         await rail.updateComplete;
         const remountMode = mode();
