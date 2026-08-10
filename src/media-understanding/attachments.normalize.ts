@@ -18,7 +18,7 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
   if (!value) {
     return undefined;
   }
-  if (/^file:\/\//iu.test(value)) {
+  if (/^file:/iu.test(value)) {
     try {
       return safeFileURLToPath(value);
     } catch {
