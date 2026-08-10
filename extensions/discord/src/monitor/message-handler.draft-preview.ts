@@ -1,8 +1,6 @@
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type AgentPlanStep,
-  buildChannelProgressDraftLine,
-  buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
@@ -124,10 +122,6 @@ export function createDiscordDraftPreviewController(params: {
     commentaryLinePrefix: "💬 ",
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
-    buildProgressEventLine: (input, options) =>
-      input.event === "tool" || input.event === "item"
-        ? buildChannelProgressDraftLineForEntry(params.discordConfig, input, options)
-        : buildChannelProgressDraftLine(input, options),
     update: async (previewText, options) => {
       if (!draftStream) {
         return false;

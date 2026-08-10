@@ -103,6 +103,68 @@ describe("buildChannelProgressDraftLine", () => {
     });
     expect(line?.text).not.toContain("command false");
   });
+
+  it.each([
+    { source: "metadata", detail: { meta: "curl https://private.example/metadata" } },
+    { source: "summary", detail: { summary: "curl https://private.example/summary" } },
+    {
+      source: "progress text",
+      detail: { progressText: "curl https://private.example/progress" },
+    },
+  ])("hides command item $source in status-only progress lines", ({ detail }) => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "tool:exec-1",
+        toolCallId: "exec-1",
+        itemKind: "command",
+        name: "exec",
+        status: "running",
+        ...detail,
+      },
+      { commandText: "status" },
+    );
+
+    expect(line).toMatchObject({
+      id: "tool:exec-1",
+      kind: "item",
+      text: "🛠️ Exec",
+      status: "running",
+    });
+    expect(line?.detail).toBeUndefined();
+  });
+
+  it("keeps command metadata precedence in raw progress lines", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        meta: "command metadata",
+        summary: "command summary",
+        progressText: "command progress",
+      },
+      { commandText: "raw" },
+    );
+
+    expect(line?.detail).toBe("command metadata");
+    expect(line?.text).toContain("command metadata");
+  });
+
+  it("keeps non-command metadata in status-only progress lines", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemKind: "tool",
+        name: "read",
+        meta: "/tmp/important.ts",
+      },
+      { commandText: "status" },
+    );
+
+    expect(line?.detail).toBe("/tmp/important.ts");
+    expect(line?.text).toContain("/tmp/important.ts");
+  });
 });
 
 // Claude CLI tool names arrive capitalized. Each tool call is described twice —

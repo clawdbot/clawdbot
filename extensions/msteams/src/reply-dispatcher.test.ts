@@ -634,6 +634,45 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(lastUpdate).not.toContain("completed");
   });
 
+  it("hides command details while preserving failed command status", async () => {
+    vi.useFakeTimers();
+    const dispatcher = createDispatcher("personal", {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "Working",
+          commandText: "status",
+        },
+      },
+    });
+
+    await dispatcher.replyOptions.onItemEvent?.({
+      itemId: "tool:private-command",
+      toolCallId: "private-command",
+      kind: "command",
+      name: "exec",
+      meta: "curl https://private.example/metadata",
+      summary: "curl https://private.example/summary",
+      progressText: "curl https://private.example/progress",
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "tool:private-command-output",
+      toolCallId: "private-command",
+      phase: "end",
+      title: "curl https://private.example/output",
+      name: "exec",
+      exitCode: 2,
+    });
+
+    const updates = getStreamMock()
+      .update.mock.calls.map(([text]) => text)
+      .join("\n");
+    expect(updates).toContain("🛠️ Exec");
+    expect(updates).toContain("exit 2");
+    expect(updates).not.toContain("private.example");
+  });
+
   it("replaces reasoning progress snapshots in progress mode", async () => {
     vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {

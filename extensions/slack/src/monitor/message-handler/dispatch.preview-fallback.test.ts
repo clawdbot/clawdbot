@@ -95,6 +95,7 @@ let mockedDispatcherCapturesDeliveryErrors = false;
 
 let mockedProgressEvents: string[] = [];
 let mockedEmptyProgressToolName: string | undefined;
+let capturedCommandOutputCommandText: "raw" | "status" | undefined;
 let mockedReplyOptionEvents: Array<
   | {
       kind: "item";
@@ -509,18 +510,21 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       return "automatic";
     },
     resolveAgentOutboundIdentity: () => undefined,
-    buildChannelProgressDraftLine: (params: {
-      event?: string;
-      itemId?: string;
-      toolCallId?: string;
-      progressText?: string;
-      summary?: string;
-      explanation?: string;
-      title?: string;
-      name?: string;
-      status?: string;
-      exitCode?: number | null;
-    }) => {
+    buildChannelProgressDraftLine: (
+      params: {
+        event?: string;
+        itemId?: string;
+        toolCallId?: string;
+        progressText?: string;
+        summary?: string;
+        explanation?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        exitCode?: number | null;
+      },
+      options?: Parameters<typeof actual.buildChannelProgressDraftLine>[1],
+    ) => {
       if (params.event === "plan") {
         return params.explanation
           ? {
@@ -533,6 +537,13 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
           : undefined;
       }
       if (params.event === "command-output") {
+        capturedCommandOutputCommandText = options?.commandText;
+        if (options?.commandText === "status") {
+          return actual.buildChannelProgressDraftLine(
+            { ...params, event: "command-output" },
+            options,
+          );
+        }
         const status =
           params.exitCode === 0
             ? "completed"
@@ -1123,6 +1134,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatcherCapturesDeliveryErrors = false;
     mockedProgressEvents = [];
     mockedEmptyProgressToolName = undefined;
+    capturedCommandOutputCommandText = undefined;
     mockedReplyOptionEvents = [];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
@@ -3782,11 +3794,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyOptionEvents = [
       {
         kind: "item",
+        itemId: "tool:private-command",
+        toolCallId: "private-command",
         itemKind: "command",
         name: "exec",
+        meta: "exec pnpm test -- --watch=false",
+        summary: "exec pnpm test -- --watch=false",
         progressText: "exec pnpm test -- --watch=false",
       },
       { kind: "item", progressText: "done" },
+      {
+        kind: "command_output",
+        itemId: "tool:private-command-output",
+        toolCallId: "private-command",
+        phase: "end",
+        title: "exec pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 0,
+      },
     ];
 
     await dispatchPreparedSlackMessage(
@@ -3797,6 +3822,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
+    expect(capturedCommandOutputCommandText).toBe("status");
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
   });

@@ -8,6 +8,7 @@ import {
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftRender,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftCompositorSnapshot,
@@ -336,7 +337,10 @@ export function createSlackProgressRuntime(runtimeParams: {
     buildProgressEventLine: (input, options) =>
       input.event === "tool" || input.event === "item"
         ? buildChannelProgressDraftLineForEntry(account.config, input, options)
-        : buildChannelProgressDraftLine(input, options),
+        : buildChannelProgressDraftLine(input, {
+            ...options,
+            commandText: resolveChannelStreamingPreviewCommandText(account.config),
+          }),
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {

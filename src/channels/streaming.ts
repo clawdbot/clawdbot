@@ -553,11 +553,9 @@ export function buildChannelProgressDraftLine(
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
       const meta =
-        input.meta ??
-        input.summary ??
-        (options?.commandText === "status" && isCommandProgressItem(input)
+        options?.commandText === "status" && isCommandProgressItem(input)
           ? undefined
-          : input.progressText);
+          : (input.meta ?? input.summary ?? input.progressText);
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }

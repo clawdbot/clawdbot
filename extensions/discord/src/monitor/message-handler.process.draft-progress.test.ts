@@ -773,7 +773,19 @@ describe("processDiscordMessage draft streaming progress", () => {
         args: { command: "pnpm test -- --watch=false" },
         detailMode: "raw",
       });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool:private-command",
+        kind: "command",
+        name: "exec",
+        summary: "pnpm test -- --watch=false",
+      });
       await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      await params?.replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 0,
+      });
       await elapseProgressDraftStartDelay();
       return createNoQueuedDispatchResult();
     });
@@ -792,7 +804,10 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith(
+      expect.stringMatching(/^Shelling\n\n(?:🛠️ Exec\n)+• done(?:\n🛠️ Exec)*$/u),
+    );
+    expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
   });
 
   it("keeps Discord progress lines below the configured label", async () => {
