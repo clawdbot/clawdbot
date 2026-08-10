@@ -47,6 +47,35 @@ export function isTextyDocumentAttachment(
   return [...TEXTY_DOCUMENT_EXTENSIONS].some((extension) => label.endsWith(extension));
 }
 
+function capPreviewText(text: string): string {
+  return text.length > DOCUMENT_PREVIEW_MAX_CHARS
+    ? `${text.slice(0, DOCUMENT_PREVIEW_MAX_CHARS)}…`
+    : text;
+}
+
+// Reads at most the preview budget from the body and cancels the rest so an
+// unknown-size or endless text attachment cannot buffer fully just by rendering.
+async function readBoundedPreviewText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return capPreviewText(await response.text());
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (text.length <= DOCUMENT_PREVIEW_MAX_CHARS) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return capPreviewText(text + decoder.decode());
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+  return capPreviewText(text);
+}
+
 export function resolveDocumentPreviewText(
   attachmentUrl: string,
   sourceIdentity: string,
@@ -88,14 +117,10 @@ export function resolveDocumentPreviewText(
         resource.value = null;
         return null;
       }
-      const text = await response.text();
+      const preview = await readBoundedPreviewText(response);
       if (!isChatMediaResourceCurrent(resource)) {
         return null;
       }
-      const preview =
-        text.length > DOCUMENT_PREVIEW_MAX_CHARS
-          ? `${text.slice(0, DOCUMENT_PREVIEW_MAX_CHARS)}…`
-          : text;
       resource.value = preview;
       return preview;
     })

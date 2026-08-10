@@ -3734,6 +3734,53 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels an unknown-size text document stream at the preview budget", async () => {
+    const chunkBytes = new TextEncoder().encode("y".repeat(1024));
+    let pulls = 0;
+    let cancelled = false;
+    const endlessBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunkBytes);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(endlessBody));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/endless.txt",
+          "document",
+          "endless.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-endless-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${"y".repeat(16 * 1024)}…`);
+    });
+    expect(cancelled).toBe(true);
+    // The preview budget is ~17 KiB of 1 KiB chunks; an unbounded read would
+    // keep pulling forever. Allow generous readahead slack.
+    expect(pulls).toBeLessThan(64);
+  });
+
   it("omits attachment anchors for unsafe transcript URLs", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.dataset.mediaPlayerTestFixture = "";
