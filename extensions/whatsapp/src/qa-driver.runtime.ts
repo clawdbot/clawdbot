@@ -7,6 +7,11 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  readWhatsAppBaileysCacheEntry,
+  rememberWhatsAppBaileysCacheEntry,
+  type WhatsAppBaileysMessageCache,
+} from "./inbound/baileys-cache.js";
+import {
   describeReplyContext,
   extractContextInfo,
   extractLocationData,
@@ -14,7 +19,11 @@ import {
   findMessageSection,
 } from "./inbound/extract.js";
 import { resolveInboundMediaMimetype } from "./inbound/media-mimetype.js";
-import { decodeWhatsAppPollVote, type WhatsAppDecodedPollVote } from "./inbound/poll-votes.js";
+import {
+  decodeWhatsAppPollVote,
+  extractWhatsAppPollUpdateMessage,
+  type WhatsAppDecodedPollVote,
+} from "./inbound/poll-votes.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import type { ActiveWebSendOptions } from "./inbound/types.js";
 import { isWhatsAppGroupJid } from "./normalize-target.js";
@@ -24,6 +33,14 @@ import {
   createWhatsAppSocketOperationTimeoutAdapter,
 } from "./socket-timing.js";
 import { jidToE164 } from "./text-runtime.js";
+
+/**
+ * How long the QA driver keeps a raw inbound message around so a later poll
+ * vote can find its poll creation message (and therefore its decryption key).
+ * Generous relative to a QA run, but finite — the shared cache helper also
+ * caps total entries, so a busy session evicts rather than growing forever.
+ */
+const QA_DRIVER_RAW_MESSAGE_CACHE_TTL_MS = 60 * 60 * 1000;
 
 type WhatsAppQaDriverObservedMessageKind =
   | "media"
@@ -312,10 +329,11 @@ export async function startWhatsAppQaDriverSession(params: {
   const sock = await createWaSocket(false, false, { authDir: params.authDir });
   const observedMessages: WhatsAppQaDriverObservedMessage[] = [];
   // Raw messages by `${remoteJid}:${id}`, so a later poll vote can look up its
-  // poll creation message's encryption key — mirrors the production cache in
-  // extensions/whatsapp/src/inbound/baileys-cache.ts, kept separate here since
-  // the QA driver doesn't share the gateway's socket-session plumbing.
-  const rawMessageCache = new Map<string, proto.IMessage>();
+  // poll creation message's encryption key. Uses the production bounded cache
+  // helper (TTL + max-entry eviction) rather than a plain Map: a long-lived or
+  // busy QA session would otherwise retain every inbound message it ever saw
+  // for the lifetime of the session.
+  const rawMessageCache: WhatsAppBaileysMessageCache = new Map();
   const waiters = new Set<Waiter>();
   let pendingNotificationsWaiter: VoidWaiter | undefined;
   let closed = false;
@@ -357,14 +375,23 @@ export async function startWhatsAppQaDriverSession(params: {
       const remoteJid = rawMessage.key.remoteJid;
       const id = rawMessage.key.id;
       if (remoteJid && id && rawMessage.message) {
-        rawMessageCache.set(`${remoteJid}:${id}`, rawMessage.message);
+        rememberWhatsAppBaileysCacheEntry(
+          rawMessageCache,
+          `${remoteJid}:${id}`,
+          rawMessage.message,
+          QA_DRIVER_RAW_MESSAGE_CACHE_TTL_MS,
+        );
       }
-      if (rawMessage.message?.pollUpdateMessage) {
+      // Uses the shared envelope extractor rather than reading
+      // `message.pollUpdateMessage` directly, so a vote WhatsApp delivers
+      // wrapped (ephemeral / view-once) is observed here too — matching what
+      // the production inbound path does.
+      if (extractWhatsAppPollUpdateMessage(rawMessage.message)) {
         const vote = decodeWhatsAppPollVote({
           message: rawMessage.message,
           key: rawMessage.key,
           getCachedMessage: (voteRemoteJid, voteMessageId) =>
-            rawMessageCache.get(`${voteRemoteJid}:${voteMessageId}`),
+            readWhatsAppBaileysCacheEntry(rawMessageCache, `${voteRemoteJid}:${voteMessageId}`),
           selfJid: sock.user?.id,
         });
         if (vote) {

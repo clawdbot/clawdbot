@@ -132,16 +132,27 @@ function resolvePollVoterJidForDecrypt(
 }
 
 /**
- * Mirrors the voter-side resolution above for the poll's own creator (us,
- * `fromMe`): match our identity to whichever address space the poll's
- * `participant`/`remoteJid` (i.e. the conversation itself) is natively in,
- * rather than always using one fixed form.
+ * Mirrors the voter-side resolution above for the poll's creator.
+ *
+ * When the poll is someone else's (`fromMe` false with an explicit
+ * `participant`), that participant *is* the creator, and it is already in
+ * the address space the encryptor signed — use it directly. The
+ * `poll_vote_received` hook never reaches this case, because its ownership
+ * gate only admits polls this gateway sent; the QA driver does, since it
+ * observes any poll in the conversation.
+ *
+ * Otherwise the poll is ours, and `participant`/`remoteJid` only tells us
+ * which space (LID or PN) the conversation is natively in — our own
+ * identity in that same space is what was signed.
  */
 function resolvePollCreatorJidForDecrypt(
   creationKey: proto.IMessageKey,
   selfJid: string | null | undefined,
   selfLid: string | null | undefined,
 ): string | undefined {
+  if (!creationKey.fromMe && creationKey.participant) {
+    return creationKey.participant;
+  }
   const referenceJid = creationKey.participant || creationKey.remoteJid || "";
   return referenceJid.endsWith("@lid")
     ? (selfLid ?? selfJid ?? undefined)
