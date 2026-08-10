@@ -1,5 +1,7 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -126,6 +128,45 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("advances to the configured fallback after a generic external runner failure", async () => {
+    const runs: Array<{ provider: string; model: string }> = [];
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "external",
+      model: "primary",
+      fallbacksOverride: ["external/fallback"],
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        runs.push({ provider, model });
+        return runs.length === 1
+          ? {
+              payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+              meta: { durationMs: 1 },
+            }
+          : { payloads: [{ text: "fallback ok" }], meta: { durationMs: 1 } };
+      },
+      classifyResult: ({ provider, model, result: runResult }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: runResult,
+        }),
+    });
+
+    expect(runs).toEqual([
+      { provider: "external", model: "primary" },
+      { provider: "external", model: "fallback" },
+    ]);
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "external",
+      model: "primary",
+      reason: "format",
+      code: "generic_external_run_failure",
+      error: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
+  });
+
   it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
     const errorText =
       "You've reached your Codex subscription usage limit. " +
@@ -170,6 +211,62 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "non-text visible content",
+      payload: {
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        mediaUrl: "https://example.com/failure-screenshot.png",
+        channelData: { delivered: true },
+      },
+    },
+    {
+      name: "interactive content",
+      payload: {
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        interactive: { type: "button", label: "Retry" },
+      },
+    },
+  ])("does not retry generic external runner failure text with $name", ({ payload }) => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: { payloads: [payload], meta: { durationMs: 42 } },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not retry generic external runner failure text after committed delivery", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          messagingToolSentTexts: ["already delivered"],
+          meta: { durationMs: 42 },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves hook blocks with generic external runner failure text", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          meta: {
+            durationMs: 42,
+            error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+          },
+        },
+      }),
+    ).toBeNull();
   });
 
   it("preserves hook block results with auth-like error payload text", () => {
