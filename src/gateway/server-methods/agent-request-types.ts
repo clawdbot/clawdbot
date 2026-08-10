@@ -10,6 +10,7 @@ export type AgentRunRequest = {
   replyTo?: string;
   sessionId?: string;
   sessionKey?: string;
+  restartRecoveryOwner?: "openclaw" | "external";
   expectedExistingSessionId?: string;
   thinking?: string;
   deliver?: boolean;

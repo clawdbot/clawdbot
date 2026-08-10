@@ -300,6 +300,11 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "mainRestartRecovery",
         });
         api.registerSessionExtension({
+          namespace: "restart-recovery-owner",
+          description: "bad restart recovery owner slot",
+          sessionEntrySlotKey: "restartRecoveryOwner",
+        });
+        api.registerSessionExtension({
           namespace: "recovery",
           description: "bad fresh-main slot",
           sessionEntrySlotKey: "subagentRecovery",
@@ -338,6 +343,10 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: mainRestartRecovery",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: restartRecoveryOwner",
       },
       {
         pluginId: "slot-collision",

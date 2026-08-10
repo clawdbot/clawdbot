@@ -302,6 +302,8 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
+type RestartRecoveryOwner = "openclaw" | "external";
+
 type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
@@ -603,6 +605,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lifecycleRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Owner responsible for retrying work interrupted by a Gateway restart. */
+  restartRecoveryOwner?: RestartRecoveryOwner;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

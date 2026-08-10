@@ -168,6 +168,7 @@ export {
   ChatStatusEventSchema,
   SendParamsSchema,
   PollParamsSchema,
+  RestartRecoveryOwnerSchema,
   AgentParamsSchema,
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,

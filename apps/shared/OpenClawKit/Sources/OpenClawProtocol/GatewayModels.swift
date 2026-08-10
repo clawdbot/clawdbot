@@ -76,6 +76,11 @@ public enum WorkerDesktopAppId: String, Codable, Sendable {
     case terminal = "terminal"
 }
 
+public enum RestartRecoveryOwner: String, Codable, Sendable {
+    case openclaw = "openclaw"
+    case external = "external"
+}
+
 public enum WorktreeRepositoryStatus: String, Codable, Sendable {
     case git = "git"
     case notGit = "not_git"
@@ -2988,6 +2993,7 @@ public struct AgentParams: Codable, Sendable {
     public let replyto: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let restartrecoveryowner: RestartRecoveryOwner?
     public let expectedexistingsessionid: String?
     public let thinking: String?
     public let deliver: Bool?
@@ -3038,6 +3044,7 @@ public struct AgentParams: Codable, Sendable {
         replyto: String? = nil,
         sessionid: String? = nil,
         sessionkey: String? = nil,
+        restartrecoveryowner: RestartRecoveryOwner? = nil,
         expectedexistingsessionid: String? = nil,
         thinking: String? = nil,
         deliver: Bool? = nil,
@@ -3087,6 +3094,7 @@ public struct AgentParams: Codable, Sendable {
         self.replyto = replyto
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.restartrecoveryowner = restartrecoveryowner
         self.expectedexistingsessionid = expectedexistingsessionid
         self.thinking = thinking
         self.deliver = deliver
@@ -3138,6 +3146,7 @@ public struct AgentParams: Codable, Sendable {
         case replyto = "replyTo"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case restartrecoveryowner = "restartRecoveryOwner"
         case expectedexistingsessionid = "expectedExistingSessionId"
         case thinking
         case deliver

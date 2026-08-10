@@ -43,8 +43,8 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  activeRecoveryFieldsForSameSession,
-  clearRecoveryStateForRotatedSessionPatch,
+  clearInternalStateForRotatedSessionPatch,
+  internalFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   projectPluginSessionStore,
@@ -148,17 +148,17 @@ type SessionLifecycleArtifactsCleanupResult = {
   removedEntries: number;
 };
 
-function preserveCoreRecoveryState(
+function preserveInternalSessionState(
   persistedEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
 ): Partial<InternalSessionEntry> {
   const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
     ? publicPatch.sessionId
     : persistedEntry.sessionId;
-  const recoveryState = activeRecoveryFieldsForSameSession(persistedEntry, nextSessionId);
-  return recoveryState
-    ? { ...publicPatch, ...recoveryState }
-    : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
+  const internalState = internalFieldsForSameSession(persistedEntry, nextSessionId);
+  return internalState
+    ? { ...publicPatch, ...internalState }
+    : clearInternalStateForRotatedSessionPatch(persistedEntry, publicPatch);
 }
 
 function resolveLegacySessionStoreTarget(storePath: string): {
@@ -307,7 +307,7 @@ export async function updateSessionStore<T>(
       const persist = !options.skipSaveWhenResult?.(result);
       if (persist) {
         // The deprecated callback owns public row changes and deletions, but
-        // core recovery coordination remains invisible and non-overwritable.
+        // internal lifecycle and recovery coordination remains invisible and non-overwritable.
         reconcilePluginSessionStore({ internalStore, publicStore });
       }
       return {
@@ -445,7 +445,7 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveInternalSessionState(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
       fallbackEntry: params.fallbackEntry
@@ -490,7 +490,7 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveInternalSessionState(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
       skipMaintenance: params.skipMaintenance,
@@ -508,7 +508,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
     toSessionAccessScope(params),
     (internalEntry) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, publicEntry);
+      return preserveInternalSessionState(persistedEntry, publicEntry);
     },
     { fallbackEntry: publicEntry, replaceEntry: true },
   );

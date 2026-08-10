@@ -155,6 +155,27 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
+  it("raises agent restart recovery ownership changes from write to admin scope", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("agent", {
+        message: "start orchestrated work",
+        restartRecoveryOwner: "external",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("agent", {
+        message: "return recovery to OpenClaw",
+        restartRecoveryOwner: "openclaw",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("agent", ["operator.write"], {
+        message: "start orchestrated work",
+        restartRecoveryOwner: "external",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
   it("raises host-sensitive node commands from write to admin scope", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "device.info" }),
