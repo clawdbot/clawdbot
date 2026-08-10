@@ -44,6 +44,8 @@ client surface.
   until the event loop can process Gateway IO.
 - `@openclaw/gateway-client/timeouts` exports timeout constants and safe timer
   resolution helpers.
+- `@openclaw/gateway-client/websocket-data` converts every Node `ws` raw-data
+  shape to UTF-8 text.
 
 ## Node quickstart
 

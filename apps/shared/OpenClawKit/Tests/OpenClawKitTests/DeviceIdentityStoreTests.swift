@@ -74,6 +74,30 @@ private func deviceAuthEntry(
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
+    @Test func `process state root configures once before identity use`() {
+        var state = DeviceIdentityStateRootState()
+        let work = URL(fileURLWithPath: "/Users/test/.openclaw-work", isDirectory: true)
+        let other = URL(fileURLWithPath: "/Users/test/.openclaw-other", isDirectory: true)
+        let configuredWork = state.configure(work)
+        let reconfiguredWork = state.configure(work)
+        let configuredOther = state.configure(other)
+        let resolvedWork = state.resolve()
+        let configuredWorkAfterUse = state.configure(work)
+        let configuredOtherAfterUse = state.configure(other)
+        #expect(configuredWork)
+        #expect(reconfiguredWork)
+        #expect(!configuredOther)
+        #expect(resolvedWork == work)
+        #expect(configuredWorkAfterUse)
+        #expect(!configuredOtherAfterUse)
+
+        var usedDefault = DeviceIdentityStateRootState()
+        let resolvedDefault = usedDefault.resolve()
+        let configuredDefaultAfterUse = usedDefault.configure(work)
+        #expect(resolvedDefault == nil)
+        #expect(!configuredDefaultAfterUse)
+    }
+
     @Test
     func `task scoped state directories isolate concurrent identity stores`() async throws {
         let fixture = DeviceIdentityMigrationFixture()

@@ -140,9 +140,10 @@ describe("qa suite provider selection", () => {
       };
       expect(summary.run).toMatchObject({
         providerMode: "live-frontier",
-        primaryModel: expect.stringMatching(/^openai\//),
-        alternateModel: expect.stringMatching(/^openai\//),
+        primaryModel: "openai/gpt-5.6",
+        alternateModel: "openai/gpt-5.6-luna",
       });
+      expect(summary.run.primaryModel).not.toBe(summary.run.alternateModel);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

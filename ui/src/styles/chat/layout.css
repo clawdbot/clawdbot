@@ -429,7 +429,7 @@ openclaw-chat-page {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   pointer-events: auto;
   transform: translateX(-50%);
 }
@@ -1099,7 +1099,7 @@ openclaw-chat-video-player {
   border-radius: 999px;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     transform 120ms ease,
     background 120ms ease;
@@ -1140,7 +1140,7 @@ openclaw-chat-video-player {
       var(--chat-audio-buffered),
     color-mix(in srgb, var(--border) 72%, transparent) var(--chat-audio-buffered) 100%
   );
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-audio-player__seek::-webkit-slider-thumb {
@@ -1493,13 +1493,19 @@ openclaw-chat-video-player {
   margin: 8px auto 14px;
 }
 
+/* Floating tray pinned to the conversation's top-right (the positioned
+   ancestor is .chat-main__conversation); content scrolls underneath it. */
 .task-suggestions {
+  position: absolute;
+  z-index: 24;
+  top: 10px;
+  right: 14px;
   display: grid;
   gap: 8px;
-  max-height: min(40vh, 24rem);
+  width: min(400px, calc(100% - 28px));
+  max-height: min(48vh, 26rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0 14px 10px;
 }
 
 .session-suggestions {
@@ -1584,39 +1590,24 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
-}
-
-.task-suggestion__icon {
+  position: relative;
   display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.task-suggestion__icon svg,
-.task-suggestion__start svg {
-  width: 16px;
-  height: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) 45%, transparent);
 }
 
 .task-suggestion__body {
   min-width: 0;
-  flex: 1;
 }
 
 .task-suggestion__eyebrow {
-  color: var(--accent);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1630,36 +1621,28 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__summary {
+  display: -webkit-box;
   margin-top: 3px;
+  overflow: hidden;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
-.task-suggestion__details {
+.task-suggestion__instructions {
+  margin-top: 8px;
+}
+
+.task-suggestion__instruction-body {
   display: grid;
-  gap: 7px;
-  margin-top: 10px;
+  gap: 6px;
+  padding: 0 8px 8px;
 }
 
-.task-suggestion__detail {
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.task-suggestion__detail > span {
-  padding-top: 3px;
-  font-weight: 650;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.task-suggestion__detail code,
-.task-suggestion__detail pre {
+.task-suggestion__instruction-body code,
+.task-suggestion__instruction-body pre {
   min-width: 0;
   max-height: 9rem;
   margin: 0;
@@ -1675,34 +1658,71 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__actions {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-self: end;
+}
+
+/* Compact split control pinned to the card's top-right; both halves share one
+   fixed height so the chevron cap can never overhang the primary segment. */
+.task-suggestion__split {
+  display: inline-flex;
+  align-items: stretch;
+  height: 26px;
 }
 
 .task-suggestion__start {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  font-size: 12px;
+  line-height: 1;
   white-space: nowrap;
 }
 
-@media (max-width: 640px) {
-  .task-suggestion {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
+.task-suggestion__start:only-child {
+  border-radius: var(--radius-md);
+}
 
-  .task-suggestion__actions {
-    width: 100%;
-    justify-content: flex-end;
-    padding-left: 44px;
-  }
+.task-suggestion__start svg {
+  width: 12px;
+  height: 12px;
+}
 
-  .task-suggestion__detail {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 3px;
-  }
+.task-suggestion__menu-trigger {
+  display: grid;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  margin-left: -1px;
+  padding: 0;
+  place-items: center;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.task-suggestion__menu-trigger svg {
+  width: 12px;
+  height: 12px;
+}
+
+.task-suggestion__menu[open] .task-suggestion__menu-trigger svg {
+  transform: rotate(180deg);
+}
+
+.task-suggestion__menu::part(menu) {
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
+.task-suggestion__dismiss {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 5px;
 }
 
 .chat-swarm {
@@ -1976,7 +1996,7 @@ openclaw-chat-video-player {
   padding: 2px 8px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, currentColor 12%, transparent);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
   list-style: none;
@@ -2122,7 +2142,7 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-pr__dismiss:hover {
@@ -2141,7 +2161,7 @@ openclaw-chat-video-player {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted) 14%, transparent);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
 }
@@ -2729,7 +2749,7 @@ openclaw-chat-video-player {
   background: transparent;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .agent-chat__session-overrides-open {
@@ -3289,7 +3309,7 @@ openclaw-chat-video-player {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, #000 68%, transparent);
   color: white;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   place-items: center;
   backdrop-filter: blur(8px);
 }
@@ -3864,7 +3884,7 @@ openclaw-chat-video-player {
 }
 
 .chat-browser-annotation-card__remove:not(:disabled) {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-browser-annotation-card__remove:focus-visible {
@@ -3983,7 +4003,7 @@ openclaw-chat-video-player {
   border: none;
   color: var(--muted);
   background: transparent;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font: inherit;
   line-height: 1.15;
   text-align: left;
@@ -4589,7 +4609,7 @@ openclaw-chat-video-player {
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
 }

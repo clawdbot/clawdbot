@@ -287,6 +287,9 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
+      if (harnessMessage.excludeFromContext === true) {
+        return 0;
+      }
       chars =
         estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -437,7 +440,8 @@ export function findCutPoint(
     if (prevEntry.type === "compaction" || prevEntry.type === "reset") {
       break;
     }
-    if (getMessageFromEntryForCompaction(prevEntry)) {
+    // Metadata can follow the cut, but private persisted messages cannot become its boundary.
+    if (prevEntry.type === "message" || getMessageFromEntryForCompaction(prevEntry)) {
       break;
     }
     cutIndex--;

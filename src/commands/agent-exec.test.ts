@@ -1001,6 +1001,21 @@ describe("agent exec run config layering", () => {
     expect(config.agents?.entries?.ops?.model).toBe("openai/gpt-5.6-sol");
   });
 
+  it("drops an inherited session store so the invocation state dir owns the agent database", () => {
+    const config = buildExecRunConfig({
+      base: {
+        session: {
+          store: "/persistent/agents/{agentId}/sessions/sessions.json",
+          mainKey: "primary",
+        },
+      },
+      cwd: "/run/here",
+    });
+
+    expect(config.session?.store).toBeUndefined();
+    expect(config.session?.mainKey).toBe("primary");
+  });
+
   it("drops an inherited harness cwd so --cwd wins", () => {
     const config = buildExecRunConfig({
       base: {

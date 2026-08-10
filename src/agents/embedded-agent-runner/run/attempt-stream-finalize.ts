@@ -1,5 +1,4 @@
 /** Settles the provider stream and completes the post-turn lifecycle phase. */
-import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
@@ -16,8 +15,7 @@ type SharedPhaseInputKeys =
   | "attempt"
   | "activeSession"
   | "sessionManager"
-  | "sessionLockController"
-  | "withOwnedSessionWriteLock";
+  | "withOwnedTranscriptWrite";
 
 // Queued subscription handlers (block-reply delivery, tool events) are
 // fire-and-forget during the turn; the pending-events join below is the only
@@ -30,8 +28,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   attempt: StreamSettleInput["attempt"];
   activeSession: StreamSettleInput["activeSession"];
   sessionManager: StreamSettleInput["sessionManager"];
-  sessionLockController: StreamSettleInput["sessionLockController"];
-  withOwnedSessionWriteLock: StreamSettleInput["withOwnedSessionWriteLock"];
+  withOwnedTranscriptWrite: StreamSettleInput["withOwnedTranscriptWrite"];
   waitForPendingEvents: () => Promise<void>;
   repairedRejectedThinkingReplay: boolean;
   getRunAbortDeadlineAtMs: () => number;
@@ -51,7 +48,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   >;
   afterTurn: Omit<AfterTurnInput, SharedPhaseInputKeys | "state">;
 }): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
-  const { activeSession, sessionManager, sessionLockController, withOwnedSessionWriteLock } = input;
+  const { activeSession, sessionManager, withOwnedTranscriptWrite } = input;
 
   await joinWithRunLivenessDeadline({
     joinWork: input.waitForPendingEvents,
@@ -67,7 +64,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   const beforeAgentFinalizeRevisionEntryId = input.getBeforeAgentFinalizeRevisionEntryId();
   let rewoundBeforeAgentFinalizeRevision = false;
   if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
-    await withOwnedSessionWriteLock(() => {
+    await withOwnedTranscriptWrite(() => {
       const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
       if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
         throw new Error(
@@ -89,20 +86,6 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
     if (input.repairedRejectedThinkingReplay && !rewoundBeforeAgentFinalizeRevision) {
       activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
     }
-    try {
-      await sessionLockController.releaseForPrompt();
-    } catch (err) {
-      // An aborted attempt never submits another prompt, so a submission-blocked
-      // release is expected teardown noise, including its recorded timeout reason.
-      // Rethrowing would silently starve every agent_end consumer for aborted runs.
-      const lifecycle = input.settle.readLifecycleState();
-      const expectedAbortError =
-        isRunnerAbortError(err) || sessionLockController.isPromptSubmissionBlockedError(err);
-      if (!lifecycle.aborted || !expectedAbortError) {
-        throw err;
-      }
-    }
-
     const currentState = input.getState();
     const streamSettleState = {
       promptError: currentState.promptError,
@@ -115,8 +98,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
         attempt: input.attempt,
         activeSession,
         sessionManager,
-        sessionLockController,
-        withOwnedSessionWriteLock,
+        withOwnedTranscriptWrite,
         state: streamSettleState,
         ...input.settle,
         runAbortDeadlineAtMs: input.getRunAbortDeadlineAtMs(),
@@ -130,7 +112,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
     }
   } finally {
     if (rewoundBeforeAgentFinalizeRevision) {
-      await withOwnedSessionWriteLock(() => {
+      await withOwnedTranscriptWrite(() => {
         // Settlement classifies the completed attempt from its original
         // in-memory messages. Later work always sees the rewound branch.
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
@@ -146,8 +128,7 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
     attempt: input.attempt,
     activeSession,
     sessionManager,
-    sessionLockController,
-    withOwnedSessionWriteLock,
+    withOwnedTranscriptWrite,
     ...input.afterTurn,
     state: {
       promptError: settledStream.promptError,

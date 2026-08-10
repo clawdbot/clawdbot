@@ -247,15 +247,13 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
     await captureProof(wilfredDevices.page, "wilfred-before-revoke.png");
-    const dialogPromise = wilfredDevices.page.waitForEvent("dialog");
-    await Promise.all([
-      dialogPromise.then(async (dialog) => {
-        expect(dialog.type()).toBe("confirm");
-        expect(dialog.message()).toBe(`Revoke token for ${deviceId} (operator)?`);
-        await dialog.accept();
-      }),
-      revokeButton.click(),
-    ]);
+    await revokeButton.click();
+    // Revoke confirms in-page, not through window.confirm: webviews without a dialog
+    // bridge silently answer false and would drop the action with no visible outcome.
+    const revokeConfirm = wilfredDevices.page.locator("openclaw-modal-dialog");
+    await revokeConfirm.getByText("Revoke the operator token?").waitFor();
+    await revokeConfirm.getByText(`Device ID: ${deviceId}`).waitFor();
+    await revokeConfirm.getByRole("button", { name: "Revoke", exact: true }).click();
     const revoke = await wilfredDevices.gateway.waitForRequest("device.token.revoke");
     expect(revoke.params).toEqual({ deviceId, role: "operator" });
     const wilfredStoreKey =

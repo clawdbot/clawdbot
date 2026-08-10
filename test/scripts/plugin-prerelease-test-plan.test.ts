@@ -465,6 +465,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(pluginManifestScript).toContain(
       "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",
     );
+    const pluginNodeShardScript = pluginWorkflow.jobs["plugin-prerelease-node-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run release-only plugin Node shard",
+    ).run;
+    expect(pluginNodeShardScript).toContain('spawnSync("pnpm", ["test", "--", ...configs]');
+    expect(pluginNodeShardScript).not.toContain("scripts/test-projects.mts");
     expect(pluginWorkflow.on.workflow_dispatch.inputs.target_ref).toEqual({
       default: "main",
       description: "Branch, tag, or full commit SHA to validate",

@@ -1048,8 +1048,8 @@ describe("GatewayBrowserClient", () => {
         protocol: 4,
         auth: {
           role: "operator",
-          scopes: [...CONTROL_UI_OPERATOR_SCOPES],
-          deviceToken: "test-token-placeholder",
+          scopes: ["operator.read"],
+          deviceToken: "stored-device-token",
         },
       },
     });
@@ -1057,9 +1057,43 @@ describe("GatewayBrowserClient", () => {
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScopeReady).toBe(true);
     expect(client.recoveryScope).toBe(
-      createHash("sha256").update("test-token-placeholder").digest("hex"),
+      createHash("sha256").update("stored-device-token").digest("hex"),
     );
-    expect(client.recoveryScope).not.toContain("test-token-placeholder");
+    expect(client.recoveryScope).not.toContain("stored-device-token");
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.scopes).toEqual(
+      [...CONTROL_UI_OPERATOR_SCOPES].toSorted(),
+    );
+    client.stop();
+  });
+
+  it("persists hello scopes when the device token rotates", async () => {
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          deviceToken: "rotated-device-token",
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })).toMatchObject({
+        token: "rotated-device-token",
+        scopes: ["operator.read"],
+      });
+    });
     client.stop();
   });
 

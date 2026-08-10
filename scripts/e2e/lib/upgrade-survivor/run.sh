@@ -812,7 +812,14 @@ seed_state() {
 }
 
 apply_baseline_config_recipe() {
-  node --import tsx scripts/e2e/lib/upgrade-survivor/config-recipe.mts apply \
+  local tsx_import="${OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT:-tsx}"
+  local recipe_runner=(
+    node --import "$tsx_import" scripts/e2e/lib/upgrade-survivor/config-recipe.mts
+  )
+  if [ ! -f scripts/e2e/lib/upgrade-survivor/config-recipe.mts ]; then
+    recipe_runner=(node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs)
+  fi
+  "${recipe_runner[@]}" apply \
     --summary "$CONFIG_COVERAGE_JSON" \
     --baseline-version "$baseline_version"
 }

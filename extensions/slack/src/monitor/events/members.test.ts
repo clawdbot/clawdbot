@@ -1,4 +1,5 @@
 // Slack tests cover members plugin behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({
@@ -11,11 +12,13 @@ type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEvent
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
 }));
-type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type MemberHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
 type MemberCaseArgs = {
   event?: Record<string, unknown>;
   body?: unknown;
+  context?: AllMiddlewareArgs["context"];
+  client?: AllMiddlewareArgs["client"];
   overrides?: MemberOverrides;
   handler?: "joined" | "left";
   trackEvent?: () => void;
@@ -62,6 +65,8 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   await handler({
     event: (args.event ?? makeMemberEvent()) as Record<string, unknown>,
     body: args.body ?? { event_id: "Ev-member-default" },
+    context: args.context,
+    client: args.client,
   });
 }
 
@@ -149,5 +154,83 @@ describe("registerSlackMemberEvents", () => {
         contextKey: "slack:member:joined:D1:U1:Ev-member-2",
       }),
     );
+  });
+
+  it("keeps enterprise member events isolated by listener workspace", async () => {
+    const harness = initSlackHarness();
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
+    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
+    const resolveSessionKey = vi.fn(
+      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventSessionKey>[0]) =>
+        `session:${input.eventScope?.teamId ?? "workspace"}`,
+    );
+    harness.ctx.resolveChannelName = resolveChannelName;
+    harness.ctx.resolveUserName = resolveUserName;
+    harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
+    registerSlackMemberEvents({ ctx: harness.ctx });
+    const handler = harness.getHandler("member_joined_channel");
+    if (!handler) {
+      throw new Error("expected Slack member joined handler");
+    }
+
+    for (const teamId of ["T111", "T222"]) {
+      await handler({
+        event: makeMemberEvent(),
+        body: { api_app_id: "A_GRID", event_id: `Ev-member-${teamId}` },
+        context: {
+          isEnterpriseInstall: true,
+          enterpriseId: "E_GRID",
+          teamId,
+        } as AllMiddlewareArgs["context"],
+        client: { token: `listener-${teamId}` } as AllMiddlewareArgs["client"],
+      });
+    }
+
+    expect(memberMocks.enqueue).toHaveBeenNthCalledWith(1, expect.any(String), {
+      sessionKey: "session:T111",
+      contextKey: "slack:member:T111:joined:D1:U1:Ev-member-T111",
+    });
+    expect(memberMocks.enqueue).toHaveBeenNthCalledWith(2, expect.any(String), {
+      sessionKey: "session:T222",
+      contextKey: "slack:member:T222:joined:D1:U1:Ev-member-T222",
+    });
+    expect(resolveChannelName).toHaveBeenCalledWith(
+      "D1",
+      expect.objectContaining({ teamId: "T111" }),
+    );
+    expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T222" }));
+  });
+
+  it("rejects enterprise member events without validated listener scope", async () => {
+    const trackEvent = vi.fn();
+    const harness = initSlackHarness();
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    registerSlackMemberEvents({ ctx: harness.ctx, trackEvent });
+    const handler = harness.getHandler("member_joined_channel");
+    if (!handler) {
+      throw new Error("expected Slack member joined handler");
+    }
+
+    await handler({
+      event: makeMemberEvent(),
+      body: { api_app_id: "A_GRID" },
+      context: {
+        isEnterpriseInstall: true,
+        enterpriseId: "E_GRID",
+      } as AllMiddlewareArgs["context"],
+      client: { token: "listener" } as AllMiddlewareArgs["client"],
+    });
+
+    expect(trackEvent).not.toHaveBeenCalled();
+    expect(memberMocks.enqueue).not.toHaveBeenCalled();
   });
 });

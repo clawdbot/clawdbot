@@ -1,4 +1,7 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
+// Presentation-free by contract: destructive confirmations belong to the owning page,
+// because native window.confirm silently returns false in webviews with no dialog bridge
+// and would end the action with no outcome and no recorded reason.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
@@ -291,10 +294,6 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
   if (!client || !state.connected) {
     return;
   }
-  const confirmed = window.confirm("Reject this device pairing request?");
-  if (!confirmed) {
-    return;
-  }
   const generation = state.requestGeneration;
   try {
     await client.request("device.pair.reject", { requestId });
@@ -343,8 +342,6 @@ async function reloadInventory(state: InventoryState, opts?: { error?: string })
   }
 }
 
-// Confirmation for these removals lives in the page (in-page dialog): native
-// window.confirm silently returns false in webviews without a dialog bridge.
 export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
   const client = state.client;
   if (!client || !state.connected) {
@@ -398,10 +395,6 @@ export async function approveNodePairingRequest(state: InventoryState, requestId
 
 export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
   if (!state.client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm("Reject this node pairing request?");
-  if (!confirmed) {
     return;
   }
   try {
@@ -465,10 +458,6 @@ export async function revokeDeviceToken(
 ) {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm(`Revoke token for ${params.deviceId} (${params.role})?`);
-  if (!confirmed) {
     return;
   }
   const generation = state.requestGeneration;

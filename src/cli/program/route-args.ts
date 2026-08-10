@@ -8,6 +8,7 @@ import {
   hasFlag,
 } from "../argv.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { MODELS_PARENT_BOOLEAN_FLAGS, MODELS_PARENT_VALUE_FLAGS } from "../parent-command-path.js";
 import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 type OptionalFlagParse = {
@@ -347,8 +348,32 @@ export function parseModelsListRouteArgs(argv: string[]) {
   };
 }
 
-/** Parse `openclaw models status` probe controls for the route-first status path. */
+function parseModelsRootStatusRouteArgs(argv: string[]) {
+  const positionals = getRoutedCommandPositionals(argv, {
+    commandPath: ["models"],
+    booleanFlags: MODELS_PARENT_BOOLEAN_FLAGS,
+    valueFlags: MODELS_PARENT_VALUE_FLAGS,
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
+  return {
+    agent: agent.value,
+    json: hasFlag(argv, "--json") || hasFlag(argv, "--status-json"),
+    plain: hasFlag(argv, "--status-plain"),
+  };
+}
+
+/** Parse both parent aliases and `openclaw models status` through one status owner. */
 export function parseModelsStatusRouteArgs(argv: string[]) {
+  const rootArgs = parseModelsRootStatusRouteArgs(argv);
+  if (rootArgs) {
+    return rootArgs;
+  }
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["models", "status"],
     booleanFlags: ["--json", "--plain", "--check", "--probe"],

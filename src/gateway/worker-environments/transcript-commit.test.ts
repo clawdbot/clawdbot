@@ -12,6 +12,7 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
+  updateSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -177,6 +178,7 @@ describe("worker transcript commit application", () => {
     await upsertSessionEntry(
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       {
+        lifecycleRevision: "worker-original-revision",
         sessionId: SESSION_ID,
         updatedAt: 10,
       },
@@ -360,6 +362,42 @@ describe("worker transcript commit application", () => {
     const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(3);
     expect(reopened.getLeafId()).toBe(first.result.newLeafId);
+  });
+
+  it("rejects a commit when lifecycle ownership changes in the writer queue", async () => {
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionEntry(
+      { agentId: "main", sessionKey: SESSION_KEY, storePath },
+      async () => {
+        markOwnerChangeStarted();
+        await ownerChangeGate;
+        return { lifecycleRevision: "worker-replacement-revision" };
+      },
+    );
+    await ownerChangeStarted;
+
+    const commit = committer.commit({ identity: IDENTITY, request: createRequest() });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(commit).resolves.toEqual({ ok: false, reason: "invalid-batch" });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath })).toMatchObject(
+      {
+        lifecycleRevision: "worker-replacement-revision",
+        sessionId: SESSION_ID,
+      },
+    );
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
   });
 
   it("replays the same tuple without duplicates and rejects a changed payload", async () => {

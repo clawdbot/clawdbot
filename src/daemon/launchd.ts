@@ -1487,9 +1487,19 @@ async function restoreLaunchAgentInstall(params: {
   snapshot: LaunchAgentInstallSnapshot;
 }): Promise<void> {
   const serviceTarget = `${params.domain}/${params.label}`;
-  const bootout = await execLaunchctl(["bootout", serviceTarget]);
-  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  // A failed bootstrap may leave no registered job. Restore files directly in
+  // that state; only a loaded replacement must be removed before rollback.
+  const currentState = await probeLaunchAgentState(serviceTarget);
+  if (currentState.state === "unknown") {
+    throw new Error(
+      `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${currentState.detail ?? "unknown error"}`,
+    );
+  }
+  if (currentState.state !== "not-loaded") {
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
   }
   await restoreLaunchAgentInstallArtifacts({
     env: params.env,
@@ -1546,9 +1556,15 @@ async function activateLaunchAgent(params: {
     // the plist write cannot race us into two KeepAlive managers.
     await assertNoSystemLaunchDaemonOwnership(label);
     for (const legacy of params.snapshot.legacy) {
-      await deactivateLaunchAgentDefinition(domain, legacy.plistPath);
+      if (legacy.loaded) {
+        await deactivateLaunchAgentDefinition(domain, legacy.plistPath);
+      }
     }
-    await deactivateLaunchAgentDefinition(domain, params.plistPath);
+    // Plist-form bootout reports EIO for a valid definition that was never loaded.
+    // The pre-publication snapshot is the authoritative cutover fact.
+    if (params.snapshot.loaded) {
+      await deactivateLaunchAgentDefinition(domain, params.plistPath);
+    }
     // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
     await bootstrapLaunchAgentOrThrow({
       domain,

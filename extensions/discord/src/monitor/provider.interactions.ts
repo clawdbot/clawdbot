@@ -2,8 +2,8 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createDiscordActivityButton } from "../activities/interaction.js";
 import {
@@ -11,7 +11,7 @@ import {
   isDiscordExecApprovalClientEnabled,
 } from "../exec-approvals.js";
 import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
-import { createDiscordVoiceCommand } from "../voice/command.js";
+import { createDiscordVoiceCommand, DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import {
   createAgentComponentControls,
   createDiscordComponentControls,
@@ -60,20 +60,13 @@ export function createDiscordProviderInteractionSurface(params: {
   modals: Modal[];
 } {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
-  const commands: BaseCommand[] = params.commandSpecs.map((spec) =>
-    createNativeCommand({
-      command: spec,
-      cfg: params.cfg,
-      discordConfig: params.discordConfig,
-      accountId: params.accountId,
-      sessionPrefix: params.sessionPrefix,
-      ephemeralDefault: params.ephemeralDefault,
-      threadBindings: params.threadBindings,
-    }),
-  );
-  if (params.nativeEnabled && params.voiceEnabled) {
-    commands.push(
-      createDiscordVoiceCommand({
+  const commands: BaseCommand[] = params.commandSpecs.map((spec) => {
+    if (
+      params.nativeEnabled &&
+      params.voiceEnabled &&
+      spec.name === DISCORD_VOICE_COMMAND_SPEC.name
+    ) {
+      return createDiscordVoiceCommand({
         cfg: params.cfg,
         discordConfig: params.discordConfig,
         accountId: params.accountId,
@@ -81,9 +74,18 @@ export function createDiscordProviderInteractionSurface(params: {
         useAccessGroups: params.useAccessGroups,
         getManager: () => params.voiceManagerRef.current,
         ephemeralDefault: params.ephemeralDefault,
-      }),
-    );
-  }
+      });
+    }
+    return createNativeCommand({
+      command: spec,
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      accountId: params.accountId,
+      sessionPrefix: params.sessionPrefix,
+      ephemeralDefault: params.ephemeralDefault,
+      threadBindings: params.threadBindings,
+    });
+  });
 
   const execApprovalsConfig = params.discordConfig.execApprovals ?? {};
   const execApprovalsEnabled = isDiscordExecApprovalClientEnabled({
