@@ -5,12 +5,10 @@ import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handle
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
-import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
-import { isSessionsYieldAbortError, isSessionsYieldAbortReason } from "./attempt.sessions-yield.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AbortLockReleaseLog = {
+type AbortLog = {
   warn(message: string): void;
 };
 
@@ -162,9 +160,8 @@ export function createEmbeddedAttemptRunAbort(input: {
   >;
   getQueueHandle: () => EmbeddedAgentQueueHandle | undefined;
   isProbeSession: boolean;
-  log: AbortLockReleaseLog;
+  log: AbortLog;
   runAbortController: AbortController;
-  sessionLockController: Pick<EmbeddedAttemptSessionLockController, "releaseHeldLockForAbort">;
   state: Pick<
     EmbeddedAttemptAbortStatePort,
     | "markAborted"
@@ -197,7 +194,6 @@ export function createEmbeddedAttemptRunAbort(input: {
     }
     abortAccepted = true;
     input.state.markAborted();
-    let effectiveReason = reason;
     if (isTimeout) {
       input.state.markTimedOut();
       if (
@@ -207,7 +203,6 @@ export function createEmbeddedAttemptRunAbort(input: {
         input.state.markTimedOutDuringToolExecution();
       }
       const timeoutReason = reason instanceof Error ? reason : createTimeoutAbortReason();
-      effectiveReason = timeoutReason;
       input.attempt.onAttemptTimeout?.(timeoutReason);
       input.runAbortController.abort(timeoutReason);
     } else {
@@ -225,36 +220,5 @@ export function createEmbeddedAttemptRunAbort(input: {
         reason: "timeout",
       });
     }
-    releaseEmbeddedAttemptSessionLockForAbort({
-      sessionLockController: input.sessionLockController,
-      log: input.log,
-      runId: input.attempt.runId,
-      abortKind: isTimeout ? "timeout abort" : "abort",
-      reason: effectiveReason,
-      terminal:
-        isTimeout || (!isSessionsYieldAbortError(reason) && !isSessionsYieldAbortReason(reason)),
-    });
   };
-}
-
-/**
- * Releases the held session lock after an abort without blocking abort
- * propagation. Release failures are logged because the caller is already
- * unwinding the run and cannot safely await lock cleanup there.
- */
-function releaseEmbeddedAttemptSessionLockForAbort(params: {
-  sessionLockController: Pick<EmbeddedAttemptSessionLockController, "releaseHeldLockForAbort">;
-  log: AbortLockReleaseLog;
-  runId: string;
-  abortKind: "abort" | "timeout abort";
-  reason?: unknown;
-  terminal: boolean;
-}): void {
-  void params.sessionLockController
-    .releaseHeldLockForAbort({ reason: params.reason, terminal: params.terminal })
-    .catch((err: unknown) => {
-      params.log.warn(
-        `failed to release session lock on ${params.abortKind}: runId=${params.runId} ${String(err)}`,
-      );
-    });
 }

@@ -389,6 +389,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
                 createTerminalTool({
                   agentId: sessionAgentId,
                   agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                  runId: options?.runId,
                 }),
               ]),
         ]),

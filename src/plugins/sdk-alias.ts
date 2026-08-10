@@ -489,7 +489,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Packaged installs omit workspace manifests; preserve the exact curated subpaths
 // instead of expanding aliases from package exports.
 const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
-  ["gateway-client", ["", "readiness", "timeouts"]],
+  ["gateway-client", ["", "readiness", "timeouts", "websocket-data"]],
   [
     "gateway-protocol",
     [

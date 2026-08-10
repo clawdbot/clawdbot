@@ -52,7 +52,6 @@ export async function runEmbeddedAttemptExecutionPhase(
     attempt,
     activeSession,
     sessionManager,
-    sessionLockController: input.sessionLock.sessionLockController,
     ownedTranscriptWriteContext: input.sessionLock.ownedTranscriptWriteContext,
     runAbortController: input.runAbortController,
     externalAbortController: input.externalAbortController,

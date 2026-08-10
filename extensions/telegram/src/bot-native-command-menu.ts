@@ -33,7 +33,6 @@ export type TelegramMenuCommand = {
   description: string;
   descriptionLocalizations?: Record<string, string>;
   isAlias?: boolean;
-  isConfigured?: boolean;
   isSkill?: boolean;
 };
 
@@ -192,9 +191,31 @@ export function buildPluginTelegramMenuCommands(params: {
   const issues: string[] = [];
   const pluginCommandNames = new Set<string>();
 
-  for (const spec of specs) {
-    const rawName = typeof spec.name === "string" ? spec.name : "";
-    const normalized = normalizeTelegramCommandName(rawName);
+  // Settle normalized collision ownership before display priority so discovery order cannot win.
+  const sortedSpecs = specs
+    .map((spec) => {
+      const rawName = typeof spec.name === "string" ? spec.name : "";
+      return {
+        spec,
+        rawName,
+        normalized: normalizeTelegramCommandName(rawName),
+      };
+    })
+    .toSorted((a, b) => {
+      if (a.normalized !== b.normalized) {
+        return a.normalized < b.normalized ? -1 : 1;
+      }
+      const aExact = a.rawName.trim().toLowerCase() === a.normalized;
+      const bExact = b.rawName.trim().toLowerCase() === b.normalized;
+      if (aExact !== bExact) {
+        return aExact ? -1 : 1;
+      }
+      // Plugin registration rejects duplicate exact invocation keys, so equal raw names
+      // cannot represent distinct production owners; transformed collisions settle above.
+      return a.rawName < b.rawName ? -1 : a.rawName > b.rawName ? 1 : 0;
+    });
+
+  for (const { spec, rawName, normalized } of sortedSpecs) {
     if (!normalized || !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
       const invalidName = rawName.trim() ? rawName : "<unknown>";
       issues.push(
@@ -252,12 +273,10 @@ export function buildCappedTelegramMenuCommands(params: {
   return result;
 }
 
-export function orderForPressure(commands: TelegramMenuCommand[]): TelegramMenuCommand[] {
-  return [
-    ...commands.filter((command) => command.isConfigured),
-    ...commands.filter((command) => !command.isConfigured && !command.isAlias),
-    ...commands.filter((command) => !command.isConfigured && command.isAlias),
-  ];
+function buildDirectSkillFallbackCommands(commands: TelegramMenuCommand[]): TelegramMenuCommand[] {
+  const fallback = commands.find((command) => command.command === "skill" && !command.isSkill);
+  const remaining = commands.filter((command) => !command.isSkill && command !== fallback);
+  return fallback ? [fallback, ...remaining] : remaining;
 }
 
 function buildUncachedCappedTelegramMenuCommands(params: {
@@ -272,30 +291,38 @@ function buildUncachedCappedTelegramMenuCommands(params: {
   maxTotalChars: number;
   descriptionTrimmed: boolean;
   textBudgetDropCount: number;
+  skillCommandsOmitted: boolean;
 } {
-  const { allCommands } = params;
-  const { maxCommands, maxTotalChars } = params;
-  const totalCommands = allCommands.length;
+  const { allCommands, maxCommands, maxTotalChars } = params;
+  const fitCommands = (commands: TelegramMenuCommand[]) => {
+    const cappedCommands = commands.slice(0, maxCommands);
+    const needsFitting =
+      cappedCommands.some(
+        (command) =>
+          countTelegramCommandText(command.description) > TELEGRAM_MAX_COMMAND_DESCRIPTION_LENGTH,
+      ) ||
+      cappedCommands.reduce(
+        (total, { command, description }) =>
+          total + countTelegramCommandText(command) + countTelegramCommandText(description),
+        0,
+      ) > maxTotalChars;
+    return needsFitting
+      ? fitTelegramCommandsWithinTextBudget(cappedCommands, maxTotalChars)
+      : { commands: cappedCommands, descriptionTrimmed: false, textBudgetDropCount: 0 };
+  };
+  let effectiveCommands = allCommands;
+  let fitted = fitCommands(allCommands);
+  // Direct skill menu entries are all-or-none; fallback keeps canonical /skill visible first.
+  const skillCommandCount = allCommands.filter((command) => command.isSkill).length;
+  const skillCommandsOmitted =
+    skillCommandCount > 0 &&
+    fitted.commands.filter((command) => command.isSkill).length < skillCommandCount;
+  if (skillCommandsOmitted) {
+    effectiveCommands = buildDirectSkillFallbackCommands(allCommands);
+    fitted = fitCommands(effectiveCommands);
+  }
+  const totalCommands = effectiveCommands.length;
   const overflowCount = Math.max(0, totalCommands - maxCommands);
-  const cappedCommands = allCommands.slice(0, maxCommands);
-  const totalText = cappedCommands.reduce(
-    (total, { command, description }) =>
-      total + countTelegramCommandText(command) + countTelegramCommandText(description),
-    0,
-  );
-  const hasMenuPressure =
-    overflowCount > 0 ||
-    totalText > maxTotalChars ||
-    cappedCommands.some(
-      (command) =>
-        countTelegramCommandText(command.description) > TELEGRAM_MAX_COMMAND_DESCRIPTION_LENGTH,
-    );
-  const fitted = hasMenuPressure
-    ? fitTelegramCommandsWithinTextBudget(
-        orderForPressure(allCommands).slice(0, maxCommands),
-        maxTotalChars,
-      )
-    : { commands: cappedCommands, descriptionTrimmed: false, textBudgetDropCount: 0 };
   return {
     commandsToRegister: fitted.commands,
     totalCommands,
@@ -304,6 +331,7 @@ function buildUncachedCappedTelegramMenuCommands(params: {
     maxTotalChars,
     descriptionTrimmed: fitted.descriptionTrimmed,
     textBudgetDropCount: fitted.textBudgetDropCount,
+    skillCommandsOmitted,
   };
 }
 
@@ -319,7 +347,6 @@ function buildTelegramMenuResultCacheKey(params: {
     updateTelegramCommandDigestField(digest, command.command);
     updateTelegramCommandDigestField(digest, command.description);
     updateTelegramCommandDigestField(digest, command.isAlias ? "1" : "0");
-    updateTelegramCommandDigestField(digest, command.isConfigured ? "1" : "0");
     updateTelegramCommandDigestField(digest, command.isSkill ? "1" : "0");
     updateTelegramCommandLocalizationDigest(digest, command.descriptionLocalizations);
   }
@@ -362,14 +389,26 @@ function rememberCappedTelegramMenuResult(
 }
 
 function hashCommandList(commands: TelegramMenuCommand[]): string {
-  const requestedCommands = commands.map((command) => ({
-    command: command.command,
-    description: command.description,
-    descriptionLocalizations: buildEffectiveTelegramCommandLocalizations(
-      command.descriptionLocalizations,
-    ),
-  }));
-  return createHash("sha256").update(JSON.stringify(requestedCommands)).digest("hex").slice(0, 16);
+  const digest = createHash("sha256");
+  updateTelegramCommandDigestField(digest, String(commands.length));
+  for (const command of commands) {
+    updateTelegramCommandDigestField(digest, command.command);
+    updateTelegramCommandDigestField(digest, command.description);
+    updateTelegramCommandLocalizationDigest(digest, command.descriptionLocalizations);
+  }
+  return digest.digest("hex").slice(0, 16);
+}
+
+function reduceTelegramMenuCommands(
+  commands: TelegramMenuCommand[],
+  maxCommands: number,
+): TelegramMenuCommand[] {
+  const reduced = commands.slice(0, maxCommands);
+  const skillCommandCount = commands.filter((command) => command.isSkill).length;
+  const reducedSkillCommandCount = reduced.filter((command) => command.isSkill).length;
+  return reducedSkillCommandCount < skillCommandCount
+    ? buildDirectSkillFallbackCommands(commands).slice(0, maxCommands)
+    : reduced;
 }
 
 function buildEffectiveTelegramCommandLocalizations(
@@ -640,16 +679,17 @@ export function syncTelegramMenuCommands(params: {
         const nextCount = Math.floor(retryCommands.length * TELEGRAM_COMMAND_RETRY_RATIO);
         const reducedCount =
           nextCount < retryCommands.length ? nextCount : retryCommands.length - 1;
-        if (reducedCount <= 0) {
+        const nextCommands = reduceTelegramMenuCommands(commandsToRegister, reducedCount);
+        if (reducedCount <= 0 || nextCommands.length === 0) {
           runtime.error?.(
             "Telegram rejected native command registration (BOT_COMMANDS_TOO_MUCH); leaving menu empty. Reduce commands or disable channels.telegram.commands.native.",
           );
           return;
         }
         runtime.log?.(
-          `Telegram rejected ${retryCommands.length} commands (BOT_COMMANDS_TOO_MUCH); retrying with ${reducedCount}.`,
+          `Telegram rejected ${retryCommands.length} commands (BOT_COMMANDS_TOO_MUCH); retrying with ${nextCommands.length}.`,
         );
-        retryCommands = orderForPressure(retryCommands).slice(0, reducedCount);
+        retryCommands = nextCommands;
       }
     }
 

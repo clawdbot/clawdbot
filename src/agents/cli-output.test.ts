@@ -1211,6 +1211,29 @@ describe("parseCliJsonl", () => {
 });
 
 describe("parseCliOutput", () => {
+  it("applies a backend JSONL hook when reparsing complete output", () => {
+    const parseJsonlEvent = vi.fn(() => ({
+      kind: "result" as const,
+      errorText: "invalid request format: malformed backend result",
+    }));
+
+    expect(
+      parseCliOutput({
+        raw: JSON.stringify({ type: "result", result: "malformed" }),
+        backend: { command: "acme", output: "jsonl" },
+        providerId: "acme-cli",
+        parseJsonlEvent,
+        outputMode: "jsonl",
+      }),
+    ).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "invalid request format: malformed backend result",
+    });
+    expect(parseJsonlEvent).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       name: "uses streamed Claude assistant text when the result envelope is missing",

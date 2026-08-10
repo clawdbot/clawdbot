@@ -49,10 +49,15 @@
       "types": "./dist/timeouts.d.mts",
       "import": "./dist/timeouts.mjs",
       "default": "./dist/timeouts.mjs"
+    },
+    "./websocket-data": {
+      "types": "./dist/websocket-data.d.mts",
+      "import": "./dist/websocket-data.mjs",
+      "default": "./dist/websocket-data.mjs"
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts src/websocket-data.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",

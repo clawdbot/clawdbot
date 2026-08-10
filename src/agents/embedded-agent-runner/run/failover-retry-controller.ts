@@ -5,6 +5,7 @@ import {
   markAuthProfileFailure,
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
+import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
@@ -34,6 +35,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   getLastProfileId: () => string | undefined;
   getSessionId: () => string;
   harnessOwnsTransport: () => boolean;
+  getRuntimeAuthOwnerId: () => string;
   getApiKeyInfo: () => ResolvedProviderAuth | null;
 }) {
   const {
@@ -84,8 +86,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
       failoverModel: string;
       logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
     }) => {
-      rateLimitProfileRotations += 1;
-      if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
+      if (!fallbackConfigured) {
+        return;
+      }
+      if (rateLimitProfileRotations < rateLimitProfileRotationLimit) {
+        // This state gates same-model retries, so skipped rotations must not consume it;
+        // otherwise one rate-limit response can disable the remaining retry budget.
+        rateLimitProfileRotations += 1;
         return;
       }
       const status = resolveFailoverStatus("rate_limit");
@@ -111,10 +118,17 @@ export function createEmbeddedRunFailoverRetryController(input: {
       reason?: AuthProfileFailureReason | null;
       modelId?: string;
     }) => {
+      const { profileId, reason } = failure;
+      if (input.harnessOwnsTransport() && (reason === "auth" || reason === "auth_permanent")) {
+        revokeRuntimeAuthMaterializations({
+          agentDir,
+          provider,
+          runtimeOwnerId: input.getRuntimeAuthOwnerId(),
+        });
+      }
       if (params.authProfileStateMode === "read-only") {
         return;
       }
-      const { profileId, reason } = failure;
       if (!reason) {
         return;
       }

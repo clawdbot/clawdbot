@@ -82,9 +82,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   checkpointBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["checkpointBeforeAgentReply"];
-  confirmRestartRecoveryArmedAfterLeaseLoss: ReturnType<
-    typeof createReplyRestartRecoveryClaimController
-  >["confirmRestartRecoveryArmedAfterLeaseLoss"];
   continuation: ReplyContinuationController;
   getActiveIsNewSession: () => boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
@@ -126,7 +123,6 @@ export async function executePreparedReplyAgentRun(
     blockStreamingEnabled,
     cfg,
     checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     commandBody,
     continuation,
     defaultModel,
@@ -465,7 +461,6 @@ export async function executePreparedReplyAgentRun(
           resolvedVerboseLevel,
           toolProgressDetail,
           replyMediaContext,
-          confirmRestartRecoveryArmedAfterLeaseLoss,
           isRestartRecoveryArmed,
         }),
       ),
@@ -568,7 +563,6 @@ export function createReplyAgentRestartRecoveryController(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
     admissionRunId:
@@ -637,7 +631,6 @@ export function createReplyAgentRestartRecoveryController(
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   };

@@ -4833,9 +4833,6 @@ describe("createTelegramBot", () => {
     expect(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]).toBe(
       codexRateLimitText,
     );
-    expect(
-      String(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]),
-    ).not.toContain("All models are temporarily rate-limited");
   });
 
   it("honors threaded replies for replyToMode=first/all", async () => {

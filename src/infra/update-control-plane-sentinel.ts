@@ -68,6 +68,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   const sessionKey = normalizeText(value.sessionKey);
   const threadId = normalizeText(value.threadId);
   const handoffId = normalizeText(value.handoffId);
+  const root = normalizeText(value.root);
   const channel = isRecord(value.deliveryContext)
     ? normalizeText(value.deliveryContext.channel)
     : undefined;
@@ -84,6 +85,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
         }
       : undefined;
   return {
+    ...(root ? { root } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(threadId ? { threadId } : {}),

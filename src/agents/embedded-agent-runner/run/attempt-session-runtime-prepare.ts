@@ -48,8 +48,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     | "replayAllowedToolNames"
     | "resolveActiveContextEnginePluginId"
     | "sessionAgentId"
-    | "sessionLockController"
-    | "withOwnedSessionWriteLock"
+    | "transcriptLifecycle"
+    | "withOwnedTranscriptWrite"
   >;
   agentSession: Pick<
     AgentSessionInput,
@@ -99,8 +99,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     replayAllowedToolNames: input.sessionManager.replayAllowedToolNames,
     resolveActiveContextEnginePluginId: input.sessionManager.resolveActiveContextEnginePluginId,
     sessionAgentId: input.sessionManager.sessionAgentId,
-    sessionLockController: input.sessionManager.sessionLockController,
-    withOwnedSessionWriteLock: input.sessionManager.withOwnedSessionWriteLock,
+    transcriptLifecycle: input.sessionManager.transcriptLifecycle,
+    withOwnedTranscriptWrite: input.sessionManager.withOwnedTranscriptWrite,
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
@@ -129,7 +129,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     },
     runAbortSignal: input.agentSession.runAbortSignal,
     sessionAgentId: input.sessionManager.sessionAgentId,
-    sessionLockController: input.sessionManager.sessionLockController,
+    transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;

@@ -104,6 +104,8 @@ function normalizeTraceparent(traceparent?: string): string | undefined {
   return normalizeDiagnosticTraceparent(traceparent);
 }
 
+type ReceiptOptions = { allowDuplicate?: boolean };
+
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
@@ -199,6 +201,7 @@ export function enqueueSystemEventEntry(
 function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
 ): SystemEvent | null {
   if (options.replace) {
     return replaceSystemEventEntry(text, options);
@@ -257,7 +260,11 @@ function enqueueOwnedSystemEventEntry(
       return cloneSystemEvent(event);
     }
   }
+  // Upstream's allowDuplicate escape (#121xxx) applied to OUR dedupe, which runs
+  // after the event is built so it can compare ack ids, expected session and the
+  // delegate-artifact receipt - fields upstream's earlier 5-arg check cannot see.
   if (
+    receiptOptions?.allowDuplicate !== true &&
     findDuplicateInQueue(
       entry.queue,
       cleaned,
@@ -281,6 +288,20 @@ function enqueueOwnedSystemEventEntry(
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return enqueueSystemEventEntry(text, options) !== null;
+}
+
+/** Enqueues one occurrence and returns one-use removal ownership for its UUID. */
+export function enqueueSystemEventWithReceipt(
+  text: string,
+  options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
+): (() => boolean) | null {
+  const event = enqueueOwnedSystemEventEntry(text, options, receiptOptions);
+  if (!event) {
+    return null;
+  }
+  const sessionKey = requireSessionKey(options.sessionKey);
+  return () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0;
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
