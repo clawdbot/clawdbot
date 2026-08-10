@@ -300,7 +300,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     });
     expect(streamedReply?.node.threadBinding).toEqual({
       kind: "provider-observed-v1",
-      threadId: "777",
+      threadSpec: { scope: "dm", id: 777 },
     });
   });
 

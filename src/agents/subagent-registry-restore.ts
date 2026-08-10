@@ -11,8 +11,8 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
-  backfillCollectorArchiveAtMs,
   reconcileOrphanedRestoredRuns,
+  updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -118,7 +118,7 @@ export function createSubagentRegistryRestorer(config: {
         resumedRuns,
       });
       for (const entry of runs.values()) {
-        if (backfillCollectorArchiveAtMs(entry, cfg)) {
+        if (updateSubagentArchiveAtMs(entry, cfg)) {
           restoredStateChanged = true;
         }
       }

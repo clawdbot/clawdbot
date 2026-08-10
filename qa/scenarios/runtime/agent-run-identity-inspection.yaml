@@ -30,6 +30,7 @@ scenario:
     - test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/agent-run-identity-inspection.ts
     summary: Starts an ephemeral Gateway and mock provider, runs local and repeated public-ingress turns, proves run ambiguity plus exact text/JSON selection, replaces the Gateway process, and compares normalized context bytes.
     args:

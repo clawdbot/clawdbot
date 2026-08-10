@@ -193,7 +193,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     sessionManager,
     settingsManager,
     resourceLoader,
-    withSessionWriteLock: transcriptRuntime.withSessionWriteLock,
+    withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
   });
   session.agent.sessionId = params.sessionId;
   session.setActiveToolsByName([...activeToolNames]);
@@ -251,7 +251,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   let finalTranscriptFailure: Error | undefined;
   try {
     try {
-      await transcriptRuntime.withSessionWriteLock(() => undefined);
+      await transcriptRuntime.withSessionWriteSettlement(() => undefined);
     } catch (error) {
       finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
     }

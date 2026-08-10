@@ -4,14 +4,13 @@ import { promises as fs } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
-  backfillCollectorArchiveAtMs,
   capFrozenResultText,
   logAnnounceGiveUp,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
-  resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
+  updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
@@ -62,21 +61,32 @@ describe("capFrozenResultText", () => {
   });
 });
 
-describe("resolveSubagentArchiveAtMs", () => {
+describe("updateSubagentArchiveAtMs", () => {
   const cfg = { agents: { defaults: { subagents: { archiveAfterMinutes: 5 } } } };
 
-  it("defers collector retention until terminal completion", () => {
-    for (const cleanup of ["keep", "delete"] as const) {
-      expect(
-        resolveSubagentArchiveAtMs({
-          cfg,
-          now: 1_000,
-          spawnMode: "run",
-          cleanup,
-          collect: true,
-        }),
-      ).toBeUndefined();
+  it("defers delete-mode and collector retention until terminal completion", () => {
+    for (const overrides of [
+      { cleanup: "delete" as const },
+      { cleanup: "keep" as const, collect: true },
+      { cleanup: "delete" as const, collect: true },
+    ]) {
+      const entry = createRunEntry(overrides);
+      expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
+      expect(entry.archiveAtMs).toBeUndefined();
     }
+  });
+
+  it("starts ordinary delete-mode retention at execution completion", () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      createdAt: 500,
+      execution: { status: "terminal", startedAt: 1_000, endedAt: 602_000 },
+      archiveAtMs: 300_500,
+    });
+
+    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
+    expect(entry.archiveAtMs).toBe(902_000);
+    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
   });
 
   it("starts collector retention when terminal completion is frozen", () => {
@@ -123,15 +133,29 @@ describe("resolveSubagentArchiveAtMs", () => {
       archiveAtMs: 10_000,
     });
 
-    expect(backfillCollectorArchiveAtMs(entry, cfg)).toBe(true);
+    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
     expect(entry.archiveAtMs).toBe(302_000);
-    expect(backfillCollectorArchiveAtMs(entry, cfg)).toBe(false);
+    expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(false);
   });
 
-  it("clears stale deadlines from active, persistent, or retention-disabled collectors", () => {
-    const active = createRunEntry({ collect: true, archiveAtMs: 10_000 });
-    expect(backfillCollectorArchiveAtMs(active, cfg)).toBe(true);
-    expect(active.archiveAtMs).toBeUndefined();
+  it("clears stale deadlines from active, paused, persistent, and retained runs", () => {
+    for (const overrides of [
+      { cleanup: "delete" as const },
+      { collect: true },
+      {
+        cleanup: "delete" as const,
+        pauseReason: "sessions_yield" as const,
+        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
+      },
+      {
+        cleanup: "keep" as const,
+        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
+      },
+    ]) {
+      const entry = createRunEntry({ ...overrides, archiveAtMs: 10_000 });
+      expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
+      expect(entry.archiveAtMs).toBeUndefined();
+    }
 
     const persistent = createRunEntry({
       collect: true,
@@ -139,40 +163,26 @@ describe("resolveSubagentArchiveAtMs", () => {
       execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
       archiveAtMs: 10_000,
     });
-    expect(backfillCollectorArchiveAtMs(persistent, cfg)).toBe(true);
+    expect(updateSubagentArchiveAtMs(persistent, cfg)).toBe(true);
     expect(persistent.archiveAtMs).toBeUndefined();
-
-    const completed = createRunEntry({
-      collect: true,
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
-      archiveAtMs: 10_000,
-    });
-    expect(
-      backfillCollectorArchiveAtMs(completed, {
-        agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-      }),
-    ).toBe(true);
-    expect(completed.archiveAtMs).toBeUndefined();
   });
 
-  it("preserves ordinary keep and persistent session semantics", () => {
-    expect(
-      resolveSubagentArchiveAtMs({
-        cfg,
-        now: 1_000,
-        spawnMode: "run",
-        cleanup: "keep",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSubagentArchiveAtMs({
-        cfg,
-        now: 1_000,
-        spawnMode: "session",
+  it("never arms retention when archiveAfterMinutes is zero", () => {
+    for (const collect of [false, true]) {
+      const entry = createRunEntry({
         cleanup: "delete",
-        collect: true,
-      }),
-    ).toBeUndefined();
+        collect,
+        execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+        archiveAtMs: 10_000,
+      });
+
+      expect(
+        updateSubagentArchiveAtMs(entry, {
+          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+        }),
+      ).toBe(true);
+      expect(entry.archiveAtMs).toBeUndefined();
+    }
   });
 });
 

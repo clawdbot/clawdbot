@@ -34,6 +34,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    canInject?: () => boolean,
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
@@ -56,7 +57,19 @@ function steerActiveSession(
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
   queueIdentity?: string,
+  canInject?: () => boolean,
 ): Promise<void> {
+  if (canInject) {
+    return activeSession.steer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      queueIdentity,
+      canInject,
+    );
+  }
   if (media?.length || queueIdentity) {
     return activeSession.steer(
       text,
@@ -199,6 +212,7 @@ async function steerAndWaitForTranscriptCommit(
   queueIdentity: string = crypto.randomUUID(),
   abortSignal?: AbortSignal,
   onQueueAccepted?: (accepted: boolean) => void,
+  canInject?: () => boolean,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -207,6 +221,7 @@ async function steerAndWaitForTranscriptCommit(
     let abortRequested = abortSignal?.aborted === true;
     let acceptanceReported = false;
     let cancellation: Promise<void> | undefined;
+    let acceptanceOpen = true;
     const reportAcceptance = (value: boolean) => {
       if (acceptanceReported) {
         return;
@@ -259,23 +274,36 @@ async function steerAndWaitForTranscriptCommit(
         },
       );
     };
+    const rejectBeforeAcceptance = (message: string) => {
+      acceptanceOpen = false;
+      reportAcceptance(false);
+      finish(new Error(message));
+    };
     const scheduleTerminalCancellation = () => {
       if (terminalTimer) {
         return;
       }
       terminalTimer = setTimeout(() => {
         terminalTimer = undefined;
-        rejectAfterCancellation(
-          "active session ended before queued steering message was committed to the transcript",
-        );
+        const message =
+          "active session ended before queued steering message was committed to the transcript";
+        if (accepted) {
+          rejectAfterCancellation(message);
+          return;
+        }
+        rejectBeforeAcceptance(message);
       }, 0);
       terminalTimer.unref?.();
     };
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => {
-        rejectAfterCancellation(
-          "queued steering message was not committed to the transcript before timeout",
-        );
+        const message =
+          "queued steering message was not committed to the transcript before timeout";
+        if (accepted) {
+          rejectAfterCancellation(message);
+          return;
+        }
+        rejectBeforeAcceptance(message);
       },
       Math.max(1, timeoutMs),
     );
@@ -306,8 +334,7 @@ async function steerAndWaitForTranscriptCommit(
       (error) => finish(error),
     );
     if (abortRequested) {
-      reportAcceptance(false);
-      finish(new Error("queued steering message was cancelled before acceptance"));
+      rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
       return;
     }
     const steer = steerActiveSession(
@@ -318,6 +345,7 @@ async function steerAndWaitForTranscriptCommit(
       media,
       imageOrder,
       queueIdentity,
+      () => acceptanceOpen && (canInject?.() ?? true),
     );
     void steer.then(
       () => {
@@ -351,6 +379,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   text: string,
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
+  canInject?: () => boolean,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !options?.images?.length;
@@ -387,6 +416,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         options?.media,
         options?.imageOrder,
         options?.queueIdentity,
+        canInject,
       );
       options?.onQueueAccepted?.(true);
     } catch (error) {
@@ -407,6 +437,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options.queueIdentity,
       options.abortSignal,
       options.onQueueAccepted,
+      canInject,
     );
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {

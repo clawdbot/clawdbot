@@ -1,5 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackBotPolicy, resolveClickClackGroupPolicy } from "./group-policy.js";
+
+describe("resolveClickClackBotPolicy", () => {
+  it("keeps bot-authored dispatch disabled by default", () => {
+    expect(resolveClickClackBotPolicy({ account: {}, channelId: "chn_unknown" })).toEqual({
+      allowBots: false,
+      botLoopProtection: undefined,
+    });
+  });
+
+  it("resolves exact, wildcard, and account bot policies independently", () => {
+    expect(
+      resolveClickClackBotPolicy({
+        account: {
+          allowBots: false,
+          botLoopProtection: { maxEventsPerWindow: 20, cooldownSeconds: 90 },
+          groups: {
+            "*": { allowBots: "mentions", botLoopProtection: { windowSeconds: 30 } },
+            chn_exact: { botLoopProtection: { maxEventsPerWindow: 5 } },
+          },
+        },
+        channelId: " chn_exact ",
+      }),
+    ).toEqual({
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 5,
+        windowSeconds: 30,
+        cooldownSeconds: 90,
+      },
+    });
+  });
+
+  it("does not apply group bot policy to direct messages", () => {
+    expect(
+      resolveClickClackBotPolicy({
+        account: {
+          allowBots: false,
+          groups: { "*": { allowBots: "mentions" } },
+        },
+      }),
+    ).toEqual({ allowBots: false, botLoopProtection: undefined });
+  });
+});
 
 describe("resolveClickClackGroupPolicy", () => {
   it("returns requireMention: false when no policy is configured", () => {
@@ -125,5 +168,16 @@ describe("resolveClickClackGroupPolicy", () => {
       channelId: " chn_exact ",
     });
     expect(result.requireMention).toBe(true);
+  });
+
+  it("does not apply group policy to direct messages", () => {
+    const result = resolveClickClackGroupPolicy({
+      account: {
+        requireMention: false,
+        mentionPatterns: ["@account"],
+        groups: { "*": { requireMention: true, mentionPatterns: ["@group"] } },
+      },
+    });
+    expect(result).toEqual({ requireMention: false, mentionPatterns: ["@account"] });
   });
 });

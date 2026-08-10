@@ -1,5 +1,6 @@
 // Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -29,6 +30,7 @@ import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   registerReplyOperationSuccessorBarrier,
+  type ReplyBackendQueueMessageOptions,
   ReplyRunAlreadyActiveError,
   ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,
@@ -179,8 +181,14 @@ describe("reply run registry", () => {
     await expect(queueReplyMessageInjectionTarget(legacyTarget!, "legacy steer")).resolves.toEqual({
       status: "accepted",
     });
-    expect(queueMessage).toHaveBeenCalledWith("steer during tool work");
-    expect(queueMessage).toHaveBeenCalledWith("legacy steer");
+    expect(queueMessage).toHaveBeenCalledWith(
+      "steer during tool work",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
+    expect(queueMessage).toHaveBeenCalledWith(
+      "legacy steer",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
     stopped = true;
     await expect(queueReplyMessageInjectionTarget(target!, "late steer")).resolves.toEqual({
       status: "rejected",
@@ -1597,7 +1605,10 @@ describe("reply run registry", () => {
     await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toEqual({
       status: "accepted",
     });
-    expect(queueMessage).toHaveBeenCalledWith("hello");
+    expect(queueMessage).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
   it("queues messages only when the task-suggestion tool surface matches", async () => {
@@ -1628,10 +1639,19 @@ describe("reply run registry", () => {
       queueCurrentReplyRunMessage("session-task-suggestions", "internal completion"),
     ).resolves.toEqual({ status: "accepted" });
     expect(queueMessage).toHaveBeenCalledTimes(2);
-    expect(queueMessage).toHaveBeenNthCalledWith(1, "capable client", {
-      taskSuggestionDeliveryMode: "gateway",
-    });
-    expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
+    expect(queueMessage).toHaveBeenNthCalledWith(
+      1,
+      "capable client",
+      expect.objectContaining({
+        taskSuggestionDeliveryMode: "gateway",
+        onQueueAccepted: expect.any(Function),
+      }),
+    );
+    expect(queueMessage).toHaveBeenNthCalledWith(
+      2,
+      "internal completion",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
   it("queues images only through backends that preserve them", async () => {
@@ -1664,7 +1684,10 @@ describe("reply run registry", () => {
     await expect(
       queueCurrentReplyRunMessage("session-images", "inspect", { images }),
     ).resolves.toEqual({ status: "accepted" });
-    expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
+    expect(queueMessage).toHaveBeenCalledWith(
+      "inspect",
+      expect.objectContaining({ images, onQueueAccepted: expect.any(Function) }),
+    );
   });
 
   it("queues messages through queue-first legacy backends while token streaming is idle", async () => {
@@ -1684,7 +1707,10 @@ describe("reply run registry", () => {
     await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toEqual({
       status: "accepted",
     });
-    expect(queueMessage).toHaveBeenCalledWith("hello");
+    expect(queueMessage).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
   it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {
@@ -1735,7 +1761,10 @@ describe("reply run registry", () => {
       await expect(queueReplyMessageInjectionTarget(target!, "fresh")).resolves.toEqual({
         status: "accepted",
       });
-      expect(queueMessage).toHaveBeenCalledWith("fresh");
+      expect(queueMessage).toHaveBeenCalledWith(
+        "fresh",
+        expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -1840,6 +1869,7 @@ describe("reply run registry", () => {
 
     const synchronousAttempt = beginReplyMessageInjectionTarget(target, "first");
     expect(synchronous).toHaveBeenCalledOnce();
+    await expect(synchronousAttempt.acceptance).resolves.toBe(false);
     await expect(synchronousAttempt.outcome).resolves.toMatchObject({
       status: "rejected",
       reason: "runtime_rejected",
@@ -1857,11 +1887,116 @@ describe("reply run registry", () => {
         }),
       },
     });
-    await expect(queueReplyMessageInjectionTarget(target, "second")).resolves.toMatchObject({
+    const asynchronousAttempt = beginReplyMessageInjectionTarget(target, "second");
+    await expect(asynchronousAttempt.acceptance).resolves.toBe(false);
+    await expect(asynchronousAttempt.outcome).resolves.toMatchObject({
       status: "rejected",
       reason: "runtime_rejected",
       errorMessage: "Error: async rejection",
     });
+  });
+
+  it("reports callback acceptance before outcome and composes the caller callback", async () => {
+    const delivery = createDeferred();
+    const callerOnQueueAccepted = vi.fn();
+    let queueOptions: ReplyBackendQueueMessageOptions | undefined;
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn((_text, options) => {
+          queueOptions = options;
+          return delivery.promise;
+        }),
+      },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const attempt = beginReplyMessageInjectionTarget(target, "accepted", {
+      onQueueAccepted: callerOnQueueAccepted,
+    });
+    let outcomeSettled = false;
+    void attempt.outcome.then(() => {
+      outcomeSettled = true;
+    });
+
+    queueOptions?.onQueueAccepted?.(true);
+
+    await expect(attempt.acceptance).resolves.toBe(true);
+    expect(callerOnQueueAccepted).toHaveBeenCalledWith(true);
+    expect(outcomeSettled).toBe(false);
+    delivery.resolve();
+    await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
+  });
+
+  it("falls back to queue settlement when the backend ignores acceptance callbacks", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const accepted = beginReplyMessageInjectionTarget(target, "accepted");
+    await expect(accepted.acceptance).resolves.toBe(true);
+
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {
+          throw new Error("rejected");
+        }),
+      },
+    });
+    const rejected = beginReplyMessageInjectionTarget(target, "rejected");
+    await expect(rejected.acceptance).resolves.toBe(false);
+  });
+
+  it("keeps callback acceptance authoritative over later queue rejection", async () => {
+    const delivery = createDeferred();
+    let queueOptions: ReplyBackendQueueMessageOptions | undefined;
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn((_text, options) => {
+          queueOptions = options;
+          return delivery.promise;
+        }),
+      },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const attempt = beginReplyMessageInjectionTarget(target, "uncertain");
+
+    queueOptions?.onQueueAccepted?.(true);
+    delivery.reject(new Error("transcript unconfirmed"));
+
+    await expect(attempt.acceptance).resolves.toBe(true);
+    await expect(attempt.outcome).resolves.toMatchObject({ status: "rejected" });
   });
 
   it("rejects an ABA successor even when key and leaf are reused", async () => {
@@ -1954,7 +2089,10 @@ describe("reply run registry", () => {
       status: "accepted",
     });
     expect(firstQueue).not.toHaveBeenCalled();
-    expect(replacementQueue).toHaveBeenCalledWith("replacement");
+    expect(replacementQueue).toHaveBeenCalledWith(
+      "replacement",
+      expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
+    );
   });
 
   it("keeps an invoked queue authoritative when the owner clears synchronously", async () => {

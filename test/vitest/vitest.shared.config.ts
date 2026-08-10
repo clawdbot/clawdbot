@@ -227,6 +227,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "timeouts.ts"),
       },
       {
+        find: "@openclaw/gateway-client/websocket-data",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "websocket-data.ts"),
+      },
+      {
         find: "@openclaw/gateway-client",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "index.ts"),
       },

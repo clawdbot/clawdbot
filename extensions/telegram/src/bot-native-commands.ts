@@ -53,10 +53,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -76,7 +73,6 @@ import {
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
-  orderForPressure,
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
@@ -945,114 +941,78 @@ export const registerTelegramNativeCommands = ({
     (
       telegramDeps.getPluginCommandSpecs ?? defaultTelegramNativeCommandDeps.getPluginCommandSpecs
     )?.("telegram", { config: cfg }) ?? [];
-  const resolveTelegramMenuCommandCatalog = (
-    activeSkillCommands: typeof skillCommands,
-    reservedSkillCommands = activeSkillCommands,
-  ) => {
-    const nativeCommands = nativeEnabled
-      ? listNativeCommandSpecsForConfig(cfg, {
-          skillCommands: activeSkillCommands,
-          provider: "telegram",
-        })
-      : [];
-    const reservedCommands = new Set(
-      listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
-    );
-    for (const command of reservedSkillCommands) {
-      reservedCommands.add(normalizeLowercaseStringOrEmpty(command.name));
-    }
-    const customResolution = resolveTelegramCustomCommands({
-      commands: telegramCfg.customCommands,
-      reservedCommands,
-    });
-    for (const issue of customResolution.issues) {
-      runtime.error?.(danger(issue.message));
-    }
-    const customCommands = customResolution.commands;
-    const existingCommands = new Set(
-      [
-        ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
-        ...customCommands.map((command) => command.command),
-      ].map((command) => normalizeLowercaseStringOrEmpty(command)),
-    );
-    for (const command of reservedSkillCommands) {
-      existingCommands.add(normalizeTelegramCommandName(command.name));
-    }
-    const pluginCatalog = buildPluginTelegramMenuCommands({
-      specs: pluginCommandSpecs,
-      existingCommands,
-    });
-    for (const issue of pluginCatalog.issues) {
-      runtime.error?.(danger(issue));
-    }
-    const firstSkillCommandIndex = nativeEnabled
-      ? listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).length
-      : 0;
-    const allCommandsFull: TelegramMenuCommand[] = [
-      ...nativeCommands
-        .map((command, index): TelegramMenuCommand | null => {
-          const normalized = normalizeTelegramCommandName(command.name);
-          if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
-            runtime.error?.(
-              danger(
-                `Native command "${command.name}" is invalid for Telegram (resolved to "${normalized}"). Skipping.`,
-              ),
-            );
-            return null;
-          }
-          const menuCommand: TelegramMenuCommand = {
-            command: normalized,
-            description: command.description,
-          };
-          if (command.isAlias) {
-            menuCommand.isAlias = true;
-          }
-          if (index >= firstSkillCommandIndex) {
-            menuCommand.isSkill = true;
-          }
-          if (command.descriptionLocalizations) {
-            menuCommand.descriptionLocalizations = command.descriptionLocalizations;
-          }
-          return menuCommand;
-        })
-        .filter((cmd) => cmd !== null),
-      ...(nativeEnabled ? pluginCatalog.commands : []),
-      ...customCommands.map((command) => ({ ...command, isConfigured: true })),
-    ];
-    return {
-      nativeCommands,
-      customCommands,
-      pluginCatalog,
-      allCommandsFull,
-      ...buildCappedTelegramMenuCommands({
-        allCommands: allCommandsFull,
-      }),
-    };
-  };
-  const fullCommandCatalog = resolveTelegramMenuCommandCatalog(skillCommands);
-  let menuCommandCatalog: ReturnType<typeof buildCappedTelegramMenuCommands> = fullCommandCatalog;
-  const omittedSkillCommand =
-    fullCommandCatalog.commandsToRegister.filter((command) => command.isSkill).length <
-    fullCommandCatalog.allCommandsFull.filter((command) => command.isSkill).length;
-  if (omittedSkillCommand) {
-    const skillFallback = fullCommandCatalog.allCommandsFull.find(
-      (command) => command.command === "skill" && !command.isSkill,
-    );
-    const fallbackCommands = fullCommandCatalog.allCommandsFull.filter(
-      (command) => command !== skillFallback && !command.isSkill,
-    );
-    menuCommandCatalog = buildCappedTelegramMenuCommands({
-      allCommands: orderForPressure(
-        skillFallback
-          ? [{ ...skillFallback, isConfigured: true }, ...fallbackCommands]
-          : fallbackCommands,
-      ),
-    });
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "telegram" })
+    : [];
+  const reservedCommands = new Set(
+    listNativeCommandSpecs({ provider: "telegram" }).map((command) =>
+      normalizeTelegramCommandName(command.name),
+    ),
+  );
+  for (const command of skillCommands) {
+    reservedCommands.add(normalizeTelegramCommandName(command.name));
+  }
+  const customResolution = resolveTelegramCustomCommands({
+    commands: telegramCfg.customCommands,
+    reservedCommands,
+  });
+  for (const issue of customResolution.issues) {
+    runtime.error?.(danger(issue.message));
+  }
+  const customCommands = customResolution.commands;
+  const pluginCatalog = buildPluginTelegramMenuCommands({
+    specs: pluginCommandSpecs,
+    existingCommands: new Set(reservedCommands),
+  });
+  for (const issue of pluginCatalog.issues) {
+    runtime.error?.(danger(issue));
+  }
+  const firstSkillCommandIndex = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).length
+    : 0;
+  const nativeMenuCommands = nativeCommands
+    .map((command, index): TelegramMenuCommand | null => {
+      const normalized = normalizeTelegramCommandName(command.name);
+      if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
+        runtime.error?.(
+          danger(
+            `Native command "${command.name}" is invalid for Telegram (resolved to "${normalized}"). Skipping.`,
+          ),
+        );
+        return null;
+      }
+      const menuCommand: TelegramMenuCommand = {
+        command: normalized,
+        description: command.description,
+      };
+      if (command.isAlias) {
+        menuCommand.isAlias = true;
+      }
+      if (index >= firstSkillCommandIndex) {
+        menuCommand.isSkill = true;
+      }
+      if (command.descriptionLocalizations) {
+        menuCommand.descriptionLocalizations = command.descriptionLocalizations;
+      }
+      return menuCommand;
+    })
+    .filter((cmd) => cmd !== null);
+  const customCommandNames = new Set(customCommands.map((command) => command.command));
+  const fullCommandCatalog = buildCappedTelegramMenuCommands({
+    allCommands: [
+      ...customCommands,
+      ...nativeMenuCommands.filter((command) => !command.isAlias),
+      ...(nativeEnabled
+        ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
+        : []),
+      ...nativeMenuCommands.filter((command) => command.isAlias),
+    ],
+  });
+  if (fullCommandCatalog.skillCommandsOmitted) {
     runtime.log?.(
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
   }
-  const { nativeCommands, pluginCatalog } = fullCommandCatalog;
   const loginCommand = listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).find(
     (command) => findCommandByNativeName(command.name, "telegram")?.key === "login",
   );
@@ -1072,7 +1032,7 @@ export const registerTelegramNativeCommands = ({
     maxTotalChars,
     descriptionTrimmed,
     textBudgetDropCount,
-  } = menuCommandCatalog;
+  } = fullCommandCatalog;
   if (overflowCount > 0) {
     runtime.log?.(
       `Telegram limits bots to ${maxCommands} commands. ` +

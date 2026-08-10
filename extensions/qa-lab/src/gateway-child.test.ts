@@ -1084,15 +1084,19 @@ describe("buildQaRuntimeEnv", () => {
     expect(configProfile.provider).toBe("openai");
     expect(configProfile.mode).toBe("api_key");
     expect(configProfile.displayName).toBe("QA live openai env credential");
+    expect(Object.values(cfg.auth?.profiles ?? {})).not.toContainEqual(
+      expect.objectContaining({ provider: "anthropic" }),
+    );
 
     for (const agentId of ["main", "qa"]) {
-      const storeProfile = requireAuthProfile(
-        readAuthProfileStore(stateDir, agentId).profiles,
-        "qa-live-openai-env",
-      );
+      const profiles = readAuthProfileStore(stateDir, agentId).profiles;
+      const storeProfile = requireAuthProfile(profiles, "qa-live-openai-env");
       expect(storeProfile.type).toBe("api_key");
       expect(storeProfile.provider).toBe("openai");
       expect(storeProfile.key).toBe("qa-live-not-a-real-key");
+      expect(Object.values(profiles)).not.toContainEqual(
+        expect.objectContaining({ provider: "anthropic" }),
+      );
     }
   });
 

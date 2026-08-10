@@ -1,14 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
-  canAdvanceSessionEntryCache: vi.fn(() => true),
   detectAndLoadPromptImages: vi.fn(),
-  installPromptSubmissionLockRelease: vi.fn((_input: Record<string, unknown>) => undefined),
-  publishOwnedSessionFileSnapshot: vi.fn(() => true),
-  reacquireAfterPrompt: vi.fn(async () => undefined),
-  releaseForPrompt: vi.fn(async () => undefined),
   resolveImageSanitizationLimits: vi.fn(() => ({ maxDimensionPx: 2048 })),
-  withSessionWriteLock: vi.fn(async (operation: () => unknown) => await operation()),
 }));
 
 vi.mock("@openclaw/media-core/constants", () => ({
@@ -21,9 +15,6 @@ vi.mock("../../image-sanitization.js", () => ({
 }));
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: hoisted.detectAndLoadPromptImages,
-}));
-vi.mock("./attempt.session-lock.js", () => ({
-  installPromptSubmissionLockRelease: hoisted.installPromptSubmissionLockRelease,
 }));
 
 import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-execution-prepare.js";
@@ -52,14 +43,6 @@ function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecu
       enabled: true,
       fsBridge: { readFile: vi.fn() },
       workspaceDir: "/sandbox/workspace",
-    },
-    session: { agent: { streamFn: vi.fn() } },
-    sessionLockController: {
-      canAdvanceSessionEntryCache: hoisted.canAdvanceSessionEntryCache,
-      publishOwnedSessionFileSnapshot: hoisted.publishOwnedSessionFileSnapshot,
-      reacquireAfterPrompt: hoisted.reacquireAfterPrompt,
-      releaseForPrompt: hoisted.releaseForPrompt,
-      withSessionWriteLock: hoisted.withSessionWriteLock,
     },
     skipPromptSubmission: false,
     ...overrides,
@@ -97,32 +80,14 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       loadedCount: 0,
       skippedCount: 0,
     });
-    expect(hoisted.installPromptSubmissionLockRelease).not.toHaveBeenCalled();
     expect(hoisted.detectAndLoadPromptImages).not.toHaveBeenCalled();
   });
 
-  it("installs the lock handoff before loading prompt images", async () => {
+  it("loads prompt images with the prepared workspace policy", async () => {
     const input = createInput();
 
     const result = await prepareEmbeddedAttemptPromptExecution(input);
 
-    expect(hoisted.installPromptSubmissionLockRelease).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: input.session,
-        sessionFile: "/tmp/session.jsonl",
-        sessionKey: "agent:main:session-1",
-      }),
-    );
-    const lockHandoff = hoisted.installPromptSubmissionLockRelease.mock.calls[0]?.[0] as
-      | {
-          reacquireAfterPrompt: () => Promise<void>;
-          releaseForPrompt: () => Promise<void>;
-        }
-      | undefined;
-    await lockHandoff?.releaseForPrompt();
-    await lockHandoff?.reacquireAfterPrompt();
-    expect(hoisted.releaseForPrompt).toHaveBeenCalledOnce();
-    expect(hoisted.reacquireAfterPrompt).toHaveBeenCalledOnce();
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith({
       prompt: "inspect image.png",
       workspaceDir: "/tmp/workspace",
@@ -152,7 +117,6 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
 
     await prepareEmbeddedAttemptPromptExecution(input);
 
-    expect(hoisted.installPromptSubmissionLockRelease).toHaveBeenCalledOnce();
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
       expect.objectContaining({ sandbox: undefined }),
     );

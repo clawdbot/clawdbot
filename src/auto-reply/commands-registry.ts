@@ -163,6 +163,36 @@ export function listNativeCommandSpecsForConfig(
   return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
 }
 
+export function mergeNativeCommandSpecs(params: {
+  primary: readonly NativeCommandSpec[];
+  secondary: readonly NativeCommandSpec[];
+  onCollision?: (normalizedName: string) => void;
+}): NativeCommandSpec[] {
+  const merged: NativeCommandSpec[] = [];
+  const names = new Set<string>();
+  const append = (spec: NativeCommandSpec, reportCollision: boolean) => {
+    const normalizedName = normalizeOptionalLowercaseString(spec.name);
+    if (!normalizedName) {
+      return;
+    }
+    if (names.has(normalizedName)) {
+      if (reportCollision) {
+        params.onCollision?.(normalizedName);
+      }
+      return;
+    }
+    names.add(normalizedName);
+    merged.push(spec);
+  };
+  for (const spec of params.primary) {
+    append(spec, false);
+  }
+  for (const spec of params.secondary) {
+    append(spec, true);
+  }
+  return merged;
+}
+
 /** Finds a command definition by provider-native command name or native alias. */
 export function findCommandByNativeName(
   name: string,

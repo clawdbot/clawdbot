@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
@@ -43,6 +44,7 @@ function makeDeps(
 ) {
   return {
     migrateOrphanedSessionKeys: migrate,
+    prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
     resolveAllAgentSessionStoreTargetsSync: vi.fn<ResolveStoreTargets>().mockReturnValue([
       { agentId: "main", storePath: "/tmp/main/sessions.json" },
       { agentId: "ops", storePath: "/tmp/ops/sessions.json" },

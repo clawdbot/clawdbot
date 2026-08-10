@@ -1584,8 +1584,10 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion {
-  display: flex;
-  align-items: flex-start;
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: start;
   gap: 12px;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
@@ -1597,7 +1599,6 @@ openclaw-chat-video-player {
   display: grid;
   width: 32px;
   height: 32px;
-  flex: 0 0 32px;
   place-items: center;
   border-radius: 10px;
   color: var(--accent);
@@ -1612,7 +1613,6 @@ openclaw-chat-video-player {
 
 .task-suggestion__body {
   min-width: 0;
-  flex: 1;
 }
 
 .task-suggestion__eyebrow {
@@ -1630,36 +1630,28 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__summary {
+  display: -webkit-box;
   margin-top: 3px;
+  overflow: hidden;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
-.task-suggestion__details {
+.task-suggestion__instructions {
+  margin-top: 8px;
+}
+
+.task-suggestion__instruction-body {
   display: grid;
-  gap: 7px;
-  margin-top: 10px;
+  gap: 6px;
+  padding: 0 8px 8px;
 }
 
-.task-suggestion__detail {
-  display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.task-suggestion__detail > span {
-  padding-top: 3px;
-  font-weight: 650;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.task-suggestion__detail code,
-.task-suggestion__detail pre {
+.task-suggestion__instruction-body code,
+.task-suggestion__instruction-body pre {
   min-width: 0;
   max-height: 9rem;
   margin: 0;
@@ -1677,31 +1669,95 @@ openclaw-chat-video-player {
 .task-suggestion__actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  align-self: start;
+  justify-self: end;
+}
+
+/* Compact split control pinned to the card's top-right; both halves share one
+   fixed height so the chevron cap can never overhang the primary segment. */
+.task-suggestion__split {
+  display: inline-flex;
+  align-items: stretch;
+  height: 26px;
 }
 
 .task-suggestion__start {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-color: var(--accent);
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 12px;
+  line-height: 1;
   white-space: nowrap;
+}
+
+.task-suggestion__start:only-child {
+  border-radius: var(--radius-md);
+}
+
+.task-suggestion__start svg {
+  width: 12px;
+  height: 12px;
+}
+
+.task-suggestion__menu-trigger {
+  display: grid;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  margin-left: -1px;
+  padding: 0;
+  place-items: center;
+  border-color: var(--accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.task-suggestion__menu-trigger svg {
+  width: 12px;
+  height: 12px;
+}
+
+.task-suggestion__menu[open] .task-suggestion__menu-trigger svg {
+  transform: rotate(180deg);
+}
+
+.task-suggestion__menu::part(menu) {
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
+.task-suggestion__dismiss {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 5px;
 }
 
 @media (max-width: 640px) {
   .task-suggestion {
-    align-items: flex-start;
-    flex-wrap: wrap;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .task-suggestion__actions {
-    width: 100%;
+    grid-column: 1 / -1;
     justify-content: flex-end;
-    padding-left: 44px;
   }
 
-  .task-suggestion__detail {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 3px;
+  .task-suggestion__dismiss {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+  }
+
+  .task-suggestion:has(.task-suggestion__dismiss) .task-suggestion__body {
+    padding-right: 28px;
   }
 }
 

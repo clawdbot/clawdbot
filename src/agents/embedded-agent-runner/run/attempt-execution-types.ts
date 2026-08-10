@@ -6,18 +6,18 @@ import type {
 } from "./attempt-abort.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-import type { prepareEmbeddedAttemptSessionLock } from "./attempt-session-lock-prepare.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import type { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
+import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
 type PreparedSetup = Prepared<typeof prepareEmbeddedAttemptSetup>;
-type PreparedSessionLock = Prepared<typeof prepareEmbeddedAttemptSessionLock>;
+type PreparedTranscriptLifecycle = Prepared<typeof prepareEmbeddedAttemptTranscriptLifecycle>;
 type StreamRuntimeInput = Parameters<typeof prepareEmbeddedAttemptStreamRuntime>[0];
 type AttemptContextEngine = NonNullable<StreamRuntimeInput["history"]["activeContextEngine"]>;
 
@@ -49,11 +49,8 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
   };
   sessionLock: Pick<
-    PreparedSessionLock,
-    | "compactionTimeoutMs"
-    | "ownedTranscriptWriteContext"
-    | "sessionLockController"
-    | "withOwnedSessionWriteLock"
+    PreparedTranscriptLifecycle,
+    "compactionTimeoutMs" | "ownedTranscriptWriteContext" | "withOwnedTranscriptWrite"
   >;
   setup: Pick<
     PreparedSetup,

@@ -10,7 +10,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -89,7 +89,7 @@ class DevicesPage extends OpenClawLightDomElement {
   @state() private canPairDevice = false;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
-  private inventoryRemovalConfirmation: AbortController | null = null;
+  private pendingConfirmation: AbortController | null = null;
 
   private routeDataInitialized = false;
   private readonly gateway = new GatewayPageController(this, {
@@ -181,7 +181,7 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.cancelInventoryRemovalConfirmation();
+    this.cancelPendingConfirmation();
     this.subscriptions.clear();
     void this.presenceTask.run([null, null]);
     this.presence = [];
@@ -245,7 +245,7 @@ class DevicesPage extends OpenClawLightDomElement {
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
-    this.cancelInventoryRemovalConfirmation();
+    this.cancelPendingConfirmation();
     this.pageState.requestGeneration += 1;
     const next = createInitialDevicesState({
       client: snapshot.client,
@@ -313,45 +313,32 @@ class DevicesPage extends OpenClawLightDomElement {
     return this.presenceTask.run([gateway, client]);
   }
 
-  private cancelInventoryRemovalConfirmation() {
-    this.inventoryRemovalConfirmation?.abort();
-    this.inventoryRemovalConfirmation = null;
+  private cancelPendingConfirmation() {
+    this.pendingConfirmation?.abort();
+    this.pendingConfirmation = null;
   }
 
-  private async confirmInventoryRemoval(prompt: InventoryRemovalPrompt) {
-    if (this.inventoryRemovalConfirmation) {
+  // Every destructive Devices action confirms here, never through window.confirm: the
+  // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
+  // scope is revalidated before the operation runs against a different server.
+  private async confirmDestructiveAction(
+    prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
+    run: (pageState: DevicesPageDataState) => unknown,
+  ) {
+    if (this.pendingConfirmation) {
       return;
     }
     const controller = new AbortController();
-    this.inventoryRemovalConfirmation = controller;
+    this.pendingConfirmation = controller;
     const generation = this.requestGeneration;
     const client = this.gateway.client;
-    const title =
-      prompt.kind === "entry"
-        ? t("devices.inventory.removePromptTitle", { name: prompt.entry.name })
-        : t(
-            prompt.entries.length === 1
-              ? "devices.inventory.removeStalePromptTitleOne"
-              : "devices.inventory.removeStalePromptTitle",
-            { count: String(prompt.entries.length) },
-          );
     const confirmed = await showConfirmDialog({
-      title,
-      message: t(
-        prompt.kind === "entry"
-          ? "devices.inventory.removePromptBody"
-          : "devices.inventory.removeStalePromptBody",
-      ),
-      details:
-        prompt.kind === "entry"
-          ? t("devices.inventory.deviceId", { id: prompt.entry.id })
-          : undefined,
-      confirmLabel: t("devices.inventory.remove"),
+      ...prompt,
       danger: true,
       signal: controller.signal,
     });
-    if (this.inventoryRemovalConfirmation === controller) {
-      this.inventoryRemovalConfirmation = null;
+    if (this.pendingConfirmation === controller) {
+      this.pendingConfirmation = null;
     }
     if (
       !confirmed ||
@@ -362,11 +349,71 @@ class DevicesPage extends OpenClawLightDomElement {
     ) {
       return;
     }
+    await this.runPageTask(run);
+  }
+
+  private confirmInventoryRemoval(prompt: InventoryRemovalPrompt) {
     if (prompt.kind === "entry") {
-      void this.runPageTask((pageState) => removeInventoryEntry(pageState, prompt.entry));
-      return;
+      const entry = prompt.entry;
+      return this.confirmDestructiveAction(
+        {
+          title: t("devices.inventory.removePromptTitle", { name: entry.name }),
+          message: t("devices.inventory.removePromptBody"),
+          details: t("devices.inventory.deviceId", { id: entry.id }),
+          confirmLabel: t("devices.inventory.remove"),
+        },
+        (pageState) => removeInventoryEntry(pageState, entry),
+      );
     }
-    void this.runPageTask((pageState) => removeStaleInventoryEntries(pageState, prompt.entries));
+    const entries = prompt.entries;
+    return this.confirmDestructiveAction(
+      {
+        title: t(
+          entries.length === 1
+            ? "devices.inventory.removeStalePromptTitleOne"
+            : "devices.inventory.removeStalePromptTitle",
+          { count: String(entries.length) },
+        ),
+        message: t("devices.inventory.removeStalePromptBody"),
+        confirmLabel: t("devices.inventory.remove"),
+      },
+      (pageState) => removeStaleInventoryEntries(pageState, entries),
+    );
+  }
+
+  private confirmPairingReject(target: "device" | "node", requestId: string) {
+    return this.confirmDestructiveAction(
+      {
+        title: t(
+          target === "device"
+            ? "devices.inventory.rejectDevicePromptTitle"
+            : "devices.inventory.rejectNodePromptTitle",
+        ),
+        message: t("devices.inventory.rejectPromptBody"),
+        confirmLabel: t("devices.inventory.reject"),
+      },
+      (pageState) =>
+        target === "device"
+          ? rejectDevicePairing(pageState, requestId)
+          : rejectNodePairingRequest(pageState, requestId),
+    );
+  }
+
+  private confirmTokenRevoke(deviceId: string, role: string) {
+    return this.confirmDestructiveAction(
+      {
+        title: t("devices.inventory.revokePromptTitle", { role }),
+        message: t("devices.inventory.revokePromptBody"),
+        details: t("devices.inventory.deviceId", { id: deviceId }),
+        confirmLabel: t("devices.inventory.revoke"),
+      },
+      (pageState) =>
+        revokeDeviceToken(pageState, {
+          deviceId,
+          gatewayUrl: this.context.gateway.connection.gatewayUrl,
+          role,
+        }),
+    );
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -420,12 +467,10 @@ class DevicesPage extends OpenClawLightDomElement {
           onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) =>
             void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId)),
-          onDeviceReject: (requestId) =>
-            void this.runPageTask((pageState) => rejectDevicePairing(pageState, requestId)),
+          onDeviceReject: (requestId) => void this.confirmPairingReject("device", requestId),
           onNodeApprove: (requestId) =>
             void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId)),
-          onNodeReject: (requestId) =>
-            void this.runPageTask((pageState) => rejectNodePairingRequest(pageState, requestId)),
+          onNodeReject: (requestId) => void this.confirmPairingReject("node", requestId),
           onInventoryRemove: (entry) => void this.confirmInventoryRemoval({ kind: "entry", entry }),
           onInventoryCleanup: (entries) => {
             if (entries.length > 0) {
@@ -441,14 +486,7 @@ class DevicesPage extends OpenClawLightDomElement {
                 scopes,
               }),
             ),
-          onDeviceRevoke: (deviceId, role) =>
-            void this.runPageTask((pageState) =>
-              revokeDeviceToken(pageState, {
-                deviceId,
-                gatewayUrl: this.context.gateway.connection.gatewayUrl,
-                role,
-              }),
-            ),
+          onDeviceRevoke: (deviceId, role) => void this.confirmTokenRevoke(deviceId, role),
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>

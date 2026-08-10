@@ -512,12 +512,17 @@ export class GatewayBrowserClient {
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
+      const role = hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE;
+      const scopes =
+        role === plan.params.role && hello.auth.deviceToken === plan.selectedAuth.storedToken
+          ? (plan.selectedAuth.storedScopes ?? hello.auth.scopes ?? [])
+          : (hello.auth.scopes ?? []);
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
         gatewayUrl: this.opts.url,
-        role: hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
+        role,
         token: hello.auth.deviceToken,
-        scopes: hello.auth.scopes ?? [],
+        scopes,
       });
     }
     void this.updateRecoveryScopeForHello(hello, plan);

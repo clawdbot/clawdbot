@@ -25,7 +25,10 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
-import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
+import {
+  getOwnedSessionTranscriptWriterFence,
+  runWithOwnedSessionTranscriptWrite,
+} from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 /** Appends one prepared ordered group in the existing transcript turn transaction. */
@@ -106,7 +109,7 @@ export async function persistSessionTranscriptTurn(
       },
     );
   }
-  const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
+  const appendedMessages = await runWithOwnedSessionTranscriptWrite(
     {
       sessionFile: target.sessionKey,
       sessionKey: target.sessionKey,
@@ -232,7 +235,12 @@ async function persistExpectedSessionTranscriptTurn(
     sessionKey: resolved.normalizedKey,
     storePath,
   };
-  const turn = await runWithOwnedSessionTranscriptWriteLock(
+  const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
+    sessionFile: target.sessionKey,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+  });
+  const turn = await runWithOwnedSessionTranscriptWrite(
     {
       sessionFile: target.sessionKey,
       sessionKey: target.sessionKey,
@@ -249,8 +257,10 @@ async function persistExpectedSessionTranscriptTurn(
         {
           config: options.config,
           cwd: options.cwd,
-          expectedLifecycleRevision: options.expectedLifecycleRevision,
-          expectedWriterRunId: options.expectedWriterRunId,
+          expectedLifecycleRevision:
+            options.expectedLifecycleRevision ?? inheritedWriterFence?.expectedLifecycleRevision,
+          expectedWriterRunId:
+            options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           atomicGroup: options.atomicGroup,

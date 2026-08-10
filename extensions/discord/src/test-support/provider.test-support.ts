@@ -471,7 +471,12 @@ vi.mock(buildDiscordSourceModuleId("token.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("voice/command.js"), () => ({
-  createDiscordVoiceCommand: () => ({ name: "voice-command" }),
+  DISCORD_VOICE_COMMAND_SPEC: {
+    name: "vc",
+    description: "Voice channel controls",
+    acceptsArgs: false,
+  },
+  createDiscordVoiceCommand: () => ({ name: "vc" }),
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/agent-components.js"), () => ({

@@ -10,16 +10,11 @@ import { log } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-startup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
-import {
-  type createEmbeddedAttemptSessionLockController,
-  EmbeddedAttemptSessionTakeoverError,
-} from "./attempt.session-lock.js";
+import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
+type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 type DisposableRuntime = { dispose(): Promise<void> | void };
 
@@ -27,7 +22,7 @@ type CleanupEmbeddedAttemptSessionInput = {
   attempt: EmbeddedRunAttemptParams;
   session?: AgentSession;
   sessionManager?: ReturnType<typeof guardSessionManager>;
-  sessionLockController: AttemptSessionLockController;
+  transcriptLifecycle: AttemptTranscriptLifecycle;
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   removeToolResultContextGuard?: () => void;
@@ -52,28 +47,6 @@ type CleanupEmbeddedAttemptSessionInput = {
     beforeAgentRunBlockedBy?: string;
   };
 };
-
-class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
-  readonly promptError: unknown;
-  readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
-
-  constructor(params: { promptError: unknown; cleanupError: EmbeddedAttemptSessionTakeoverError }) {
-    super(formatErrorMessage(params.promptError), { cause: params.cleanupError });
-    this.name = "EmbeddedAttemptSessionTakeoverError";
-    this.promptError = params.promptError;
-    this.cleanupError = params.cleanupError;
-  }
-}
-
-function shouldPreservePromptErrorAfterCleanupError(params: {
-  promptError: unknown;
-  cleanupError: unknown;
-}): boolean {
-  return (
-    Boolean(params.promptError) &&
-    params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
-  );
-}
 
 export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
@@ -128,9 +101,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       cleanupState.idleTimedOut ||
       cleanupState.timedOutDuringCompaction;
     const cleanupAbortLike = cleanupAborted || input.cleanupYieldAborted;
-    const cleanupSessionLock = await input.sessionLockController.acquireForCleanup({
-      session: input.session,
-    });
+    await input.transcriptLifecycle.beginCleanup();
     await cleanupEmbeddedAttemptResources({
       removeToolResultContextGuard: input.removeToolResultContextGuard,
       flushPendingToolResultsAfterIdle,
@@ -138,28 +109,24 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       sessionManager: input.sessionManager,
       bundleMcpRuntime: input.bundleMcpRuntime,
       bundleLspRuntime: input.bundleLspRuntime,
-      sessionLock: cleanupSessionLock,
       // Aborted runs skip the idle wait so teardown cannot strand the lock.
       aborted: cleanupAbortLike,
       abortSettlePromise: cleanupAborted ? input.buildAbortSettlePromise() : null,
-      skipSessionFlush: input.sessionLockController.hasSessionTakeover(),
       runId: attempt.runId,
       sessionId: attempt.sessionId,
     });
   } catch (err) {
     cleanupError = err;
+  } finally {
+    try {
+      await input.transcriptLifecycle.dispose();
+    } catch (err) {
+      cleanupError ??= err;
+    }
   }
 
   const finalState = input.readState();
-  const synthesizedCleanupTakeoverError =
-    !cleanupError && finalState.promptError && input.sessionLockController.hasSessionTakeover()
-      ? new EmbeddedAttemptSessionTakeoverError(attempt.sessionFile)
-      : undefined;
-  const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
-  const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
-    promptError: finalState.promptError,
-    cleanupError: cleanupFailure,
-  });
+  const cleanupFailure = cleanupError;
   input.emitDiagnosticRunCompleted?.(
     cleanupFailure
       ? "error"
@@ -173,7 +140,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
               finalState.timedOutDuringCompaction
             ? "aborted"
             : "completed",
-    shouldPreservePromptError ? finalState.promptError : (cleanupFailure ?? finalState.promptError),
+    cleanupFailure ?? finalState.promptError,
     finalState.beforeAgentRunBlocked
       ? { blockedBy: finalState.beforeAgentRunBlockedBy ?? "before_agent_run" }
       : undefined,
@@ -181,19 +148,6 @@ export async function cleanupEmbeddedAttemptSessionPhase(
 
   if (!cleanupFailure) {
     return;
-  }
-  if (shouldPreservePromptError) {
-    log.warn(
-      `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
-        `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
-        `promptError=${formatErrorMessage(finalState.promptError)} cleanupError=${formatErrorMessage(cleanupFailure)}`,
-    );
-    await Promise.reject(
-      new EmbeddedAttemptPromptErrorWithCleanupTakeoverError({
-        promptError: finalState.promptError,
-        cleanupError: cleanupFailure as EmbeddedAttemptSessionTakeoverError,
-      }),
-    );
   }
   await Promise.reject(toErrorObject(cleanupFailure, "Non-Error rejection"));
 }

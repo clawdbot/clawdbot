@@ -8,7 +8,9 @@ import {
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 describe("CI changed Node test plan", () => {
   it("routes a focused source change into one targeted job", () => {
@@ -114,6 +116,22 @@ describe("CI changed Node test plan", () => {
 
   it("fails safe to the full plan for broad changes", () => {
     expect(createChangedNodeTestShards(["package.json"])).toBeNull();
+  });
+
+  it("keeps minimal-gateway boot coverage reachable from gateway startup changes", () => {
+    // A gateway startup stall must fail in the gateway lane; the boot smoke is
+    // selected purely through the import graph, so a rename or an import shape
+    // the graph walker cannot see would silently drop it from targeted plans
+    // and the stall would first surface on unrelated ui-e2e PRs again.
+    const bootSmoke = "src/gateway/server-startup-minimal-boot.test.ts";
+    expect(isGatewayServerTestFile(bootSmoke)).toBe(true);
+    expect(
+      hasImportGraphImpactOnTargets(
+        ["src/gateway/server-startup-bootstrap.ts"],
+        [bootSmoke],
+        process.cwd(),
+      ),
+    ).toBe(true);
   });
 
   it("fails safe whenever a diff deletes source files", () => {
