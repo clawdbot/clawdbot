@@ -26,4 +26,30 @@ describe("stripModelSpecialTokens", () => {
     const text = "Just a normal response.";
     expect(stripModelSpecialTokens(text)).toBe(text);
   });
+
+  it.each([
+    {
+      name: "before closing punctuation",
+      input: "Hello<|assistant|>.",
+      expected: "Hello.",
+    },
+    {
+      name: "after opening punctuation",
+      input: "(<|assistant|>Hello",
+      expected: "(Hello",
+    },
+    {
+      name: "before a Markdown closing delimiter",
+      input: "**bold<|assistant|>**",
+      expected: "**bold**",
+    },
+  ])("does not insert a separator $name", ({ input, expected }) => {
+    expect(stripModelSpecialTokens(input)).toBe(expected);
+  });
+
+  // Separator insertion stays Unicode-aware: adjacent non-Latin word content
+  // still gets a separator so the two words are not concatenated.
+  it("inserts a separator between adjacent non-Latin words", () => {
+    expect(stripModelSpecialTokens("Привет<|assistant|>Мир")).toBe("Привет Мир");
+  });
 });

@@ -12,8 +12,20 @@ function overlapsCodeRegion(
   return codeRegions.some((region) => start < region.end && end > region.start);
 }
 
+// A separator is only needed when removing the token would otherwise concatenate
+// two runs of word content (letters/digits). Punctuation, whitespace, and markup
+// delimiters already form a boundary; inserting a space there adds spurious
+// whitespace and can break Markdown emphasis (e.g. `**bold **` stays literal
+// instead of rendering as strong). Unicode-aware so non-Latin adjacent words
+// (Cyrillic, CJK, etc.) still get separated.
+const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+
+function isWordChar(value: string | undefined): boolean {
+  return value !== undefined && WORD_CHAR_RE.test(value);
+}
+
 function shouldInsertSeparator(before: string | undefined, after: string | undefined): boolean {
-  return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
+  return isWordChar(before) && isWordChar(after);
 }
 
 /**
