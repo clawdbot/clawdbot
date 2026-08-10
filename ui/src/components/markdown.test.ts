@@ -82,59 +82,59 @@ describe("toSanitizedMarkdownHtml", () => {
     it("links www.example.com", () => {
       const html = toSanitizedMarkdownHtml("Visit www.example.com today");
       expect(html).toBe(
-        '<p>Visit <a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a> today</p>\n',
+        '<p>Visit <a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a> today</p>\n',
       );
     });
 
     it("links www.example.com with path, query, and fragment", () => {
       const html = toSanitizedMarkdownHtml("See www.example.com/path?a=1#section");
       expect(html).toBe(
-        '<p>See <a href="http://www.example.com/path?a=1#section" rel="noreferrer noopener" target="_blank">www.example.com/path?a=1#section</a></p>\n',
+        '<p>See <a href="http://www.example.com/path?a=1#section" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path?a=1#section</a></p>\n',
       );
     });
 
     it("links www.example.com with port", () => {
       const html = toSanitizedMarkdownHtml("Visit www.example.com:8080/foo");
       expect(html).toBe(
-        '<p>Visit <a href="http://www.example.com:8080/foo" rel="noreferrer noopener" target="_blank">www.example.com:8080/foo</a></p>\n',
+        '<p>Visit <a href="http://www.example.com:8080/foo" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com:8080/foo</a></p>\n',
       );
     });
 
     it("links www.localhost and other single-label hosts", () => {
       const html = toSanitizedMarkdownHtml("Visit www.localhost:3000/path for dev");
       expect(html).toBe(
-        '<p>Visit <a href="http://www.localhost:3000/path" rel="noreferrer noopener" target="_blank">www.localhost:3000/path</a> for dev</p>\n',
+        '<p>Visit <a href="http://www.localhost:3000/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.localhost:3000/path</a> for dev</p>\n',
       );
     });
 
     it("links Unicode/IDN domains like www.münich.de", () => {
       const html1 = toSanitizedMarkdownHtml("Visit www.münich.de");
       expect(html1).toBe(
-        '<p>Visit <a href="http://www.xn--mnich-kva.de" rel="noreferrer noopener" target="_blank">www.münich.de</a></p>\n',
+        '<p>Visit <a href="http://www.xn--mnich-kva.de" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.münich.de</a></p>\n',
       );
 
       const html2 = toSanitizedMarkdownHtml("Visit www.café.example");
       expect(html2).toBe(
-        '<p>Visit <a href="http://www.xn--caf-dma.example" rel="noreferrer noopener" target="_blank">www.café.example</a></p>\n',
+        '<p>Visit <a href="http://www.xn--caf-dma.example" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.café.example</a></p>\n',
       );
     });
 
     it("links www.foo_bar.example.com with underscores", () => {
       const html = toSanitizedMarkdownHtml("Visit www.foo_bar.example.com");
       expect(html).toBe(
-        '<p>Visit <a href="http://www.foo_bar.example.com" rel="noreferrer noopener" target="_blank">www.foo_bar.example.com</a></p>\n',
+        '<p>Visit <a href="http://www.foo_bar.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.foo_bar.example.com</a></p>\n',
       );
     });
 
     it("strips trailing punctuation from links", () => {
       const html1 = toSanitizedMarkdownHtml("Check www.example.com/help.");
       expect(html1).toBe(
-        '<p>Check <a href="http://www.example.com/help" rel="noreferrer noopener" target="_blank">www.example.com/help</a>.</p>\n',
+        '<p>Check <a href="http://www.example.com/help" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/help</a>.</p>\n',
       );
 
       const html2 = toSanitizedMarkdownHtml("See www.example.com!");
       expect(html2).toBe(
-        '<p>See <a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a>!</p>\n',
+        '<p>See <a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>!</p>\n',
       );
     });
 
@@ -142,13 +142,13 @@ describe("toSanitizedMarkdownHtml", () => {
       // &hl; looks like an entity reference, so strip it
       const html1 = toSanitizedMarkdownHtml("www.google.com/search?q=commonmark&hl;");
       expect(html1).toBe(
-        '<p><a href="http://www.google.com/search?q=commonmark" rel="noreferrer noopener" target="_blank">www.google.com/search?q=commonmark</a>&amp;hl;</p>\n',
+        '<p><a href="http://www.google.com/search?q=commonmark" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.google.com/search?q=commonmark</a>&amp;hl;</p>\n',
       );
 
       // &amp; is also entity-like
       const html2 = toSanitizedMarkdownHtml("www.example.com/path&amp;");
       expect(html2).toBe(
-        '<p><a href="http://www.example.com/path" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&amp;</p>\n',
+        '<p><a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&amp;</p>\n',
       );
     });
 
@@ -156,19 +156,19 @@ describe("toSanitizedMarkdownHtml", () => {
       // Quoted URL — trailing unbalanced " is stripped
       const html1 = toSanitizedMarkdownHtml('"www.example.com"');
       expect(html1).toBe(
-        '<p>"<a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a>"</p>\n',
+        '<p>"<a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>"</p>\n',
       );
 
       // Balanced quotes inside path — preserved
       const html2 = toSanitizedMarkdownHtml('www.example.com/path"with"quotes');
       expect(html2).toBe(
-        '<p><a href="http://www.example.com/path%22with%22quotes" rel="noreferrer noopener" target="_blank">www.example.com/path"with"quotes</a></p>\n',
+        '<p><a href="http://www.example.com/path%22with%22quotes" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path"with"quotes</a></p>\n',
       );
 
       // Trailing unbalanced " — stripped
       const html3 = toSanitizedMarkdownHtml('www.example.com/path"');
       expect(html3).toBe(
-        '<p><a href="http://www.example.com/path" rel="noreferrer noopener" target="_blank">www.example.com/path</a>"</p>\n',
+        '<p><a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>"</p>\n',
       );
     });
 
@@ -183,7 +183,7 @@ describe("toSanitizedMarkdownHtml", () => {
     it("handles balanced parentheses in URLs", () => {
       const html = toSanitizedMarkdownHtml("(see www.example.com/foo(bar))");
       expect(html).toBe(
-        '<p>(see <a href="http://www.example.com/foo(bar)" rel="noreferrer noopener" target="_blank">www.example.com/foo(bar)</a>)</p>\n',
+        '<p>(see <a href="http://www.example.com/foo(bar)" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/foo(bar)</a>)</p>\n',
       );
     });
 
@@ -191,13 +191,13 @@ describe("toSanitizedMarkdownHtml", () => {
       // Stops at < character
       const html1 = toSanitizedMarkdownHtml("Visit www.example.com/path<test");
       expect(html1).toBe(
-        '<p>Visit <a href="http://www.example.com/path" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&lt;test</p>\n',
+        '<p>Visit <a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&lt;test</p>\n',
       );
 
       // <tag> pattern — stops before <
       const html2 = toSanitizedMarkdownHtml("Visit www.example.com/<token> here");
       expect(html2).toBe(
-        '<p>Visit <a href="http://www.example.com/" rel="noreferrer noopener" target="_blank">www.example.com/</a>&lt;token&gt; here</p>\n',
+        '<p>Visit <a href="http://www.example.com/" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/</a>&lt;token&gt; here</p>\n',
       );
     });
 
@@ -219,14 +219,14 @@ describe("toSanitizedMarkdownHtml", () => {
     it("keeps adjacent trailing CJK text outside www auto-links", () => {
       const html = toSanitizedMarkdownHtml("www.example.com重新解读");
       expect(html).toBe(
-        '<p><a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a>重新解读</p>\n',
+        '<p><a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>重新解读</p>\n',
       );
     });
 
     it("keeps Japanese text outside www auto-links", () => {
       const html = toSanitizedMarkdownHtml("www.example.comテスト");
       expect(html).toBe(
-        '<p><a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a>テスト</p>\n',
+        '<p><a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>テスト</p>\n',
       );
     });
   });
@@ -235,14 +235,14 @@ describe("toSanitizedMarkdownHtml", () => {
     it("links https:// URLs", () => {
       const html = toSanitizedMarkdownHtml("Visit https://example.com");
       expect(html).toBe(
-        '<p>Visit <a href="https://example.com" rel="noreferrer noopener" target="_blank">https://example.com</a></p>\n',
+        '<p>Visit <a href="https://example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com</a></p>\n',
       );
     });
 
     it("links http:// URLs", () => {
       const html = toSanitizedMarkdownHtml("Visit http://github.com/openclaw");
       expect(html).toBe(
-        '<p>Visit <a href="http://github.com/openclaw" rel="noreferrer noopener" target="_blank">http://github.com/openclaw</a></p>\n',
+        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" rel="noreferrer noopener" target="_blank">http://github.com/openclaw</a></p>\n',
       );
     });
 
@@ -256,14 +256,14 @@ describe("toSanitizedMarkdownHtml", () => {
     it("keeps adjacent trailing CJK text outside https:// auto-links", () => {
       const html = toSanitizedMarkdownHtml("https://example.com重新解读");
       expect(html).toBe(
-        '<p><a href="https://example.com" rel="noreferrer noopener" target="_blank">https://example.com</a>重新解读</p>\n',
+        '<p><a href="https://example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com</a>重新解读</p>\n',
       );
     });
 
     it("keeps CJK text outside https:// links with path", () => {
       const html = toSanitizedMarkdownHtml("https://example.com/path重新解读");
       expect(html).toBe(
-        '<p><a href="https://example.com/path" rel="noreferrer noopener" target="_blank">https://example.com/path</a>重新解读</p>\n',
+        '<p><a href="https://example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com/path</a>重新解读</p>\n',
       );
     });
 
@@ -271,7 +271,7 @@ describe("toSanitizedMarkdownHtml", () => {
       // CJK in the middle of a URL path (not trailing) must not be trimmed
       const html = toSanitizedMarkdownHtml("https://example.com/你/test");
       expect(html).toBe(
-        '<p><a href="https://example.com/%E4%BD%A0/test" rel="noreferrer noopener" target="_blank">https://example.com/你/test</a></p>\n',
+        '<p><a href="https://example.com/%E4%BD%A0/test" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com/你/test</a></p>\n',
       );
     });
 
@@ -279,7 +279,7 @@ describe("toSanitizedMarkdownHtml", () => {
       // Percent-encoded paths without raw CJK are preserved as-is
       const html = toSanitizedMarkdownHtml("https://example.com/path/%E4%BD%A0%E5%A5%BD");
       expect(html).toBe(
-        '<p><a href="https://example.com/path/" rel="noreferrer noopener" target="_blank">https://example.com/path/</a>你好</p>\n',
+        '<p><a href="https://example.com/path/" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com/path/</a>你好</p>\n',
       );
       // markdown-it linkify decodes percent-encoded CJK for display, then our
       // CJK trim rule splits at the first raw CJK char. This is acceptable
@@ -884,6 +884,26 @@ PY
         toSanitizedMarkdownHtml("Node.js, e.g. version 1.2.3", { fileLinks: true }),
       );
       expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+    });
+  });
+
+  describe("bare url links", () => {
+    it("marks autolinked URL text but not authored labels", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "https://example.com/a/very/long/path and [a label](https://example.com/a/very/long/path) and www.example.com",
+        ),
+      );
+      expect(
+        [...fragment.querySelectorAll("a")].map((link) =>
+          link.classList.contains("markdown-bare-url"),
+        ),
+      ).toEqual([true, false, true]);
+    });
+
+    it("leaves email autolinks unmarked", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("Email me at test@example.com"));
+      expect(fragment.querySelector("a.markdown-bare-url")).toBeNull();
     });
   });
 

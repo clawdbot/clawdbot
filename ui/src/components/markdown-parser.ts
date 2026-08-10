@@ -28,26 +28,25 @@ const CJK_RE = new RegExp(
 // (styles/chat/text.css). The mark is never emitted as markup so it stays out
 // of the accessibility tree and out of copied text.
 const GITHUB_LINK_CLASS = "markdown-github-link";
+// Marks anchors whose visible text is the URL itself, which CSS may break at
+// any character. Authored labels keep normal word wrapping.
+const BARE_URL_CLASS = "markdown-bare-url";
 
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
 }
 
-function isGitHubLinkHref(href: string): boolean {
+function parseWebLinkHref(href: string): URL | null {
   let url: URL;
   try {
     url = new URL(href);
   } catch {
-    // Relative and malformed hrefs never resolve to github.com here; the docs
-    // shortlink rewrite in markdown.ts runs later and only targets docs paths.
-    return false;
+    // Relative and malformed hrefs are not web destinations at this stage; the
+    // docs shortlink rewrite in markdown.ts runs later and only targets docs.
+    return null;
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return false;
-  }
-  const host = url.hostname.toLowerCase();
-  return host === "github.com" || host === "www.github.com";
+  return url.protocol === "https:" || url.protocol === "http:" ? url : null;
 }
 
 function isFileLinkBoundaryBefore(value: string, index: number): boolean {
@@ -363,12 +362,11 @@ export function createMarkdownParser(): MarkdownIt {
     }
   });
 
-  // Tag github.com anchors so CSS can prefix them with the GitHub mark. Runs
-  // after linkify so bare URLs are already anchors, and skips links whose only
-  // content is an image (badges/shields) — a mark next to a mark reads as noise.
-  // Code spans and fences never reach this rule: markdown-it does not linkify
-  // inside them, so they stay undecorated without an explicit exclusion.
-  markdownParser.core.ruler.after("linkify", "github-link-mark", (state) => {
+  // Classify web anchors for presentation; runs after linkify so bare URLs are
+  // already anchors. The GitHub mark skips links whose only content is an image
+  // (badges/shields), where a mark beside a mark reads as noise. Code spans and
+  // fences need no exclusion: markdown-it does not linkify inside them.
+  markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
         continue;
@@ -380,7 +378,15 @@ export function createMarkdownParser(): MarkdownIt {
           continue;
         }
         const href = open.attrGet("href");
-        if (!href || !isGitHubLinkHref(href)) {
+        const url = href ? parseWebLinkHref(href) : null;
+        if (!url) {
+          continue;
+        }
+        if (open.markup === "linkify" || open.markup === "autolink") {
+          open.attrJoin("class", BARE_URL_CLASS);
+        }
+        const host = url.hostname.toLowerCase();
+        if (host !== "github.com" && host !== "www.github.com") {
           continue;
         }
         for (let cursor = index + 1; cursor < children.length; cursor++) {

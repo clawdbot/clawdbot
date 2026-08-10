@@ -195,6 +195,15 @@
   -webkit-mask: var(--github-mark) center / contain no-repeat;
 }
 
+/* The inherited `overflow-wrap: anywhere` breaks a word only once every other
+   option is gone, so a long URL is pushed whole onto the next line — stranding
+   the mark alone at the end of the previous one. Unconditional break points
+   make the URL fill the line it starts on; authored labels are excluded so
+   prose still wraps on word boundaries. */
+.chat-text :where(a.markdown-bare-url) {
+  line-break: anywhere;
+}
+
 .chat-text :where(a.markdown-file-link) {
   color: var(--accent);
   /* File links are href-less anchors (driven by data-file-path), so the UA
