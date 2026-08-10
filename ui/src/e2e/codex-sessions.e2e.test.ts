@@ -220,7 +220,16 @@ suite.define(() => {
       ]);
       expect(liveRowsBox).not.toBeNull();
       expect(catalogBox).not.toBeNull();
-      expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(10);
+      // Read the rhythm from the token instead of restating it: the guard is
+      // that catalogs are a separate group, not that the gap is any one number.
+      const groupGap = await page.evaluate(() => {
+        const sidebar = document.querySelector(".sidebar");
+        return sidebar
+          ? Number.parseInt(getComputedStyle(sidebar).getPropertyValue("--sidebar-group-gap"), 10)
+          : Number.NaN;
+      });
+      expect(groupGap).toBeGreaterThan(0);
+      expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
         await sessionGroups.screenshot({

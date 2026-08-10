@@ -227,12 +227,14 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
-  it("renders routes and pinned sessions in entry order while Home stays fixed", async () => {
+  it("renders pinned sessions as their own labelled group below the Pages routes", async () => {
     const { sidebar, sessions } = await mountZone();
     const result = sessions.sessions.state.result;
     if (!result) {
       throw new Error("expected session list");
     }
+    // Nothing pinned yet: the group must not reserve a label or its spacing.
+    expect(sidebar.querySelector(".sidebar-nav__head--pinned")).toBeNull();
     sessions.publish({
       result: {
         ...result,
@@ -249,7 +251,14 @@ describe("AppSidebar interleaved zone", () => {
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
       entry.textContent?.trim(),
     );
-    expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
+    // Routes keep their configured order; the pinned session leaves the Pages
+    // list and heads its own group, so it renders after every route.
+    expect(labels).toEqual(["Usage", "Plugins", "Alpha"]);
+    const pinnedHead = sidebar.querySelector(".sidebar-nav__head--pinned");
+    expect(pinnedHead?.textContent?.trim()).toBe("Pinned");
+    expect(
+      pinnedHead?.nextElementSibling?.contains(zoneEntry(sidebar, "session:agent:main:alpha")),
+    ).toBe(true);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
     const pinnedRow = sidebar.querySelector('[data-session-key="agent:main:alpha"]');
     const pinnedTree = pinnedRow?.closest(".sidebar-session-tree");

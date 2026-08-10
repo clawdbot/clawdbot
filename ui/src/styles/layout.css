@@ -897,6 +897,9 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  /* One rhythm for every group boundary in the sidebar (Pages, Pinned, and each
+     session section) so the column reads as separate shelves, not one list. */
+  --sidebar-group-gap: var(--space-4);
   --scrollbar-size: 6px;
   position: relative;
   display: flex;
@@ -1333,7 +1336,7 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 8px;
   padding: 0 8px;
-  margin-top: 10px;
+  margin-top: var(--sidebar-group-gap);
   border-radius: var(--radius-md);
   transition:
     background var(--duration-fast) ease,
@@ -1368,7 +1371,7 @@ html.openclaw-native-macos
 
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sidebar-group-gap);
   margin: 0 -8px;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
@@ -3069,6 +3072,12 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-nav__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
+}
+
+/* Pinned sessions are their own group, so they take the sidebar's inter-group
+   rhythm instead of butting against the Pages list. */
+.sidebar-nav__head--pinned {
+  margin-top: var(--sidebar-group-gap);
 }
 
 .sidebar-nav__head-action {
