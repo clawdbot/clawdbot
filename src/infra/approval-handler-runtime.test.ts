@@ -75,10 +75,7 @@ function makeNativeApprovalCapability(
         ? { resolveApproverDmTargets: params.resolveApproverDmTargets }
         : {}),
     },
-    nativeRuntime: {
-      ...createApprovalNativeRuntimeAdapterStubs(params),
-      eventKinds: ["exec", "plugin"],
-    },
+    nativeRuntime: createApprovalNativeRuntimeAdapterStubs(params),
   };
 }
 
