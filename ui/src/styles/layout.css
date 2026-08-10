@@ -92,6 +92,16 @@
   gap: var(--shell-chrome-controls-gap);
 }
 
+/* The chrome controls are fixed over the top-left of the content area, so a
+   callout in normal flow starts underneath them and loses its first words.
+   Reserve the strip wherever those controls render. */
+.shell:not(.shell--onboarding):not(.shell--settings):not(.shell--mobile-nav)
+  .content
+  > openclaw-update-banner
+  .callout {
+  margin-top: calc(var(--shell-chrome-control-size) + 8px);
+}
+
 .shell-chrome-controls__button {
   display: inline-flex;
   align-items: center;
@@ -1243,6 +1253,24 @@ html.openclaw-native-macos
 
 .sidebar-update-card__action--busy:disabled {
   cursor: wait;
+}
+
+/* The install outlives the request that started it, so the card keeps moving
+   for the whole wait instead of reading as a dead disabled button. */
+.sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+  animation: sidebar-update-card-spin 1s linear infinite;
+}
+
+@keyframes sidebar-update-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+    animation: none;
+  }
 }
 
 .sidebar-update-card__action--undismissable {

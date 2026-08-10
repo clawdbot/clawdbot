@@ -140,7 +140,11 @@ suite.define(() => {
           .waitFor();
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
-        expect(await page.getByRole("button", { name: /Update Gateway/ }).isEnabled()).toBe(true);
+        // The restart still has to land, so the card stays busy rather than
+        // offering the same update again.
+        const updating = page.getByRole("button", { name: /Updating Gateway/ });
+        await updating.waitFor();
+        expect(await updating.isEnabled()).toBe(false);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
       },
@@ -218,9 +222,9 @@ suite.define(() => {
           await gateway.waitForRequest("update.run");
           if (responseFirst) {
             await gateway.resolveDeferred("update.run", MANAGED_UPDATE_HANDOFF_RESPONSE);
-            await expect
-              .poll(() => page.getByRole("button", { name: /Update Gateway/ }).isEnabled())
-              .toBe(true);
+            // The handoff keeps installing after its RPC answers; the card must
+            // keep saying so instead of re-offering the update.
+            await page.getByRole("button", { name: /Updating Gateway/ }).waitFor();
           }
           await gateway.closeLatest(1012, "managed update handoff");
 

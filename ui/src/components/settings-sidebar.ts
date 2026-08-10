@@ -40,7 +40,7 @@ type SettingsSidebarProps = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule?: UpdateScheduleState | null;
   heldUpdateCampaignId?: string | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
   canUpdate?: boolean;
   canHoldUpdate?: boolean;
   onUpdate: () => void;
@@ -312,7 +312,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         .updateAvailable=${props.updateAvailable}
         .updateSchedule=${props.updateSchedule ?? null}
         .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
-        .updateRunning=${props.updateRunning}
+        .updateBusy=${props.updateBusy}
         .canUpdate=${props.canUpdate ?? false}
         .canHoldUpdate=${props.canHoldUpdate ?? false}
         .onUpdate=${props.onUpdate}

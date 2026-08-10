@@ -61,7 +61,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
   @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
   @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
-  @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) updateBusy = false;
   @property({ attribute: false }) canUpdate = false;
   @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
@@ -91,7 +91,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     this.nativeUpdateAvailable = false;
     if (
       (this.updateAvailable || this.updateSchedule?.campaign) &&
-      !this.updateRunning &&
+      !this.updateBusy &&
       this.canUpdate &&
       !this.refreshRequired
     ) {
@@ -152,11 +152,16 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
     const update = this.updateAvailable;
     const campaign = this.updateSchedule?.campaign;
+    const busy = this.updateBusy || campaign?.state === "applying";
     const hasGitUpdate =
       this.updateSchedule?.target?.kind === "git" && this.updateSchedule.target.commitsBehind > 0;
     const hasVersionUpdate = Boolean(update && update.latestVersion !== update.currentVersion);
+    // A running update outranks availability: the gateway drops its update
+    // metadata while it restarts, and the card must not vanish or fall back to
+    // the stale "update available" call to action mid-install.
     if (
       !campaign &&
+      !busy &&
       (!update ||
         (!hasVersionUpdate && !hasGitUpdate) ||
         this.dismissedUpdateKey === updateKey(update) ||
@@ -164,11 +169,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     ) {
       return nothing;
     }
-    const title = this.updateRunning
-      ? t("chat.updating")
-      : this.nativeUpdateAvailable
-        ? t("chat.sidebar.updateMacAndGateway")
-        : t("chat.sidebar.updateGateway");
+    const title = this.nativeUpdateAvailable
+      ? t("chat.sidebar.updateMacAndGateway")
+      : t("chat.sidebar.updateGateway");
     const betaChannelSuffix = update?.channel === "beta" ? " (beta)" : "";
     const campaignLabel = formatUpdateCampaignLabel(this.updateSchedule);
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, update);
@@ -176,10 +179,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       ? targetLabel
         ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
         : campaignLabel
-      : targetLabel
-        ? `${title} · ${targetLabel}${betaChannelSuffix}`
-        : title;
-    const busy = this.updateRunning || campaign?.state === "applying";
+      : busy
+        ? t("updates.sidebar.updating")
+        : targetLabel
+          ? `${title} · ${targetLabel}${betaChannelSuffix}`
+          : title;
     const countdownActive =
       campaign?.state === "countdown" || campaign?.state === "waiting-for-idle";
     const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
@@ -220,7 +224,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               });
             }}
           >
-            <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
+            <span class="sidebar-update-card__icon" aria-hidden="true"
+              >${busy ? icons.refresh : icons.download}</span
+            >
             <span
               class="sidebar-update-card__text"
               role=${countdownActive ? "timer" : nothing}
@@ -245,7 +251,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               `
             : nothing}
         </div>
-        ${campaign || !update
+        ${campaign || busy || !update
           ? nothing
           : html`
               <button

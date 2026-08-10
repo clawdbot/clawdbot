@@ -19,7 +19,14 @@ function formatInstalledAndAvailable(
     : null;
   const available = formatUpdateTargetLabel(updateSchedule, updateAvailable);
   if (installed && available) {
-    return t("updates.confirm.versions", { available, installed });
+    // A commit count already reads as a distance, so "Available 246 commits
+    // behind" would double the framing; only a version needs the label.
+    const behind =
+      updateSchedule?.target?.kind === "git" || updateAvailable?.commitsBehind !== undefined;
+    return t(behind ? "updates.confirm.versionsBehind" : "updates.confirm.versions", {
+      available,
+      installed,
+    });
   }
   return installed ?? available ?? undefined;
 }

@@ -51,6 +51,7 @@ import {
   readUpdateScheduleValue,
   resolveExpectedUpdateSha,
   resolveUnknownUpdateOutcomeBanner,
+  resolveUpdateInProgressBanner,
   resolveUpdateStatusBanner,
   UPDATE_HANDOFF_STARTED_REASON,
   type ApplicationStatusBanner,
@@ -58,6 +59,7 @@ import {
   type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
+import { announceRecordedUpdateSuccess, recordUpdateSuccess } from "./update-success-notice.ts";
 
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -236,15 +238,28 @@ export function createApplicationOverlays(
     getHello: () => gateway.snapshot.hello,
     publish,
     publishBanner: publishUpdateBanner,
-    onVerifiedInstall: reloadControlUiIfStale,
+    // Record before reloading: the reload started here throws this document
+    // away, and the operator must still learn the update finished.
+    onVerifiedInstall: (identity) => {
+      recordUpdateSuccess(identity);
+      if (!reloadControlUiIfStale(identity)) {
+        announceRecordedUpdateSuccess();
+      }
+    },
   });
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
+    const projected = projectUpdateStatusResponse(response, {
+      updateStatusBanner: snapshot.updateStatusBanner,
+      heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
+    });
     snapshot = {
       ...snapshot,
-      ...projectUpdateStatusResponse(response, {
-        updateStatusBanner: snapshot.updateStatusBanner,
-        heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
-      }),
+      ...projected,
+      // A status poll clears the banner for an in-flight handoff sentinel. The
+      // pending reconciliation, not the sentinel, owns "still updating", so keep
+      // narrating instead of going quiet mid-install.
+      updateStatusBanner:
+        projected.updateStatusBanner ?? (pendingUpdate ? resolveUpdateInProgressBanner() : null),
     };
     publish();
   };
@@ -439,6 +454,8 @@ export function createApplicationOverlays(
     }
   });
   synchronizeGateway(gateway.snapshot);
+  // A reload started by the previous document's verified install lands here.
+  announceRecordedUpdateSuccess();
 
   return {
     get snapshot() {
@@ -462,7 +479,14 @@ export function createApplicationOverlays(
         return;
       }
       const generation = ++updateRunGeneration;
-      snapshot = { ...snapshot, updateRunning: true, updateStatusBanner: null };
+      // The install outlives this RPC and the connection that carries it, so the
+      // banner — the only update surface that survives the restart — narrates the
+      // whole wait until an outcome replaces it.
+      snapshot = {
+        ...snapshot,
+        updateRunning: true,
+        updateStatusBanner: resolveUpdateInProgressBanner(),
+      };
       publish();
       try {
         // updateRunning above suspends NEW config writes (bootstrap syncs it

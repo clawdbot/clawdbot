@@ -1045,7 +1045,11 @@ describe("application update overlays", () => {
 
       await overlays.runUpdate();
       expect(overlays.snapshot.updateReconciliationPending).toBe(true);
-      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+      // The install outlives the RPC, so the wait stays narrated until verified.
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "info",
+        text: expect.stringContaining("updates.inProgress"),
+      });
 
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });

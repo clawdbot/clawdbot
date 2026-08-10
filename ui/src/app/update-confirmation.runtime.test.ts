@@ -107,6 +107,22 @@ it("shows the git target when no package version is available", async () => {
   await settled;
 });
 
+it("states a git distance once instead of labelling it as an available version", async () => {
+  const { settled } = startUpdate({
+    updateAvailable: { channel: "dev", currentVersion: "2026.8.1", latestVersion: "2026.8.1" },
+    updateSchedule: {
+      target: { commitsBehind: 246, kind: "git" },
+    } as unknown as UpdateScheduleState,
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+
+  expect(modal.textContent).toContain("Installed v2026.8.1 · 246 commits behind");
+  expect(modal.textContent).not.toContain("Available 246");
+
+  findButton("Cancel").click();
+  await settled;
+});
+
 it("keeps a repeated request from stacking a second confirmation or update", async () => {
   const first = startUpdate();
   const second = startUpdate();

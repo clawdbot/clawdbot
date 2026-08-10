@@ -37,6 +37,24 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "managed-service-handoff-already-running":
     "updates.failureReasons.managedServiceHandoffAlreadyRunning",
   "doctor-failed": "updates.failureReasons.doctorFailed",
+  // The detached helper owns these; its output never reaches the gateway log,
+  // so the default "see the gateway logs" guidance would send operators nowhere.
+  "managed-service-handoff-failed": "updates.failureReasons.managedServiceHandoffFailed",
+  "managed-service-handoff-spawn-failed": "updates.failureReasons.managedServiceHandoffSpawnFailed",
+  "managed-service-handoff-helper-failed": "updates.failureReasons.managedServiceHandoffFailed",
+  "managed-service-handoff-parent-timeout":
+    "updates.failureReasons.managedServiceHandoffParentTimeout",
+};
+// One line is enough to name the cause; the full tail belongs in the CLI.
+const MAX_UPDATE_FAILURE_CAUSE_CHARS = 180;
+
+type UpdateSentinelStep = {
+  name?: string | null;
+  log?: {
+    stdoutTail?: string | null;
+    stderrTail?: string | null;
+    exitCode?: number | null;
+  } | null;
 };
 
 export type UpdateRestartStatusResponse = {
@@ -46,11 +64,41 @@ export type UpdateRestartStatusResponse = {
     stats?: {
       reason?: string | null;
       after?: { sha?: string | null; version?: string | null } | null;
+      steps?: UpdateSentinelStep[] | null;
     } | null;
   } | null;
   updateAvailable?: UpdateAvailable | null;
   schedule?: UpdateScheduleState;
 };
+
+export type UpdateFailureCause = { step: string; detail: string };
+
+function lastLogLine(tail: string | null | undefined): string | null {
+  const lines = (tail ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const last = lines.at(-1);
+  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+}
+
+/**
+ * The updater records why it stopped — the failing step plus its captured
+ * output — in the restart sentinel. Read that recorded fact instead of making
+ * the operator reconstruct a disk-full or build failure from a reason slug.
+ */
+export function readUpdateFailureCause(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): UpdateFailureCause | null {
+  const steps = sentinel?.stats?.steps;
+  // The run stops at its first failure, so the last non-zero exit is the cause.
+  const failed = Array.isArray(steps)
+    ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
+    : undefined;
+  const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
+  const step = failed?.name?.trim();
+  return step && detail ? { step, detail } : null;
+}
 
 export type UpdateRunResponse = {
   ok?: boolean;
@@ -204,7 +252,13 @@ export function createUpdateVerificationController(params: {
       }
       if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
         params.clearPending();
-        params.publishBanner(resolvePostRestartUpdateBanner(sentinel.stats?.reason));
+        params.publishBanner(
+          resolveUpdateStatusBanner({
+            status: "error",
+            ...(sentinel.stats?.reason ? { reason: sentinel.stats.reason } : {}),
+            cause: readUpdateFailureCause(sentinel),
+          }),
+        );
         return;
       }
       const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
@@ -570,6 +624,7 @@ export function projectUpdateStatusResponse(
           : resolveUpdateStatusBanner({
               status: sentinel.status,
               reason: sentinel.stats?.reason ?? undefined,
+              cause: readUpdateFailureCause(sentinel),
             })
         : current.updateStatusBanner,
     ...(Object.hasOwn(response, "updateAvailable")
@@ -635,16 +690,27 @@ export function formatUpdateTargetLabel(
   return version ? t("updates.target.version", { version }) : null;
 }
 
+/** Narrates the wait between an accepted update and its verified outcome. */
+export function resolveUpdateInProgressBanner(): ApplicationStatusBanner {
+  return { tone: "info", text: t("updates.inProgress") };
+}
+
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;
+  cause?: UpdateFailureCause | null;
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
   const guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
+  const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",
-    text: t("updates.status", { status, reason, guidance }),
+    // A recorded cause names what actually broke; the reason slug only names
+    // which step owned it.
+    text: cause
+      ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
+      : t("updates.status", { status, reason, guidance }),
   };
 }
 
@@ -667,24 +733,6 @@ function resolveUpdateVerificationBanner(params: {
   return {
     tone: "danger",
     text: t("updates.verificationFailedWithIdentity", { expected, actual }),
-  };
-}
-
-function resolvePostRestartUpdateBanner(
-  reason: string | null | undefined,
-): ApplicationStatusBanner {
-  const normalizedReason = reason?.trim() || "restart-unhealthy";
-  const guidanceKey =
-    normalizedReason === "restart-unhealthy"
-      ? "updates.postRestart.restartUnhealthy"
-      : "updates.postRestart.default";
-  return {
-    tone: "danger",
-    text: t("updates.status", {
-      status: "error",
-      reason: normalizedReason,
-      guidance: t(guidanceKey),
-    }),
   };
 }
 
