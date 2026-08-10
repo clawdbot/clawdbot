@@ -186,4 +186,39 @@ describe("durable inbound reply delivery", () => {
     expect(result).toEqual({ status: "failed", error, sentBeforeError: true });
     expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });
+
+  it("treats adapter_returned_no_identity as potentially visible, not handled_no_send", async () => {
+    // The adapter was called but returned no identity — the platform may have
+    // delivered. routeReply and the delivery queue treat this as potentially
+    // visible (ambiguous); durable-delivery must match, or a reply that may
+    // have been delivered is marked "explicitly not sent" and recovery state /
+    // fallback decisions are wrong.
+    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      reason: "adapter_returned_no_identity",
+      results: [],
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        sentAt: 1,
+      },
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      ctxPayload: ctxPayload({
+        OriginatingTo: "chat-1",
+      }),
+    });
+
+    if (result.status !== "handled_visible") {
+      throw new Error(`expected handled_visible, got ${result.status}`);
+    }
+    expect(result.delivery.visibleReplySent).toBe(true);
+  });
 });
