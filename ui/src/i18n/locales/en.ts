@@ -6021,6 +6021,10 @@ export const en: TranslationMap & {
         skills: "Skills",
         connectors: "Connectors",
         webSearch: "Web search",
+        webSearchGloballyDisabled:
+          "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
+        webSearchClearStaleEnable:
+          "Web search is disabled in config. Click to clear this session’s enable override.",
         managePlugins: "Manage plugins",
         manageSkills: "Manage skills",
         browseConnectors: "Browse connectors",
