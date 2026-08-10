@@ -52,6 +52,7 @@ function ownsTranscriptSession(
 ): boolean {
   const channel = ctx.agentChannel?.trim().toLowerCase();
   const isLocalMainOperator = ctx.agentId === "main" && !channel;
+  const isUnattributedLocalOperator = !ctx.agentId && !channel;
   const provider = resolveSourceProvider(session.source.providerId, ctx);
   const accountBindingChannels = (provider?.accountBindingChannels ?? [])
     .map((entry) => entry.trim().toLowerCase())
@@ -73,7 +74,7 @@ function ownsTranscriptSession(
       if (channel && (!provider || accountBindingChannels.includes(channel))) {
         return false;
       }
-      return typeof ownerAgentId === "string" || isLocalMainOperator;
+      return typeof ownerAgentId === "string" || isLocalMainOperator || isUnattributedLocalOperator;
     }
     // Persisted ingress ownership remains authoritative if provider discovery
     // later changes; only the channel-less local main agent may recover it.
