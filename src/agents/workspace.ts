@@ -1454,10 +1454,10 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
           resolvedPaths.add(match);
         }
       } else {
-        // A magic-free pattern is a literal path — a plain path, or a collapsed
-        // single-char class like `pkg[1]` whose `1` is not a metacharacter.
-        // path.resolve below normalizes separators, so the raw pattern opens its
-        // real on-disk path directly.
+        // A pattern with no `? * { }` is a literal path — square brackets stay
+        // literal, so `pkg[1]` and `pkg[ab]` name their real on-disk directories
+        // rather than expanding as character classes. path.resolve below
+        // normalizes separators, so the raw pattern opens its real path directly.
         resolvedPaths.add(pattern);
       }
     } catch (error) {

@@ -11,11 +11,10 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Minimatch } from "minimatch";
 import { isPathInside } from "../infra/path-guards.js";
 
-// Normalize a configured pattern to POSIX-relative form: fs.glob and Minimatch
-// both expect "/"-separated patterns and a leading "./" carries no meaning.
+// Normalize a configured pattern to POSIX-relative form: fs.glob expects
+// "/"-separated patterns and a leading "./" carries no meaning.
 function normalizeWorkspacePatternPath(value: string): string {
   return value
     .replaceAll(path.sep, "/")
@@ -23,34 +22,23 @@ function normalizeWorkspacePatternPath(value: string): string {
     .replace(/^\.\/+/u, "");
 }
 
-// Magic-detection options for the routing gate only. magicalBraces makes a brace
-// alternation like `{a,b}` count as magic (fs.glob still expands it to concrete
-// paths), while Minimatch folds a single-char class like `[1]` back to a literal
-// — so a real directory named `pkg[1]` routes to the literal reader and
-// `pkg[ab]` routes to fs.glob. No nocase/optimizationLevel/matcher plumbing:
-// fs.glob performs the actual matching and applies its own platform case rules.
-function extraBootstrapMagicOptions() {
-  return {
-    nocomment: true,
-    nonegate: true,
-    windowsPathsNoEscape: true,
-    magicalBraces: true,
-  };
-}
-
 export function hasGlobPattern(pattern: string): boolean {
-  // A pattern is a glob when Minimatch reports magic; anything it folds to a
-  // literal (a plain path or a collapsed single-char class) is read verbatim.
-  const normalized = normalizeWorkspacePatternPath(pattern);
-  return new Minimatch(normalized, extraBootstrapMagicOptions()).hasMagic();
+  // Keep square brackets literal here; workspace paths commonly contain them.
+  // Only `? * { }` route a pattern to fs.glob, so an existing config path like
+  // `pkg[ab]/AGENTS.md` still loads only the literal file rather than fanning
+  // out to a bracket-class expansion after upgrade (a `main` compatibility
+  // contract). A pattern that mixes brackets with real magic (`pkg[ab]/*/…`)
+  // does route to fs.glob, where `[ab]` is a character class — the same
+  // asymmetry `main` has.
+  return /[?*{}]/u.test(pattern);
 }
 
 // Leading literal directory prefix of a pattern: the path segments before the
 // first glob-magic segment. Only the security pre-gate uses it, to decide
 // whether a pattern rooted at a literal directory symlink escapes the workspace
-// before fs.glob reads there. A magic-first pattern (`[ab]/…`, `{a,b}/…`)
-// collapses to "." (the workspace root), matching fs.glob which would root that
-// walk at the workspace; a fully-literal pattern keeps its whole path.
+// before fs.glob reads there. A magic-first pattern (`{a,b}/…`) collapses to "."
+// (the workspace root), matching fs.glob which would root that walk at the
+// workspace; a fully-literal pattern (brackets included) keeps its whole path.
 function literalPatternPrefix(pattern: string): string {
   const segments = normalizeWorkspacePatternPath(pattern).split("/");
   const literal: string[] = [];
@@ -61,42 +49,6 @@ function literalPatternPrefix(pattern: string): string {
     literal.push(segment);
   }
   return literal.join("/") || ".";
-}
-
-// Literal interpretation of the raw pattern for the transparent no-match
-// fallback: the pattern taken verbatim as a path (brackets/extglob NOT
-// expanded). Returns the normalized workspace-relative path only when it
-// resolves inside the workspace AND exists on disk; otherwise null.
-async function containedLiteralPath(
-  workspaceDir: string,
-  workspaceRealpath: string,
-  pattern: string,
-): Promise<string | null> {
-  const relative = normalizeWorkspacePatternPath(pattern);
-  // Reject any pattern with a `..` or globstar (`**`) segment. Those are the
-  // only forms `path.resolve` collapses lexically into a different existing
-  // path (e.g. `**/../AGENTS.md` cancels to `AGENTS.md`), which would wrongly
-  // match the literal fallback and double-add a path the glob already produced.
-  // A genuinely literal pattern (`pkg[ab]/AGENTS.md` naming a real bracket-named
-  // directory) has no `..`/`**` segment, so each segment resolves to itself and
-  // the fallback stays correct — bracket/extglob names are allowed here.
-  for (const segment of relative.split("/")) {
-    if (segment === ".." || segment.includes("**")) {
-      return null;
-    }
-  }
-  const absolute = path.resolve(workspaceDir, relative);
-  if (!isPathInside(workspaceDir, absolute)) {
-    return null;
-  }
-  let realpath: string;
-  try {
-    realpath = await fs.realpath(absolute);
-  } catch {
-    // No such on-disk path — a genuine no-match glob, not a mislabeled literal.
-    return null;
-  }
-  return isPathInside(workspaceRealpath, realpath) ? relative : null;
 }
 
 // Resolve a glob pattern to workspace-relative POSIX paths via Node's async
@@ -143,28 +95,6 @@ export async function resolveExtraBootstrapPatternPaths(
     if (strictRead && (error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-  }
-  // Transparent literal fallback (zero operator action): once the resolver
-  // adopts Node glob grammar, a pattern like `pkg[ab]/AGENTS.md` written to name
-  // a real directory literally called `pkg[ab]` parses its `[ab]` as a character
-  // class and matches nothing. When the contained set is empty, fall back to the
-  // raw pattern read as a literal path, keeping it only if it exists inside the
-  // workspace. This union is unconditional (not gated on an empty glob set):
-  // `main` treated square brackets as literal and always loaded such a path, so
-  // a shipped config naming `pkg[ab]` must keep loading even when sibling dirs
-  // (`pkga`/`pkgb`) also satisfy the bracket class as a live glob — the result
-  // is the strict superset of the old literal contract and the new glob
-  // capability. A genuine no-match glob (`packages/*/AGENTS.md`) adds nothing
-  // because its raw form is not a real on-disk path (existence-gated), so no
-  // phantom "missing file" diagnostic appears; `matches` is a Set, so a literal
-  // that also happens to be a glob match is deduped rather than double-counted.
-  //
-  // One edge case this intentionally does NOT cover: a literal-bracket parent
-  // with a live child glob (`pkg[ab]/**/AGENTS.md`) — the raw string is not
-  // itself an on-disk path, so the existence gate rejects it.
-  const literal = await containedLiteralPath(workspaceDir, workspaceRealpath, pattern);
-  if (literal) {
-    matches.add(literal);
   }
   return [...matches];
 }

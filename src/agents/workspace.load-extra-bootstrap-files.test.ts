@@ -456,13 +456,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("loads a literal-bracket directory via the transparent no-match fallback", async () => {
-    // A pattern like `pkg[ab]/AGENTS.md`, written before the resolver adopted
-    // Node glob grammar to name a real directory literally called `pkg[ab]`, now
-    // parses `[ab]` as a character class and the glob matches nothing. The
-    // empty-set literal fallback opens the real `pkg[ab]` directory's file with
-    // zero operator action — no `openclaw doctor --fix` step.
-    const workspaceDir = await createWorkspaceDir("literal-fallback-brackets");
+  it("loads a literal-bracket directory as a literal path", async () => {
+    // `main` grammar: square brackets are literal, so `pkg[ab]/AGENTS.md` names
+    // the real directory literally called `pkg[ab]` and reads that one file — it
+    // is never routed to fs.glob to expand `[ab]` as a character class.
+    const workspaceDir = await createWorkspaceDir("literal-brackets-multi");
     const packageDir = path.join(workspaceDir, "pkg[ab]");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal bracket agents", "utf-8");
@@ -479,14 +477,13 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("unions the literal bracket dir with live bracket-class glob matches", async () => {
-    // A pattern simultaneously a live glob AND a literal path. Dirs `a`/`b` make
-    // `[ab]/AGENTS.md` a live glob, and a real directory literally named `[ab]`
-    // is also present. `main` treated brackets as literal and always loaded the
-    // `[ab]` directory's file, so the additive-union fallback must load ALL
-    // three (`a`, `b`, and the literal `[ab]`) — preserving the old literal
-    // contract while keeping the new glob capability.
-    const workspaceDir = await createWorkspaceDir("literal-fallback-union");
+  it("loads only the literal bracket dir even when sibling dirs satisfy the bracket class", async () => {
+    // `main` grammar regression guard: dirs `a`/`b` would satisfy `[ab]` as a
+    // character class AND a real directory literally named `[ab]` exists. Because
+    // brackets are literal, `[ab]/AGENTS.md` loads ONLY the `[ab]` directory's
+    // file and must NOT fan out to `a`/`b` — the pre-fix union behavior that
+    // broke the one-file contract for shipped configs.
+    const workspaceDir = await createWorkspaceDir("literal-bracket-only");
     for (const name of ["a", "b", "[ab]"]) {
       const dir = path.join(workspaceDir, name);
       await fs.mkdir(dir, { recursive: true });
@@ -495,22 +492,18 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
 
     const files = await loadExtraBootstrapFileList(workspaceDir, ["[ab]/AGENTS.md"]);
 
-    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
-      [
-        path.join(workspaceDir, "a", "AGENTS.md"),
-        path.join(workspaceDir, "b", "AGENTS.md"),
-        path.join(workspaceDir, "[ab]", "AGENTS.md"),
-      ].toSorted(),
-    );
+    expect(files.map((file: { path: string }) => file.path)).toStrictEqual([
+      path.join(workspaceDir, "[ab]", "AGENTS.md"),
+    ]);
   });
 
-  it("loads the literal bracket dir alongside prefixed bracket-class glob matches", async () => {
-    // The named regression scenario: a pattern `pkg[ab]/AGENTS.md` where a real
-    // directory literally called `pkg[ab]` exists AND sibling dirs `pkga`/`pkgb`
-    // satisfy the bracket class. `main` loaded the literal `pkg[ab]` file
-    // unconditionally; the additive union must load all three so the shipped
-    // literal config is never silently dropped.
-    const workspaceDir = await createWorkspaceDir("literal-union-prefixed");
+  it("loads only the literal bracket dir, not the prefixed bracket-class siblings", async () => {
+    // The named P1 regression scenario: `pkg[ab]/AGENTS.md` where a real directory
+    // literally called `pkg[ab]` exists AND sibling dirs `pkga`/`pkgb` satisfy the
+    // bracket class. `main` treats brackets as literal and loads only the literal
+    // `pkg[ab]` file; the sibling `pkga`/`pkgb` files must NOT be injected after
+    // upgrade (the compatibility regression this PR reverts).
+    const workspaceDir = await createWorkspaceDir("literal-bracket-prefixed-only");
     for (const name of ["pkga", "pkgb", "pkg[ab]"]) {
       const dir = path.join(workspaceDir, name);
       await fs.mkdir(dir, { recursive: true });
@@ -518,22 +511,19 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     }
 
     const files = await loadExtraBootstrapFileList(workspaceDir, ["pkg[ab]/AGENTS.md"]);
+    const loadedPaths = files.map((file: { path: string }) => file.path);
 
-    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
-      [
-        path.join(workspaceDir, "pkga", "AGENTS.md"),
-        path.join(workspaceDir, "pkgb", "AGENTS.md"),
-        path.join(workspaceDir, "pkg[ab]", "AGENTS.md"),
-      ].toSorted(),
-    );
+    expect(loadedPaths).toStrictEqual([path.join(workspaceDir, "pkg[ab]", "AGENTS.md")]);
+    expect(loadedPaths).not.toContain(path.join(workspaceDir, "pkga", "AGENTS.md"));
+    expect(loadedPaths).not.toContain(path.join(workspaceDir, "pkgb", "AGENTS.md"));
   });
 
-  it("does not open a literal-bracket parent when a child glob follows it", async () => {
-    // Accepted edge case (ii): a literal-bracket parent with a live child glob
-    // (`pkg[ab]/**/AGENTS.md`). The glob matches nothing (no `pkga`/`pkgb`), and
-    // the raw pattern is not itself an on-disk path (the `**` segment does not
-    // exist), so the existence-gated fallback rejects it and nothing loads.
-    const workspaceDir = await createWorkspaceDir("literal-fallback-child-glob");
+  it("treats a bracket parent with a child glob as fs.glob (bracket is a class)", async () => {
+    // A pattern that mixes brackets with real magic (`pkg[ab]/**/AGENTS.md`)
+    // routes to fs.glob, where `[ab]` IS a character class — the same asymmetry
+    // `main` has. With no `pkga`/`pkgb` directory the class matches nothing, so
+    // the literal `pkg[ab]` subtree is not opened and nothing loads.
+    const workspaceDir = await createWorkspaceDir("bracket-parent-child-glob");
     const nested = path.join(workspaceDir, "pkg[ab]", "nested");
     await fs.mkdir(nested, { recursive: true });
     await fs.writeFile(path.join(nested, "AGENTS.md"), "nested", "utf-8");
@@ -546,87 +536,16 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("resolves a bracket-class pattern through the glob walker", async () => {
-    // Node glob grammar: `[ab]` is a character class, so it must route through
-    // the walker and match sibling directories `a` and `b` but not `c`.
-    const workspaceDir = await createWorkspaceDir("bracket-class");
-    for (const name of ["a", "b", "c"]) {
-      const dir = path.join(workspaceDir, name);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
-    }
-
-    const files = await loadExtraBootstrapFileList(workspaceDir, ["[ab]/AGENTS.md"]);
-
-    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
-      [
-        path.join(workspaceDir, "a", "AGENTS.md"),
-        path.join(workspaceDir, "b", "AGENTS.md"),
-      ].toSorted(),
-    );
-  });
-
-  it("resolves an extglob alternation pattern through the glob walker", async () => {
-    // `@(pkg|app)` is an extglob exactly-one alternation; it must match `pkg` and
-    // `app` directories but not `lib`.
-    const workspaceDir = await createWorkspaceDir("extglob-alternation");
-    for (const name of ["pkg", "app", "lib"]) {
-      const dir = path.join(workspaceDir, name);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
-    }
-
-    const files = await loadExtraBootstrapFileList(workspaceDir, ["@(pkg|app)/AGENTS.md"]);
-
-    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
-      [
-        path.join(workspaceDir, "app", "AGENTS.md"),
-        path.join(workspaceDir, "pkg", "AGENTS.md"),
-      ].toSorted(),
-    );
-  });
-
-  it("resolves +(...) and !(...) extglob prefixes through the glob walker", async () => {
-    // `+(a)` matches one-or-more `a` (so `a` and `aa`); `!(skip)` matches any
-    // segment except `skip`. Both must route through the walker.
-    const workspaceDir = await createWorkspaceDir("extglob-plus-negate");
-    for (const name of ["a", "aa", "b", "skip"]) {
-      const dir = path.join(workspaceDir, name);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
-    }
-
-    const plusFiles = await loadExtraBootstrapFileList(workspaceDir, ["+(a)/AGENTS.md"]);
-    expect(plusFiles.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
-      [
-        path.join(workspaceDir, "a", "AGENTS.md"),
-        path.join(workspaceDir, "aa", "AGENTS.md"),
-      ].toSorted(),
-    );
-
-    const negateFiles = await loadExtraBootstrapFileList(workspaceDir, ["!(skip)/AGENTS.md"]);
-    expect(negateFiles.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
-      [
-        path.join(workspaceDir, "a", "AGENTS.md"),
-        path.join(workspaceDir, "aa", "AGENTS.md"),
-        path.join(workspaceDir, "b", "AGENTS.md"),
-      ].toSorted(),
-    );
-  });
-
-  it("computes the walk root from the first magic segment for bracket/extglob patterns", async () => {
-    // Regression: the walk-root split must cut before the first magic segment
-    // using the same magic definition as the routing gate. A bracket class or
-    // extglob nested under literal prefixes (`packages/[ab]/*/AGENTS.md`,
-    // `src/@(a|b)/AGENTS.md`) must start the walk at the literal parent dir, not
-    // be misread as a literal path.
+  it("computes the walk root from the first magic segment for a bracket-then-star pattern", async () => {
+    // A bracket followed by real magic (`packages/[ab]/*/AGENTS.md`) routes to
+    // fs.glob, where `[ab]` is a character class. The walk-root split must cut
+    // before the first `? * { }` segment (`*`), starting the walk at the literal
+    // `packages/[ab]` prefix rather than misreading the whole thing as a literal
+    // path. `[ab]` then matches `a` as a class and `*` matches `core`.
     const workspaceDir = await createWorkspaceDir("walk-root-magic");
     const bracketDir = path.join(workspaceDir, "packages", "a", "core");
-    const extglobDir = path.join(workspaceDir, "src", "b");
     await fs.mkdir(bracketDir, { recursive: true });
-    await fs.mkdir(extglobDir, { recursive: true });
     await fs.writeFile(path.join(bracketDir, "AGENTS.md"), "bracket agents", "utf-8");
-    await fs.writeFile(path.join(extglobDir, "AGENTS.md"), "extglob agents", "utf-8");
 
     const bracketFiles = await loadExtraBootstrapFileList(workspaceDir, [
       "packages/[ab]/*/AGENTS.md",
@@ -636,16 +555,6 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         name: "AGENTS.md",
         path: path.join(bracketDir, "AGENTS.md"),
         content: "bracket agents",
-        missing: false,
-      },
-    ]);
-
-    const extglobFiles = await loadExtraBootstrapFileList(workspaceDir, ["src/@(a|b)/AGENTS.md"]);
-    expect(extglobFiles).toStrictEqual([
-      {
-        name: "AGENTS.md",
-        path: path.join(extglobDir, "AGENTS.md"),
-        content: "extglob agents",
         missing: false,
       },
     ]);
@@ -670,39 +579,6 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
       [path.join(nestedDir, "AGENTS.md"), path.join(topDir, "AGENTS.md")].toSorted(),
     );
-  });
-
-  it("matches Node fs.glob for bracket-class and extglob patterns (parity)", async () => {
-    // Parity fixture: for the same patterns, the walker's match set must equal
-    // Node fs.glob's over the real tree. This pins the walker to Node glob
-    // grammar for bracket classes, extglobs, and slash-spanning brace
-    // alternations, not just the `?*{}` subset.
-    const workspaceDir = await createWorkspaceDir("glob-parity");
-    for (const name of ["a", "b", "c", "pkg", "app", "lib"]) {
-      const dir = path.join(workspaceDir, name);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
-    }
-    const nestedDir = path.join(workspaceDir, "a", "deep");
-    await fs.mkdir(nestedDir, { recursive: true });
-    await fs.writeFile(path.join(nestedDir, "AGENTS.md"), "deep agents", "utf-8");
-
-    const parityPatterns = [
-      "[ab]/AGENTS.md",
-      "@(pkg|app)/AGENTS.md",
-      "!(lib)/AGENTS.md",
-      "{a/deep,c}/AGENTS.md",
-    ];
-    for (const pattern of parityPatterns) {
-      const walkerPaths = (await loadExtraBootstrapFileList(workspaceDir, [pattern]))
-        .map((file: { path: string }) => path.relative(workspaceDir, file.path))
-        .toSorted();
-      const nodeGlobPaths: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        nodeGlobPaths.push(match);
-      }
-      expect(walkerPaths).toStrictEqual(nodeGlobPaths.toSorted());
-    }
   });
 
   it("treats a truly-literal path with no magic as a literal file", async () => {
