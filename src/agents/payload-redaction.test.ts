@@ -23,6 +23,7 @@ describe("sanitizeDiagnosticPayload", () => {
           { type: "image", source: { data: MEDIA_DATA } },
           { type: "video", data: MEDIA_BYTES },
           { type: "video_frame", data: MEDIA_DATA },
+          { type: "image_generation_call", result: MEDIA_DATA },
         ],
         wrappers: [
           { audio: { data: MEDIA_DATA } },
@@ -41,6 +42,7 @@ describe("sanitizeDiagnosticPayload", () => {
         { type: "image", source: { data: "<redacted>", ...MEDIA_SUMMARY } },
         { type: "video", data: "<redacted>", ...BYTE_MEDIA_SUMMARY },
         { type: "video_frame", data: "<redacted>", ...MEDIA_SUMMARY },
+        { type: "image_generation_call", result: "<redacted>", ...MEDIA_SUMMARY },
       ],
       wrappers: [
         { audio: { data: "<redacted>", ...MEDIA_SUMMARY } },
@@ -139,6 +141,22 @@ describe("sanitizeDiagnosticPayload", () => {
 
     expect(sanitized).not.toMatch(/0123456789abcdef|abcdefghijklmnop/u);
     expect(sanitized).toContain("<redacted>");
+  });
+
+  it.each([
+    "x-api-key: sk-0123456789012345",
+    "api-key: 0123456789abcdef",
+    "Authorization: ApiKey 0123456789abcdef",
+    "Error: x-api-key: sk-0123456789012345",
+    "headers: Authorization: ApiKey 0123456789abcdef",
+    'headers: {"x-api-key":"sk-0123456789012345"}',
+    "{'Authorization': 'ApiKey 0123456789abcdef'}",
+  ])("redacts credential header %s", (header) => {
+    expect(sanitizeDiagnosticPayload(header)).not.toMatch(/sk-0123456789012345|0123456789abcdef/u);
+  });
+
+  it("preserves ordinary colon-delimited diagnostics", () => {
+    expect(sanitizeDiagnosticPayload("status: healthy")).toBe("status: healthy");
   });
 
   it("redacts embedded and folded media data URLs without dropping surrounding text", () => {

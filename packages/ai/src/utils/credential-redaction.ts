@@ -12,7 +12,7 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
 const CREDENTIAL_FIELD_SUFFIX_RE =
   /(?:apikey|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
 const MEDIA_PAYLOAD_SUFFIXES =
-  "base64|blob|buffer|bytes|data|delta|frames?|(?:file|media|source)?(?:uri|url)";
+  "base64|blob|buffer|bytes|data|delta|frames?|output|result|(?:file|media|source)?(?:uri|url)";
 const MEDIA_FIELD_NAME_RE = new RegExp(
   `^(?:input|output)?(?:audio|image|video)(?:${MEDIA_PAYLOAD_SUFFIXES})*$`,
   "u",
@@ -22,6 +22,10 @@ const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_HEADER_RE = /\b((?:set-)?cookie\s*:\s*)([^\r\n]+)/giu;
+const QUOTED_CREDENTIAL_HEADER_RE =
+  /(["'])((?:[A-Za-z][A-Za-z0-9_.-]*[_.-])?(?:api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token))\1\s*:\s*([^,}\r\n]+)/giu;
+const CREDENTIAL_HEADER_RE =
+  /\b((?:[A-Za-z][A-Za-z0-9_.-]*[_.-])?(?:api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token))\s*:\s*([^\r\n]+)/giu;
 const COOKIE_VALUE_RE = /\b([A-Za-z][A-Za-z0-9_.-]{0,64})=([A-Za-z0-9+/._~%=-]{16,})/gu;
 const LOOSE_QUOTED_CREDENTIAL_PAIR_RE =
   /\b((?!(?:api|endpoint|method|model|provider|status|type)=)[A-Za-z][A-Za-z0-9_.-]{0,64})=(["'])([A-Za-z0-9+/._~%=-]{16,})\2/giu;
@@ -58,6 +62,8 @@ export function redactCredentialText(value: string): string {
       (_match, prefix: string, header: string) =>
         `${prefix}${header.replace(COOKIE_VALUE_RE, "$1=<redacted>")}`,
     )
+    .replace(QUOTED_CREDENTIAL_HEADER_RE, "$1$2$1: <redacted>")
+    .replace(CREDENTIAL_HEADER_RE, "$1: <redacted>")
     .replace(LOOSE_QUOTED_CREDENTIAL_PAIR_RE, "$1=$2<redacted>$2")
     .replace(LOOSE_CREDENTIAL_PAIR_RE, "$1=<redacted>");
 }

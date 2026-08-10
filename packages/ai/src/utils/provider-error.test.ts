@@ -166,6 +166,11 @@ describe("projectProviderError", () => {
       leaked: "[65,66,67,68]",
     },
     {
+      name: "image generation result",
+      body: '{"type":"image_generation_call","result":"QUJDRA=="}',
+      leaked: "QUJDRA==",
+    },
+    {
       name: "typed video URI",
       body: '{"type":"video","uri":"https://media.invalid/private"}',
       leaked: "https://media.invalid/private",
@@ -402,6 +407,24 @@ describe("projectProviderError", () => {
 
     expect(projected).not.toMatch(/0123456789abcdef|abcdefghijklmnop/u);
     expect(projected).toContain("=<redacted>");
+  });
+
+  it.each([
+    "x-api-key: sk-0123456789012345",
+    "api-key: 0123456789abcdef",
+    "Authorization: ApiKey 0123456789abcdef",
+    "Error: x-api-key: sk-0123456789012345",
+    "headers: Authorization: ApiKey 0123456789abcdef",
+    'headers: {"x-api-key":"sk-0123456789012345"}',
+    "{'Authorization': 'ApiKey 0123456789abcdef'}",
+  ])("redacts credential header %s", (header) => {
+    expect(projectProviderError(header).errorMessage).not.toMatch(
+      /sk-0123456789012345|0123456789abcdef/u,
+    );
+  });
+
+  it("preserves ordinary colon-delimited diagnostics", () => {
+    expect(projectProviderError("status: healthy").errorMessage).toBe("status: healthy");
   });
 
   it.each([
