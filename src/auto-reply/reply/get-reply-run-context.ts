@@ -111,29 +111,33 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const inboundEventKind = promptSessionCtx.InboundEventKind;
-  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode: injectedStableMode } =
+  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode: promptStableMode } =
     resolvePromptSourceReplyMode({ promptSessionCtx, opts });
   // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
   // stable-mode injection; resolve the same session-stable fact here so their
   // binding facts and messageToolPolicyHash match dispatched chat turns —
   // otherwise chat<->heartbeat transitions ping-pong the CLI session (#121485).
+  // Synthetic turns must not fall back to their effective turn mode: a
+  // response-tool heartbeat's message_tool_only is per-turn enforcement, not
+  // session policy, and hashing it recreates the ping-pong.
+  const isSyntheticTurn = isSyntheticSourceReplyTurn({
+    inputProvenance: promptSessionCtx.InputProvenance,
+    isHeartbeat,
+  });
   const sessionPromptSourceReplyDeliveryMode =
-    injectedStableMode ??
-    (sessionEntry &&
-    isSyntheticSourceReplyTurn({
-      inputProvenance: promptSessionCtx.InputProvenance,
-      isHeartbeat,
-    })
+    opts?.sessionPromptSourceReplyDeliveryMode ??
+    (isSyntheticTurn && sessionEntry
       ? resolveSessionStableReplyMode({
           cfg,
+          ctx: { ...promptSessionCtx, CommandAuthorized: false },
           sessionEntry,
           sessionAgentId: agentId,
           sessionKey,
-          defaultProvider: provider,
-          defaultModel: model,
-          inputProvenance: promptSessionCtx.InputProvenance,
+          sessionStore,
+          turnModelOverride:
+            isHeartbeat && opts ? normalizeOptionalString(opts.heartbeatModelOverride) : undefined,
         })
-      : undefined);
+      : promptStableMode);
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,

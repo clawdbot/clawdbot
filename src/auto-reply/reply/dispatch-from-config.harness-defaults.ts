@@ -205,7 +205,47 @@ function resolveModelOverrideCandidate(params: {
   })?.ref;
 }
 
-export function resolveHarnessSourceVisibleRepliesDefault(params: {
+/**
+ * Resolves the configured visible-replies mode plus the guarded harness
+ * default. One owner for dispatch and synthetic-turn binding facts: both must
+ * derive the same session-stable delivery mode or CLI session bindings
+ * ping-pong across turn kinds (#121485).
+ */
+export function resolveVisibleRepliesPolicy(params: {
+  cfg: OpenClawConfig;
+  chatType?: string;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  turnModelOverride?: string;
+}): {
+  configuredVisibleReplies?: "automatic" | "message_tool";
+  harnessDefaultVisibleReplies?: "automatic" | "message_tool";
+} {
+  const configuredVisibleReplies =
+    params.chatType === "group" || params.chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined &&
+    params.chatType !== "group" &&
+    params.chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg: params.cfg,
+          ctx: params.ctx,
+          entry: params.entry,
+          sessionAgentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionStore: params.sessionStore,
+          turnModelOverride: params.turnModelOverride,
+        })
+      : undefined;
+  return { configuredVisibleReplies, harnessDefaultVisibleReplies };
+}
+
+function resolveHarnessSourceVisibleRepliesDefault(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;

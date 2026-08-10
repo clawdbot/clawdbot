@@ -35,8 +35,8 @@ import {
 } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import {
-  resolveHarnessSourceVisibleRepliesDefault,
   resolveTurnModelOverride,
+  resolveVisibleRepliesPolicy,
 } from "./dispatch-from-config.harness-defaults.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
@@ -222,22 +222,16 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         ? cfg.surfaces?.[silentReplySurface]?.silentReply
         : undefined,
     }) === "allow";
-  const configuredVisibleReplies =
-    chatType === "group" || chatType === "channel"
-      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
-      : cfg.messages?.visibleReplies;
-  const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg,
-          ctx,
-          entry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-          sessionStore: sessionStoreEntry.store,
-          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-        })
-      : undefined;
+  const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
+    cfg,
+    chatType,
+    ctx,
+    entry: sessionStoreEntry.entry,
+    sessionAgentId,
+    sessionKey: acpDispatchSessionKey,
+    sessionStore: sessionStoreEntry.store,
+    turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+  });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
