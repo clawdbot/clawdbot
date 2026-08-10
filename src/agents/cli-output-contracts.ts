@@ -1,4 +1,3 @@
-import type { AgentPlanStep } from "../channels/streaming.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -79,10 +78,6 @@ export type CliThinkingDelta = {
 
 export type CliThinkingProgress = {
   progressTokens: number;
-};
-
-export type CliPlanUpdate = {
-  steps: AgentPlanStep[];
 };
 
 /** Tool-call start event reconstructed from CLI stream output. */

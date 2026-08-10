@@ -11,7 +11,6 @@ import type {
 } from "../plugins/cli-backend.types.js";
 import type {
   CliOutput,
-  CliPlanUpdate,
   CliStreamingDelta,
   CliStreamJsonOutputLimits,
   CliThinkingDelta,
@@ -151,7 +150,6 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
-  onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
@@ -433,9 +431,7 @@ export function createCliJsonlStreamingParser(params: {
     if (parseErrorText) {
       return;
     }
-    const parsedSessionId =
-      pickCliSessionId(parsed, params.backend) ??
-      (!sessionId && typeof parsed.thread_id === "string" ? parsed.thread_id.trim() : undefined);
+    const parsedSessionId = pickCliSessionId(parsed, params.backend);
     if (parsedSessionId && parsedSessionId !== sessionId) {
       sessionId = parsedSessionId;
       params.onSessionId?.(parsedSessionId);
@@ -561,23 +557,6 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     const item = isRecord(parsed.item) ? parsed.item : null;
-    if (item?.type === "todo_list" && Array.isArray(item.items)) {
-      const steps = item.items.flatMap((entry) => {
-        if (!isRecord(entry) || typeof entry.text !== "string") {
-          return [];
-        }
-        return [
-          {
-            step: entry.text,
-            // codex exec JSONL exposes only a completed boolean for todo items.
-            status: entry.completed === true ? ("completed" as const) : ("pending" as const),
-          },
-        ];
-      });
-      if (steps.length > 0) {
-        params.onPlanUpdate?.({ steps });
-      }
-    }
     if (item && typeof item.text === "string") {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {

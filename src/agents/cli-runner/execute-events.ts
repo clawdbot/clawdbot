@@ -1,7 +1,6 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type {
-  CliPlanUpdate,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
@@ -370,17 +369,6 @@ export function createCliEventHandlers(params: {
     }
   };
 
-  const emitCliPlanUpdate = ({ steps }: CliPlanUpdate) => {
-    observedCliActivity = true;
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "plan",
-        data: { phase: "update", title: "Plan updated", source: "codex-exec", steps },
-      });
-    }
-  };
-
   return {
     emitLiveEvents,
     emitCliToolUseStart,
@@ -394,7 +382,6 @@ export function createCliEventHandlers(params: {
     emitCliAssistantDelta,
     emitCliThinkingDelta,
     emitCliThinkingProgress,
-    emitCliPlanUpdate,
     hasObservedCliActivity: () => observedCliActivity,
     activeParsedToolCount: () => activeParsedTools.size,
     getToolSummary,
