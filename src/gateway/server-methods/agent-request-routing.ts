@@ -226,6 +226,30 @@ export async function prepareAgentRequestRouting(params: {
   ) {
     return undefined;
   }
+  // Reject resolved session keys whose canonical agent is not configured.
+  // The tool-side guard in sessions_send provides an early rejection with
+  // visibility-first privacy; this Gateway-level check ensures direct agent
+  // RPC requests also cannot create phantom sessions for unknown agents.
+  if (requestedSessionKey) {
+    const keyShape = classifySessionKeyShape(requestedSessionKey);
+    if (keyShape === "agent") {
+      const sessionAgentId = resolveAgentIdFromSessionKey(
+        requestedSessionKey,
+        resolveDefaultAgentId(params.cfg),
+      );
+      if (sessionAgentId && !knownAgents.includes(sessionAgentId)) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: unknown agent "${sessionAgentId}"`,
+          ),
+        );
+        return undefined;
+      }
+    }
+  }
   const preAcceptedReservedSessionKey =
     requestedSessionKey &&
     resolveSessionStoreKey({ cfg: params.cfg, sessionKey: requestedSessionKey }) === "global"

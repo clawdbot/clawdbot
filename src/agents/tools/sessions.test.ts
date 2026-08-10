@@ -2,8 +2,19 @@
 // and assistant-visible text sanitization.
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
+import * as runtimeConfig from "../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -77,17 +88,11 @@ type SessionsToolTestConfig = {
 
 const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
   session: { scope: "per-sender", mainKey: "main" },
+  agents: { list: [{ id: "main" }, { id: "other" }] },
   tools: { agentToAgent: { enabled: false } },
 }));
 
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: () => loadConfigMock() as never,
-  };
-});
+let getRuntimeConfigSpy: MockInstance<typeof runtimeConfig.getRuntimeConfig> | undefined;
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(),
 }));
@@ -133,10 +138,17 @@ function requireGatewayRequest(index = 0) {
 }
 
 beforeAll(async () => {
+  getRuntimeConfigSpy = vi
+    .spyOn(runtimeConfig, "getRuntimeConfig")
+    .mockImplementation(() => loadConfigMock() as never);
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
   ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
   ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+});
+
+afterAll(() => {
+  getRuntimeConfigSpy?.mockRestore();
 });
 
 const installRegistry = async () => {
@@ -277,13 +289,14 @@ async function executeFireAndForgetA2AFrom(
     options?.bindingAccountId ||
     options?.bindingAgentId
       ? {
-          ...(options.bindingAgentId
-            ? {
-                agents: {
-                  list: [{ id: "main", default: true }, { id: options.bindingAgentId }],
-                },
-              }
-            : {}),
+          agents: {
+            list: [
+              { id: "main", default: true },
+              ...(options.bindingAgentId
+                ? [{ id: options.bindingAgentId }, { id: "other" }]
+                : [{ id: "other" }]),
+            ],
+          },
           bindings: [
             ...(options.defaultBindingDmScope
               ? [
@@ -312,7 +325,7 @@ async function executeFireAndForgetA2AFrom(
             },
           ],
         }
-      : {}),
+      : { agents: { list: [{ id: "main" }, { id: "other" }] } }),
     session: {
       scope: "per-sender",
       mainKey: options?.mainKey ?? "main",
@@ -389,6 +402,7 @@ beforeEach(() => {
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
+    agents: { list: [{ id: "main" }, { id: "other" }] },
     tools: { agentToAgent: { enabled: false } },
   });
   setActivePluginRegistry(createTestRegistry([]));
@@ -861,6 +875,7 @@ describe("sessions_send gating", () => {
       callGateway: callGatewayMock,
       config: {
         session: { scope: "per-sender", mainKey: "main" },
+        agents: { list: [{ id: "main" }, { id: "other" }] },
         tools: {
           agentToAgent: { enabled: false },
           sessions: { visibility: "tree" },
@@ -1011,6 +1026,7 @@ describe("sessions_send gating", () => {
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }, { id: "other" }] },
       tools: {
         agentToAgent: { enabled: false },
         sessions: { visibility: "all" },
@@ -1526,6 +1542,129 @@ describe("sessions_send gating", () => {
 
     expect(requireDetails(result).status).toBe("ok");
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+  });
+
+  it("rejects sessionKey targeting a non-existent agent before starting a run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-phantom-session-key", {
+      sessionKey: "agent:ghost:main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: ghost");
+    // Visibility check may call sessions.list; ensure no agent dispatch occurred.
+    const methods = callGatewayMock.mock.calls.map((c) => (c[0] as { method?: string })?.method);
+    expect(methods).not.toContain("agent");
+  });
+
+  it("rejects malformed agent-prefixed sessionKey before starting a run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: false } },
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-malformed-session-key", {
+      sessionKey: "agent:ghost",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: agent:ghost");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects label-resolved key when the target agent does not exist", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
+    });
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ghost:main" });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-phantom-label", {
+      label: "ghost-label",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: ghost");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("rejects opaque session reference that resolves to a non-existent agent", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: true }, sessions: { visibility: "all" } },
+    });
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ghost:main" });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-phantom-session-id", {
+      sessionKey: "opaque-session-id",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: ghost");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("returns forbidden (not agent-not-found) for hidden and unknown agents under restricted visibility", async () => {
+    // Regression: the configured-agent check must run after the visibility
+    // guard so restricted callers cannot distinguish a hidden configured
+    // agent from an absent one by comparing error responses.
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }, { id: "other" }] },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "tree" },
+      },
+    });
+    const tool = createMainSessionsSendTool();
+
+    // Hidden configured agent: should be forbidden, not "agent not found".
+    const hiddenResult = await tool.execute("call-hidden-agent", {
+      sessionKey: "agent:other:main",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(hiddenResult).status).toBe("forbidden");
+
+    // Unknown agent: should also be forbidden, indistinguishable from hidden.
+    const unknownResult = await tool.execute("call-unknown-agent", {
+      sessionKey: "agent:ghost:main",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+    expect(requireDetails(unknownResult).status).toBe("forbidden");
+
+    // Neither should have dispatched an agent run.
+    const gatewayMethods = callGatewayMock.mock.calls.map(
+      (c) => (c[0] as { method?: string })?.method,
+    );
+    expect(gatewayMethods).not.toContain("agent");
   });
 });
 
