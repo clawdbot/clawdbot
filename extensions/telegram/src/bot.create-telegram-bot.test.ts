@@ -4833,9 +4833,10 @@ describe("createTelegramBot", () => {
     expect(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]).toBe(
       codexRateLimitText,
     );
+    // Keep this fallback copy aligned with src/auto-reply/reply/agent-runner-failure-reply.ts.
     expect(
       String(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]),
-    ).not.toContain("All models are temporarily rate-limited");
+    ).not.toContain("All attempted models were rate-limited or overloaded.");
   });
 
   it("honors threaded replies for replyToMode=first/all", async () => {
