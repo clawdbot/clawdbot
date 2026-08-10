@@ -95,7 +95,8 @@ const mocks = vi.hoisted(() => ({
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
 }));
 
-vi.mock("../infra/fs-safe.js", () => ({
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
   movePathToTrash: mocks.movePathToTrash,
 }));
 
@@ -147,6 +148,44 @@ function expectedTrashSourcePath(targetPath: string): string {
 }
 
 describe("handleReset", () => {
+  it("rejects full-reset workspaces that contain the active onboarding lock", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-lock-overlap-");
+    const stateDir = path.join(homeDir, "state");
+    const migrationDir = path.join(stateDir, "migration");
+    const migrationAlias = path.join(homeDir, "migration-alias");
+    const lockSidecar = path.join(migrationDir, "onboarding.lock-target.lock");
+    const lockSidecarViaAlias = path.join(migrationAlias, "onboarding.lock-target.lock");
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.mkdirSync(migrationDir, { recursive: true });
+    fs.writeFileSync(configPath, "{}\n");
+    fs.symlinkSync(migrationDir, migrationAlias, process.platform === "win32" ? "junction" : "dir");
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    for (const workspaceDir of [
+      homeDir,
+      stateDir,
+      migrationDir,
+      migrationAlias,
+      lockSidecar,
+      lockSidecarViaAlias,
+    ]) {
+      await expect(
+        withEnvAsync(
+          {
+            HOME: homeDir,
+            OPENCLAW_HOME: homeDir,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: configPath,
+          },
+          async () => await handleReset("full", workspaceDir, runtime),
+        ),
+      ).rejects.toThrow("overlaps the active onboarding lock directory");
+    }
+
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+  });
+
   it("uses active profile paths for destructive reset targets", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
     const profileStateDir = path.join(homeDir, ".openclaw-work");
