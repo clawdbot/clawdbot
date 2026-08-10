@@ -26,7 +26,6 @@ const CURRENT_TRAIN_METHODS = [
   "terminal.close",
   "terminal.attach",
   "terminal.list",
-  "terminal.text",
   "terminal.upload",
   "worktrees.list",
   "worktrees.branches",
@@ -95,5 +94,12 @@ describe("core gateway method release trains", () => {
         .map((method) => method.name)
         .toSorted(),
     ).toEqual(CURRENT_TRAIN_METHODS.toSorted());
+    expect(methods.find((method) => method.name === "update.hold")?.since).toBe("2026.8");
+    expect(methods.find((method) => method.name === "sessions.catalog.startTerminal")?.since).toBe(
+      "2026.8",
+    );
+    expect(methods.find((method) => method.name === "worker.desktop.observe")?.since).toBe(
+      "2026.8",
+    );
   });
 });

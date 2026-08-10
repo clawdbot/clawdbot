@@ -235,11 +235,18 @@ describe("cron stream trigger composition", () => {
       expect(onTriggerDisposition).not.toHaveBeenCalledWith("fired");
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
+        lastError: "boom",
         consecutiveErrors: 1,
       });
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("boom") }),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            text:
+              'Automation "failing stream payload" failed 1 times\n' +
+              "Check automation history for details.",
+          }),
+        }),
       );
     } finally {
       cron.stop();

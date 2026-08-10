@@ -4,7 +4,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   activatePreparedManualRun,
@@ -22,7 +22,12 @@ import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
 import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import {
+  ensureLoaded,
+  persistOrRestore,
+  pruneCronJobScratchAfterCommit,
+  snapshotStoreForRollback,
+} from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
   resolveCronRunScheduleOwnership,
@@ -304,6 +309,7 @@ async function finishPreparedManualRun(
         postPersistNotifications,
       });
       if (removedJob) {
+        pruneCronJobScratchAfterCommit(state, [removedJob.id]);
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }
       finalized = true;

@@ -94,7 +94,7 @@ function normalizeEmbeddedAttemptToolMetas(
         toolName: string;
         meta?: string;
         replaySafe?: boolean;
-        isError?: true;
+        isError?: boolean;
         asyncStarted?: boolean;
         asyncTaskRunId?: string;
         asyncTaskId?: string;
@@ -106,8 +106,8 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
-      if (entry.isError === true) {
-        normalized.isError = true;
+      if (typeof entry.isError === "boolean") {
+        normalized.isError = entry.isError;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;

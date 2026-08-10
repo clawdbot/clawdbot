@@ -25,6 +25,7 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -270,6 +271,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     clientCaps: params.ctx.GatewayClientCaps,
+    conversationToolPolicy: params.ctx.ConversationToolPolicy,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,
@@ -287,13 +289,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     provider: params.provider,
     model: params.model,
     authProfileId: targetSessionEntry.authProfileOverride,
-    authProfileIdSource:
-      targetSessionEntry.authProfileOverrideSource ??
-      (targetSessionEntry.authProfileOverride
-        ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
-          ? "auto"
-          : "user"
-        : undefined),
+    authProfileIdSource: resolveSessionAuthProfileOverrideSource(targetSessionEntry),
     contextTokenBudget,
     agentHarnessId:
       targetSessionEntry.modelSelectionLocked === true

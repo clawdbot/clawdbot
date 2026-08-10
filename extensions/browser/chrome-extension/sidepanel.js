@@ -99,7 +99,7 @@ function handleChatEvent(payload) {
     addBubble("system", payload.errorMessage || "The run failed.");
   }
   if (payload.state === "aborted") {
-    addBubble("system", "Run stopped because this tab was closed or unshared.");
+    addBubble("system", "Run stopped because this tab was closed or access was revoked.");
   }
   if (payload.state === "final" || payload.state === "error" || payload.state === "aborted") {
     finalizeStream();
@@ -126,12 +126,12 @@ function updateState(state) {
       setComposerEnabled(true);
       break;
     case "needs-sharing":
-      sessionNote.textContent = "No session until this tab is shared.";
+      sessionNote.textContent = "No session until OpenClaw can access this tab.";
       setGate({
         action: "share",
-        title: "Keep the boundary visible",
+        title: "Allow this tab",
         detail:
-          "Sharing adds this tab to the OpenClaw group. The copilot can act here, but nowhere else.",
+          "Use the current access mode to allow OpenClaw here. Restricted and incognito tabs remain unavailable.",
       });
       break;
     case "needs-pairing":

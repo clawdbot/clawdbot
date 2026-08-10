@@ -469,7 +469,6 @@ async function runSetupHandoff(
     await writeWizardConfigFile(result.nextConfig, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
       afterWrite: GATEWAY_SETUP_AFTER_WRITE,
     });
     runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
@@ -507,7 +506,6 @@ async function runSetupHandoff(
     await writeWizardConfigFile(searchSetup.config, {
       allowConfigSizeDrop: false,
       baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
     });
     return;
   }

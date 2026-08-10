@@ -1,5 +1,5 @@
 // Msteams tests cover monitor.lifecycle plugin behavior.
-import { EventEmitter } from "node:events";
+import { createServer, type Server } from "node:http";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
@@ -11,13 +11,6 @@ import {
   gateIngressAcceptThenDispatch,
 } from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
-
-type FakeServer = EventEmitter & {
-  close: (callback?: (err?: Error | null) => void) => void;
-  setTimeout: (msecs: number) => FakeServer;
-  requestTimeout: number;
-  headersTimeout: number;
-};
 
 type MSTeamsUserResolution = {
   input: string;
@@ -45,90 +38,14 @@ type RegisterMSTeamsHandlersMock = (
   deps: MSTeamsMessageHandlerDeps,
 ) => MSTeamsActivityHandler;
 
-type MockExpressFn = ReturnType<typeof vi.fn>;
-type MockExpressApp = MockExpressFn & {
-  use: MockExpressFn;
-  post: MockExpressFn;
-  listen: MockExpressFn;
-};
+const keepHttpServerTaskAliveMock = vi.hoisted(() => vi.fn());
 
-const expressControl = vi.hoisted(() => ({
-  mode: { value: "listening" as "listening" | "error" },
-  apps: [] as MockExpressApp[],
-}));
-
-const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
-const keepHttpServerTaskAliveMock = vi.hoisted(() =>
-  vi.fn(async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
-    await new Promise<void>((resolve) => {
-      if (params.abortSignal?.aborted) {
-        resolve();
-        return;
-      }
-      params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-    });
-    await params.onAbort?.();
-  }),
-);
-
-vi.mock("../runtime-api.js", () => ({
-  DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
-  isDangerousNameMatchingEnabled,
-  normalizeSecretInputString: (value: unknown) =>
-    typeof value === "string" && value.trim() ? value.trim() : undefined,
-  hasConfiguredSecretInput: (value: unknown) =>
-    typeof value === "string" && value.trim().length > 0,
-  normalizeResolvedSecretInputString: (params: { value?: unknown }) =>
-    typeof params?.value === "string" && params.value.trim() ? params.value.trim() : undefined,
-  keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
-  mergeAllowlist: (params: { existing?: string[]; additions?: string[] }) =>
-    Array.from(new Set([...(params.existing ?? []), ...(params.additions ?? [])])),
-  summarizeMapping: vi.fn(),
-}));
-
-vi.mock("express", () => {
-  const json = vi.fn(() => {
-    return (_req: unknown, _res: unknown, next?: (err?: unknown) => void) => {
-      next?.();
-    };
-  });
-
-  const factory = () => {
-    const app = vi.fn() as MockExpressApp;
-    app.use = vi.fn();
-    app.post = vi.fn();
-    app.listen = vi.fn((_port: number, callback?: (error?: Error) => void) => {
-      const server = new EventEmitter() as FakeServer;
-      server.setTimeout = vi.fn((_msecs: number) => server);
-      server.requestTimeout = 0;
-      server.headersTimeout = 0;
-      server.close = (closeCallback?: (err?: Error | null) => void) => {
-        queueMicrotask(() => {
-          server.emit("close");
-          closeCallback?.(null);
-        });
-      };
-      queueMicrotask(() => {
-        if (expressControl.mode.value === "error") {
-          callback?.(new Error("listen EADDRINUSE"));
-          return;
-        }
-        callback?.();
-      });
-      return server;
-    });
-    return app;
-  };
-
-  const wrappedFactory = () => {
-    const app = factory();
-    expressControl.apps.push(app);
-    return app;
-  };
-
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  keepHttpServerTaskAliveMock.mockImplementation(actual.keepHttpServerTaskAlive);
   return {
-    default: wrappedFactory,
-    json,
+    ...actual,
+    keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
   };
 });
 
@@ -139,19 +56,35 @@ const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
 const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
-  vi.fn(async (_creds?: unknown, _options?: unknown) => ({
-    app: {
+  vi.fn(async (_creds?: unknown, options?: Record<string, unknown>) => {
+    const app = {
       on: vi.fn(),
       event: vi.fn(),
       onTokenExchange: vi.fn(async () => ({ status: 200 })),
       onVerifyState: vi.fn(async () => ({ status: 200 })),
-      initialize: vi.fn(async () => {}),
+      initialize: vi.fn(async () => {
+        const adapter = options?.httpServerAdapter as
+          | {
+              registerRoute?: (
+                path: string,
+                handler: (req: Request, res: Response) => void,
+              ) => void;
+            }
+          | undefined;
+        const endpoint = options?.messagingEndpoint;
+        if (adapter?.registerRoute && typeof endpoint === "string") {
+          adapter.registerRoute(endpoint, (req, res) => {
+            res.status(200).json({ url: req.url });
+          });
+        }
+      }),
       tokenManager: {
         getBotToken: vi.fn(async () => ({ toString: (): string => "bot-token" })),
         getGraphToken: vi.fn(async () => ({ toString: (): string => "graph-token" })),
       },
-    },
-  })),
+    };
+    return { app };
+  }),
 );
 
 const ssoTokenStore = vi.hoisted(() => ({
@@ -190,16 +123,19 @@ vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
 }));
 
 vi.mock("./sdk.js", () => ({
-  loadMSTeamsSdkWithAuth: (creds?: unknown, options?: unknown) =>
+  loadMSTeamsSdkWithAuth: (creds?: unknown, options?: Record<string, unknown>) =>
     loadMSTeamsSdkWithAuth(creds, options),
   createMSTeamsTokenProvider: () => ({
     getAccessToken: vi.fn().mockResolvedValue("mock-token"),
   }),
-  createMSTeamsExpressAdapter: vi.fn().mockResolvedValue({
-    registerRoute: vi.fn(),
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-  }),
+  createMSTeamsExpressAdapter: vi.fn(
+    async (expressApp: { post: (...args: unknown[]) => void }) => ({
+      registerRoute: (path: string, handler: (req: Request, res: Response) => void) =>
+        expressApp.post(path, handler),
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    }),
+  ),
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -278,6 +214,25 @@ function createStores() {
   };
 }
 
+async function resolveStartedServer(): Promise<Server> {
+  await waitForMSTeamsTestState(() => {
+    expect(keepHttpServerTaskAliveMock).toHaveBeenCalled();
+  });
+  const server = keepHttpServerTaskAliveMock.mock.calls.at(-1)?.[0]?.server as Server | undefined;
+  if (!server) {
+    throw new Error("expected started Microsoft Teams HTTP server");
+  }
+  return server;
+}
+
+function resolveServerUrl(server: Server, path: string): string {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP server address");
+  }
+  return `http://127.0.0.1:${address.port}${path}`;
+}
+
 function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
     | { cfg?: OpenClawConfig }
@@ -291,9 +246,6 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    expressControl.mode.value = "listening";
-    expressControl.apps.length = 0;
-    isDangerousNameMatchingEnabled.mockReset().mockReturnValue(false);
     resolveAllowlistMocks.resolveMSTeamsTeamsConfig
       .mockReset()
       .mockImplementation(async ({ teams }) => ({ teams, mapping: [], unresolved: [] }));
@@ -338,20 +290,42 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!result.app) {
       throw new Error("expected Teams monitor app after startup abort");
     }
-    await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
-  it("rejects startup when webhook port is already in use", async () => {
-    expressControl.mode.value = "error";
-    await expect(
-      monitorMSTeamsProvider({
-        cfg: createConfig(3978),
+  it("rejects startup when the webhook port is already in use", async () => {
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(0, resolve);
+    });
+
+    try {
+      const address = blocker.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected occupied TCP port");
+      }
+
+      const stores = createStores();
+      const task = monitorMSTeamsProvider({
+        cfg: createConfig(address.port),
         runtime: createRuntime(),
-        abortSignal: new AbortController().signal,
-        conversationStore: createStores().conversationStore,
-        pollStore: createStores().pollStore,
-      }),
-    ).rejects.toThrow(/EADDRINUSE/);
+        conversationStore: stores.conversationStore,
+        pollStore: stores.pollStore,
+      });
+
+      await expect(task).rejects.toMatchObject({ code: "EADDRINUSE" });
+      const ingress = getMSTeamsIngressMockState().instances[0];
+      if (!ingress) {
+        throw new Error("expected Teams ingress");
+      }
+      expect(ingress.start).toHaveBeenCalledTimes(1);
+      expect(ingress.stop).toHaveBeenCalledTimes(1);
+      expect(keepHttpServerTaskAliveMock).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 
   it("rejects requests without Bearer token before SDK route", async () => {
@@ -364,40 +338,18 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await waitForMSTeamsTestState(() => {
-      expect(expressControl.apps.length).toBeGreaterThan(0);
+    const server = await resolveStartedServer();
+    const unauthorized = await fetch(resolveServerUrl(server, "/api/messages"), {
+      method: "POST",
     });
+    expect(unauthorized.status).toBe(401);
+    await expect(unauthorized.json()).resolves.toEqual({ error: "Unauthorized" });
 
-    const app = expressControl.apps.at(-1);
-    expect(app).toBeDefined();
-    // Three middlewares are installed before the SDK route registers:
-    // [0] = bearer-presence gate — rejects unauthenticated requests cheaply.
-    // [1] = `express.json({ limit })` — caps bearer-shaped inbound bodies
-    //       before the SDK's later json() can parse them.
-    // [2] = JSON parser error handler — keeps 413 responses JSON-shaped.
-    expect(app!.use.mock.calls.length).toBeGreaterThanOrEqual(3);
-
-    const bearerMiddleware = app!.use.mock.calls[0]?.[0] as (
-      req: Request,
-      res: Response,
-      next: (err?: unknown) => void,
-    ) => void;
-
-    // Request without Bearer token should be rejected
-    const statusFn = vi.fn().mockReturnValue({ json: vi.fn() });
-    const next = vi.fn();
-    bearerMiddleware({ headers: {} } as Request, { status: statusFn } as unknown as Response, next);
-    expect(statusFn).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
-
-    // Request with Bearer token should pass through
-    const next2 = vi.fn();
-    bearerMiddleware(
-      { headers: { authorization: "Bearer valid-token" } } as Request,
-      {} as Response,
-      next2,
-    );
-    expect(next2).toHaveBeenCalledTimes(1);
+    const authorized = await fetch(resolveServerUrl(server, "/api/messages"), {
+      method: "POST",
+      headers: { authorization: "Bearer valid-token" },
+    });
+    expect(authorized.status).toBe(200);
 
     abort.abort();
     await task;
@@ -413,26 +365,18 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await waitForMSTeamsTestState(() => {
-      expect(expressControl.apps.length).toBeGreaterThan(0);
+    const server = await resolveStartedServer();
+    const response = await fetch(resolveServerUrl(server, "/api/messages"), {
+      method: "POST",
+      headers: {
+        authorization: "Bearer valid-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ payload: "x".repeat(1024 * 1024) }),
     });
 
-    const app = expressControl.apps.at(-1);
-    const jsonErrorMiddleware = app!.use.mock.calls[2]?.[0] as (
-      err: unknown,
-      req: Request,
-      res: Response,
-      next: (err?: unknown) => void,
-    ) => void;
-    const json = vi.fn();
-    const status = vi.fn(() => ({ json }));
-    const next = vi.fn();
-
-    jsonErrorMiddleware({ status: 413 }, {} as Request, { status } as unknown as Response, next);
-
-    expect(status).toHaveBeenCalledWith(413);
-    expect(json).toHaveBeenCalledWith({ error: "Payload too large" });
-    expect(next).not.toHaveBeenCalled();
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "Payload too large" });
 
     abort.abort();
     await task;
@@ -452,27 +396,17 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await waitForMSTeamsTestState(() => {
-      expect(expressControl.apps.length).toBeGreaterThan(0);
-    });
-
-    const app = expressControl.apps.at(-1);
+    const server = await resolveStartedServer();
     expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
       messagingEndpoint: "/teams/events",
     });
-    const legacyForwarder = app!.post.mock.calls.find((call) => call[0] === "/api/messages")?.[1];
-    expect(typeof legacyForwarder).toBe("function");
-    if (typeof legacyForwarder !== "function") {
-      throw new Error("expected legacy /api/messages forwarder");
-    }
+    const response = await fetch(resolveServerUrl(server, "/api/messages"), {
+      method: "POST",
+      headers: { authorization: "Bearer valid" },
+    });
 
-    const req = { url: "/api/messages", headers: { authorization: "Bearer valid" } } as Request;
-    const res = {} as Response;
-    const next = vi.fn();
-    legacyForwarder(req, res, next);
-
-    expect(req.url).toBe("/teams/events");
-    expect(app).toHaveBeenCalledWith(req, res, next);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ url: "/teams/events" });
 
     abort.abort();
     await task;
@@ -1027,7 +961,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   });
 
   it("resolves user allowlists when name matching is enabled", async () => {
-    isDangerousNameMatchingEnabled.mockReturnValue(true);
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist
       .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
       .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
@@ -1070,7 +1003,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   });
 
   it("keeps only stable allowlist entries when Graph resolution fails", async () => {
-    isDangerousNameMatchingEnabled.mockReturnValue(true);
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockRejectedValueOnce(
       new Error("Graph unavailable"),
     );

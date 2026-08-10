@@ -38,7 +38,7 @@ export DEEPINFRA_API_KEY="<your-deepinfra-api-key>" # pragma: allowlist secret
 
 ```json5
 {
-  env: { DEEPINFRA_API_KEY: "<your-deepinfra-api-key>" }, // pragma: allowlist secret
+  env: { vars: { DEEPINFRA_API_KEY: "<your-deepinfra-api-key>" } }, // pragma: allowlist secret
   agents: {
     defaults: {
       model: { primary: "deepinfra/deepseek-ai/DeepSeek-V4-Flash" },

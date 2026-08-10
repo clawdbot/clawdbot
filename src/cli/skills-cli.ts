@@ -22,7 +22,7 @@ import {
   fetchClawHubSkillCard,
   fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
-} from "../infra/clawhub.js";
+} from "../infra/clawhub-skills.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   installSkillFromClawHub,
@@ -991,7 +991,9 @@ export function registerSkillsCli(program: Command) {
   const runWorkshopDraftAction = (
     opts: SkillProposalDraftCliOptions,
     action: (
-      input: Omit<Parameters<typeof proposeUpdateSkill>[0], "skillName">,
+      input: Omit<Parameters<typeof proposeUpdateSkill>[0], "skillName" | "content"> & {
+        content: string;
+      },
     ) => Promise<SkillProposalReadResult>,
     format: (proposal: SkillProposalReadResult) => string = (proposal) => `${proposal.record.id}\n`,
   ): Promise<void> =>

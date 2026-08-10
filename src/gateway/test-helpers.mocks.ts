@@ -38,6 +38,7 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.waitCalls.push(sessionId);
       const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
       if (ended) {
+        embeddedRunMock.activeIds.delete(sessionId);
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
       } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
@@ -284,10 +285,12 @@ vi.mock("/src/auto-reply/reply.js", () => ({
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");

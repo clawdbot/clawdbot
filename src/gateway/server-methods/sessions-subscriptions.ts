@@ -9,8 +9,8 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
-import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -23,13 +23,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       context.subscribeSessionEvents(connId);
     }
     respond(true, { subscribed: Boolean(connId) }, undefined);
-  },
-  "sessions.unsubscribe": ({ client, context, respond }) => {
-    const connId = client?.connId?.trim();
-    if (connId) {
-      context.unsubscribeSessionEvents(connId);
-    }
-    respond(true, { subscribed: false }, undefined);
   },
   "sessions.viewers.set": ({ params, client, context, respond }) => {
     if (
@@ -109,7 +102,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       sessionKey: key,
       ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
     });
-    const subscriptionKey = sessionObserverScopeKey(
+    const subscriptionKey = resolveSessionSubscriptionKey(
       canonicalKey,
       requestedAgentId ?? resolveDefaultAgentId(cfg),
     );
@@ -194,7 +187,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       sessionKey: key,
       ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
     });
-    const subscriptionKey = sessionObserverScopeKey(
+    const subscriptionKey = resolveSessionSubscriptionKey(
       canonicalKey,
       requestedAgentId ?? resolveDefaultAgentId(cfg),
     );

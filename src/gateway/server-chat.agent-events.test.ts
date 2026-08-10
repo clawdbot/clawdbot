@@ -2,6 +2,7 @@
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -238,6 +239,13 @@ describe("agent event handler", () => {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
 
+  function chatDeltaTexts(broadcast: ReturnType<typeof vi.fn>) {
+    return chatBroadcastCalls(broadcast)
+      .map(([, payload]) => payload as { state?: string; deltaText?: string })
+      .filter((payload) => payload.state === "delta")
+      .map((payload) => payload.deltaText);
+  }
+
   function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
     return broadcast.mock.calls.filter(([event]) => event === "agent");
   }
@@ -364,12 +372,7 @@ describe("agent event handler", () => {
     return call;
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
     for (const [key, value] of Object.entries(fields)) {
@@ -1444,6 +1447,73 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("delivers a throttled delta when the window expires without another event", () => {
+    vi.useFakeTimers();
+    let now = 12_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "trailing");
+
+    emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello" });
+    now = 12_020;
+    emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello world" });
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
+    now = 12_150;
+    vi.advanceTimersByTime(130);
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
+    expect(vi.getTimerCount()).toBe(0);
+    nowSpy.mockRestore();
+  });
+
+  it("cancels the trailing delta before the terminal frame", () => {
+    vi.useFakeTimers();
+    let now = 13_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "terminal-trailing");
+
+    emitAgentEvent(handler, "run-terminal-trailing", "assistant", { text: "Hello" });
+    now = 13_020;
+    emitAgentEvent(handler, "run-terminal-trailing", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    emitLifecycleEnd(handler, "run-terminal-trailing");
+    expect(vi.getTimerCount()).toBe(0);
+    const statesAtTerminal = chatBroadcastCalls(broadcast).map(
+      ([, payload]) => (payload as { state?: string }).state,
+    );
+    expect(statesAtTerminal).toEqual(["delta", "delta", "final"]);
+
+    now = 13_500;
+    vi.advanceTimersByTime(1_000);
+    expect(
+      chatBroadcastCalls(broadcast).map(([, payload]) => (payload as { state?: string }).state),
+    ).toEqual(statesAtTerminal);
+    nowSpy.mockRestore();
+  });
+
+  it("cancels trailing deltas when gateway chat state is cleared", () => {
+    vi.useFakeTimers();
+    let now = 14_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "shutdown-trailing");
+
+    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", { text: "Hello" });
+    now = 14_020;
+    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    chatRunState.clear();
+    expect(vi.getTimerCount()).toBe(0);
+    now = 14_500;
+    vi.advanceTimersByTime(1_000);
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
+    nowSpy.mockRestore();
+  });
+
   it("does not emit a delta when a repeated assistant snapshot is unchanged", () => {
     let now = 11_250;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1627,7 +1697,7 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it("routes tool events only to registered recipients when verbose is enabled", () => {
+  it("routes live edit diff progress to registered run recipients", () => {
     const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -1635,10 +1705,26 @@ describe("agent event handler", () => {
     registerAgentRunContext("run-tool", { sessionKey: "session-1", verboseLevel: "on" });
     toolEventRecipients.add("run-tool", "conn-1");
 
-    emitAgentEvent(handler, "run-tool", "tool", { phase: "start", name: "read", toolCallId: "t1" });
+    emitAgentEvent(handler, "run-tool", "tool", {
+      phase: "input_delta",
+      name: "edit",
+      toolCallId: "t1",
+      diff: { added: 2, removed: 1 },
+    });
 
     expect(broadcast).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      requireRecord(
+        requireMockPayload(broadcastToConnIds, 0, 1, "run tool payload").data,
+        "run tool data",
+      ),
+      {
+        phase: "input_delta",
+        name: "edit",
+        diff: { added: 2, removed: 1 },
+      },
+    );
   });
 
   it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
@@ -1712,7 +1798,7 @@ describe("agent event handler", () => {
     expect(nodeToolCalls).toHaveLength(1);
   });
 
-  it("mirrors tool events to session subscribers so late-joining operator UIs can render them", () => {
+  it("mirrors live edit diff progress to session subscribers", () => {
     const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -1727,10 +1813,10 @@ describe("agent event handler", () => {
       "run-session-tool",
       "tool",
       {
-        phase: "start",
-        name: "exec",
+        phase: "input_delta",
+        name: "edit",
         toolCallId: "tool-session-1",
-        args: { command: "echo hi" },
+        diff: { added: 4, removed: 2 },
       },
       { ts: 1_234 },
     );
@@ -1746,10 +1832,10 @@ describe("agent event handler", () => {
       ts: 1_234,
     });
     expectRecordFields(requireRecord(sessionToolPayload.data, "session tool payload data"), {
-      phase: "start",
-      name: "exec",
+      phase: "input_delta",
+      name: "edit",
       toolCallId: "tool-session-1",
-      args: { command: "echo hi" },
+      diff: { added: 4, removed: 2 },
     });
     expect(requireMockArg(broadcastToConnIds, 0, 2, "session tool recipients")).toEqual(
       new Set(["conn-session"]),

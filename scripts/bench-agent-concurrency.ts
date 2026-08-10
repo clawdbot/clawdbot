@@ -74,6 +74,7 @@ const REQUIRED_INVARIANT_FIELDS: Record<WorkerScenario, readonly string[]> = {
     "postTeardownTaskRows",
     "postTeardownDurableSubagentRows",
     "postTeardownDurableTaskRows",
+    "postTeardownActiveRootWork",
   ],
   spawnPipelineDurable: [
     "ok",
@@ -90,6 +91,7 @@ const REQUIRED_INVARIANT_FIELDS: Record<WorkerScenario, readonly string[]> = {
     "postTeardownTaskRows",
     "postTeardownDurableSubagentRows",
     "postTeardownDurableTaskRows",
+    "postTeardownActiveRootWork",
   ],
   admission: ["ok", "admissionCap", "overflowRejected", "released"],
   recoverySweep: [

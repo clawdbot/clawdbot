@@ -1,4 +1,4 @@
-import type { ReactiveController } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
@@ -29,10 +29,35 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
+
+export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
+  readonly sessionData: Pick<
+    SessionDataController,
+    | "beginSessionMutation"
+    | "isSessionMutationScopeCurrent"
+    | "publishSessionMutationError"
+    | "refreshSidebarSessions"
+    | "resetForStatusFilter"
+  >;
+  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
+  sessionsGrouping: SidebarSessionsGrouping;
+  sessionsShowCron: boolean;
+  sessionsStatusFilter: SidebarSessionStatusFilter;
+  clearSessionSelection(): void;
+  findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
+  knownSessionGroups(): string[];
+  knownSessionCatalogIds(): string[];
+  knownSectionOrder(): string[];
+  pruneSidebarSessionEntry(key: string): void;
+  reconciledSidebarZone(): { sidebarEntries: readonly string[] };
+  replaceCurrentSession(sessionKey: string): void;
+  selectSession(sessionKey: string): void;
+  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+}
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController implements ReactiveController {
@@ -367,7 +392,11 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const nextLabel = window.prompt(t("sessionsView.renameSessionPrompt"), session.label);
+    const { showInputDialog } = await import("./input-dialog.ts");
+    const nextLabel = await showInputDialog({
+      title: t("sessionsView.renameSessionPrompt"),
+      defaultValue: session.label,
+    });
     if (nextLabel === null) {
       return;
     }

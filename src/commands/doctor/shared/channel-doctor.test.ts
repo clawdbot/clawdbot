@@ -140,6 +140,10 @@ describe("channel doctor compatibility mutations", () => {
         defaults: {
           enabled: true,
         },
+        modelByChannel: {
+          discord: "openai/gpt-5.6-luna",
+        },
+        " ": { token: "dummy" },
       },
     } as never);
 

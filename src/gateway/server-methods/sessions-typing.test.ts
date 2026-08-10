@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
@@ -42,9 +43,9 @@ function client(profileId: string, connId: string): GatewayClient {
   };
 }
 
-function context(broadcast = vi.fn()): GatewayRequestContext {
+function context(broadcast = vi.fn(), cfg: OpenClawConfig = {}): GatewayRequestContext {
   return {
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => cfg,
     broadcast,
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
@@ -56,6 +57,7 @@ async function callTyping(params: {
   sessionKey: string;
   sessionId: string;
   typing: boolean;
+  agentId?: string;
   client: GatewayClient;
   context: GatewayRequestContext;
 }) {
@@ -63,6 +65,7 @@ async function callTyping(params: {
   const requestParams = {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     typing: params.typing,
   };
   await sessionSuggestionHandlers["session.typing"]?.({
@@ -87,6 +90,47 @@ afterEach(() => {
 });
 
 describe("session typing handler", () => {
+  it.each([
+    { agentId: "main", expected: ["agent:main:global", "global"] },
+    { agentId: "work", expected: ["agent:work:global"] },
+  ])("uses the canonical global subscription keys for $agentId", async ({ agentId, expected }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      } satisfies OpenClawConfig;
+      await upsertSessionEntry(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `session-${agentId}`,
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = [
+        { user: { id: "alice" }, watchedSessions: ["global"] },
+        { user: { id: "owner" }, watchedSessions: ["global"] },
+      ];
+      const broadcast = vi.fn();
+
+      expect(
+        await callTyping({
+          sessionKey: "global",
+          sessionId: `session-${agentId}`,
+          agentId,
+          typing: true,
+          client: client("alice", `alice-${agentId}`),
+          context: context(broadcast, cfg),
+        }),
+      ).toEqual({ ok: true, broadcast: true });
+      expect(broadcast).toHaveBeenCalledWith(
+        "session.typing",
+        expect.objectContaining({ agentId, sessionKey: "global" }),
+        expect.objectContaining({ agentId, sessionKeys: expected }),
+      );
+    });
+  });
+
   it("keeps an identity typing until its last active connection stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.useFakeTimers();

@@ -9,10 +9,6 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function makeStateDir(): string {
-  return tempDirs.make("openclaw-rescue-migration-");
-}
-
 function writeLegacyApproval(stateDir: string, owner: "crestodian" | "openclaw"): string {
   const sourcePath = path.join(stateDir, owner, "rescue-pending", "approval.json");
   fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
@@ -22,7 +18,7 @@ function writeLegacyApproval(stateDir: string, owner: "crestodian" | "openclaw")
 
 describe("legacy rescue pending cleanup", () => {
   it("discards both retired stores only during explicit doctor migration", () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-rescue-migration-");
     const crestodianPath = writeLegacyApproval(stateDir, "crestodian");
     const openclawPath = writeLegacyApproval(stateDir, "openclaw");
 
@@ -52,7 +48,7 @@ describe("legacy rescue pending cleanup", () => {
   });
 
   it("recomputes fixed owner paths instead of trusting detection paths", () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-rescue-migration-");
     const openclawPath = writeLegacyApproval(stateDir, "openclaw");
 
     discardLegacyRescuePending({
@@ -64,8 +60,8 @@ describe("legacy rescue pending cleanup", () => {
   });
 
   it("refuses to traverse a symlinked owner directory", () => {
-    const stateDir = makeStateDir();
-    const externalDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-rescue-migration-");
+    const externalDir = tempDirs.make("openclaw-rescue-migration-");
     const externalApproval = writeLegacyApproval(externalDir, "openclaw");
     fs.symlinkSync(path.join(externalDir, "openclaw"), path.join(stateDir, "openclaw"));
 

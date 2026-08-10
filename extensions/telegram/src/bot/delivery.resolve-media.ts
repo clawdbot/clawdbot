@@ -4,6 +4,7 @@ import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { TelegramBotApiFileTooLargeError } from "../bot-handlers.media.js";
 import type { TelegramTransport } from "../fetch.js";
+import type { TelegramResolvedMedia } from "../message-cache-persistence.js";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "../network-errors.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import {
@@ -16,8 +17,8 @@ import {
   shouldRetryTelegramTransportFallback,
   sleepWithAbort,
 } from "./delivery.resolve-media.runtime.js";
-import { resolveTelegramPrimaryMedia, type TelegramMediaKind } from "./helpers.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
+import { resolveTelegramPrimaryMedia } from "./helpers.js";
+import type { TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
@@ -375,16 +376,7 @@ async function resolveStickerMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<
-  | {
-      path: string;
-      contentType?: string;
-      kind: TelegramMediaKind;
-      stickerMetadata?: StickerMetadata;
-    }
-  | null
-  | undefined
-> {
+}): Promise<(TelegramResolvedMedia & { path: string }) | null | undefined> {
   const { msg, ctx, maxBytes, token, transport, abortSignal } = params;
   if (!msg.sticker) {
     return undefined;
@@ -431,9 +423,13 @@ async function resolveStickerMedia(params: {
       });
     }
     return {
+      id: saved.id,
       path: saved.path,
+      size: saved.size,
       contentType: saved.contentType,
       kind: "sticker",
+      fileUniqueId: sticker.file_unique_id,
+      savedAt: Date.now(),
       stickerMetadata: {
         emoji,
         setName,
@@ -446,9 +442,13 @@ async function resolveStickerMedia(params: {
 
   // Cache miss - return metadata for vision processing
   return {
+    id: saved.id,
     path: saved.path,
+    size: saved.size,
     contentType: saved.contentType,
     kind: "sticker",
+    fileUniqueId: sticker.file_unique_id,
+    savedAt: Date.now(),
     stickerMetadata: {
       emoji: sticker.emoji ?? undefined,
       setName: sticker.set_name ?? undefined,
@@ -467,12 +467,7 @@ export async function resolveMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<{
-  path: string;
-  contentType?: string;
-  kind: TelegramMediaKind;
-  stickerMetadata?: StickerMetadata;
-} | null> {
+}): Promise<(TelegramResolvedMedia & { path: string }) | null> {
   const {
     ctx,
     maxBytes,
@@ -528,5 +523,13 @@ export async function resolveMedia(params: {
       : saved.contentType?.startsWith("audio/")
         ? "audio"
         : nativeKind;
-  return { path: saved.path, contentType: saved.contentType, kind };
+  return {
+    id: saved.id,
+    path: saved.path,
+    size: saved.size,
+    contentType: saved.contentType,
+    kind,
+    fileUniqueId: m.file_unique_id,
+    savedAt: Date.now(),
+  };
 }

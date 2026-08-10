@@ -646,20 +646,24 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "sessions.resolve": async ({ params, respond, context }) => {
+  "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
 
-    const resolved = await resolveSessionKeyFromResolveParams({ cfg, p });
+    const resolved = await resolveSessionKeyFromResolveParams({ cfg, client, p });
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;
     }
     if ("missing" in resolved) {
       respond(true, { ok: false }, undefined);
+      return;
+    }
+    if ("ambiguous" in resolved) {
+      respond(true, { ok: false, candidates: resolved.candidates }, undefined);
       return;
     }
     respond(true, { ok: true, key: resolved.key }, undefined);

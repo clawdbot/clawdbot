@@ -84,7 +84,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.146.1";
+const OPENAI_CODEX_CLIENT_VERSION = "0.147.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -429,13 +429,8 @@ function resolveCodexModelInput(
   return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
 }
 
-function normalizeOpenAICodexCatalogModel(
-  model: ModelDefinitionConfig,
-): ModelDefinitionConfig | undefined {
+function normalizeOpenAICodexCatalogModel(model: ModelDefinitionConfig): ModelDefinitionConfig {
   const modelId = normalizeLowercaseStringOrEmpty(model.id);
-  if (modelId === OPENAI_GPT_56_MODEL_ID) {
-    return undefined;
-  }
   if (
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
@@ -483,6 +478,9 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   }
   const modelId = readCodexModelString(row, "slug") ?? readCodexModelString(row, "id");
   if (!modelId) {
+    return undefined;
+  }
+  if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
     return undefined;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
@@ -554,13 +552,15 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
       const modelId = normalizeLowercaseStringOrEmpty(model.id);
+      if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
+        return [];
+      }
       // Static OAuth rows are offline hints, not entitlement claims. Keep only
       // the proven GPT-5.6 subscription route; live discovery may add others.
       if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
         return [];
       }
-      const normalized = normalizeOpenAICodexCatalogModel(model);
-      return normalized ? [normalized] : [];
+      return [normalizeOpenAICodexCatalogModel(model)];
     }),
   };
 }
@@ -579,7 +579,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       fetchGuard: params.fetchGuard,
       signal: params.signal,
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
-      auditContext: "openai-codex-model-discovery",
+      auditContext: "openai-model-discovery",
       readRows: readCodexModelRows,
       buildRequestHeaders: ({ discoveryApiKey }) => ({
         Accept: "application/json",
@@ -1127,8 +1127,4 @@ export function buildOpenAIProvider(): ProviderPlugin {
   };
 }
 
-/** @deprecated Use buildOpenAIProvider; OpenAI Codex is now an OpenAI auth/transport mode. */
-export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
-  return buildOpenAIProvider();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

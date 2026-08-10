@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.CopyOnWriteArrayList
 
 internal val chatControllerTestJson = Json { ignoreUnknownKeys = true }
 
@@ -21,6 +22,7 @@ internal fun CoroutineScope.createChatController(
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   requestGateway: suspend (method: String, paramsJson: String?) -> String = { _, _ -> "{}" },
 ): ChatController {
   val scopedRequest =
@@ -48,6 +50,7 @@ internal fun CoroutineScope.createChatController(
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 }
 
@@ -115,7 +118,9 @@ internal class ScriptedGateway(
     val paramsJson: String?,
   )
 
-  val calls = mutableListOf<Call>()
+  // Controllers can retry from a background dispatcher while tests inspect calls.
+  // Snapshot iteration keeps assertions from racing concurrent request recording.
+  val calls = CopyOnWriteArrayList<Call>()
   private val handlers = mutableMapOf<String, suspend (paramsJson: String?) -> String>()
 
   /** Client-generated run id captured from the latest chat.send params. */

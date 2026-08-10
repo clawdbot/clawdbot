@@ -2,12 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createAbortAwareIsolatedRunner,
-  createDeferred,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   clearCommandLane,
@@ -88,9 +88,9 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const enterRunner = createDeferred<void>();
-    const runnerStarted = createDeferred<void>();
-    const finished = createDeferred<void>();
+    const enterRunner = createDeferred();
+    const runnerStarted = createDeferred();
+    const finished = createDeferred();
     let terminalEvent: CronEvent | undefined;
     const state = createCronServiceState({
       cronEnabled: true,
@@ -231,8 +231,8 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const blockerStarted = createDeferred<void>();
-    const releaseBlocker = createDeferred<void>();
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
     const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
       blockerStarted.resolve();
       return await releaseBlocker.promise;
@@ -242,8 +242,8 @@ describe("cron service ops regressions", () => {
     let resolveRun:
       | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
       | undefined;
-    const started = createDeferred<void>();
-    const finished = createDeferred<void>();
+    const started = createDeferred();
+    const finished = createDeferred();
     const events: CronEvent[] = [];
     const runIsolatedAgentJob = vi.fn(
       async () =>
@@ -314,8 +314,8 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const runStarted = createDeferred<void>();
-    const runFinished = createDeferred<void>();
+    const runStarted = createDeferred();
+    const runFinished = createDeferred();
     const runResolvers: Array<
       (value: { status: "ok" | "error" | "skipped"; summary?: string }) => void
     > = [];
@@ -637,11 +637,11 @@ describe("cron service ops regressions", () => {
     let now = dueAt;
     let activeRuns = 0;
     let peakActiveRuns = 0;
-    const firstStarted = createDeferred<void>();
+    const firstStarted = createDeferred();
     const firstRun = createDeferred<{ status: "ok"; summary: string }>();
     const secondRun = createDeferred<{ status: "ok"; summary: string }>();
-    const secondStarted = createDeferred<void>();
-    const bothFinished = createDeferred<void>();
+    const secondStarted = createDeferred();
+    const bothFinished = createDeferred();
     const runIsolatedAgentJob = vi.fn(async (params: { job: { id: string } }) => {
       activeRuns += 1;
       peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
@@ -721,7 +721,7 @@ describe("cron service ops regressions", () => {
     };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const terminal = createDeferred<void>();
+    const terminal = createDeferred();
     const events: CronEvent[] = [];
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
@@ -780,8 +780,8 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const blockerStarted = createDeferred<void>();
-    const releaseBlocker = createDeferred<void>();
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
     const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
       blockerStarted.resolve();
       return await releaseBlocker.promise;
@@ -841,7 +841,7 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const execution = createDeferred<{
       status: "ok";
       summary: string;
@@ -900,7 +900,7 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const firstRunGate = createDeferred<void>();
+    const firstRunGate = createDeferred();
     let dispatchCount = 0;
     let inFlight = 0;
     let peakInFlight = 0;
@@ -955,7 +955,7 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const firstRunGate = createDeferred<void>();
+    const firstRunGate = createDeferred();
     let dispatchCount = 0;
     const state = createCronServiceState({
       cronEnabled: true,

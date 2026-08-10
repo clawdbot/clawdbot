@@ -36,7 +36,6 @@ const hostRuntime = {
     acquireLocalService: async () => undefined,
   },
   state: {
-    withLease: vi.fn(),
     openKeyedStore: vi.fn(() => ({
       lookup: vi.fn(),
       register: vi.fn(),
@@ -224,16 +223,14 @@ describe("memory-core plugin runtime registration", () => {
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
       acquireLocalService: expect.any(Function),
       openKeyedStore: expect.any(Function),
-      withLease: expect.any(Function),
     });
   });
 
   it("defers nested host runtime access until the injected operation runs", async () => {
     const acquireLocalService = vi.fn(async () => undefined);
     const openKeyedStore = vi.fn(() => ({}));
-    const withLease = vi.fn(async (_options, run) => await run({}));
     const llmGetter = vi.fn(() => ({ acquireLocalService }));
-    const stateGetter = vi.fn(() => ({ openKeyedStore, withLease }));
+    const stateGetter = vi.fn(() => ({ openKeyedStore }));
     const host = Object.defineProperties(
       {},
       {
@@ -256,11 +253,7 @@ describe("memory-core plugin runtime registration", () => {
     expect(stateGetter).not.toHaveBeenCalled();
     await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
     const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
-    if (
-      !injectedHost?.acquireLocalService ||
-      !injectedHost.openKeyedStore ||
-      !injectedHost.withLease
-    ) {
+    if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
       throw new Error("expected memory-core host operations");
     }
 
@@ -268,21 +261,11 @@ describe("memory-core plugin runtime registration", () => {
     await injectedHost.acquireLocalService(target);
     const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
     injectedHost.openKeyedStore(storeOptions);
-    const run = vi.fn(async () => "leased");
-    const leaseOptions = {
-      namespace: "lazy-host",
-      key: "manager",
-      database: { scope: "shared" as const },
-      leaseMs: 1_000,
-      waitMs: 1_000,
-    };
-    await injectedHost.withLease(leaseOptions, run as never);
 
     expect(llmGetter).toHaveBeenCalledOnce();
     expect(acquireLocalService).toHaveBeenCalledWith(target);
-    expect(stateGetter).toHaveBeenCalledTimes(2);
+    expect(stateGetter).toHaveBeenCalledOnce();
     expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
-    expect(withLease).toHaveBeenCalledWith(leaseOptions, run);
   });
 
   it("forwards search-hit authorization through the registered memory runtime", async () => {
@@ -318,11 +301,10 @@ describe("memory-core plugin runtime registration", () => {
     expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
       acquireLocalService: expect.any(Function),
       openKeyedStore: expect.any(Function),
-      withLease: expect.any(Function),
     });
   });
 
-  it("binds the host SQLite state hooks to tools and CLI runtime", async () => {
+  it("binds the host SQLite state hook to tools and CLI runtime", async () => {
     const runtime = registerMemoryCoreRuntime();
     const cfg = {} as OpenClawConfig;
 
@@ -332,7 +314,6 @@ describe("memory-core plugin runtime registration", () => {
     const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
     host?.openKeyedStore?.(storeOptions);
     expect(hostRuntime.state.openKeyedStore).toHaveBeenCalledWith(storeOptions);
-    expect(host?.withLease).toEqual(expect.any(Function));
   });
 });
 

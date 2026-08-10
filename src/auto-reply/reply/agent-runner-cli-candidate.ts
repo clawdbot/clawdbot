@@ -7,6 +7,7 @@ import {
 } from "../../agents/cli-session.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
@@ -65,6 +66,8 @@ export async function runCliFallbackCandidate(params: {
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunCliAgentParams["userTurnTranscriptRecorder"];
+  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
+  onContextEngineTurnCandidate: RunCliAgentParams["onContextEngineTurnCandidate"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -84,6 +87,16 @@ export async function runCliFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
+  const sessionTarget =
+    sessionKey && turn.storePath
+      ? {
+          agentId: turn.followupRun.run.agentId,
+          sessionId: turn.followupRun.run.sessionId,
+          sessionKey,
+          storePath: turn.storePath,
+        }
+      : undefined;
   const cliSessionBinding = getCliSessionBinding(
     turn.getActiveSessionEntry(),
     params.cliExecutionProvider,
@@ -121,8 +134,10 @@ export async function runCliFallbackCandidate(params: {
   const cliCurrentMessageId = isRestartSentinelContinuation
     ? turn.sessionCtx.ReplyToId
     : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
+  const commandDetailsVisible = turn.resolvedVerboseLevel === "full";
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
+    commandDetailsVisible,
     shouldEmitToolResult: turn.shouldEmitToolResult,
     shouldEmitToolOutput: turn.shouldEmitToolOutput,
     deliver: async (payload) => {
@@ -133,21 +148,24 @@ export async function runCliFallbackCandidate(params: {
   // so the terminal fact has to be projected here. The embedded path gets this
   // from the shared agent-event handler; without it a failed CLI command renders
   // exactly like one that succeeded.
-  const deliverCliCommandOutcome = async (payload: {
-    name: string | undefined;
-    phase: "start" | "update" | "result";
-    args: Record<string, unknown> | undefined;
-    toolCallId?: string;
-    isError?: boolean;
-    result?: unknown;
-  }) => {
+  const deliverCliCommandOutcome = async (
+    payload: {
+      name: string | undefined;
+      phase: "start" | "update" | "result";
+      args: Record<string, unknown> | undefined;
+      toolCallId?: string;
+      isError?: boolean;
+      result?: unknown;
+    },
+    commandBearing: boolean,
+  ) => {
     const onCommandOutput = turn.opts?.onCommandOutput;
     if (!onCommandOutput) {
       return;
     }
     const commandOutput = buildCommandOutputFromToolResultEvent({
       stream: "tool",
-      data: { ...payload },
+      data: { ...payload, commandBearing },
     });
     if (commandOutput) {
       await onCommandOutput(commandOutput);
@@ -212,22 +230,26 @@ export async function runCliFallbackCandidate(params: {
             }
             const textForTyping = classified.text;
             const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
+            const onPartialReply = turn.opts?.onPartialReply;
             if (!params.preserveProgressCallbackStartOrder) {
               await turn.typingSignals.signalTextDelta(textForTyping);
-              if (sanitized.skip || !sanitized.text || !turn.opts?.onPartialReply) {
-                return;
+              if (sanitized.skip || !sanitized.text || !onPartialReply) {
+                return false;
               }
-              await turn.opts.onPartialReply({ text: sanitized.text });
-              return;
+              return await onPartialReply({ text: sanitized.text });
             }
             if (sanitized.skip || !sanitized.text) {
               await turn.typingSignals.signalTextDelta(textForTyping);
-              return;
+              return false;
+            }
+            if (!onPartialReply) {
+              await turn.typingSignals.signalTextDelta(textForTyping);
+              return false;
             }
             // Assistant and tool CLI bridges drain independently. Stage presentation first.
-            await params.presentation.startPresentationWhileTyping(
+            return await params.presentation.startPresentationWhileTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => turn.opts?.onPartialReply?.({ text: sanitized.text }),
+              () => onPartialReply({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -237,9 +259,9 @@ export async function runCliFallbackCandidate(params: {
           },
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
-              await cliToolSummaryTracker.noteToolEvent(payload);
+              const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
               if (payload.phase === "result") {
-                await deliverCliCommandOutcome(payload);
+                await deliverCliCommandOutcome(payload, commandBearing);
                 return;
               }
               const { name, phase, args, toolCallId } = payload;
@@ -257,8 +279,8 @@ export async function runCliFallbackCandidate(params: {
             }
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
-              await summaryPromise;
-              await deliverCliCommandOutcome(payload);
+              const commandBearing = await summaryPromise;
+              await deliverCliCommandOutcome(payload, commandBearing);
               return;
             }
             const { name, phase, args, toolCallId } = payload;
@@ -267,14 +289,15 @@ export async function runCliFallbackCandidate(params: {
               summaryPromise,
               params.presentation.startPresentationWhileTyping(
                 turn.typingSignals.signalToolStart(),
-                () =>
-                  turn.opts?.onToolStart?.({
+                async () => {
+                  await turn.opts?.onToolStart?.({
                     ...(toolCallId ? { toolCallId } : {}),
                     name,
                     phase,
                     args,
                     detailMode: turn.toolProgressDetail,
-                  }),
+                  });
+                },
               ),
             ]);
           },
@@ -323,6 +346,7 @@ export async function runCliFallbackCandidate(params: {
           runParams: {
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
+            sessionTarget,
             chatType:
               normalizeChatType(turn.followupRun.originatingChatType) ??
               normalizeChatType(turn.sessionCtx.ChatType) ??
@@ -341,6 +365,8 @@ export async function runCliFallbackCandidate(params: {
             media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             onUserMessagePersisted: params.notifyUserMessagePersisted,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&

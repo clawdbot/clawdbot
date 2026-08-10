@@ -32,6 +32,7 @@ import {
   formatRelativeTimestamp,
   formatTokens,
 } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
@@ -130,7 +131,6 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       category?: string | null;
-      icon?: string | null;
       archived?: boolean;
       pinned?: boolean;
       unread?: boolean;
@@ -1486,14 +1486,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                       href=${chatUrl}
                       class="session-link"
                       @click=${(e: MouseEvent) => {
-                        if (
-                          e.defaultPrevented ||
-                          e.button !== 0 ||
-                          e.metaKey ||
-                          e.ctrlKey ||
-                          e.shiftKey ||
-                          e.altKey
-                        ) {
+                        if (!shouldHandleNavigationClick(e)) {
                           return;
                         }
                         if (props.onNavigateToChat) {

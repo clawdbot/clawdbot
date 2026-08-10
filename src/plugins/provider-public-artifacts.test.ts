@@ -177,15 +177,7 @@ describe("provider public artifacts", () => {
         modelId: "deepseek-v4-pro",
       }),
     ).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "high",
     });
     expect(

@@ -1,4 +1,7 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  normalizeUsage,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -105,7 +108,14 @@ describe("runCodexSettledTurnFinalization", () => {
       text: "The update was sent successfully.",
       items: [],
       model: "gpt-5.4",
-      usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
+      usage: {
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        reasoningTokens: 3,
+        total: 12,
+      },
     });
     mocks.mirror.mockReset();
     mocks.mirror.mockImplementation(
@@ -175,7 +185,14 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
-      usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
+      usage: {
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        reasoningTokens: 3,
+        total: 12,
+      },
       assistant: {
         role: "assistant",
         content: [{ type: "text", text: "The update was sent successfully." }],
@@ -191,6 +208,7 @@ describe("runCodexSettledTurnFinalization", () => {
       cacheWrite: 1,
       totalTokens: 12,
     });
+    expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
   });
 
   it("rejects an empty final answer before transcript mutation", async () => {

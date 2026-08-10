@@ -36,6 +36,7 @@ import {
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
+  retireSessionWorkerPlacementBeforeMutation,
   respondSessionWorkerPlacementMutationError,
   sessionLog,
 } from "./sessions-shared.js";
@@ -191,35 +192,10 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let abortResult:
-      | {
-          ok: boolean;
-          error?: ReturnType<typeof errorShape>;
-        }
-      | undefined;
     const abortSessionKey = target.canonicalKey ?? key;
     const chatAbort = chatHandlers["chat.abort"];
     if (!chatAbort) {
       throw new Error("chat.abort handler is not registered");
-    }
-    sessionMutationAuthorization?.assertCurrent();
-    await chatAbort({
-      req,
-      params: {
-        sessionKey: abortSessionKey,
-        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-      },
-      respond: (ok, _payload, error) => {
-        abortResult = { ok, ...(error ? { error } : {}) };
-      },
-      context,
-      client,
-      isWebchatConnect,
-      ...(sessionMutationAuthorization ? { sessionMutationAuthorization } : {}),
-    });
-    if (abortResult?.ok === false) {
-      respond(false, undefined, abortResult.error);
-      return;
     }
     const deleteLifecycleIdentities = [
       target.canonicalKey,
@@ -231,15 +207,19 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     let expectedSessionStillCurrent = true;
     let deleteBlockedByModelLock = false;
     let deleteBlockedByWorkerPlacement = false;
+    let deleteBlockedByArchiveOrOwnership = false;
+    let preparedDeleteSessionId: string | undefined;
     const deletion = await runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: deleteLifecycleIdentities,
       prepare: async () => {
         sessionMutationAuthorization?.assertCurrent();
-        const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+        const { entry: preparedEntry, canonicalKey: preparedCanonicalKey } = loadSessionEntry(key, {
+          agentId: requestedAgentId,
+        });
         deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
           preparedEntry,
-          target.canonicalKey,
+          preparedCanonicalKey ?? target.canonicalKey,
         );
         if (deleteBlockedByModelLock) {
           return;
@@ -259,6 +239,31 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           respondSessionWorkerPlacementMutationError(placementError, respond);
           return;
         }
+        if (p.archivedOnly === true && preparedEntry?.archivedAt === undefined) {
+          deleteBlockedByArchiveOrOwnership = true;
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session ${key} is not archived. Archive it first, then delete it.`,
+            ),
+          );
+          return;
+        }
+        if (
+          rejectPluginRuntimeSessionOwnershipMismatch({
+            action: "delete",
+            client,
+            key: preparedCanonicalKey ?? key,
+            entry: preparedEntry,
+            respond,
+          })
+        ) {
+          deleteBlockedByArchiveOrOwnership = true;
+          return;
+        }
+        preparedDeleteSessionId = normalizeOptionalString(preparedEntry?.sessionId);
         admittedWorkReleased = await interruptSessionWorkAdmissions({
           scope: storePath,
           identities: deleteLifecycleIdentities,
@@ -269,6 +274,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         if (
           deleteBlockedByModelLock ||
           deleteBlockedByWorkerPlacement ||
+          deleteBlockedByArchiveOrOwnership ||
           !expectedSessionStillCurrent
         ) {
           return undefined;
@@ -285,6 +291,10 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
           agentId: requestedAgentId,
         });
+        if (normalizeOptionalString(entry?.sessionId) !== preparedDeleteSessionId) {
+          respondSessionChanged();
+          return undefined;
+        }
         if (rejectModelSelectionLockedDelete(entry, canonicalKey ?? target.canonicalKey)) {
           return undefined;
         }
@@ -313,6 +323,43 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
             respond,
           })
         ) {
+          return undefined;
+        }
+        // Drain first so a legitimate local turn can release its claim. Retire only
+        // after every non-destructive guard is rechecked; a placement race must abort
+        // before runtime cleanup or session mutation begins.
+        const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
+          action: "delete",
+          context,
+          key,
+          sessionId: normalizeOptionalString(entry?.sessionId),
+        });
+        if (placementRetirementError) {
+          respondSessionWorkerPlacementMutationError(placementRetirementError, respond);
+          return undefined;
+        }
+        let abortResult:
+          | {
+              ok: boolean;
+              error?: ReturnType<typeof errorShape>;
+            }
+          | undefined;
+        await chatAbort({
+          req,
+          params: {
+            sessionKey: abortSessionKey,
+            ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          },
+          respond: (ok, _payload, error) => {
+            abortResult = { ok, ...(error ? { error } : {}) };
+          },
+          context,
+          client,
+          isWebchatConnect,
+          ...(sessionMutationAuthorization ? { sessionMutationAuthorization } : {}),
+        });
+        if (abortResult?.ok === false) {
+          respond(false, undefined, abortResult.error);
           return undefined;
         }
         const mutationCleanupError = await cleanupSessionBeforeMutation({

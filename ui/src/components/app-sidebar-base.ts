@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { property } from "lit/decorators.js";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -29,9 +29,11 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) offline = false;
   @property({ attribute: false }) outboxCountForSession: (sessionKey: string) => number = () => 0;
+  @property({ attribute: false }) hasSessionDraft: (sessionKey: string) => boolean = () => false;
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
+  @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   @property({ attribute: false }) workboardBoards: readonly SidebarWorkboardBoard[] = [];
@@ -46,8 +48,15 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
+  @property({ attribute: false }) updateSchedule: UpdateScheduleState | null = null;
+  @property({ attribute: false }) heldUpdateCampaignId: string | null = null;
   @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) canUpdate = false;
+  @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) refreshRequired = false;
+  @property({ attribute: false }) onRefresh: () => void = () => undefined;
+  @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
@@ -60,6 +69,10 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+  /** Hand the phone navigation drawer back to the shell when a sidebar action's outcome
+   * belongs on the main surface. The drawer is a modal dialog, so anything the shell
+   * raises behind it is both occluded and inert until it closes. */
+  @property({ attribute: false }) onCloseNavDrawer?: () => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: true })

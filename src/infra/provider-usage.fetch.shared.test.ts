@@ -5,7 +5,6 @@ import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
   readUsageJson,
@@ -157,15 +156,6 @@ describe("provider usage fetch shared helpers", () => {
     await fetchJson("https://example.com/usage", {}, MAX_TIMER_TIMEOUT_MS + 1_000_000, fetchFn);
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("cancels unread response bodies when discarding usage responses", async () => {
-    const response = new Response("not needed", { status: 429 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-
-    await discardUsageResponseBody(response);
-
-    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("maps configured status codes to token expired", () => {

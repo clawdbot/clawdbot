@@ -1,6 +1,7 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -43,20 +44,6 @@ vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => 
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
-
-function createDeferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve: (value: T | PromiseLike<T>) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
 
 function recordMcpLoopbackToolCallResult(params: {
   captureKey: string;
@@ -454,6 +441,51 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ).rejects.toMatchObject({
       name: "FailoverError",
       message: "Credit balance is too low",
+    });
+  });
+
+  it("surfaces a local Claude synthetic empty terminal through the output error path", async () => {
+    const stdout = [
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          model: "<synthetic>",
+          role: "assistant",
+          content: [{ type: "text", text: "No response requested." }],
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        session_id: "claude-synthetic-empty",
+        result: "",
+      }),
+      "",
+    ].join("\n");
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      code: "cli_synthetic_no_response",
+      rawError: "Claude CLI returned a synthetic no-response result.",
     });
   });
 
@@ -2453,10 +2485,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
       {
         text: "implicit reply",
         mediaUrl: "https://example.com/implicit.png",
+        sourceReplyFinal: true,
       },
       {
         text: "implicit reply",
         mediaUrl: "https://example.com/implicit.png",
+        sourceReplyFinal: true,
       },
     ]);
   });

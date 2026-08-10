@@ -53,6 +53,18 @@ describe("mcp-grant-store", () => {
     expect(a.token).not.toBe(b.token);
   });
 
+  it("binds a separate agent owner only to the canonical global session", () => {
+    const global = mintAttachGrant({ sessionKey: "global", agentId: " ops ", nowMs: T0 });
+    const scoped = mintAttachGrant({
+      sessionKey: "agent:main:telegram:1",
+      agentId: "ops",
+      nowMs: T0,
+    });
+
+    expect(global.agentId).toBe("ops");
+    expect(scoped.agentId).toBeUndefined();
+  });
+
   it("revokes by token", () => {
     const g = mintAttachGrant({ sessionKey: "agent:main:x", nowMs: T0 });
     expect(revokeAttachGrant(g.token)).toBe(true);

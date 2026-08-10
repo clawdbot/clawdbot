@@ -1,7 +1,8 @@
 // Canonical SQLite row helpers for exec approval policy state.
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   normalizeExecApprovalsInternal,
@@ -15,45 +16,82 @@ import {
 } from "./kysely-sync.js";
 
 const EXEC_APPROVALS_CONFIG_KEY = "current";
-export const EXEC_APPROVALS_MUTATION_LEASE_SCOPE = "exec-approvals";
-export const EXEC_APPROVALS_MUTATION_LEASE_KEY = "mutation";
 
 type ExecApprovalsDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "exec_approvals_config" | "state_leases"
+  "agent_deletion_journal" | "exec_approvals_config"
 >;
 
-export type ExecApprovalsMutationLeaseOwner = Pick<
-  OpenClawStateLeaseContext,
-  "assertOwnedInTransaction"
->;
+export type ExecApprovalsMutationAuthority = {
+  action: "remove" | "restore";
+  agentId: string;
+  operationId: string;
+};
 
-class ExecApprovalsMutationFencedError extends Error {
+export class ExecApprovalsMutationFencedError extends Error {
   constructor() {
     super("Exec approvals cannot be changed while agent deletion is in progress; retry.");
     this.name = "ExecApprovalsMutationFencedError";
   }
 }
 
-function assertExecApprovalsMutationAllowed(params: {
-  db: DatabaseSync;
-  leaseOwner?: ExecApprovalsMutationLeaseOwner;
-  now?: number;
-}): void {
-  if (params.leaseOwner) {
-    params.leaseOwner.assertOwnedInTransaction(params.db);
-    return;
-  }
-  const activeLease = executeSqliteQueryTakeFirstSync(
-    params.db,
-    getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
-      .selectFrom("state_leases")
-      .select("owner")
-      .where("scope", "=", EXEC_APPROVALS_MUTATION_LEASE_SCOPE)
-      .where("lease_key", "=", EXEC_APPROVALS_MUTATION_LEASE_KEY)
-      .where("expires_at", ">", params.now ?? Date.now()),
+export function assertExecApprovalsMutationAuthority(
+  db: DatabaseSync,
+  authority: ExecApprovalsMutationAuthority,
+): void {
+  const journal = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<ExecApprovalsDatabase>(db)
+      .selectFrom("agent_deletion_journal")
+      .select("operation_id")
+      .where("agent_id", "=", normalizeAgentId(authority.agentId)),
   );
-  if (activeLease) {
+  if (journal?.operation_id !== authority.operationId) {
+    throw new ExecApprovalsMutationFencedError();
+  }
+}
+
+export function assertExecApprovalsMutationAllowed(params: {
+  db: DatabaseSync;
+  current: ExecApprovalsFile;
+  next: ExecApprovalsFile;
+  authority?: ExecApprovalsMutationAuthority;
+}): void {
+  const current = normalizeExecApprovalsInternal(params.current);
+  const next = normalizeExecApprovalsInternal(params.next);
+  const agentIds = new Set([
+    ...Object.keys(current.agents ?? {}),
+    ...Object.keys(next.agents ?? {}),
+  ]);
+  const state = getNodeSqliteKysely<ExecApprovalsDatabase>(params.db);
+  for (const agentId of agentIds) {
+    const currentPolicy = current.agents?.[agentId];
+    const nextPolicy = next.agents?.[agentId];
+    if (isDeepStrictEqual(currentPolicy, nextPolicy)) {
+      continue;
+    }
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const journal = executeSqliteQueryTakeFirstSync(
+      params.db,
+      state
+        .selectFrom("agent_deletion_journal")
+        .select("operation_id")
+        .where("agent_id", "=", normalizedAgentId),
+    );
+    if (!journal) {
+      continue;
+    }
+    const authority = params.authority;
+    const authorizedRemoval = currentPolicy !== undefined && nextPolicy === undefined;
+    const authorizedRestore = currentPolicy === undefined && nextPolicy !== undefined;
+    if (
+      authority?.agentId === normalizedAgentId &&
+      authority.operationId === journal.operation_id &&
+      ((authority.action === "remove" && authorizedRemoval) ||
+        (authority.action === "restore" && authorizedRestore))
+    ) {
+      continue;
+    }
     throw new ExecApprovalsMutationFencedError();
   }
 }
@@ -144,9 +182,7 @@ export function writeExecApprovalsConfigRow(params: {
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
-  leaseOwner?: ExecApprovalsMutationLeaseOwner;
 }): void {
-  assertExecApprovalsMutationAllowed({ db: params.db, leaseOwner: params.leaseOwner });
   const raw = params.raw ?? serializeExecApprovals(params.file);
   const values = {
     config_key: EXEC_APPROVALS_CONFIG_KEY,
@@ -176,11 +212,7 @@ export function writeExecApprovalsConfigRow(params: {
   );
 }
 
-export function deleteExecApprovalsConfigRow(
-  db: DatabaseSync,
-  leaseOwner?: ExecApprovalsMutationLeaseOwner,
-): void {
-  assertExecApprovalsMutationAllowed({ db, leaseOwner });
+export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(db)

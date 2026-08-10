@@ -82,6 +82,12 @@ export async function createCopilotSessionSetup(params: {
     promptBuild.toolsAllow,
     shouldForceCopilotMessageTool(input) ? { forceToolNames: ["message"] } : undefined,
   );
+  // Restricted turns may expose native ask_user only when its policy-filtered
+  // OpenClaw equivalent survived the canonical tool catalog.
+  const includeAskUser =
+    !ringZeroSystemAgentRun &&
+    (attemptInput.pluginHarnessToolPolicyRestricted !== true ||
+      promptTools.some((tool) => tool.name === "ask_user"));
   let promptImagesCount = 0;
   const emitLlmInput = (prompt: string, additionalContext?: string) => {
     if (settledToolFinalization) {
@@ -127,7 +133,7 @@ export async function createCopilotSessionSetup(params: {
               emitLlmInput(prompt, additionalContext),
           }
         : undefined,
-      includeAskUser: !ringZeroSystemAgentRun,
+      includeAskUser,
       operation: operation ?? "attempt",
     },
   );
@@ -149,7 +155,7 @@ export async function createCopilotSessionSetup(params: {
                   emitLlmInput(prompt, additionalContext),
               }
             : undefined,
-          includeAskUser: !ringZeroSystemAgentRun,
+          includeAskUser,
           operation: operation ?? "attempt",
         },
       )

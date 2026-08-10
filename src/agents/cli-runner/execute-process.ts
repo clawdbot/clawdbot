@@ -7,12 +7,9 @@ import {
 } from "../../infra/event-session-routing.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import {
-  createCliJsonlStreamingParser,
-  extractCliErrorMessage,
-  parseCliOutput,
-  type CliOutput,
-} from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
+import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -171,7 +168,6 @@ export async function executeCliProcess(params: {
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
-        onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
         onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
@@ -284,12 +280,11 @@ export async function executeCliProcess(params: {
         onStderr: consumeStderr,
       });
       managedRunPid = managedRun.pid;
-      let replyBackendCompleted = false;
       const replyBackendHandle = runParams.replyOperation
         ? {
             kind: "cli" as const,
+            runId: runParams.runId,
             cancel: () => managedRun.cancel("manual-cancel"),
-            isStreaming: () => !replyBackendCompleted,
           }
         : undefined;
       if (replyBackendHandle) {
@@ -298,7 +293,6 @@ export async function executeCliProcess(params: {
       try {
         result = await managedRun.wait();
       } finally {
-        replyBackendCompleted = true;
         if (replyBackendHandle) {
           runParams.replyOperation?.detachBackend(replyBackendHandle);
         }
@@ -330,7 +324,7 @@ export async function executeCliProcess(params: {
     nodeRunTruncated &&
     result.exitCode === 0 &&
     !result.timedOut &&
-    !streamingParser?.getOutput()
+    !streamingParser?.hasTerminalResult()
   ) {
     throw new FailoverError(
       "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",

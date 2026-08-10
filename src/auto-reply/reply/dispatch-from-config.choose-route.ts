@@ -28,6 +28,10 @@ import {
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import {
+  hasExecApprovalPayload,
+  requiresDurableToolResultDelivery,
+} from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
@@ -84,7 +88,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
     (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+  const shouldSuppressDefaultToolProgressMessages = () =>
+    params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
   const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
   const notifiedSessionMetadataChangeKeys = new Set<string>();
@@ -132,33 +137,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     ctx.InboundEventKind !== "room_event" &&
     !sendPolicyDenied;
   let finalReplyDeliveryStarted = false;
-  const hasExecApprovalPayload = (payload: ReplyPayload) => {
-    const execApproval =
-      payload.channelData &&
-      typeof payload.channelData === "object" &&
-      !Array.isArray(payload.channelData)
-        ? payload.channelData.execApproval
-        : undefined;
-    return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
-  };
-  const hasAskUserPayload = (payload: ReplyPayload) => {
-    const askUser = payload.channelData?.askUser;
-    return askUser && typeof askUser === "object" && !Array.isArray(askUser);
-  };
-  const readAskUserQuestionId = (payload: ReplyPayload) => {
-    const askUser = payload.channelData?.askUser;
-    if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
-      return undefined;
-    }
-    const questionId = (askUser as { questionId?: unknown }).questionId;
-    return typeof questionId === "string" ? questionId : undefined;
-  };
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
     if (!finalReplyDeliveryStarted) {
       return false;
     }
-    const reply = resolveSendableOutboundReplyParts(payload);
-    return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
+    return !requiresDurableToolResultDelivery(payload);
   };
   // Durable inter-tool commentary lane: with verbose progress on, preamble
   // items become standalone progress messages like tool summaries. The latest
@@ -238,16 +221,17 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
     const contentKey = createBlockReplyContentKey(payload);
     const delivery = turnLedger.sendQueued("block", payload);
-    if (!delivery.queued || !delivery.outcome) {
-      return delivery.queued;
+    if (!delivery.queued) {
+      return false;
     }
+    const outcome = delivery.outcome ?? Promise.resolve("delivered" as const);
     const outcomes = blockDeliveryOutcomes.get(contentKey);
     if (outcomes) {
-      outcomes.push(delivery.outcome);
+      outcomes.push(outcome);
     } else {
-      blockDeliveryOutcomes.set(contentKey, [delivery.outcome]);
+      blockDeliveryOutcomes.set(contentKey, [outcome]);
     }
-    return delivery.queued;
+    return true;
   };
   const recordRoutedBlockReplyDelivery = (
     payload: ReplyPayload,
@@ -325,6 +309,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     await flushPendingCommentaryProgress();
     throwIfFinalDeliveryAborted();
     const payloadMetadata = getReplyPayloadMetadata(payload);
+    const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
+    const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
     const sourceReplySessionBinding = resolvePreparedTranscriptBinding(
       payloadMetadata?.sourceReplyTranscriptMirror?.sessionKey,
     );
@@ -334,6 +320,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           ...(sourceReplySessionBinding
             ? { expectedSessionId: sourceReplySessionBinding.sessionId }
             : {}),
+          ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+          ...(expectedWriterRunId ? { expectedWriterRunId } : {}),
           storePath: sourceReplySessionBinding?.storePath ?? sessionStoreEntry.storePath,
         }
       : undefined;
@@ -477,6 +465,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               ...(transcriptMirrorSessionBinding
                 ? { expectedSessionId: transcriptMirrorSessionBinding.sessionId }
                 : {}),
+              ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+              ...(expectedWriterRunId ? { expectedWriterRunId } : {}),
               storePath: transcriptMirrorSessionBinding?.storePath ?? sessionStoreEntry.storePath,
               preferText: true,
               ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
@@ -648,6 +638,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   originatingThreadId: routeReplyThreadId,
                   originatingChatType: replyRoute.chatType,
                   shouldSendToolSummaries,
+                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
                   sendPolicy: state.sendPolicy,
                 }),
                 {
@@ -694,9 +685,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     shouldDeliverVerboseProgressDespiteSourceSuppression,
     shouldDeliverForcedToolProgressDespiteSourceSuppression,
     shouldDeliverFastModeAutoProgressDespiteSourceSuppression,
-    hasExecApprovalPayload,
-    hasAskUserPayload,
-    readAskUserQuestionId,
     shouldSuppressLateTextOnlyToolProgress,
     flushPendingCommentaryProgress,
     noteCommentaryProgress,

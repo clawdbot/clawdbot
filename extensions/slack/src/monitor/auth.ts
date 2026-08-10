@@ -15,6 +15,8 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { collectSlackCursorPages } from "../cursor-pages.js";
+import { parseSlackTarget } from "../target-parsing.js";
 import {
   allowListMatches,
   normalizeAllowList,
@@ -183,7 +185,7 @@ function buildBaseAllowFrom(ctx: SlackMonitorContext): string[] {
 
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
-  options?: { includePairingStore?: boolean },
+  options?: { includePairingStore?: boolean; eventScope?: SlackEventScope },
 ) {
   const base = buildBaseAllowFrom(ctx);
   if (options?.includePairingStore !== true) {
@@ -200,7 +202,22 @@ export async function resolveSlackEffectiveAllowFrom(
   } catch {
     storeAllowFrom = [];
   }
-  return normalizeAllowListLower([...base, ...storeAllowFrom]);
+  if (ctx.installationIdentity.kind !== "enterprise") {
+    return normalizeAllowListLower([...base, ...storeAllowFrom]);
+  }
+  const teamId = options.eventScope?.teamId.toLowerCase();
+  if (!teamId) {
+    return base;
+  }
+  const workspaceAllowFrom = storeAllowFrom.flatMap((entry) => {
+    try {
+      const target = parseSlackTarget(entry);
+      return target?.kind === "user" && target.teamId?.toLowerCase() === teamId ? [target.id] : [];
+    } catch {
+      return [];
+    }
+  });
+  return normalizeAllowListLower([...base, ...workspaceAllowFrom]);
 }
 
 async function fetchSlackChannelMemberIds(
@@ -208,22 +225,17 @@ async function fetchSlackChannelMemberIds(
   channelId: string,
   eventScope?: SlackEventScope,
 ): Promise<Set<string>> {
-  const members = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const response = await (eventScope?.client ?? ctx.app.client).conversations.members({
-      token: ctx.botToken,
-      channel: channelId,
-      limit: 999,
-      ...(cursor ? { cursor } : {}),
-    });
-    for (const member of normalizeAllowListLower(response.members)) {
-      members.add(member);
-    }
-    const nextCursor = response.response_metadata?.next_cursor?.trim();
-    cursor = nextCursor ? nextCursor : undefined;
-  } while (cursor);
-  return members;
+  const members = await collectSlackCursorPages({
+    fetchPage: (cursor) =>
+      (eventScope?.client ?? ctx.app.client).conversations.members({
+        token: ctx.botToken,
+        channel: channelId,
+        limit: 999,
+        ...(cursor ? { cursor } : {}),
+      }),
+    collectPageItems: (response) => normalizeAllowListLower(response.members),
+  });
+  return new Set(members);
 }
 
 async function resolveSlackChannelMemberIds(
@@ -494,6 +506,7 @@ export async function authorizeSlackSystemEventSender(params: {
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
+  eventScope?: SlackEventScope;
   expectedSenderId?: string;
   /** When true, requires expectedSenderId, rejects ambiguous channel types,
    *  and applies interactive-only owner allowFrom checks without changing the
@@ -522,7 +535,7 @@ export async function authorizeSlackSystemEventSender(params: {
     const info: {
       name?: string;
       type?: "im" | "mpim" | "channel" | "group";
-    } = await params.ctx.resolveChannelName(channelId).catch(() => ({}));
+    } = await params.ctx.resolveChannelName(channelId, params.eventScope).catch(() => ({}));
     channelName = info.name;
     const resolvedTypeSource = params.channelType ?? info.type;
     channelType = normalizeSlackChannelType(resolvedTypeSource, channelId);
@@ -568,7 +581,7 @@ export async function authorizeSlackSystemEventSender(params: {
   }
 
   const senderInfo: { name?: string } = await params.ctx
-    .resolveUserName(senderId)
+    .resolveUserName(senderId, params.eventScope)
     .catch(() => ({}));
   const senderName = senderInfo.name;
   const ingressChannelType = channelType ?? "channel";
@@ -581,6 +594,7 @@ export async function authorizeSlackSystemEventSender(params: {
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
     includePairingStore: ingressChannelType === "im",
+    eventScope: params.eventScope,
   });
   const channelConfig = channelId
     ? resolveSlackChannelConfig({

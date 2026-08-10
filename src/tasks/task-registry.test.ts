@@ -1,8 +1,8 @@
 // Covers task registry lifecycle, delivery, notification, and query behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
-import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
+import { startAcpSpawnParentStreamRelay } from "../agents/subagents/spawn/acp-spawn-parent-stream.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -693,6 +693,16 @@ describe("task-registry", () => {
       emitAgentEvent({
         runId: "run-tools",
         stream: "tool",
+        data: {
+          phase: "input_delta",
+          name: "edit",
+          toolCallId: "call-streaming",
+          diff: { added: 3, removed: 1 },
+        },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
         data: { phase: "end", name: "read", toolCallId: "call-1" },
       });
       emitAgentEvent({
@@ -746,6 +756,48 @@ describe("task-registry", () => {
         endedAt: 201,
         error: undefined,
         terminalSummary: "finished",
+      });
+    });
+  });
+
+  it("keeps a superseded subagent terminal outcome sticky over late success", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:superseded",
+        runId: "run-subagent-superseded",
+        task: "Do not outlive the replacement",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-subagent-superseded",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          status: "superseded",
+          stopReason: "superseded",
+          error: "agent run superseded by a newer session writer",
+          endedAt: 200,
+        },
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-superseded"), {
+        status: "cancelled",
+        error: "agent run superseded by a newer session writer",
+      });
+
+      finalizeTaskRunByRunId({
+        runId: "run-subagent-superseded",
+        runtime: "subagent",
+        status: "succeeded",
+        endedAt: 201,
+        terminalSummary: "late success",
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-superseded"), {
+        status: "cancelled",
+        endedAt: 200,
+        terminalSummary: undefined,
       });
     });
   });
@@ -2659,47 +2711,65 @@ describe("task-registry", () => {
     });
   });
 
-  it("retains live background exec tasks and marks missing process sessions lost", async () => {
-    await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryMemoryForTest();
-      const task = createTaskFixture("cli", {
-        taskKind: "exec",
-        sourceId: "amber-reef",
-        runId: "exec:amber-reef",
-        task: "Background CLI command",
-        lastEventAt: Date.now() - 10 * 60_000,
-      });
-      const currentTasks = new Map([[task.taskId, task]]);
-      configureTaskRegistryMaintenanceRuntimeForTest({
-        currentTasks,
-        snapshotTasks: [task],
-        isBackgroundExecSessionActive: () => true,
-      });
+  it("retains removed background exec tasks until the process exits", async () => {
+    const [
+      { isBackgroundExecSessionActive },
+      { addSession, deleteSession, markBackgrounded, markExited },
+      { createProcessSessionFixture },
+      { resetProcessRegistryForTests },
+    ] = await Promise.all([
+      import("../agents/bash-process-control.js"),
+      import("../agents/bash-process-registry.js"),
+      import("../agents/bash-process-registry.test-helpers.js"),
+      import("../agents/bash-process-registry.test-support.js"),
+    ]);
+    resetProcessRegistryForTests();
+    try {
+      await withTaskRegistryTempDir(async () => {
+        resetTaskRegistryMemoryForTest();
+        const session = createProcessSessionFixture({ id: "amber-reef" });
+        addSession(session);
+        markBackgrounded(session);
+        deleteSession(session.id);
 
-      expect(await runTaskRegistryMaintenance()).toEqual({
-        reconciled: 0,
-        recovered: 0,
-        cleanupStamped: 0,
-        pruned: 0,
-      });
-      expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+        const task = createTaskFixture("cli", {
+          taskKind: "exec",
+          sourceId: session.id,
+          runId: `exec:${session.id}`,
+          task: "Background CLI command",
+          lastEventAt: Date.now() - 10 * 60_000,
+        });
+        const currentTasks = new Map([[task.taskId, task]]);
+        configureTaskRegistryMaintenanceRuntimeForTest({
+          currentTasks,
+          snapshotTasks: [task],
+          isBackgroundExecSessionActive,
+        });
 
-      configureTaskRegistryMaintenanceRuntimeForTest({
-        currentTasks,
-        snapshotTasks: [task],
-        isBackgroundExecSessionActive: () => false,
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 0,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+
+        markExited(session, null, "SIGTERM", "killed");
+
+        expect(await runTaskRegistryMaintenance()).toEqual({
+          reconciled: 1,
+          recovered: 0,
+          cleanupStamped: 0,
+          pruned: 0,
+        });
+        expectRecordFields(currentTasks.get(task.taskId), {
+          status: "lost",
+          error: "backing session missing",
+        });
       });
-      expect(await runTaskRegistryMaintenance()).toEqual({
-        reconciled: 1,
-        recovered: 0,
-        cleanupStamped: 0,
-        pruned: 0,
-      });
-      expectRecordFields(currentTasks.get(task.taskId), {
-        status: "lost",
-        error: "backing session missing",
-      });
-    });
+    } finally {
+      resetProcessRegistryForTests();
+    }
   });
 
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {

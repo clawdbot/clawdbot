@@ -86,6 +86,28 @@ export const normalizePluginsConfig = (
   return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
+/** Resolves the enabled plugin selected to own the context-engine slot. */
+export function resolveSelectedContextEnginePluginId(config?: OpenClawConfig): string | undefined {
+  const plugins = normalizePluginsConfig(config?.plugins);
+  return resolveSelectedContextEnginePluginIdFromConfig(plugins, plugins.slots.contextEngine);
+}
+
+export function resolveSelectedContextEnginePluginIdFromConfig(
+  plugins: NormalizedPluginsConfig,
+  pluginId: string | null | undefined,
+): string | undefined {
+  if (
+    !plugins.enabled ||
+    !pluginId ||
+    pluginId === defaultSlotIdForKey("contextEngine") ||
+    plugins.deny.includes(pluginId) ||
+    plugins.entries[pluginId]?.enabled === false
+  ) {
+    return undefined;
+  }
+  return pluginId;
+}
+
 /** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */
 export function normalizePluginTargetConfig(
   config: OpenClawConfig,

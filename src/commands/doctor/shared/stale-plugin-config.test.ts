@@ -106,6 +106,30 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("removes retired thread-ownership config while retaining valid plugin ids", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["discord", "thread-ownership"],
+        deny: ["thread-ownership", "openai"],
+        entries: {
+          discord: { enabled: true },
+          "thread-ownership": { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.config.plugins).toEqual({
+      allow: ["discord"],
+      deny: ["openai"],
+      entries: { discord: { enabled: true } },
+    });
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (thread-ownership)",
+      "- plugins.deny: removed 1 stale plugin id (thread-ownership)",
+      "- plugins.entries: removed 1 stale plugin entry (thread-ownership)",
+    ]);
+  });
+
   it("resets stale plugin slots without changing valid slot sentinels", () => {
     const cfg = {
       plugins: {
@@ -375,6 +399,47 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
     expect(result.config.agents?.list?.[0]?.heartbeat).toStrictEqual({});
     expect(result.config.agents?.list?.[1]?.heartbeat).toEqual({ target: "telegram" });
+  });
+
+  it("lists only the actually removed ids in heartbeat and modelByChannel change entries", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["missing-a", "missing-b"],
+      },
+      channels: {
+        "missing-a": {
+          enabled: true,
+          token: "stale-a",
+        },
+        "missing-b": {
+          enabled: true,
+          token: "stale-b",
+        },
+        modelByChannel: {
+          openai: {
+            "missing-a": "openai/gpt-5.4",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            target: "missing-a",
+            every: "30m",
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 2 stale plugin ids (missing-a, missing-b)",
+      "- channels: removed 2 stale channel configs (missing-a, missing-b)",
+      "- agents heartbeat: removed 1 stale heartbeat target (missing-a)",
+      "- channels.modelByChannel: removed 1 stale channel model override (missing-a)",
+    ]);
+    expect(result.config.channels?.["missing-a"]).toBeUndefined();
+    expect(result.config.channels?.["missing-b"]).toBeUndefined();
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
   });
 
   it("does not remove unknown channel config without stale plugin evidence", () => {

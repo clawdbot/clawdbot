@@ -1,4 +1,4 @@
-/** Resolves SecretRef values from env, file, and exec secret providers. */
+/** Resolves SecretRef values from env, file, exec, and store secret providers. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -46,6 +46,7 @@ import {
   providerResolutionError,
   refResolutionError,
 } from "./resolve-errors.js";
+import { resolveStoreRefs } from "./resolve-store.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import {
   isNonEmptyString,
@@ -99,7 +100,17 @@ function throwUnknownProviderResolutionError(params: {
   if (isSecretResolutionError(params.err)) {
     throw params.err;
   }
+  // fs-safe 0.5 exposes one fail-closed receipt for failed permission inspection,
+  // unavailable ACL data, and indeterminate owner trust. Keep the diagnostic path-free.
+  const isWindowsPathSecurityFailure =
+    process.platform === "win32" &&
+    (params.source === "file" || params.source === "exec") &&
+    params.err instanceof FsSafeError &&
+    params.err.code === "permission-unverified";
   throw providerResolutionError({
+    ...(isWindowsPathSecurityFailure
+      ? { code: "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE" as const }
+      : {}),
     source: params.source,
     provider: params.provider,
     message: formatErrorMessage(params.err),
@@ -149,6 +160,12 @@ function resolveConfiguredProvider(params: {
   if (!providerConfig) {
     if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
       return { source: "env" };
+    }
+    if (
+      ref.source === "store" &&
+      ref.provider === resolveDefaultSecretProviderAlias(config, "store")
+    ) {
+      return { source: "store" };
     }
     throw providerResolutionError({
       code: "SECRET_PROVIDER_NOT_CONFIGURED",
@@ -245,7 +262,8 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
+    throw new FsSafeError(
+      "permission-unverified",
       `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
     );
   }
@@ -664,6 +682,13 @@ async function resolveProviderRefs(params: {
         cache: params.options.cache,
       });
     }
+    if (params.providerConfig.source === "store") {
+      return resolveStoreRefs({
+        refs: params.refs,
+        providerName: params.providerName,
+        database: { env: params.options.env ?? process.env },
+      });
+    }
     if (params.providerConfig.source === "exec") {
       if (isPluginIntegrationSecretProviderConfig(params.providerConfig)) {
         throw providerResolutionError({
@@ -717,6 +742,11 @@ function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
     if (ref.source === "file" && !isValidFileSecretRefId(id)) {
       throw new Error(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {

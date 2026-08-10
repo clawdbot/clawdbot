@@ -49,6 +49,13 @@ type UserProfileAvatar = {
   updatedAt: number;
 };
 
+type UserProfileDisplay = {
+  id: string;
+  displayName: string | null;
+  avatarRevision: string;
+  hasAvatar: boolean;
+};
+
 type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
@@ -247,6 +254,27 @@ export function getUserProfileListItem(
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
   return selectUserProfileListItemById(db, requireResolvedProfileById(db, profileId).id);
+}
+
+/** Reads merge-aware display data without exposing avatar content through list/RPC shapes. */
+export function getUserProfileDisplay(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfileDisplay {
+  ensureUserProfilesSchema(options);
+  const { db } = openOpenClawStateDatabase(options);
+  const profile = requireResolvedProfileById(db, profileId);
+  const avatarMime = toAvatarMime(profile.avatar_mime);
+  const avatarRevision =
+    profile.avatar_sha256 && avatarMime
+      ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
+      : String(profile.updated_at);
+  return {
+    id: profile.id,
+    displayName: profile.display_name,
+    avatarRevision,
+    hasAvatar: profile.avatar !== null,
+  };
 }
 
 function ensureProfileForEmailWithInitialName(

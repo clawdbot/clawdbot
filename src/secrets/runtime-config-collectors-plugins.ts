@@ -66,6 +66,7 @@ export function collectPluginConfigAssignments(params: {
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: bundledLoadablePluginIds,
         pluginIds: Object.keys(entries),
+        manifestRegistry: params.context.manifestRegistry,
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {
       const secretInputs = metadata.configContracts.secretInputs;

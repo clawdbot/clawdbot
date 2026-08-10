@@ -44,7 +44,7 @@ type ChatPaneHeaderProps = {
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
-  terminalAction: TemplateResult | typeof nothing;
+  panelActions: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
@@ -52,7 +52,7 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
-  boardDockAction?: TemplateResult | typeof nothing;
+  sessionMenuAction: TemplateResult | typeof nothing;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -178,7 +178,6 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
         const selected = gateway.id === snapshot.currentId;
         return html`<wa-dropdown-item
           class="chat-pane__gateway-menu-item chat-pane__gateway-item"
-          type="checkbox"
           role="menuitemradio"
           aria-checked=${String(selected)}
           ${ref((element) => syncDropdownItemRadio(element, selected))}
@@ -432,7 +431,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
+        ${props.panelActions} ${props.discussionAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
@@ -451,7 +450,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${!props.narrow && props.onSplitDown
           ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
               <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
                 type="button"
                 aria-label=${t("chat.splitView.splitDown")}
                 @click=${() => props.onSplitDown?.(props.paneId)}
@@ -463,7 +462,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${!props.narrow && props.onSplitRight
           ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
               <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
                 type="button"
                 aria-label=${t("chat.splitView.splitRight")}
                 @click=${() => props.onSplitRight?.(props.paneId)}
@@ -475,7 +474,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.onClosePane
           ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
               <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
                 type="button"
                 aria-label=${t("chat.splitView.closePane")}
                 @click=${() => props.onClosePane?.(props.paneId)}
@@ -496,6 +495,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
+        ${props.sessionMenuAction}
       </div>
     </div>
   `;

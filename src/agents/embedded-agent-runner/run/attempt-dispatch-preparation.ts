@@ -124,9 +124,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           }),
         })
       : undefined);
-  const resolvedSessionTarget = resolvedTranscriptTarget
-    ? { ...sessionPromptState.sessionTarget, ...resolvedTranscriptTarget }
-    : sessionPromptState.sessionTarget;
+  const resolvedSessionTarget =
+    resolvedTranscriptTarget || sessionPromptState.sessionTarget
+      ? {
+          ...sessionPromptState.sessionTarget,
+          ...resolvedTranscriptTarget,
+          ...sessionPromptState.sessionWriterFence,
+        }
+      : undefined;
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);

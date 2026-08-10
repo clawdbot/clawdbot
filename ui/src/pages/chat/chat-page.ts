@@ -20,12 +20,13 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
 import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
-import { routeDraft } from "./route-draft.ts";
-import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
+import { locationWithoutDraft, routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
@@ -124,6 +125,7 @@ export class ChatPage extends OpenClawLightDomElement {
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
     const layout = this.layout ?? this.classicLayout();
+    resumeStagedPanes(this, layout, this.narrow);
     if (this.isConnected) {
       this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
     }
@@ -216,12 +218,12 @@ export class ChatPage extends OpenClawLightDomElement {
       return;
     }
     const targetPane =
-      command.kind === "split"
-        ? undefined
-        : panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey);
+      command.kind === "close-pane"
+        ? panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey)
+        : undefined;
     const survivingPane =
       command.kind === "close-pane" && targetPane
-        ? panesOf(layout).find((pane) => pane.id !== targetPane.id)
+        ? closeStagedPane(this.context, this, layout, targetPane.id)
         : undefined;
     const next = applyUiCommandToSplitLayout(layout, command, sourceSessionKey);
     if (next === layout) {
@@ -518,7 +520,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (!layout) {
       return;
     }
-    const survivingPane = panesOf(layout).find((pane) => pane.id !== paneId);
+    const survivingPane = closeStagedPane(this.context, this, layout, paneId);
     const next = closePane(layout, paneId);
     if (!next && survivingPane) {
       const survivingLocation = findPane(layout, survivingPane.id);

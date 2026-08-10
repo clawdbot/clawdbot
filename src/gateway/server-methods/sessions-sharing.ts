@@ -17,7 +17,7 @@ import {
   removeSessionMember,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
-import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import {
   allowedSessionVisibilities,
@@ -34,17 +34,16 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const sharingMutationQueues = new Map<string, StoreWriterQueue>();
-
 function runExclusiveSharingMutation<T>(
   target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
   run: () => Promise<T>,
 ): Promise<T> {
-  return runQueuedStoreWrite({
-    queues: sharingMutationQueues,
-    storePath: `${target.storePath}\0${target.canonicalKey}`,
-    label: "session-sharing-mutation",
-    fn: run,
+  // Sharing and lifecycle mutations share one exact-row fence so authorization
+  // cannot change between archive's stop and commit boundaries.
+  return runExclusiveSessionLifecycleMutation({
+    scope: target.storePath,
+    identities: [target.canonicalKey, target.storeKey, ...target.storeKeys, target.entry.sessionId],
+    run,
   });
 }
 
@@ -91,9 +90,9 @@ function requireManageableTarget(params: {
   return { target, role };
 }
 
-// Manager authorization runs before the exclusive queue, so a session can be
+// Manager authorization runs before the lifecycle fence, so a session can be
 // reset or recreated under the same key while a mutation waits. Requiring the
-// same session instance and a still-valid manager role inside the queue keeps
+// same session instance and a still-valid manager role inside the fence keeps
 // a stale owner from mutating the replacement session's sharing state.
 function requireCurrentManagedTarget(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
@@ -213,10 +212,9 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         sessionKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      // The entry-store write queue is separate from the sharing queue, so a
-      // reset/recreate can replace the row between the check above and this
-      // write. Re-check the instance inside the atomic patch and no-op if it
-      // changed, so a stale owner cannot stamp the replacement's visibility.
+      // The lifecycle fence excludes canonical reset/recreate. Keep the exact
+      // session-id check at the storage boundary so an out-of-band row
+      // replacement still cannot inherit this visibility change.
       let sessionChanged = false;
       await patchSessionEntry(scope, (entry) => {
         if (entry.sessionId !== current.entry.sessionId) {
@@ -239,9 +237,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           now,
         });
       } catch (error) {
-        // Roll back only if this is still the same instance we patched; a
-        // concurrent reset could otherwise stamp the old restricted value onto
-        // a fresh (shared-default) replacement.
+        // Roll back only the exact instance and value we patched; an unexpected
+        // storage-owner replacement must not inherit the old visibility.
         await patchSessionEntry(scope, (entry) =>
           entry.sessionId === current.entry.sessionId &&
           resolveSessionVisibility(entry) === visibility

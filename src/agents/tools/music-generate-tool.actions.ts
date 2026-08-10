@@ -12,7 +12,7 @@ import {
   buildMusicGenerationTaskStatusText,
   findActiveMusicGenerationTaskForSession,
   findDuplicateGuardMusicGenerationTaskForSession,
-} from "../music-generation-task-status.js";
+} from "../media-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskActions,

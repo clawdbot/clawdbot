@@ -1,4 +1,5 @@
 /** CLI runner for node-host stdin/stdout command dispatch. */
+import { isDeepStrictEqual } from "node:util";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -108,43 +109,64 @@ function handleNodeHostReconnectPaused(
   exit(1);
 }
 
-function isUnsupportedNodePluginToolsUpdateError(error: unknown): boolean {
+const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
+const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
+const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
+const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
+
+function isExactUnknownMethodError(error: unknown, method: string): boolean {
   return (
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: node.pluginTools.update")
+    error.message === `unknown method: ${method}`
   );
 }
 
-function isUnsupportedNodeSkillsUpdateError(error: unknown): boolean {
+function isExactLegacyNodeAuthorizationError(error: unknown, gatewayProtocol: number): boolean {
   return (
+    gatewayProtocol === 3 &&
     error instanceof GatewayClientRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: node.skills.update")
+    error.message === "unauthorized role: node"
   );
 }
 
-async function publishNodePluginTools(client: GatewayClient, tools: unknown[]): Promise<void> {
-  try {
-    await client.request("node.pluginTools.update", { tools });
-  } catch (error) {
-    if (isUnsupportedNodePluginToolsUpdateError(error)) {
-      return;
-    }
-    writeStderrLine(`node host plugin tool publish failed: ${String(error)}`);
+function classifyNodeMethodFailure(
+  error: unknown,
+  method: string,
+  gatewayProtocol: number,
+): "legacy-unsupported" | "rejected" | "transient" {
+  if (
+    isExactUnknownMethodError(error, method) ||
+    isExactLegacyNodeAuthorizationError(error, gatewayProtocol)
+  ) {
+    return "legacy-unsupported";
   }
+  if (error instanceof GatewayClientRequestError && error.gatewayCode === "INVALID_REQUEST") {
+    return "rejected";
+  }
+  return "transient";
 }
 
-async function publishNodeSkills(client: GatewayClient, skills: unknown[]): Promise<void> {
-  try {
-    await client.request("node.skills.update", { skills });
-  } catch (error) {
-    if (isUnsupportedNodeSkillsUpdateError(error)) {
-      return;
-    }
-    writeStderrLine(`node host skill publish failed: ${String(error)}`);
-  }
-}
+type NodeOptionalPublicationMethod =
+  | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
+  | typeof NODE_SKILLS_UPDATE_METHOD;
+
+type NodeOptionalPublicationState = {
+  status: "unknown" | "supported" | "unsupported";
+  hasPending: boolean;
+  pendingParams?: unknown;
+  hasPublishedParams: boolean;
+  publishedParams?: unknown;
+  hasRejectedParams: boolean;
+  rejectedParams?: unknown;
+  retryDelayMs: number;
+  retryPending: boolean;
+  retryTimer?: NodeJS.Timeout;
+  hasInFlightParams: boolean;
+  inFlightParams?: unknown;
+  inFlight?: Promise<void>;
+};
 
 async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
@@ -224,15 +246,209 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const url = `${scheme}://${urlHost}:${port}${contextPath}`;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let gatewayHelloReceived = false;
+  let gatewayConnectionGeneration = 0;
+  let connectedGatewayProtocol = 0;
+  let optionalPublicationStates = new Map<
+    NodeOptionalPublicationMethod,
+    NodeOptionalPublicationState
+  >();
+  const retireOptionalPublications = () => {
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
+  };
+  const retireGatewayConnection = () => {
+    gatewayConnectionGeneration += 1;
+    gatewayHelloReceived = false;
+    connectedGatewayProtocol = 0;
+    retireOptionalPublications();
+  };
+
+  const queueOptionalPublication = (
+    method: NodeOptionalPublicationMethod,
+    params: unknown,
+    label: string,
+    isRetry = false,
+  ): void => {
+    if (!gatewayHelloReceived) {
+      return;
+    }
+    const connectionGeneration = gatewayConnectionGeneration;
+    const gatewayProtocol = connectedGatewayProtocol;
+    const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
+    let state = optionalPublicationStates.get(method);
+    if (!state) {
+      state = {
+        status: "unknown",
+        hasPending: false,
+        hasPublishedParams: false,
+        hasRejectedParams: false,
+        retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
+        retryPending: false,
+        hasInFlightParams: false,
+      };
+      optionalPublicationStates.set(method, state);
+    }
+    if (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) {
+      // The latest desired value remains authoritative even when it matches the
+      // active request. Replace a newer pending value so A -> B -> A cannot publish B.
+      if (state.hasPending) {
+        state.pendingParams = params;
+      }
+      return;
+    }
+    if (
+      state.status === "unsupported" ||
+      (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
+      (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
+      (!state.inFlight &&
+        state.hasPublishedParams &&
+        isDeepStrictEqual(state.publishedParams, params))
+    ) {
+      return;
+    }
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = undefined;
+    }
+    if (!isRetry) {
+      state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+    }
+    state.hasRejectedParams = false;
+    state.rejectedParams = undefined;
+    state.pendingParams = params;
+    state.hasPending = true;
+    if (state.inFlight) {
+      return;
+    }
+    const publish = async () => {
+      while (state.hasPending && state.status !== "unsupported") {
+        if (!connectionIsCurrent()) {
+          return;
+        }
+        const nextParams = state.pendingParams;
+        state.pendingParams = undefined;
+        state.hasPending = false;
+        if (state.hasPublishedParams && isDeepStrictEqual(state.publishedParams, nextParams)) {
+          continue;
+        }
+        if (state.hasRejectedParams && !isDeepStrictEqual(state.rejectedParams, nextParams)) {
+          // A different value reopens publication. Keeping the old rejection
+          // would drop a later return to that value while this request is in flight.
+          state.hasRejectedParams = false;
+          state.rejectedParams = undefined;
+        }
+        state.inFlightParams = nextParams;
+        state.hasInFlightParams = true;
+        try {
+          await client.request(method, nextParams);
+          // Request settlement races reconnect teardown. Stale completions must
+          // not mutate or report against the retired connection.
+          if (!connectionIsCurrent()) {
+            return;
+          }
+          state.status = "supported";
+          state.publishedParams = nextParams;
+          state.hasPublishedParams = true;
+          state.hasRejectedParams = false;
+          state.rejectedParams = undefined;
+          state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+          state.retryPending = false;
+        } catch (error) {
+          if (!connectionIsCurrent()) {
+            return;
+          }
+          const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
+          if (failure === "legacy-unsupported") {
+            state.status = "unsupported";
+            state.pendingParams = undefined;
+            state.hasPending = false;
+            state.retryPending = false;
+          } else {
+            writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
+            if (failure === "rejected") {
+              state.hasRejectedParams = true;
+              state.rejectedParams = nextParams;
+              state.retryPending = false;
+              if (state.hasPending && isDeepStrictEqual(state.pendingParams, nextParams)) {
+                state.pendingParams = undefined;
+                state.hasPending = false;
+              }
+            } else {
+              // A timeout or transport failure can occur after the Gateway applied
+              // the update. Forget the acknowledged baseline so the next desired
+              // value is never skipped against an uncertain remote state.
+              state.hasPublishedParams = false;
+              state.publishedParams = undefined;
+              if (!state.hasPending || isDeepStrictEqual(state.pendingParams, nextParams)) {
+                state.pendingParams = nextParams;
+                state.hasPending = true;
+                state.retryPending = true;
+                break;
+              }
+            }
+          }
+        } finally {
+          state.inFlightParams = undefined;
+          state.hasInFlightParams = false;
+        }
+      }
+    };
+    const inFlight = publish().finally(() => {
+      if (state.inFlight === inFlight) {
+        state.inFlight = undefined;
+        if (
+          state.hasPending &&
+          state.status !== "unsupported" &&
+          gatewayHelloReceived &&
+          connectionIsCurrent()
+        ) {
+          const pendingParams = state.pendingParams;
+          const retryPending = state.retryPending;
+          state.retryPending = false;
+          if (retryPending) {
+            const retryDelayMs = state.retryDelayMs;
+            state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
+            state.retryTimer = setTimeout(() => {
+              state.retryTimer = undefined;
+              if (
+                state.hasPending &&
+                isDeepStrictEqual(state.pendingParams, pendingParams) &&
+                gatewayHelloReceived &&
+                connectionIsCurrent()
+              ) {
+                state.pendingParams = undefined;
+                state.hasPending = false;
+                queueOptionalPublication(method, pendingParams, label, true);
+              }
+            }, retryDelayMs);
+            state.retryTimer.unref?.();
+          } else {
+            state.pendingParams = undefined;
+            state.hasPending = false;
+            queueOptionalPublication(method, pendingParams, label);
+          }
+        }
+      }
+    });
+    state.inFlight = inFlight;
+  };
 
   const publishInventory = () => {
     if (!gatewayHelloReceived) {
       return;
     }
     if (inventory.skills) {
-      void publishNodeSkills(client, inventory.skills);
+      queueOptionalPublication(NODE_SKILLS_UPDATE_METHOD, { skills: inventory.skills }, "skill");
     }
-    void publishNodePluginTools(client, inventory.pluginTools);
+    queueOptionalPublication(
+      NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+      { tools: inventory.pluginTools },
+      "plugin tool",
+    );
   };
 
   const client = new GatewayClient({
@@ -280,9 +496,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       }
       void activeRuntime.invoke(payload);
     },
-    onHelloOk: () => {
+    onHelloOk: (hello) => {
       writeStderrLine(`node host gateway connected: ${url}`);
+      gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
+      connectedGatewayProtocol = hello.protocol;
+      retireOptionalPublications();
+      optionalPublicationStates = new Map();
       publishInventory();
     },
     onConnectError: (err) => {
@@ -300,7 +520,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onClose: (code, reason) => {
-      gatewayHelloReceived = false;
+      retireGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
@@ -312,7 +532,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       publishInventory();
     },
     onManifestChanged: (manifest) => {
-      gatewayHelloReceived = false;
+      // Manifest changes force a reconnect. Retire the current publication queue
+      // now so it cannot drain against the closing connection.
+      retireGatewayConnection();
       client.updateNodeManifest(manifest);
     },
   });
@@ -330,6 +552,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.off("SIGTERM", onSigterm);
   };
   const stopClientAndMcp = async () => {
+    retireGatewayConnection();
     client.stop();
     try {
       await activeRuntime.close();

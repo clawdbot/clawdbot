@@ -378,6 +378,7 @@ export function createRuntimeSecretsActivator(params: {
             ? null
             : prepareSecretsRuntimeFastPathSnapshot({
                 config: sourceConfig,
+                env: startupEnv,
                 ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
               });
           if (fastPath) {

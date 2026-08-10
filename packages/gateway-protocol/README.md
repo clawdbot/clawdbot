@@ -128,7 +128,7 @@ Several identifier names coexist because they identify different things:
 
 Follow each method schema rather than converting fields based on their spelling.
 `sessions.resolve` is the explicit bridge when a caller has a key, raw session ID,
-label, or parent/agent scope.
+label, Control UI short ID, or parent/agent scope.
 
 ### Intentionally open fields
 

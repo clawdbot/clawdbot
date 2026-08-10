@@ -306,34 +306,42 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     {
       tools: {
         media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              capabilities: ["audio"],
+            },
+            {
+              type: "cli",
+              command: "whisper",
+              args: ["--model", "base", "{{AttachmentPath}}"],
+              capabilities: ["audio"],
+            },
+            {
+              provider: "google",
+              model: "gemini-3-flash-preview",
+              capabilities: ["video"],
+            },
+            {
+              type: "cli",
+              command: "gemini",
+              args: [
+                "-m",
+                "gemini-3-flash",
+                "--allowed-tools",
+                "read_file",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
+              ],
+              capabilities: ["video"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              { provider: "openai", model: "gpt-4o-mini-transcribe" },
-              {
-                type: "cli",
-                command: "whisper",
-                args: ["--model", "base", "{{AttachmentPath}}"],
-              },
-            ],
           },
           video: {
             enabled: true,
             maxChars: 500,
-            models: [
-              { provider: "google", model: "gemini-3-flash-preview" },
-              {
-                type: "cli",
-                command: "gemini",
-                args: [
-                  "-m",
-                  "gemini-3-flash",
-                  "--allowed-tools",
-                  "read_file",
-                  "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
-                ],
-              },
-            ],
           },
         },
       },
@@ -345,25 +353,26 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     {
       tools: {
         media: {
+          models: [
+            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "anthropic", model: "claude-opus-5", capabilities: ["image"] },
+            {
+              type: "cli",
+              command: "gemini",
+              args: [
+                "-m",
+                "gemini-3-flash",
+                "--allowed-tools",
+                "read_file",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
+              ],
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
             maxBytes: 10485760,
             maxChars: 500,
-            models: [
-              { provider: "openai", model: "gpt-5.6-sol" },
-              { provider: "anthropic", model: "claude-opus-5" },
-              {
-                type: "cli",
-                command: "gemini",
-                args: [
-                  "-m",
-                  "gemini-3-flash",
-                  "--allowed-tools",
-                  "read_file",
-                  "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
-                ],
-              },
-            ],
           },
         },
       },
@@ -375,33 +384,13 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     {
       tools: {
         media: {
-          image: {
-            models: [
-              {
-                provider: "google",
-                model: "gemini-3.1-pro-preview",
-                capabilities: ["image", "video", "audio"],
-              },
-            ],
-          },
-          audio: {
-            models: [
-              {
-                provider: "google",
-                model: "gemini-3.1-pro-preview",
-                capabilities: ["image", "video", "audio"],
-              },
-            ],
-          },
-          video: {
-            models: [
-              {
-                provider: "google",
-                model: "gemini-3.1-pro-preview",
-                capabilities: ["image", "video", "audio"],
-              },
-            ],
-          },
+          models: [
+            {
+              provider: "google",
+              model: "gemini-3.1-pro-preview",
+              capabilities: ["image", "video", "audio"],
+            },
+          ],
         },
       },
     }

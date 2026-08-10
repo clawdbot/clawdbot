@@ -5,6 +5,14 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { SenderIdentity } from "./sender-label.ts";
 
+export type BrowserAnnotationAttachment = {
+  modelContext: string;
+  title: string;
+  displayUrl: string;
+  markedRegionCount: number;
+  inspectedElement: boolean;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -12,6 +20,21 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+  /** UI-local context that must remain coupled to its annotated screenshot. */
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
+export type ChatComposerDraftRetry = {
+  expectedDraftRevision: number;
+  draftRevision: number;
+};
+
+export type ChatComposerMemoryFallback = {
+  message: string;
+  attachments: ChatAttachment[];
+  storageFailed: boolean;
+  draftRetry?: ChatComposerDraftRetry;
+  sequence: number;
 };
 
 export type ChatQueueSkillWorkshopRevision = {
@@ -37,6 +60,8 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
+  /** Immutable active run selected when this row first became a steer. */
+  steerTargetRunId?: string;
   sendState?:
     | "waiting-model"
     | "waiting-idle"

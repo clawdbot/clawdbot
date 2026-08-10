@@ -16,7 +16,6 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
-  clearIMessageQuestionReactionTargetsForTest,
   hasIMessageQuestionReactionTarget,
   maybeResolveIMessageQuestionReaction,
   registerIMessageQuestionReactionTargetForDeliveredPayload,
@@ -45,7 +44,6 @@ function buildPayload() {
 
 describe("iMessage question reactions", () => {
   beforeEach(() => {
-    clearIMessageQuestionReactionTargetsForTest();
     hoisted.resolve.mockReset().mockResolvedValue({
       status: "answered",
       questionId: "choice",
@@ -53,7 +51,7 @@ describe("iMessage question reactions", () => {
     });
   });
 
-  it("recognizes a stable GUID and consumes a stale duplicate", async () => {
+  it("normalizes stable GUIDs and routes their numbered reactions", async () => {
     expect(
       registerIMessageQuestionReactionTargetForDeliveredPayload({
         accountId: "default",
@@ -101,13 +99,6 @@ describe("iMessage question reactions", () => {
       logDebug: vi.fn(),
     };
 
-    await expect(
-      maybeResolveIMessageQuestionReaction({
-        ...params,
-        message: { ...message, reaction_emoji: "4️⃣" },
-      }),
-    ).resolves.toBe(true);
-    await expect(maybeResolveIMessageQuestionReaction(params)).resolves.toBe(true);
     await expect(maybeResolveIMessageQuestionReaction(params)).resolves.toBe(true);
     expect(hoisted.resolve).toHaveBeenCalledOnce();
     expect(hoisted.resolve).toHaveBeenCalledWith(

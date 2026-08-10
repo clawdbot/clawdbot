@@ -12,7 +12,6 @@ import {
   renderSessionUnreadBadge,
   type SessionGlyphContent,
 } from "./session-glyph.ts";
-import { resolveSessionIcon } from "./session-icon-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
@@ -129,7 +128,7 @@ export function renderSessionLeadingState(
         running,
         leadingIndicator: renderSessionGlyph({
           content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-            >${resolveSessionIcon(session.icon)}</span
+            >${icons.messageSquare}</span
           >`,
           running,
           badge: renderGlyphBadge(session, pullRequestState),
@@ -154,10 +153,7 @@ export function renderSessionLeadingState(
     const sessionState = renderSessionState(session);
     return {
       running,
-      leadingIndicator:
-        sessionState !== nothing
-          ? sessionState
-          : html`<span class="sidebar-session-indicator__dot" aria-hidden="true"></span>`,
+      leadingIndicator: sessionState,
       trailingIndicator,
     };
   }
@@ -177,7 +173,7 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
-          >${resolveSessionIcon(session.icon)}</span
+          >${icons.messageSquare}</span
         >`,
         running: false,
       }),

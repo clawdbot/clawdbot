@@ -1,6 +1,7 @@
 // Coverage for embedded run auth initialization and runtime credential refresh.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { isSecretValueRegisteredForRedaction } from "../../../logging/secret-redaction-registry.js";
 import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
@@ -39,20 +40,6 @@ import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
 } from "./auth-controller.js";
-
-function createDeferred<T>() {
-  // Manual deferreds let refresh tests prove in-flight auth state and ordering.
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected auth controller deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 function createTestModel(): Model {
   return {

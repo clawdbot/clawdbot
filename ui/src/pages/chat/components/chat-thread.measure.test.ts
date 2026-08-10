@@ -573,7 +573,7 @@ describe("chat transcript row measurement", () => {
 
     const previousResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::old-token::`,
+      `${source.replace(/\/full$/u, "/thumbnail")}::old-token::`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(previousResource.subscribers.size).toBe(1);
@@ -593,7 +593,7 @@ describe("chat transcript row measurement", () => {
 
     const nextResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::next-token::`,
+      `${source.replace(/\/full$/u, "/thumbnail")}::next-token::`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(

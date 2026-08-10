@@ -1,5 +1,5 @@
 // Qa Lab tests cover gateway rpc client plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayRpcMock = vi.hoisted(() => {
   const callGatewayFromCli = vi.fn(async () => ({ ok: true }));
@@ -33,9 +33,22 @@ function expectReleaseCallback(callback: (() => void) | null): () => void {
   return callback;
 }
 
+function expectRejectCallback(
+  callback: ((reason?: unknown) => void) | null,
+): (reason?: unknown) => void {
+  if (callback === null) {
+    throw new Error("Expected request rejection callback to be captured");
+  }
+  return callback;
+}
+
 describe("startQaGatewayRpcClient", () => {
   beforeEach(() => {
     gatewayRpcMock.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("calls the in-process gateway cli helper without mutating process.env", async () => {
@@ -99,6 +112,22 @@ describe("startQaGatewayRpcClient", () => {
     await expect(client.request("health")).rejects.toThrow(
       "gateway not connected\nGateway logs:\nOPENCLAW_GATEWAY_TOKEN=<redacted>\nAuthorization: Bearer <redacted>",
     );
+  });
+
+  it("normalizes non-Error request failures before wrapping with gateway logs", async () => {
+    gatewayRpcMock.callGatewayFromCli.mockRejectedValueOnce("gateway not connected");
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    await expect(
+      client.request("health", {}, { deadlineMs: Date.now() + 5_000 }),
+    ).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: "gateway not connected" }),
+      message: "gateway not connected\nGateway logs:\nqa logs",
+    });
   });
 
   it("rejects new requests after stop", async () => {
@@ -195,6 +224,111 @@ describe("startQaGatewayRpcClient", () => {
     await expect(firstRequest).resolves.toEqual({ ok: true });
     await expect(secondRequest).resolves.toEqual({ ok: true });
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires queued requests promptly without dispatching them later", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseFirst: (() => void) | null = null;
+    gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(
+      async () =>
+        await new Promise<{ ok: boolean }>((resolve) => {
+          releaseFirst = () => resolve({ ok: true });
+        }),
+    );
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    const firstRequest = client.request("health");
+    await Promise.resolve();
+    const queuedRequest = client.request("status", {}, { deadlineMs: 100, timeoutMs: 5_000 });
+    const rejection = expect(queuedRequest).rejects.toThrow(
+      "gateway request deadline exceeded\nGateway logs:\nqa logs",
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    await rejection;
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
+
+    expectReleaseCallback(releaseFirst)();
+    await expect(firstRequest).resolves.toEqual({ ok: true });
+    await Promise.resolve();
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the queue serialized when a running request expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let rejectRunning: ((reason?: unknown) => void) | null = null;
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    gatewayRpcMock.callGatewayFromCli
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<never>((_resolve, reject) => {
+            rejectRunning = reject;
+          }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const client = await startQaGatewayRpcClient({
+        wsUrl: "ws://127.0.0.1:18789",
+        token: "qa-token",
+        logs: () => "qa logs",
+      });
+      const runningRequest = client.request("health", {}, { deadlineMs: 100, timeoutMs: 5_000 });
+      const runningRejection = expect(runningRequest).rejects.toThrow(
+        "gateway request deadline exceeded\nGateway logs:\nqa logs",
+      );
+      await Promise.resolve();
+      const queuedRequest = client.request("status");
+      await Promise.resolve();
+
+      expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(100);
+      await runningRejection;
+      expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+      expectRejectCallback(rejectRunning)(new Error("late gateway rejection"));
+      await expect(queuedRequest).resolves.toEqual({ ok: true });
+      expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(2);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
+  it("clamps the dispatched CLI timeout to the remaining deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    await expect(
+      client.request("status", {}, { deadlineMs: 1_250, timeoutMs: 5_000 }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledWith(
+      "status",
+      expect.objectContaining({ timeout: "250" }),
+      {},
+      expect.any(Object),
+    );
   });
 
   it("rejects queued requests that have not started before stop", async () => {

@@ -1,7 +1,6 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_LIVE_EVENT_BYTES = 32 * 1024;
@@ -310,69 +309,43 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
     if (event.type === "agent_end") {
       lifecycleFinished = true;
-      const lastAssistant = event.messages
-        .toReversed()
-        .find((message): message is AssistantMessage => message.role === "assistant");
-      if (lastAssistant?.stopReason === "error") {
-        terminalLiveEvent = {
-          kind: "lifecycle",
-          payload: {
-            phase: "error",
-            startedAt,
-            endedAt: Date.now(),
-            error: lastAssistant.errorMessage ?? "Worker inference failed.",
-            fallbackExhaustedFailure: true,
-          },
-        };
-      } else if (lastAssistant?.stopReason === "aborted") {
-        terminalLiveEvent = {
-          kind: "lifecycle",
-          payload: {
-            phase: "end",
-            startedAt,
-            endedAt: Date.now(),
-            stopReason: "aborted",
-            aborted: true,
-          },
-        };
-      } else {
-        terminalLiveEvent = {
-          kind: "lifecycle",
-          payload: { phase: "end", startedAt, endedAt: Date.now() },
-        };
-      }
+      const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+      const terminal = {
+        startedAt,
+        endedAt: Date.now(),
+        ...(lastAssistant ? { stopReason: lastAssistant.stopReason } : {}),
+      };
+      terminalLiveEvent = {
+        kind: "lifecycle",
+        payload: {
+          phase: "finishing",
+          ...terminal,
+          ...(lastAssistant?.stopReason === "error"
+            ? { error: lastAssistant.errorMessage ?? "Worker inference failed." }
+            : {}),
+          ...(lastAssistant?.stopReason === "aborted" ? { aborted: true } : {}),
+        },
+      };
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
     if (lifecycleFinished) {
       return;
     }
-    if (failure.aborted) {
-      terminalLiveEvent = {
-        kind: "lifecycle",
-        payload: {
-          phase: "end",
-          startedAt,
-          endedAt: Date.now(),
-          stopReason: "aborted",
-          aborted: true,
-        },
-      };
-    } else {
-      terminalLiveEvent = {
-        kind: "lifecycle",
-        payload: {
-          phase: "error",
-          startedAt,
-          endedAt: Date.now(),
-          error: failure.error.message,
-          fallbackExhaustedFailure: true,
-        },
-      };
-    }
+    terminalLiveEvent = {
+      kind: "lifecycle",
+      payload: {
+        phase: "finishing",
+        startedAt,
+        endedAt: Date.now(),
+        ...(failure.aborted
+          ? { stopReason: "aborted", aborted: true }
+          : { error: failure.error.message }),
+      },
+    };
   };
-  // Emits directly (not via the degradable preview queue): the terminal event drives
-  // gateway turn settlement and must survive a degraded live stream.
+  // Emits directly (not via the degradable preview queue): finishing is the durable
+  // result fence that must reach the Gateway before post-worker reconciliation.
   const emitTerminal = async () => {
     if (!terminalLiveEvent) {
       return;

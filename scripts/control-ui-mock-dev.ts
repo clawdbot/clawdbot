@@ -1306,7 +1306,6 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
-      icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
       category: "Research",
@@ -1337,7 +1336,6 @@ async function createChatPickerScenario(
       execCwd: "/Users/peter/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       pinned: true,
-      icon: "🛠️",
     }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
       kind: "group",
@@ -1454,6 +1452,10 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    // Advertised Gateway methods gate session actions (see
+    // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
+    // every session context-menu row disabled, so the harness could not show
+    // the menu operators actually see.
     featureMethods: [
       "chat.metadata",
       "chat.startup",
@@ -1461,9 +1463,18 @@ async function createChatPickerScenario(
       "openclaw.changes.list",
       "openclaw.chat",
       "openclaw.chat.history",
+      "sessions.delete",
       "sessions.diff",
       "sessions.files.set",
+      "sessions.fork",
+      "sessions.groups.delete",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.patch",
+      "sessions.patchMany",
       "sessions.catalog.list",
+      "sessions.catalog.read",
       "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
@@ -1604,6 +1615,61 @@ async function createChatPickerScenario(
                 ],
               },
             ],
+          },
+        ],
+      },
+      "sessions.catalog.read": {
+        cases: [
+          {
+            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-1" },
+            response: {
+              hostId: "gateway",
+              threadId: "codex-thread-1",
+              items: [
+                {
+                  id: "release-checklist-answer",
+                  type: "agentMessage",
+                  text: "The release checklist is complete and ready for review.",
+                },
+                {
+                  id: "release-checklist-request",
+                  type: "userMessage",
+                  text: "Please sweep the release checklist for anything we missed.",
+                },
+              ],
+            },
+          },
+          {
+            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-2" },
+            response: {
+              hostId: "gateway",
+              threadId: "codex-thread-2",
+              items: [
+                {
+                  id: "sidebar-context-menu-answer",
+                  type: "agentMessage",
+                  text: "The sidebar context menu behaves as expected.",
+                },
+              ],
+            },
+          },
+          {
+            match: {
+              catalogId: "claude-code",
+              hostId: "gateway",
+              threadId: "claude-thread-1",
+            },
+            response: {
+              hostId: "gateway",
+              threadId: "claude-thread-1",
+              items: [
+                {
+                  id: "docs-refresh-answer",
+                  type: "agentMessage",
+                  text: "The documentation refresh is ready for review.",
+                },
+              ],
+            },
           },
         ],
       },
@@ -2421,6 +2487,8 @@ const server = await createServer({
       commit: "0123456789abcdef0123456789abcdef01234567",
       commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
+      branch: null,
+      dirty: null,
       release: false,
       buildId: "mock",
     }),

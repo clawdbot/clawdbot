@@ -62,6 +62,8 @@ function makeDispatchInput(
       runId: "run-1",
       timeoutMs: 30_000,
       config: {},
+      contextEngineLogicalTurnLease: { owner: "logical-turn" },
+      onContextEngineTurnCandidate: vi.fn(),
     },
     transcriptOwnership: { kind: "caller-owned", sessionManager },
     runtime: {
@@ -131,7 +133,7 @@ describe("embedded run retry dispatch", () => {
     mocks.settleRequesterAfterSessionSpawns.mockReset();
   });
 
-  it("preserves caller-owned session and unsafe replay state on the next attempt", async () => {
+  it("preserves caller-owned turn facts and unsafe replay state on the next attempt", async () => {
     const sessionManager = { owner: "caller" };
     const replayState = observeReplayMetadata(
       observeReplayMetadata(createEmbeddedRunReplayState(), {
@@ -141,10 +143,15 @@ describe("embedded run retry dispatch", () => {
       { replaySafe: true, hadPotentialSideEffects: false },
     );
 
-    const result = await dispatchEmbeddedRunAttempt(makeDispatchInput(sessionManager, replayState));
+    const input = makeDispatchInput(sessionManager, replayState);
+    const result = await dispatchEmbeddedRunAttempt(input);
 
     expect(result.preparedAttempt.sessionManager).toBe(sessionManager);
     expect(result.preparedAttempt.sessionTarget).toBeUndefined();
+    expect(result.preparedAttempt.contextEngineLogicalTurnLease).toBeUndefined();
+    expect(result.preparedAttempt.onContextEngineTurnCandidate).toBe(
+      input.params.onContextEngineTurnCandidate,
+    );
     expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
     expect(result.preparedAttempt.initialReplayState).toBe(replayState);
     expect(mocks.runAttempt).toHaveBeenCalledWith(result.preparedAttempt);

@@ -68,6 +68,8 @@ if [[ "$VERSION" == *-alpha.* || "$VERSION" == *.alpha.* ]]; then
 fi
 if [[ "$VERSION" == *-beta.* || "$VERSION" == *.beta.* ]]; then
   CHANNEL_ARGS=(--channel beta)
+elif [[ "$VERSION" =~ ^[0-9]{4}\.[1-9][0-9]*\.([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 33 ]]; then
+  CHANNEL_ARGS=(--channel extended-stable)
 fi
 
 TMP_DIR="$(mktemp -d)"

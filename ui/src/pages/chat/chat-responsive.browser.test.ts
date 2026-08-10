@@ -272,29 +272,30 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      <div class="chat-view-menu-wrapper">
-        <wa-dropdown class="chat-view-menu" aria-label="View">
-          <button slot="trigger" class="chat-view-menu-trigger" type="button" aria-label="View">
-            ${iconSvg()}
-          </button>
-          <wa-dropdown-item class="chat-view-menu__item" type="checkbox">Reasoning</wa-dropdown-item>
-        </wa-dropdown>
-      </div>
       <div class="chat-composer-model-control">
-        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+        <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+          <details class="chat-controls__inline-select chat-controls__model-picker">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">Default model · Off</span>
-            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+            <span class="chat-controls__inline-select-label">GPT-5.6</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
-            <div class="chat-controls__combined-model-list">
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
+            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
+            <div class="chat-controls__model-options">
+              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
             </div>
-            <div class="chat-controls__reasoning-panel">Reasoning</div>
           </div>
-        </details>
+          </details>
+          <details class="chat-controls__inline-select chat-controls__effort-picker">
+          <summary class="chat-controls__inline-select-trigger" data-chat-composer-effort="true" aria-label="Effort">
+            <span class="chat-controls__inline-select-label">High</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
+            <div class="chat-controls__reasoning-panel">Effort</div>
+          </div>
+          </details>
+        </div>
       </div>
     </div>
   `;
@@ -462,7 +463,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
-                          <summary class="context-ring" role="status" aria-label="Thread context usage: 46k/200k (23%)">
+                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
                             <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                               <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
@@ -478,7 +479,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                             <div class="context-usage__limits">
                               <div class="context-usage__limit">
                                 <div class="context-usage__limit-head">
-                                  <span class="context-usage__limit-label">Weekly · all models</span>
+                                  <span class="context-usage__limit-label">Weekly</span>
                                   <span class="context-usage__limit-meta"><strong>72%</strong></span>
                                 </div>
                                 <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
@@ -487,7 +488,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                           </section>
                         </details>
                       </div>
-                      <span class="agent-chat__token-count">8</span>
                     </div>
                   </div>
                 </div>
@@ -775,7 +775,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <wa-dropdown class="chat-pane__gateway-menu">
-            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
+            <template shadowrootmode="open"><div part="menu">Gateways<slot></slot></div></template>
             <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
           </wa-dropdown>
         </body></html>`,
@@ -815,7 +815,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("pins the collapsed session rail to the pane header edge", async () => {
+  it("insets the collapsed session rail from the pane header edge", async () => {
     const page = await openBrowserPage(922, 282);
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
@@ -838,7 +838,164 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const header = await getBoundingBox(page, ".chat-pane__header");
       const observer = await getBoundingBox(page, ".chat-session-rail");
 
-      expect(observer.y).toBeCloseTo(header.y + header.height, 0);
+      expect(observer.y).toBeCloseTo(header.y + header.height + 12, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the split-pane close button reachable as the pane narrows", async () => {
+    const page = await openBrowserPage(1100, 240);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
+      const settingsCss = readStyleSheet("ui/src/styles/settings.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${settingsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 320px;">
+            <div class="chat-pane__header">
+              <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
+              <span class="chat-pane__session-title">A deliberately long split-pane session title</span>
+              <openclaw-session-owner-chip>
+                <span class="session-owner-chip session-owner-chip--header">O</span>
+              </openclaw-session-owner-chip>
+              <button class="chat-pane__workspace-chip" type="button">
+                ${iconSvg()}<span>openclaw-workspace</span>
+              </button>
+              <div class="chat-pane__face-switch chat-pane__face-switch--split">
+                <div class="settings-segmented">
+                  <button class="settings-segmented__btn" type="button">Chat</button>
+                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
+                  <button class="settings-segmented__btn" type="button">Dashboard</button>
+                </div>
+                <wa-dropdown class="chat-pane__dock-caret">
+                  <button
+                    slot="trigger"
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__dock-caret-trigger"
+                    type="button"
+                  >B</button>
+                </wa-dropdown>
+              </div>
+              <wa-dropdown class="chat-pane__sharing-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
+              </wa-dropdown>
+              <wa-dropdown class="chat-pane__branches-menu">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger" type="button">R</button>
+              </wa-dropdown>
+              <wa-dropdown class="chat-pane__gateway-menu">
+                <button class="chat-pane__gateway-chip" type="button">
+                  <span class="chat-pane__gateway-health"></span>
+                  <span class="chat-pane__gateway-name">A long native gateway name</span>
+                </button>
+              </wa-dropdown>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle" type="button">D</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle" type="button">T</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle" type="button">W</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn" data-catalog-terminal type="button">E</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle" type="button">C</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down" type="button">V</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right" type="button">H</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open" type="button">P</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const selectors = [
+        "openclaw-session-owner-chip",
+        ".chat-session-diff-toggle",
+        ".chat-tasks-toggle",
+        ".chat-workspace-toggle",
+        ".chat-session-discussion-toggle",
+        ".chat-pane__dock-caret",
+        ".chat-pane__sharing-menu",
+        ".chat-pane__branches-menu",
+        ".chat-pane__gateway-menu",
+        ".chat-pane__nav-toggle",
+        ".chat-pane__palette-open",
+        ".chat-pane__split-down",
+        ".chat-pane__split-right",
+      ];
+      const displayValues = async () =>
+        await page
+          .locator(selectors.join(","))
+          .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).display));
+      const setHeaderContentWidth = async (contentWidth: number) => {
+        await page.locator(".chat-split-view__cell").evaluate((cell, width) => {
+          const header = cell.querySelector<HTMLElement>(".chat-pane__header")!;
+          const style = getComputedStyle(header);
+          const horizontalInsets =
+            Number.parseFloat(style.paddingLeft) +
+            Number.parseFloat(style.paddingRight) +
+            Number.parseFloat(style.borderLeftWidth) +
+            Number.parseFloat(style.borderRightWidth);
+          (cell as HTMLElement).style.width = `${width + horizontalInsets}px`;
+        }, contentWidth);
+      };
+
+      const header = await getBoundingBox(page, ".chat-pane__header");
+      const close = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(close.x + close.width).toBeLessThanOrEqual(header.x + header.width);
+      expect(await displayValues()).toEqual(selectors.map(() => "none"));
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "580px";
+      });
+      await waitForLayoutSettled(page);
+      const intermediateHeader = await getBoundingBox(page, ".chat-pane__header");
+      const intermediateClose = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(intermediateClose.x + intermediateClose.width).toBeLessThanOrEqual(
+        intermediateHeader.x + intermediateHeader.width,
+      );
+      expect(await displayValues()).toEqual(selectors.map(() => "none"));
+      const intermediateOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      expect(intermediateOverflow.scrollWidth).toBeLessThanOrEqual(
+        intermediateOverflow.clientWidth,
+      );
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "1000px";
+      });
+      await waitForLayoutSettled(page);
+      const fullCompositionWidth = await page.locator(".chat-pane__header").evaluate((element) => {
+        const headerElement = element as HTMLElement;
+        headerElement.style.containerType = "normal";
+        headerElement.style.width = "0px";
+        const width = headerElement.scrollWidth;
+        headerElement.style.removeProperty("width");
+        headerElement.style.removeProperty("container-type");
+        return width;
+      });
+      await setHeaderContentWidth(801);
+      await waitForLayoutSettled(page);
+      const transitionOverflow = await page.locator(".chat-pane__header").evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      const transitionHeader = await getBoundingBox(page, ".chat-pane__header");
+      const transitionClose = await getBoundingBox(page, ".chat-pane__close-pane");
+      expect(transitionClose.x + transitionClose.width).toBeLessThanOrEqual(
+        transitionHeader.x + transitionHeader.width,
+      );
+      expect(await displayValues()).not.toContain("none");
+      expect(
+        await page
+          .locator("[data-catalog-terminal]")
+          .evaluate((element) => getComputedStyle(element).display),
+      ).not.toBe("none");
+      expect(transitionOverflow.scrollWidth).toBeLessThanOrEqual(transitionOverflow.clientWidth);
+      expect(transitionOverflow.clientWidth - fullCompositionWidth).toBeGreaterThanOrEqual(8);
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "1000px";
+      });
+      expect(await displayValues()).not.toContain("none");
     } finally {
       await closeBrowserPage(page);
     }
@@ -901,6 +1058,61 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         callBackground: "rgba(0, 0, 0, 0)",
         tool: "text",
       });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("insets only the bundled logo inside the unchanged avatar box", async () => {
+    const page = await openBrowserPage(430, 720);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <img class="chat-avatar assistant chat-avatar--logo" src="/apple-touch-icon.png" alt="Logo" />
+        <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
+        <img class="chat-avatar user" src="/avatar/user" alt="User" />
+      </body></html>`);
+
+      const avatars = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>(".chat-avatar")].map((avatar) => {
+          const style = getComputedStyle(avatar);
+          const bounds = avatar.getBoundingClientRect();
+          return {
+            width: bounds.width,
+            height: bounds.height,
+            boxSizing: style.boxSizing,
+            objectFit: style.objectFit,
+            padding: style.padding,
+            borderWidth: style.borderTopWidth,
+          };
+        }),
+      );
+
+      expect(avatars).toEqual([
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "contain",
+          padding: "2px",
+          borderWidth: "1px",
+        },
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "cover",
+          padding: "0px",
+          borderWidth: "1px",
+        },
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "cover",
+          padding: "0px",
+          borderWidth: "1px",
+        },
+      ]);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1009,6 +1221,51 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }));
       expect(widths.bubble).toBeCloseTo(widths.messages, 0);
       expect(widths.app).toBeGreaterThan(600);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps inline MCP App reloads transparent without changing dashboard surfaces", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
+      await page.addScriptTag({
+        type: "module",
+        url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
+      });
+      const backgrounds = await page.evaluate(async () => {
+        await customElements.whenDefined("mcp-app-view");
+        const readFrameBackground = async (boardSurface?: string) => {
+          const owner = document.createElement("div");
+          if (boardSurface) {
+            owner.style.setProperty("--board-surface", boardSurface);
+          }
+          const view = document.createElement("mcp-app-view") as HTMLElement & {
+            updateComplete: Promise<boolean>;
+          };
+          owner.append(view);
+          document.body.replaceChildren(owner);
+          await view.updateComplete;
+          const mount = view.shadowRoot?.querySelector(".mount");
+          if (!mount) {
+            throw new Error("MCP App mount is missing");
+          }
+          const frame = document.createElement("iframe");
+          mount.append(frame);
+          return getComputedStyle(frame).backgroundColor;
+        };
+        return {
+          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
+          inline: await readFrameBackground(),
+        };
+      });
+
+      expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
+      expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
     } finally {
       await closeBrowserPage(page);
     }
@@ -1806,8 +2063,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           model: rectFor(".chat-composer-model-control"),
           context: rectFor(".context-ring"),
           send: rectFor(".chat-send-btn"),
-          settings: rectFor(".chat-view-menu-trigger"),
-          settingsIcon: rectFor(".chat-view-menu-trigger svg"),
           shell: rectFor(".agent-chat__composer-shell"),
           textarea:
             textareaNode && textareaRect
@@ -1832,9 +2087,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const model = expectControlRect(layout.model, "model selector");
       const context = expectControlRect(layout.context, "context control");
       const send = expectControlRect(layout.send, "primary action");
-      const settings = expectControlRect(layout.settings, "settings control");
       const attach = expectControlRect(layout.attach, "attachment control");
-      const settingsIcon = expectControlRect(layout.settingsIcon, "settings icon");
       const attachIcon = expectControlRect(layout.attachIcon, "attachment icon");
       const textareaRect = expectControlRect(layout.textarea, "composer textarea");
       const textareaMetrics = layout.textarea;
@@ -1856,17 +2109,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(shell.x).toBeLessThanOrEqual(8);
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeLessThanOrEqual(8);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
-      expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
       expect(context.x).toBeGreaterThanOrEqual(model.x + model.width - 1);
       expect(input.x + input.width - (send.x + send.width)).toBeLessThanOrEqual(8);
-      for (const control of [model, settings, context]) {
+      for (const control of [model, context]) {
         expect(
-          Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+          Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
         ).toBeLessThanOrEqual(2);
       }
-      expect(meta.y).toBeGreaterThanOrEqual(settings.y - 1);
-      expect(settingsIcon.width).toBeGreaterThanOrEqual(18);
-      expect(settingsIcon.height).toBeGreaterThanOrEqual(18);
+      expect(meta.y).toBeGreaterThanOrEqual(model.y - 1);
       expect(attachIcon.width).toBeGreaterThanOrEqual(18);
       expect(attachIcon.height).toBeGreaterThanOrEqual(18);
     } finally {
@@ -1884,13 +2134,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
-        await page.locator('[data-chat-composer-model="true"]').click();
-        const menu = await getBoundingBox(page, ".chat-controls__inline-select-menu--combined");
-        const reasoning = await getBoundingBox(page, ".chat-controls__reasoning-panel");
+        await page.locator('[data-chat-composer-model="true"]').evaluate((node) => {
+          node.parentElement?.setAttribute("open", "");
+        });
+        const menu = await getBoundingBox(page, ".chat-controls__model-menu");
         expect(menu.x).toBeGreaterThanOrEqual(0);
         expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
-        expect(reasoning.x).toBeGreaterThanOrEqual(0);
-        expect(reasoning.x + reasoning.width).toBeLessThanOrEqual(width + 1);
       } finally {
         await closeBrowserPage(page);
       }
@@ -1936,7 +2185,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
             context: rectFor(".context-ring"),
-            settings: rectFor(".chat-view-menu-trigger"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
@@ -1951,11 +2199,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
         const context = expectControlRect(controls.context, "composer context control");
-        const settings = expectControlRect(controls.settings, "composer settings control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [footer, textarea, meta, model, context, settings, attach, send]) {
+        for (const control of [footer, textarea, meta, model, context, attach, send]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
@@ -1965,37 +2212,30 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         }
         expect(model.y).toBeGreaterThanOrEqual(footer.y - 1);
         expect(model.y + model.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
-        expect(settings.y).toBeGreaterThanOrEqual(footer.y - 1);
-        expect(settings.y + settings.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
         expect(model.y).toBeGreaterThanOrEqual(textarea.y);
         expect(context.y).toBeGreaterThanOrEqual(textarea.y);
         expect(
           Math.abs(attach.y + attach.height / 2 - (send.y + send.height / 2)),
         ).toBeLessThanOrEqual(2);
         expect(attach.x + attach.width).toBeLessThanOrEqual(textarea.x + 1);
-        expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        expect(rectsOverlap(model, settings)).toBe(false);
         expect(rectsOverlap(model, send)).toBe(false);
-        expect(rectsOverlap(settings, send)).toBe(false);
         const composerFontSize = await page
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
         if (width <= 768) {
           expect(composerFontSize).toBe(16);
-          expect(model.width).toBeGreaterThanOrEqual(width === 320 ? 32 : 64);
+          expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, settings, context]) {
+          for (const control of [model, context]) {
             expect(
-              Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+              Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
             ).toBeLessThanOrEqual(2);
           }
           expect(footer.height).toBeLessThanOrEqual(49.1);
-          expect(settings.width).toBeGreaterThanOrEqual(36);
-          expect(settings.height).toBeGreaterThanOrEqual(36);
         } else {
           expect(composerFontSize).toBe(14);
           expect(send.width).toBeCloseTo(36, 2);
@@ -2047,6 +2287,35 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
     },
   );
+
+  it("keeps newly opened sidebar columns transparent while panel owners retain their surface", async () => {
+    const page = await openBrowserPage(1_000, 700);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="sidebar-region" style="--panel: rgb(12, 34, 56)">
+            <main class="sidebar-region__primary">Primary chat</main>
+          </div>
+        </body></html>`,
+      );
+
+      const backgrounds = await page.evaluate(() => {
+        const column = document.createElement("section");
+        column.className = "sidebar-column";
+        column.innerHTML = '<div class="sidebar-panel">Owned panel surface</div>';
+        document.querySelector(".sidebar-region")?.append(column);
+        return {
+          column: getComputedStyle(column).backgroundColor,
+          panel: getComputedStyle(column.firstElementChild!).backgroundColor,
+        };
+      });
+
+      expect(backgrounds.column).toBe("rgba(0, 0, 0, 0)");
+      expect(backgrounds.panel).toBe("rgb(12, 34, 56)");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 
   it("collapses sidebar columns into one tabbed column below the pane breakpoint", async () => {
     const page = await openBrowserPage(900, 700);
@@ -2316,7 +2585,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
-          settings: rectFor(".chat-view-menu-trigger"),
           send: rectFor(".chat-send-btn"),
         };
       });
@@ -2326,7 +2594,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [label, control] of [
         ["composer metadata", scrolled.meta],
         ["composer model control", scrolled.model],
-        ["composer settings control", scrolled.settings],
       ] as const) {
         const rect = expectControlRect(control, label);
         expect(rect.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
@@ -2418,66 +2685,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
-
-  it.each([
-    [320, 568],
-    [393, 852],
-    [568, 320],
-  ] as const)(
-    "keeps mobile model and settings popovers inside the viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        const modelTrigger = page.locator('[data-chat-composer-model="true"]');
-        await modelTrigger.click();
-
-        const modelMenu = await getRect(page, ".chat-controls__inline-select-menu--combined");
-        expect(modelMenu.left).toBeGreaterThanOrEqual(0);
-        expect(modelMenu.right).toBeLessThanOrEqual(width);
-        expect(modelMenu.top).toBeGreaterThanOrEqual(0);
-        expect(modelMenu.bottom).toBeLessThanOrEqual(height);
-
-        await modelTrigger.click();
-        await page.locator(".chat-view-menu").evaluate((node) => {
-          node.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page);
-
-        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
-        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.right).toBeLessThanOrEqual(width);
-        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  it.each([
-    [768, 900],
-    [1024, 768],
-    [1366, 900],
-  ] as const)(
-    "keeps the left-aligned desktop settings popover inside the viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        await page.locator(".chat-view-menu").evaluate((node) => {
-          node.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page);
-
-        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
-        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.right).toBeLessThanOrEqual(width);
-        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
 
   describe("slash command keyboard navigation", () => {
     let page: Page;

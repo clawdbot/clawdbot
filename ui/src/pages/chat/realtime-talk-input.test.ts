@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  observeRealtimeTalkDevices,
   openRealtimeTalkCamera,
   openRealtimeTalkInput,
 } from "./realtime-talk-input.ts";
@@ -37,7 +38,7 @@ describe("realtime Talk microphone inputs", () => {
         { deviceId: "usb", label: "Microphone 2" },
       ],
       permissionRequired: true,
-      warning: null,
+      issue: null,
     });
     expect(getUserMedia).not.toHaveBeenCalled();
   });
@@ -63,7 +64,7 @@ describe("realtime Talk microphone inputs", () => {
         { deviceId: "loopback", label: "Loopback Audio" },
       ],
       permissionRequired: false,
-      warning: null,
+      issue: null,
     });
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
     expect(stopFirst).toHaveBeenCalledOnce();
@@ -71,7 +72,7 @@ describe("realtime Talk microphone inputs", () => {
     expect(enumerateDevices).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps System default usable when microphone permission is denied", async () => {
+  it("reports the blocked reason when microphone permission is denied", async () => {
     vi.stubGlobal("navigator", {
       mediaDevices: {
         enumerateDevices: vi.fn(async () => [mediaDevice("audioinput", "", "")]),
@@ -85,7 +86,52 @@ describe("realtime Talk microphone inputs", () => {
 
     expect(result.devices).toEqual([]);
     expect(result.permissionRequired).toBe(true);
-    expect(result.warning).toContain("Microphone access is blocked");
+    expect(result.issue).toBe("permission-blocked");
+  });
+
+  it("separates an empty machine from a blocked browser", async () => {
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        enumerateDevices: vi.fn(async () => []),
+        getUserMedia: vi.fn(async () => {
+          throw new DOMException("none", "NotFoundError");
+        }),
+      },
+    });
+
+    await expect(discoverRealtimeTalkInputs(true)).resolves.toEqual({
+      devices: [],
+      permissionRequired: true,
+      issue: "none-found",
+    });
+  });
+
+  it("subscribes to devicechange and releases the listener on unsubscribe", () => {
+    const mediaDevices = new EventTarget();
+    let changes = 0;
+    vi.stubGlobal("navigator", { mediaDevices });
+
+    const unsubscribe = observeRealtimeTalkDevices(() => (changes += 1));
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+    unsubscribe();
+    mediaDevices.dispatchEvent(new Event("devicechange"));
+
+    expect(changes).toBe(1);
+  });
+
+  it("stays inert where the browser exposes no media devices to watch", () => {
+    vi.stubGlobal("navigator", {});
+    expect(() => observeRealtimeTalkDevices(() => undefined)()).not.toThrow();
+  });
+
+  it("reports an unsupported enumeration instead of a generic access failure", async () => {
+    vi.stubGlobal("navigator", { mediaDevices: {} });
+
+    await expect(discoverRealtimeTalkInputs(true)).resolves.toEqual({
+      devices: [],
+      permissionRequired: false,
+      issue: "list-unsupported",
+    });
   });
 
   it("does not silently fall back when the selected microphone is unavailable", async () => {
@@ -288,7 +334,7 @@ describe("realtime Talk camera inputs", () => {
         { deviceId: "back", label: "Camera 2" },
       ],
       permissionRequired: true,
-      warning: null,
+      issue: null,
     });
     expect(getUserMedia).not.toHaveBeenCalled();
   });
@@ -305,7 +351,7 @@ describe("realtime Talk camera inputs", () => {
     await expect(discoverRealtimeTalkCameras(true)).resolves.toEqual({
       devices: [{ deviceId: "camera", label: "Desk Camera" }],
       permissionRequired: false,
-      warning: null,
+      issue: null,
     });
     expect(getUserMedia).toHaveBeenCalledWith({ video: true });
     expect(stop).toHaveBeenCalledOnce();

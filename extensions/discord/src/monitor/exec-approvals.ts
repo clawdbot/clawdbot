@@ -204,8 +204,9 @@ export function createDiscordExecApprovalButtonContext(params: {
           approvalId,
           approvalKind,
           decision,
+          channel: "discord",
+          senderId: params.accountId,
           gatewayUrl: params.gatewayUrl,
-          clientDisplayName: `Discord approval (${params.accountId})`,
         });
         return { ok: true, resolution };
       } catch (err) {

@@ -5,11 +5,9 @@ import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
-import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
   buildProviderReauthCommand,
@@ -24,6 +22,8 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { isLikelyContextOverflowError } from "./failover/classify.js";
+import type { FailoverReason } from "./failover/signal.js";
 import {
   getFallbackCandidateSkipReason,
   isFallbackCandidateSkipped,
@@ -77,7 +77,11 @@ import {
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
 import { gateModelCircuitForCandidate } from "./model-fallback-route-eligibility.js";
-import type { FallbackAttempt, ModelFallbackRouteResolution } from "./model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackCandidate,
+  ModelFallbackRouteResolution,
+} from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
   resolveSessionSuspensionReason,
@@ -94,6 +98,17 @@ async function loadModelFallbackAuthRuntime() {
   return await modelFallbackAuthRuntimeLoader.load();
 }
 
+function resolveFallbackAuthScope(params: {
+  userLockedAuthProfileId?: string;
+  profileIds?: readonly string[];
+}): string | undefined {
+  if (params.userLockedAuthProfileId) {
+    return params.userLockedAuthProfileId;
+  }
+  // resolveAuthProfileOrder places the profile selected for this model first.
+  return params.profileIds?.find((id) => id.trim())?.trim();
+}
+
 type RunWithModelFallbackParams<T> = {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -102,12 +117,14 @@ type RunWithModelFallbackParams<T> = {
   sessionId?: string;
   agentId?: string;
   sessionKey?: string;
+  userLockedAuthProfileId?: string;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   prepareAgentHarnessRuntime?: (params: {
     provider: string;
     model: string;
     agentHarnessRuntimeOverride?: string;
   }) => Promise<void> | void;
+  prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
   lane?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -173,15 +190,19 @@ async function runWithModelFallbackInternal<T>(
     requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
   });
+  await params.prepareCandidateChain?.(candidates);
+  const userLockedAuthProfileId = params.userLockedAuthProfileId?.trim() || undefined;
   const authRuntime =
     !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
       ? await loadModelFallbackAuthRuntime()
       : null;
   const authStore = authRuntime
     ? authRuntime.ensureAuthProfileStore(params.agentDir, {
-        externalCli: externalCliDiscoveryForProviders({
-          cfg: params.cfg,
-          providers: candidates.map((candidate) => candidate.provider),
+        externalCli: externalCliDiscoveryScoped({
+          config: params.cfg,
+          allowKeychainPrompt: false,
+          providerIds: candidates.map((candidate) => candidate.provider),
+          ...(userLockedAuthProfileId ? { profileIds: [userLockedAuthProfileId] } : {}),
         }),
       })
     : null;
@@ -309,6 +330,37 @@ async function runWithModelFallbackInternal<T>(
         ...details,
       });
 
+    let candidateAuthProfileIds: string[] | undefined;
+    let userLockedAuthProfileEligible = false;
+    if (authRuntime && authStore) {
+      userLockedAuthProfileEligible =
+        userLockedAuthProfileId !== undefined &&
+        authRuntime.resolveAuthProfileEligibility({
+          cfg: params.cfg,
+          store: authStore,
+          provider: candidate.provider,
+          profileId: userLockedAuthProfileId,
+        }).eligible;
+      if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
+        candidateAuthProfileIds = authRuntime.resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store: authStore,
+          provider: candidate.provider,
+          forModel: candidate.model,
+        });
+        authRuntime.maybeReprobeWhamBlockedProfiles({
+          store: authStore,
+          profileIds: candidateAuthProfileIds,
+          agentDir: params.agentDir,
+          forModel: candidate.model,
+        });
+      }
+    }
+    const candidateAuthScope = resolveFallbackAuthScope({
+      userLockedAuthProfileId: userLockedAuthProfileEligible ? userLockedAuthProfileId : undefined,
+      profileIds: candidateAuthProfileIds,
+    });
+
     // Skip-known-bad cache: when a previous turn in this session failed this
     // candidate with `auth` / `auth_permanent` (e.g. missing or expired
     // credentials), suppress repeat attempts for the cache TTL so we do not
@@ -319,12 +371,14 @@ async function runWithModelFallbackInternal<T>(
       const skipped = isFallbackCandidateSkipped({
         sessionId: params.sessionId,
         ...candidateRef,
+        authScope: candidateAuthScope,
       });
       if (skipped) {
         const skipReason =
           getFallbackCandidateSkipReason({
             sessionId: params.sessionId,
             ...candidateRef,
+            authScope: candidateAuthScope,
           }) ?? "auth";
         const reauthCommand = buildProviderReauthCommand(candidate.provider);
         const reauthHint = reauthCommand
@@ -343,23 +397,18 @@ async function runWithModelFallbackInternal<T>(
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore && !candidateHarnessAuth.skipsProviderAuthCooldown) {
-      const profileIds = authRuntime.resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-      });
-      authRuntime.maybeReprobeWhamBlockedProfiles({
-        store: authStore,
-        profileIds,
-        agentDir: params.agentDir,
-        forModel: candidate.model,
-      });
+    if (
+      authRuntime &&
+      authStore &&
+      candidateAuthProfileIds &&
+      !candidateHarnessAuth.skipsProviderAuthCooldown
+    ) {
+      const profileIds = candidateAuthProfileIds;
       const isAnyProfileAvailable = profileIds.some(
         (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
       );
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
+      if (profileIds.length > 0 && !isAnyProfileAvailable && !userLockedAuthProfileEligible) {
         // All profiles for this provider are in cooldown.
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
@@ -401,6 +450,7 @@ async function runWithModelFallbackInternal<T>(
               deferredSuspension.pending = undefined;
               void suspendSession({
                 cfg: params.cfg,
+                agentId: params.agentId,
                 agentDir: params.agentDir,
                 sessionId: params.sessionId,
                 laneId,
@@ -706,6 +756,9 @@ async function runWithModelFallbackInternal<T>(
       markFallbackCandidateSkipped({
         sessionId: params.sessionId,
         ...candidateRef,
+        // The inner runner records the profile that actually failed. Prefer
+        // that fact because automatic routing can advance before the next turn.
+        authScope: normalized.profileId?.trim() || candidateAuthScope,
         reason: normalized.reason,
       });
     }
@@ -775,6 +828,7 @@ async function runWithModelFallbackInternal<T>(
     }),
     attribution: { sessionId: params.sessionId, lane: resolveTerminalSuspensionLane() },
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
   });
 }

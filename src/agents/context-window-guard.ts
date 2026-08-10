@@ -158,8 +158,9 @@ export function formatContextWindowWarningMessage(params: {
   }
   if (params.guard.source === "agentContextTokens") {
     return (
-      `${base}; OpenClaw is capped by agents.defaults.contextTokens, so raise that cap ` +
-      `if you want to use more of the model context window`
+      `${base}; OpenClaw is capped by the agent's contextTokens setting ` +
+      `(agents.list[].contextTokens or agents.entries.<id>.contextTokens, else agents.defaults.contextTokens), ` +
+      `so raise that cap if you want to use more of the model context window`
     );
   }
   if (params.guard.source === "modelsConfig") {
@@ -187,7 +188,11 @@ export function formatContextWindowBlockMessage(params: {
     return base;
   }
   if (params.guard.source === "agentContextTokens") {
-    return `${base} OpenClaw is capped by agents.defaults.contextTokens. Raise that cap.`;
+    return (
+      `${base} OpenClaw is capped by the agent's contextTokens setting ` +
+      `(agents.list[].contextTokens or agents.entries.<id>.contextTokens, else agents.defaults.contextTokens). ` +
+      `Raise that cap.`
+    );
   }
   if (params.guard.source === "modelsConfig") {
     return (

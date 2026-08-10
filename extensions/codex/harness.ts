@@ -72,6 +72,7 @@ export function createCodexAppServerAgentHarness(options: {
     autoSelection: { providerIds: [...providerIds] },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
+    conversationToolPolicySupport: "exact",
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },
@@ -243,18 +244,25 @@ export function createCodexAppServerAgentHarness(options: {
     },
     reset: async (params) => {
       if (params.sessionId) {
-        const { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity } =
-          await import("./src/app-server/session-binding.js");
+        const [
+          { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity },
+          { retireCodexAppServerSessionGeneration },
+        ] = await Promise.all([
+          import("./src/app-server/session-binding.js"),
+          import("./src/app-server/session-retirement.js"),
+        ]);
         const identity = sessionBindingIdentity({
           agentId: params.agentId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         });
-        const resetGeneration =
-          params.reason === "deleted"
-            ? options.bindingStore.retireSessionGeneration.bind(options.bindingStore)
-            : options.bindingStore.resetSessionGeneration.bind(options.bindingStore);
-        let reset = await resetGeneration(identity);
+        const resetGeneration = () =>
+          retireCodexAppServerSessionGeneration({
+            bindingStore: options.bindingStore,
+            identity,
+            mode: params.reason === "deleted" ? "retire" : "reset",
+          });
+        let reset = await resetGeneration();
         if (reset === "conflict") {
           const reclaimed = await reclaimCurrentCodexSessionGeneration({
             bindingStore: options.bindingStore,
@@ -262,7 +270,7 @@ export function createCodexAppServerAgentHarness(options: {
             config: options.resolveConfig?.(),
           });
           if (reclaimed) {
-            reset = await resetGeneration(identity);
+            reset = await resetGeneration();
           }
         }
         if (reset === "conflict") {

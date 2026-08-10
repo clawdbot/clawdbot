@@ -6,7 +6,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   markMcpLoopbackToolCallFinished,
@@ -361,6 +361,54 @@ describe("runCliAgent spawn path", () => {
     expect(context.params.persistCliSessionForkSuccessor).toHaveBeenCalledWith(
       "forked-node-session",
     );
+  });
+
+  it("surfaces a node-placed Claude synthetic empty terminal through the shared parser", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        [
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: "No response requested." }],
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            session_id: "node-synthetic-empty",
+            result: "",
+          }),
+          "",
+        ].join("\n"),
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildClaudeLiveRunContext({
+      model: "claude-opus-4-8",
+      runId: "run-node-synthetic-empty",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      code: "cli_synthetic_no_response",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
   });
 
   it("rejects a truncated node stream that lost the terminal result", async () => {
@@ -2814,8 +2862,6 @@ describe("runCliAgent spawn path", () => {
     });
 
     await writeReady;
-    expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(true);
-
     live.emit([
       { type: "system", subtype: "init", session_id: "live-session-reply" },
       { type: "result", session_id: "live-session-reply", result: "done" },
@@ -2823,7 +2869,6 @@ describe("runCliAgent spawn path", () => {
 
     const result = await run;
     expect(result.text).toBe("done");
-    expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
     operation.complete();
   });
 
