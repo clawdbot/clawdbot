@@ -918,7 +918,7 @@ describe("qa-lab server", () => {
     qaChannelMock.startAccount.mockImplementationOnce(
       async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
         await new Promise<void>((resolve) => {
-          abortSignal?.addEventListener("abort", resolve, { once: true });
+          abortSignal?.addEventListener("abort", () => resolve(), { once: true });
         });
         markGatewayStopping();
         await gatewayStopped;
