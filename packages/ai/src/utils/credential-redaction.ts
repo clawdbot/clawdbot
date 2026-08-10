@@ -115,14 +115,16 @@ export function extractDiagnosticMediaField(
   const mediaField = MEDIA_FIELD_NAME_RE.test(normalized) || MEDIA_WRAPPER_NAME_RE.test(key);
   const contextualPayload = parentMedia && MEDIA_PAYLOAD_SUFFIX_RE.test(normalized);
   if (!privateField && !mediaField && !contextualPayload) {
-    return parentMedia ? { kind: "context" } : undefined;
+    const nestedMedia =
+      value !== null && (typeof value === "object" || /^(?:0|[1-9]\d*)$/u.test(key));
+    return parentMedia && nestedMedia ? { kind: "context" } : undefined;
   }
   if (/(?:uri|url)$/u.test(normalized)) {
     return { kind: "redacted" };
   }
   const encoded = diagnosticBytes(value, true) ?? (typeof value === "string" ? value : undefined);
   if (encoded === undefined) {
-    return { kind: privateField ? "redacted" : "context" };
+    return { kind: privateField || Array.isArray(value) ? "redacted" : "context" };
   }
   const bytes =
     typeof encoded === "string" ? estimateBase64DecodedBytes(encoded) : encoded.byteLength;

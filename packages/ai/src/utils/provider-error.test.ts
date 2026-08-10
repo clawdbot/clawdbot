@@ -114,6 +114,15 @@ describe("projectProviderError", () => {
   });
 
   it.each([
+    ["string chunks", ["QUJDRA=="]],
+    ["numeric chunks", [[65, 66, 67, 68]]],
+  ])("redacts media arrays containing %s", (_name, videoFrames) => {
+    expect(
+      JSON.stringify(projectProviderError({ status: 500, body: { videoFrames } })),
+    ).not.toMatch(/QUJDRA==|65,66,67,68/u);
+  });
+
+  it.each([
     ["imageBytes", true],
     ["imageBase64", true],
     ["audioData", true],

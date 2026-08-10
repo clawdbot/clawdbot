@@ -72,6 +72,15 @@ describe("sanitizeDiagnosticPayload", () => {
   });
 
   it.each([
+    ["string chunks", [MEDIA_DATA]],
+    ["numeric chunks", [MEDIA_BYTES]],
+  ])("redacts media arrays containing %s", (_name, videoFrames) => {
+    expect(JSON.stringify(sanitizeDiagnosticPayload({ videoFrames }))).not.toMatch(
+      /QUJDRA==|65,66,67,68/u,
+    );
+  });
+
+  it.each([
     ["imageBytes", true],
     ["imageBase64", true],
     ["audioData", true],
