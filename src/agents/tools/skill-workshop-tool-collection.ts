@@ -1,0 +1,101 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  MAX_RECONCILED_SKILLS,
+  reconcileSkillCollection,
+  type SkillCollectionPlanEntry,
+  type SkillCollectionReconcileContext,
+} from "../../skills/workshop/collection-reconcile.js";
+import { stringEnum } from "../schema/typebox.js";
+import { readStringParam, ToolInputError } from "./common.js";
+
+export const skillCollectionPlanSchema = Type.Optional(
+  Type.Array(
+    Type.Object(
+      {
+        action: stringEnum(["keep", "write", "drop"] as const),
+        name: Type.String(),
+        description: Type.Optional(Type.String({ maxLength: 160 })),
+        content: Type.Optional(Type.String()),
+        reason: Type.Optional(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
+    {
+      maxItems: MAX_RECONCILED_SKILLS,
+      description:
+        "Exactly one decision for every current writable skill, plus optional new write decisions. write requires description and complete SKILL.md content; drop requires a reason.",
+    },
+  ),
+);
+
+export async function executeSkillCollectionReconcile(params: {
+  toolParams: Record<string, unknown>;
+  workspaceDir: string;
+  readSkillHashes: ReadonlyMap<string, string>;
+  context?: SkillCollectionReconcileContext;
+  config?: OpenClawConfig;
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  if (params.context?.result) {
+    throw new ToolInputError("this skill collection has already been reconciled");
+  }
+  const result = await reconcileSkillCollection({
+    workspaceDir: params.workspaceDir,
+    plan: readCollectionPlanParam(params.toolParams),
+    readSkillHashes: params.readSkillHashes,
+    config: params.config,
+    agentId: params.agentId,
+    env: params.env,
+  });
+  if (params.context) {
+    params.context.result = result;
+  }
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Reconciled the skill collection: kept ${result.kept.length}, wrote ${result.written.length}, dropped ${result.dropped.length}. Backup ${result.backupId}.`,
+      },
+    ],
+    details: result,
+  };
+}
+
+function readCollectionPlanParam(params: Record<string, unknown>): SkillCollectionPlanEntry[] {
+  if (!Array.isArray(params.collection)) {
+    throw new ToolInputError("collection required for reconcile");
+  }
+  return params.collection.map((value, index) => {
+    const entry = asNullableRecord(value);
+    if (!entry) {
+      throw new ToolInputError(`collection[${index}] must be an object`);
+    }
+    const action = readStringParam(entry, "action", { required: true });
+    const name = readStringParam(entry, "name", { required: true });
+    if (action === "keep") {
+      return { action, name };
+    }
+    if (action === "drop") {
+      return {
+        action,
+        name,
+        reason: readStringParam(entry, "reason", { required: true }),
+      };
+    }
+    if (action === "write") {
+      return {
+        action,
+        name,
+        description: readStringParam(entry, "description", { required: true }),
+        content: readStringParam(entry, "content", { required: true, trim: false }),
+      };
+    }
+    throw new ToolInputError(`collection[${index}].action must be keep, write, or drop`);
+  });
+}
+
+export const SKILL_COLLECTION_ACTION_DESCRIPTION =
+  "read = inspect one current skill; reconcile = atomically keep, rewrite, create, or drop the whole writable skill collection.";

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
+import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
@@ -34,6 +35,31 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
+  it("gives an isolated collection review only read and reconcile", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-tool-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "duplicate", description: "Duplicate procedure" },
+    ]);
+    const collectionReconcile = {};
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      collectionReconcile,
+    });
+
+    expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
+    await tool.execute("read", { action: "read", skill_name: "duplicate" });
+    await tool.execute("reconcile", {
+      action: "reconcile",
+      collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
+    });
+
+    expect(collectionReconcile).toMatchObject({
+      result: { kept: [], written: [], dropped: [{ name: "duplicate", reason: "redundant" }] },
+    });
+    await expect(fs.access(path.join(workspaceDir, "skills", "duplicate"))).rejects.toThrow();
+  });
+
   it("describes action selection and pending-proposal discovery in its schema", () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);

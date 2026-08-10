@@ -48,31 +48,18 @@ target change -> stale
 
 Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
-## Lifecycle curation
+## Collection review
 
-The Gateway tracks aggregate skill usage in the shared state database. Once a
-day, it reviews applied skills created through agent autocapture. Skills unused
-for more than 30 days become `stale`; after 90 days they become `archived` and
-are left out of new agent skill snapshots. Archived skill files remain
-unchanged on disk. Operator-created skills, including proposals created through
-the CLI or Gateway/Control UI, are treated as manual and never curated.
+In `auto` mode, the Gateway starts one isolated collection-review session per
+writable agent workspace each day. The session can only read skills and submit
+one complete collection reconciliation. It keeps distinct useful skills,
+rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
 
-Pinned skills bypass lifecycle transitions. A stale skill returns to `active`
-after it is used and the next sweep runs. Archived skills return only through an
-explicit restore:
-
-Lifecycle transitions and restores apply to new sessions; running sessions keep
-their current skill snapshot.
-
-```bash
-openclaw skills curator status
-openclaw skills curator pin <skill>
-openclaw skills curator unpin <skill>
-openclaw skills curator restore <skill>
-```
-
-All curator commands accept `--json`. Status also reports deterministic overlap
-candidates as suggestions only; it never merges skills or calls a model.
+Every current skill must be read and receive exactly one `keep`, `write`, or
+`drop` decision. OpenClaw validates and scans every write before changing the
+workspace, serializes collection edits with a workspace lease, and retains one
+backup under the state directory. The changed collection appears in new agent
+runs; running sessions keep their existing skill snapshot.
 
 ## Chat
 
@@ -81,8 +68,8 @@ proposal id.
 
 ### Learn from recent work
 
-Use `/learn` to turn the current conversation or named sources into one
-standards-guided skill proposal:
+Use `/learn` to route the current conversation or named sources into the best
+matching pending proposal or live skill, creating a skill only when needed:
 
 ```text
 /learn
@@ -93,7 +80,8 @@ With no request, `/learn` asks the agent to distill the reusable workflow from
 the current conversation. With a request, the agent treats paths, URLs, pasted
 notes, and conversation references as sources while honoring focus, scope, and
 naming requirements. It gathers the sources with its existing tools, then calls
-`skill_workshop` with `action: "create"`.
+`skill_workshop` to revise a matching pending proposal, update a matching live
+skill, or create a proposal when neither exists.
 
 The resulting proposal stays `pending`; `/learn` never applies it. Review and
 apply it through the normal approval flow or with `openclaw skills workshop`.
@@ -383,6 +371,9 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.pin`               | `operator.admin` |
 | `skills.curator.unpin`             | `operator.admin` |
 | `skills.curator.restore`           | `operator.admin` |
+
+The `skills.curator.*` methods remain for lifecycle state written by older
+releases. Daily collection review does not use age, pin, or overlap state.
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session

@@ -8,6 +8,7 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
+import type { SkillCollectionReconcileContext } from "../../skills/workshop/collection-reconcile.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import {
@@ -23,7 +24,6 @@ import {
   reviseSkillProposal,
   SkillProposalStaleTargetError,
 } from "../../skills/workshop/service.js";
-import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
@@ -39,6 +39,12 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./common.js";
+import {
+  executeSkillCollectionReconcile,
+  SKILL_COLLECTION_ACTION_DESCRIPTION,
+  skillCollectionPlanSchema,
+} from "./skill-workshop-tool-collection.js";
+import { buildSkillWorkshopToolDescription } from "./skill-workshop-tool-description.js";
 import {
   actionResult,
   beginProposalReviewMutation,
@@ -70,6 +76,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "apply",
   "reject",
   "quarantine",
+  "reconcile",
 ] as const;
 function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
   return [
@@ -111,15 +118,25 @@ function buildSkillWorkshopToolSchema(
   proposalOnly: boolean,
   supportsCompletion: boolean,
   updateProposals: boolean,
+  collectionOnly: boolean,
 ) {
   const proposalActions = resolveProposalOnlyActions(updateProposals, supportsCompletion);
   return Type.Object(
     {
-      action: stringEnum(proposalOnly ? proposalActions : [...SKILL_WORKSHOP_ACTIONS], {
-        description: proposalOnly
-          ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
-          : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
-      }),
+      action: stringEnum(
+        collectionOnly
+          ? ["read", "reconcile"]
+          : proposalOnly
+            ? proposalActions
+            : [...SKILL_WORKSHOP_ACTIONS],
+        {
+          description: proposalOnly
+            ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
+            : collectionOnly
+              ? SKILL_COLLECTION_ACTION_DESCRIPTION
+              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; reconcile = atomically clean the writable skill collection; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+        },
+      ),
       proposal_id: Type.Optional(
         Type.String({
           description:
@@ -211,6 +228,7 @@ function buildSkillWorkshopToolSchema(
             "Optional orchestration or experiment correlation id carried into lifecycle events.",
         }),
       ),
+      collection: skillCollectionPlanSchema,
     },
     { additionalProperties: false },
   );
@@ -231,33 +249,20 @@ type SkillWorkshopToolOptions = {
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional durable completion latch shared across runner retries. */
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
+  /** Isolated collection review latch; when present only read/reconcile are exposed. */
+  collectionReconcile?: SkillCollectionReconcileContext;
 };
-
-function buildSkillWorkshopToolDescription(
-  proposalOnly: boolean,
-  supportsCompletion: boolean,
-  updateProposals: boolean,
-  autonomousMode: "off" | "propose" | "auto",
-): string {
-  if (!proposalOnly) {
-    const repairPolicy =
-      autonomousMode === "off"
-        ? "Foreground repair is disabled."
-        : autonomousMode === "propose"
-          ? "A foreground patch to a skill used in this run stays pending for review."
-          : "A foreground patch to a skill used in this run is scanned and applied immediately.";
-    return `Read, patch, create, update, revise, inspect, evaluate, and apply reusable-procedure skill proposals. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
-  }
-  const completion = supportsCompletion ? " complete = durably finish this review." : "";
-  const draftKinds = updateProposals ? "create, update, or revise" : "create or revise";
-  return `Inspect reusable-procedure skill proposals and draft pending ${draftKinds} proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
-}
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
   const readSkillHashes =
-    options.proposalMutationBudget?.readSkillHashes ?? new Map<string, string>();
+    options.collectionReconcile?.readSkillHashes ??
+    options.proposalMutationBudget?.readSkillHashes ??
+    new Map<string, string>();
+  if (options.collectionReconcile) {
+    options.collectionReconcile.readSkillHashes = readSkillHashes;
+  }
   if (options.proposalMutationBudget) {
     options.proposalMutationBudget.readSkillHashes = readSkillHashes;
   }
@@ -265,16 +270,18 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     label: "Skill Workshop",
     name: "skill_workshop",
     displaySummary: "Propose or improve a reusable skill",
-    description: buildSkillWorkshopToolDescription(
-      options.proposalOnly === true,
-      options.proposalReviewCompletion !== undefined,
-      options.updateProposals === true,
-      workshopConfig.autonomous.mode,
-    ),
+    description: buildSkillWorkshopToolDescription({
+      proposalOnly: options.proposalOnly === true,
+      supportsCompletion: options.proposalReviewCompletion !== undefined,
+      updateProposals: options.updateProposals === true,
+      autonomousMode: workshopConfig.autonomous.mode,
+      collectionOnly: options.collectionReconcile !== undefined,
+    }),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
       options.updateProposals === true,
+      options.collectionReconcile !== undefined,
     ),
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
@@ -283,6 +290,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         options.updateProposals === true,
         options.proposalReviewCompletion !== undefined,
       );
+
+      if (options.collectionReconcile && action !== "read" && action !== "reconcile") {
+        throw new ToolInputError("this Skill Workshop session can only read and reconcile skills");
+      }
 
       if (options.proposalOnly === true && !proposalActions.includes(action)) {
         throw new ToolInputError("this Skill Workshop session can only inspect or draft proposals");
@@ -310,7 +321,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
-        const truncated = skill.content.length > SKILL_WORKSHOP_READ_MAX_CHARS;
+        const readMaxChars = options.collectionReconcile
+          ? workshopConfig.maxSkillBytes
+          : SKILL_WORKSHOP_READ_MAX_CHARS;
+        const truncated = skill.content.length > readMaxChars;
         // A truncated read is context, not sight of the whole skill: it earns no
         // receipt, so oversized skills cannot be patched by a reviewer that never
         // saw their later content.
@@ -320,12 +334,24 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
         }
         const text = truncated
-          ? `${truncateUtf16Safe(skill.content, SKILL_WORKSHOP_READ_MAX_CHARS)}\n[truncated: skill exceeds the Workshop read budget]`
+          ? `${truncateUtf16Safe(skill.content, readMaxChars)}\n[truncated: skill exceeds the Workshop read budget]`
           : skill.content;
         return {
           content: [{ type: "text", text }],
           details: { skillKey: skill.skillKey, truncated },
         };
+      }
+
+      if (action === "reconcile") {
+        return await executeSkillCollectionReconcile({
+          toolParams: params,
+          workspaceDir: options.workspaceDir,
+          readSkillHashes,
+          context: options.collectionReconcile,
+          config: options.config,
+          agentId: options.agentId,
+          env: options.env,
+        });
       }
 
       if (action === "list") {
