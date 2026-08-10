@@ -6,8 +6,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import { clampText } from "../../lib/format.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
@@ -15,11 +14,10 @@ export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type ResolvedBoardView = {
   provider: BoardProvider;
-  snapshot: BoardViewSnapshot;
+  snapshot: BoardSnapshot;
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
-  activeTabReadOnly: boolean;
   dock: BoardTab["chatDock"];
   reopenDock: BoardVisibleChatDock;
 };

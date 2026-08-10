@@ -65,8 +65,7 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     workspaceGit: boolean,
   ) {
     const board = this.resolveBoardView();
-    const canChangeBoardDock =
-      board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate;
+    const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
     const workspace = resolveChatPaneWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,

@@ -29,9 +29,7 @@ import type {
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
-import { ObserverDigestHistory } from "../../lib/observer-digest.ts";
+import type { BoardTab } from "../../lib/board/types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -254,9 +252,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     | undefined;
   protected readonly lastVisibleBoardDock = new Map<string, BoardVisibleChatDock>();
   protected retainedBoardSessionKey = "";
-  protected readonly observerDigestHistory = new ObserverDigestHistory();
-  protected builtinBoardSnapshot: BoardViewSnapshot | null = null;
-  protected builtinBoardSnapshotBase: BoardSnapshot | null = null;
   protected swarmHydrator: SwarmRosterHydrator | null = null;
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
@@ -353,17 +348,12 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
             this.refreshSwarmRoster();
-            this.refreshBuiltinBoardSnapshot();
             notify();
           }),
       )
       .watch(
         () => this.resolveBoardProvider(),
-        (provider, notify) =>
-          provider.snapshot$.subscribe(() => {
-            this.refreshBuiltinBoardSnapshot();
-            notify();
-          }),
+        (provider, notify) => provider.snapshot$.subscribe(notify),
       )
       .effect(
         () => this.resolveBoardProvider(),
@@ -373,7 +363,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
   protected abstract refreshSwarmRoster(): void;
-  protected abstract refreshBuiltinBoardSnapshot(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;
   protected abstract reconcileWaitingApprovalSnapshot(

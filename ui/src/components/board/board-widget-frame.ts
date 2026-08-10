@@ -1,7 +1,8 @@
 import { html, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardViewWidget, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
@@ -30,7 +31,7 @@ function isLoopbackHostname(hostname: string): boolean {
 // message keeps the authorization fact but adds the deployment hint operators
 // otherwise never find.
 function resolveBoardFrameFailureMessage(
-  widget: Pick<BoardViewWidget, "sandboxOrigin">,
+  widget: Pick<BoardWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,
 ): string {
   if (!widget.sandboxOrigin && resolvedSandboxOrigin) {
@@ -56,7 +57,7 @@ type BoardWidgetFrameLifecycleHost = {
   reportContentHeight: (name: string, height: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
-  widget: () => BoardViewWidget | undefined;
+  widget: () => BoardWidget | undefined;
 };
 
 class BoardWidgetTicketRefresh {
@@ -82,7 +83,7 @@ class BoardWidgetTicketRefresh {
     this.scheduledTicket = "";
   }
 
-  schedule(widget: BoardViewWidget | undefined, refresh: FrameRefresh | undefined): void {
+  schedule(widget: BoardWidget | undefined, refresh: FrameRefresh | undefined): void {
     const ticket = widget?.viewTicket;
     const remainingTtlMs = widget ? remainingBoardWidgetTicketTtlMs(widget) : undefined;
     if (!this.canRefresh() || !widget || !refresh || !ticket || remainingTtlMs === undefined) {
@@ -193,7 +194,7 @@ export class BoardWidgetFrameLifecycle {
     }
   }
 
-  widgetChanged(previous: BoardViewWidget, current: BoardViewWidget | undefined): void {
+  widgetChanged(previous: BoardWidget, current: BoardWidget | undefined): void {
     if (previous.name !== current?.name || previous.revision !== current?.revision) {
       this.resetFailures(false);
       return;
@@ -224,7 +225,7 @@ export class BoardWidgetFrameLifecycle {
     this.sandboxHost?.setActive(true);
   }
 
-  render(widget: BoardViewWidget): TemplateResult {
+  render(widget: BoardWidget): TemplateResult {
     const resolveFrameUrl = this.host.resolveFrameUrl();
     if (!resolveFrameUrl) {
       throw new Error(t("board.widget.frameResolverMissing"));
@@ -288,7 +289,7 @@ export class BoardWidgetFrameLifecycle {
     this.sandboxHost?.reset();
   }
 
-  private refreshFailedFrame(widget: BoardViewWidget): void {
+  private refreshFailedFrame(widget: BoardWidget): void {
     if (!this.host.active()) {
       return;
     }
@@ -316,7 +317,7 @@ export class BoardWidgetFrameLifecycle {
     }
   }
 
-  private verifyAuthorization(event: Event, widget: BoardViewWidget): void {
+  private verifyAuthorization(event: Event, widget: BoardWidget): void {
     const frame = event.currentTarget;
     const src = frame instanceof HTMLIFrameElement ? (frame.getAttribute("src") ?? "") : "";
     if (!src.startsWith("/__openclaw__/board/")) {
@@ -352,7 +353,7 @@ export class BoardWidgetFrameLifecycle {
       });
   }
 
-  private resolveSandboxFrameUrl(widget: BoardViewWidget): string | undefined {
+  private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
     const gatewayUrl = this.host.context()?.gateway.connection.gatewayUrl;
     if (
       !widget.sandboxUrl ||
@@ -375,7 +376,7 @@ export class BoardWidgetFrameLifecycle {
 
   private sandboxHostOptions(
     frame: HTMLIFrameElement,
-    widget: BoardViewWidget,
+    widget: BoardWidget,
   ): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] | undefined {
     const resolveFrameUrl = this.host.resolveFrameUrl();
     if (!resolveFrameUrl) {
