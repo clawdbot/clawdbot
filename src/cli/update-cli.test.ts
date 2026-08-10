@@ -14,6 +14,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../infra/clawhub-install-trust.js";
 import { isBetaTag } from "../infra/update-channels.js";
+import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -7447,6 +7448,87 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     });
+  });
+
+  it.each([
+    {
+      name: "ref-only as detached",
+      env: { OPENCLAW_UPDATE_DEV_TARGET_REF: "frozen-sha" },
+      expected: { mode: "detached", ref: "frozen-sha" },
+    },
+    {
+      name: "versioned tracked target",
+      env: applyDevUpdateTargetEnv(
+        {},
+        { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "frozen-sha" },
+      ),
+      expected: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "frozen-sha" },
+    },
+  ])("maps the internal dev target environment $name", async ({ env, expected }) => {
+    await withEnvAsync(env, async () => {
+      await updateCommand({ channel: "dev", yes: true, restart: false });
+    });
+
+    expect(vi.mocked(runGatewayUpdate).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ devTarget: expected }),
+    );
+  });
+
+  it.each([
+    ["malformed", "openclaw-dev-target:v1:not+base64url"],
+    ["unknown version", "openclaw-dev-target:v2:hostile-ref"],
+    ["unknown namespace", "other-dev-target:v1:hostile-ref"],
+  ])("rejects a %s tracked dev target before update side effects", async (_name, value) => {
+    await withEnvAsync({ OPENCLAW_UPDATE_DEV_TARGET_REF: value }, async () => {
+      await updateCommand({ channel: "dev", yes: true, restart: false });
+    });
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "Invalid internal OPENCLAW_UPDATE_DEV_TARGET_REF contract; expected a plain Git ref or a supported tracked-target encoding.",
+    );
+    expect(defaultRuntime.error).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      runGatewayUpdate,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+    );
+  });
+
+  it("rejects a malformed inferred dev target before running the update", async () => {
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_DEV_TARGET_REF: "openclaw-dev-target:v1:not+base64url" },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "Invalid internal OPENCLAW_UPDATE_DEV_TARGET_REF contract; expected a plain Git ref or a supported tracked-target encoding.",
+    );
+    expect(defaultRuntime.error).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+  });
+
+  it("ignores a malformed dev target for a stable package update", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-stable-update"));
+    mockCurrentProcessFreshDoctor();
+
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_DEV_TARGET_REF: "openclaw-dev-target:v1:not+base64url" },
+      async () => {
+        await updateCommand({ channel: "stable", yes: true, restart: false });
+      },
+    );
+
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("OPENCLAW_UPDATE_DEV_TARGET_REF"),
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(packageInstallCommandCall()).toBeDefined();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
   });
 
   it("uses ~/openclaw as the default dev checkout directory", async () => {

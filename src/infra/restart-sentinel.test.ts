@@ -52,7 +52,7 @@ import {
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
-  readUpdateInstallReceipt,
+  readSuccessfulGitUpdateReceipt,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -557,7 +557,11 @@ describe("restart sentinel", () => {
             mode: "git",
             root: installAlias,
             before: { sha: "aaaaaaaa" },
-            after: { sha: "bbbbbbbb", version: "expected-version" },
+            after: {
+              sha: " bbbbbbbb ",
+              upstreamRef: " origin/main ",
+              version: "expected-version",
+            },
           },
         });
 
@@ -569,15 +573,11 @@ describe("restart sentinel", () => {
         );
         await clearRestartSentinel();
 
-        await expect(readUpdateInstallReceipt()).resolves.toMatchObject({
-          kind: "update",
-          status: "ok",
-          ts,
-          stats: {
-            mode: "git",
-            root: await fs.realpath(installRoot),
-            after: { sha: "bbbbbbbb", version: "actual-version" },
-          },
+        await expect(readSuccessfulGitUpdateReceipt()).resolves.toEqual({
+          root: await fs.realpath(installRoot),
+          sha: "bbbbbbbb",
+          upstreamRef: "origin/main",
+          installedAtMs: ts,
         });
       });
     });
@@ -604,7 +604,7 @@ describe("restart sentinel", () => {
         process.cwd(),
       );
 
-      await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+      await expect(readSuccessfulGitUpdateReceipt()).resolves.toBeNull();
     });
   });
 
@@ -634,7 +634,7 @@ describe("restart sentinel", () => {
           stats: { reason: "restart-revision-mismatch" },
         },
       });
-      await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+      await expect(readSuccessfulGitUpdateReceipt()).resolves.toBeNull();
     });
   });
 
@@ -670,7 +670,7 @@ describe("restart sentinel", () => {
             stats: { reason: "restart-root-mismatch" },
           },
         });
-        await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+        await expect(readSuccessfulGitUpdateReceipt()).resolves.toBeNull();
       });
     });
   });
