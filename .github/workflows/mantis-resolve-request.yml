@@ -121,8 +121,6 @@ jobs:
                   stringParam(dispatchParams.lease_id) ||
                   stringParam(dispatchParams.lease),
                 pr_number: prNumber,
-                publish_artifact_name: stringParam(dispatchParams.publish_artifact_name),
-                publish_run_id: stringParam(dispatchParams.publish_run_id),
                 provider_mode:
                   stringParam(dispatchParams.provider_mode) ||
                   stringParam(dispatchParams["provider-mode"]),
@@ -194,15 +192,12 @@ jobs:
                 token(["provider", "crabbox_provider"]) ||
                 stringParam(dispatchParams.crabbox_provider) ||
                 stringParam(dispatchParams.provider),
-              instructions: stringParam(dispatchParams.instructions) || body,
               lease_id:
                 token(["lease", "lease_id", "crabbox_lease_id"]) ||
                 stringParam(dispatchParams.crabbox_lease_id) ||
                 stringParam(dispatchParams.lease_id) ||
                 stringParam(dispatchParams.lease),
               pr_number: String(issue.number),
-              publish_artifact_name: stringParam(dispatchParams.publish_artifact_name),
-              publish_run_id: stringParam(dispatchParams.publish_run_id),
               provider_mode:
                 token(["provider_mode", "provider-mode"]) ||
                 stringParam(dispatchParams.provider_mode) ||
