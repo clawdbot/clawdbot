@@ -638,24 +638,11 @@ async function runGuidedOnboardingFlow(
     });
     const recommendedConfig = recommendationOutcome.config;
     if (recommendedConfig !== persistedConfig) {
-      const latestSnapshot = await readConfigFileSnapshot();
-      if (!latestSnapshot.valid) {
-        throw new Error("App recommendations could not update an invalid OpenClaw config.");
-      }
-      const latestConfig = latestSnapshot.sourceConfig ?? latestSnapshot.config;
-      const { mergeWizardConfigOntoLatest, writeWizardConfigFile } =
-        await import("../wizard/setup.shared.js");
-      const mergedConfig = mergeWizardConfigOntoLatest(
-        latestConfig,
-        persistedConfig,
-        recommendedConfig,
-      );
-      await writeWizardConfigFile(mergedConfig, {
+      const { writeWizardConfigFile } = await import("../wizard/setup.shared.js");
+      persistedConfig = await writeWizardConfigFile(recommendedConfig, {
         allowConfigSizeDrop: false,
-        ...(latestSnapshot.hash ? { baseHash: latestSnapshot.hash } : {}),
-        migrationBaseConfig: latestConfig,
+        mergeBase: persistedConfig,
       });
-      persistedConfig = mergedConfig;
     }
     recommendationOutcome.commitResult();
   }

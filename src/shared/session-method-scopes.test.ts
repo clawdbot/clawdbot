@@ -16,12 +16,19 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     { incognito: true },
     { key: "agent:main:dashboard:incognito-123" },
     { parentSessionKey: "agent:main:subagent:incognito-123" },
-    { cwd: "/tmp/workspace" },
     { execNode: "node-1" },
   ])("requires admin for privileged session creation params %#", (params) => {
     expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
       "operator.admin",
     );
+  });
+
+  it("leaves Gateway cwd containment to the state-aware create handler", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.create", {
+        cwd: "/configured/workspace/packages/app",
+      }),
+    ).toBe("operator.write");
   });
 
   it.each([

@@ -552,11 +552,12 @@ function splitNameTokens(name: string) {
     .filter(Boolean);
 }
 
-function hasImportSource(source: string, specifier: string) {
+function hasImportSource(source: string, specifier: string, matchSuffix = false) {
   const escaped = escapeRegExp(specifier);
-  return new RegExp(`from\\s+["']${escaped}["']|import\\s*\\(\\s*["']${escaped}["']\\s*\\)`).test(
-    source,
-  );
+  const importSource = matchSuffix ? `(?:[^"']*/)?${escaped}` : escaped;
+  return new RegExp(
+    `from\\s+["']${importSource}["']|import\\s*\\(\\s*["']${importSource}["']\\s*\\)`,
+  ).test(source);
 }
 
 function hasAnyImportSource(source: string, specifiers: string[]) {
@@ -700,19 +701,20 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     "../acp/control-plane/manager.js",
     "../../../acp/control-plane/manager.js",
   ]);
-  const importsLifecycleRegistry = hasAnyImportSource(source, [
-    "./subagent-registry-completion.js",
-    "./subagent-registry-cleanup.js",
-    "./subagent-registry-state.js",
-    "./subagent-registry.js",
-    "./subagent-lifecycle-events.js",
-    "../context-engine/init.js",
-    "../context-engine/registry.js",
-    "../sessions/session-lifecycle-events.js",
-    "../../../context-engine/init.js",
-    "../../../context-engine/registry.js",
-    "../../../sessions/session-lifecycle-events.js",
-  ]);
+  const importsLifecycleRegistry =
+    hasImportSource(source, "subagent-registry.js", true) ||
+    hasAnyImportSource(source, [
+      "./subagent-registry-completion.js",
+      "./subagent-registry-cleanup.js",
+      "./subagent-registry-state.js",
+      "./subagent-lifecycle-events.js",
+      "../context-engine/init.js",
+      "../context-engine/registry.js",
+      "../sessions/session-lifecycle-events.js",
+      "../../../context-engine/init.js",
+      "../../../context-engine/registry.js",
+      "../../../sessions/session-lifecycle-events.js",
+    ]);
   const importsAnnounceDelivery = hasAnyImportSource(source, [
     "./subagent-announce.js",
     "./subagent-announce-dispatch.js",

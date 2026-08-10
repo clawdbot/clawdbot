@@ -45,7 +45,7 @@ is present under it (unsupported sections or keys fail as
 `policy/policy-jsonc-invalid` instead of being silently ignored). Minimal
 example covering every supported section:
 
-```jsonc
+```jsonc validate=false
 {
   "channels": {
     "denyRules": [

@@ -792,7 +792,7 @@ describe("worker runtime", () => {
     const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
     expect(toolNames).toHaveLength(6);
     const terminalIndex = gateway.applicationOrder.findIndex(
-      (entry) => entry === "live:lifecycle:end",
+      (entry) => entry === "live:lifecycle:finishing",
     );
     const finalTranscriptIndex = gateway.applicationOrder.findLastIndex((entry) =>
       entry.startsWith("transcript:"),
@@ -809,10 +809,11 @@ describe("worker runtime", () => {
       request.event.kind === "lifecycle" ? [request.event.payload.phase] : [],
     );
     expect(lifecycleEvents).toContain("start");
-    expect(lifecycleEvents).toContain("end");
+    expect(lifecycleEvents).toContain("finishing");
+    expect(lifecycleEvents).not.toContain("end");
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end", stopReason: "stop" },
+      payload: { phase: "finishing", stopReason: "stop" },
     });
     expect(gateway.transcriptRequests.length).toBeGreaterThan(0);
     expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual(
@@ -908,7 +909,7 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests.length).toBeGreaterThanOrEqual(2);
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end" },
+      payload: { phase: "finishing" },
     });
   });
 
@@ -926,7 +927,7 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests).toHaveLength(3);
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end" },
+      payload: { phase: "finishing" },
     });
   });
 
@@ -967,7 +968,7 @@ describe("worker runtime", () => {
     expect(gateway.methods).toContain("worker.inference.cancel");
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "end", aborted: true },
+      payload: { phase: "finishing", aborted: true },
     });
   });
 
@@ -998,9 +999,9 @@ describe("worker runtime", () => {
   });
 
   it.each([
-    ["error", "error", "error", { status: "failed", reason: "turn-failed" }],
-    ["cancelled", "aborted", "end", { status: "failed", reason: "turn-failed" }],
-    ["length", "length", "end", { status: "completed" }],
+    ["error", "error", "finishing", { status: "failed", reason: "turn-failed" }],
+    ["cancelled", "aborted", "finishing", { status: "failed", reason: "turn-failed" }],
+    ["length", "length", "finishing", { status: "completed" }],
   ] as const)(
     "reports remote inference %s terminal reasons",
     async (plan, stopReason, lifecyclePhase, expectedResult) => {
@@ -1031,7 +1032,7 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker live event rejected");
     expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
       kind: "lifecycle",
-      payload: { phase: "error" },
+      payload: { phase: "finishing" },
     });
   });
 
@@ -1067,9 +1068,11 @@ describe("worker runtime", () => {
     async (plan) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
         status: "failed",
         reason: "turn-failed",
+        transcriptLeafId: expect.any(String),
+        transcriptNextSeq: expect.any(Number),
       });
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
@@ -1217,9 +1220,11 @@ describe("worker runtime", () => {
       providerReplay: structuredClone(WORKER_LOOP_REPLAY),
     };
 
-    await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
       status: "failed",
       reason: "turn-failed",
+      transcriptLeafId: expect.any(String),
+      transcriptNextSeq: expect.any(Number),
     });
 
     expect(gateway.inferenceRequests).toHaveLength(1);

@@ -563,7 +563,7 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it.each(["heartbeat", "commitment-only"] as const)(
+  it.each(["heartbeat"] as const)(
     "records %s classification on the host-owned turn candidate",
     async (bootstrapContextRunKind) => {
       const admission = {
@@ -695,7 +695,13 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(
       contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
-    ).toHaveBeenCalledWith({ admission, isHeartbeat: false, lease });
+    ).toHaveBeenCalledWith({
+      admission,
+      isHeartbeat: false,
+      lease,
+      recorder: params.userTurnTranscriptRecorder,
+      sessionTarget: undefined,
+    });
     expect(order).toEqual(["drain", "begin", "run"]);
     expect(receivedContextEngines).toEqual([undefined]);
   });

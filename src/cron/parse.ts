@@ -3,8 +3,8 @@ import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 
 const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}[Tt]/;
+const ISO_DATE_RE = /^(?:[+-]\d{6}|\d{4})-\d{2}-\d{2}$/;
+const ISO_DATE_TIME_RE = /^(?:[+-]\d{6}|\d{4})-\d{2}-\d{2}[Tt]/;
 
 function normalizeUtcIso(raw: string) {
   if (ISO_TZ_RE.test(raw)) {

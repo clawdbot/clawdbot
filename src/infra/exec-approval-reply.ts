@@ -258,7 +258,7 @@ type BuildApprovalPresentationParams = {
 };
 
 /** Build the shipped command-backed portable approval controls. */
-export function buildApprovalPresentation(
+export function buildApprovalButtonPresentation(
   params: BuildApprovalPresentationParams,
 ): MessagePresentation | undefined {
   return buildApprovalPresentationFromActionDescriptors(
@@ -290,7 +290,7 @@ export function buildExecApprovalPresentation(params: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): MessagePresentation | undefined {
-  return buildApprovalPresentation({
+  return buildApprovalButtonPresentation({
     approvalId: params.approvalCommandId,
     ask: params.ask,
     allowedDecisions: params.allowedDecisions,
@@ -440,7 +440,7 @@ export function buildExecApprovalPendingReplyPayload(
 
   return {
     text: lines.join("\n\n"),
-    presentation: buildApprovalPresentation({
+    presentation: buildApprovalButtonPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),

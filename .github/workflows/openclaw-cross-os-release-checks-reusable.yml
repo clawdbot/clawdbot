@@ -249,6 +249,7 @@ env:
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}

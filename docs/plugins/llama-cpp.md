@@ -113,14 +113,8 @@ Set `memory.search.provider` to `local`:
 
 `local.modelPath` defaults to the `hf:` URI shown above (`embeddinggemma-300m-qat-Q8_0.gguf`).
 Point it at a different `hf:` URI or a local `.gguf` file to use another
-model. `local.modelCacheDir` overrides where downloaded models are cached
-(default: `~/.node-llama-cpp/models`), and `local.contextSize` accepts an
-integer or `"auto"`.
-
-When `local.contextSize` is numeric, the provider also gives that requirement
-to node-llama-cpp's automatic GPU-layer placement. This lets node-llama-cpp fit
-the model and embedding context together while retaining its memory-safety
-checks. With `"auto"`, node-llama-cpp keeps its normal automatic placement.
+model. Cache placement and embedding context sizing are managed by the
+llama.cpp provider; `memory.search.local` exposes only `modelPath`.
 
 ## Native runtime
 

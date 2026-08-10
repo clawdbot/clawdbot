@@ -85,6 +85,7 @@ jobs:
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
+      frozen_target: ${{ steps.manifest.outputs.frozen_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
@@ -713,6 +714,7 @@ jobs:
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
+            frozen_target: frozenTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
@@ -1468,14 +1470,22 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Install Playwright Chromium
+      - &install_playwright_chromium
+        name: Install Playwright Chromium
+        env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         run: |
-          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+          if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]; then
             # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
             # Install the managed browser revision pinned by the selected target instead.
             pnpm --dir ui exec playwright install chromium
-          else
+          elif [[ -f scripts/ensure-playwright-chromium.mts ]]; then
             node --import tsx scripts/ensure-playwright-chromium.mts
+          elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]; then
+            node scripts/ensure-playwright-chromium.mjs
+          else
+            echo "Target does not provide a supported Playwright Chromium installer." >&2
+            exit 1
           fi
 
       - name: Lint Control UI window.open usage
@@ -1526,8 +1536,7 @@ jobs:
           sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
-      - name: Install Playwright Chromium
-        run: node --import tsx scripts/ensure-playwright-chromium.mts
+      - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
         run: >-
@@ -1563,8 +1572,7 @@ jobs:
           sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
-      - name: Install Playwright Chromium
-        run: node --import tsx scripts/ensure-playwright-chromium.mts
+      - *install_playwright_chromium
 
       - name: Test MCP app conformance with a real Gateway
         run: >-
@@ -2279,6 +2287,7 @@ jobs:
 
       - name: Run check shard
         env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
@@ -2298,10 +2307,10 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-                echo "[skip] historical target skips the wall-clock doctor deprecation registry guard"
-              elif has_package_script "check:doctor-deprecation-registry"; then
+              if has_package_script "check:doctor-deprecation-registry"; then
                 pnpm check:doctor-deprecation-registry
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the wall-clock doctor deprecation registry guard"
               else
                 echo "Current CI targets must provide the check:doctor-deprecation-registry package script." >&2
                 exit 1

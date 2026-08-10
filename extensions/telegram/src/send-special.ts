@@ -242,7 +242,6 @@ async function sendPollTelegramWithContext(
             telegramCfg: context.account.config,
             groupConfig: groupPolicyConfig,
             topicConfig,
-            useTopicAndGroupOverrides: true,
           }) === "disabled";
         if (groupIngressDisabled) {
           pollAnswerRouting = "unavailable";

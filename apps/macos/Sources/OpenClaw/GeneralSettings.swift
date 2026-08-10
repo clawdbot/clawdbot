@@ -939,42 +939,4 @@ struct GeneralSettings_Previews: PreviewProvider {
             .environment(TailscaleService.shared)
     }
 }
-
-@MainActor
-extension GeneralSettings {
-    static func exerciseForTesting() {
-        let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .ssh
-        state.remoteTarget = "user@host:2222"
-        state.remoteUrl = "wss://gateway.example.ts.net"
-        state.remoteToken = "example-token"
-        state.remoteIdentity = "/tmp/id_ed25519"
-        state.remoteProjectRoot = "/tmp/openclaw"
-        state.remoteCliPath = "/tmp/openclaw"
-
-        let view = GeneralSettings(state: state)
-        view.gatewayStatus = GatewayEnvironmentStatus(
-            kind: .ok,
-            nodeVersion: "1.0.0",
-            gatewayVersion: "1.0.0",
-            requiredGateway: nil,
-            message: "Gateway ready")
-        view.remoteStatus = .failed("SSH failed")
-        view.showRemoteAdvanced = true
-        _ = view.body
-
-        state.connectionMode = .unconfigured
-        _ = view.body
-
-        state.connectionMode = .local
-        view.gatewayStatus = GatewayEnvironmentStatus(
-            kind: .error("Gateway offline"),
-            nodeVersion: nil,
-            gatewayVersion: nil,
-            requiredGateway: nil,
-            message: "Gateway offline")
-        _ = view.body
-    }
-}
 #endif

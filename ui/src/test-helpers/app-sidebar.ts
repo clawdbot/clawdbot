@@ -51,6 +51,7 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   offline: boolean;
   outboxCountForSession: (sessionKey: string) => number;
+  hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -66,6 +67,7 @@ export type SidebarLifecycleState = HTMLElement & {
     routeId: string,
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
+  onCloseNavDrawer: () => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
   requestUpdate: () => void;

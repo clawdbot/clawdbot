@@ -5,6 +5,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   formatToolDetail,
+  isCommandBearingToolCall,
   isShellToolDisplayName,
   resolveToolDisplay,
 } from "../agents/tool-display.js";
@@ -238,6 +239,7 @@ export type ChannelProgressDraftLineInput =
       summary?: string;
       progressText?: string;
       meta?: string;
+      commandBearing?: boolean;
     }
   | {
       event: "plan";
@@ -381,13 +383,12 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
 
 /** Tools whose detail is raw command text; commandText policy applies to these. */
 export function isCommandToolName(name: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(name);
-  return normalized === "exec" || normalized === "shell" || normalized === "bash";
+  return isCommandBearingToolCall(name);
 }
 
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
-  return itemKind === "command" || isCommandToolName(input.name);
+  return input.commandBearing === true || itemKind === "command" || isCommandToolName(input.name);
 }
 
 function resolveProgressDraftLineId(
@@ -444,7 +445,7 @@ function buildCommandOutputProgressLine(
 ): ChannelProgressDraftLine | undefined {
   const name = input.name ?? "exec";
   const correlationKey = resolveCommandProgressCorrelationKey(input);
-  const detail = options?.commandText === "status" ? [] : compactStrings([input.title]);
+  const detail = options?.commandText === "raw" ? compactStrings([input.title]) : [];
   const line = buildNamedProgressLine(input.event, name, detail, options, {
     correlationKey,
     id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
@@ -532,20 +533,19 @@ export function buildChannelProgressDraftLine(
   switch (input.event) {
     case "tool": {
       const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
+      const commandBearing = isCommandBearingToolCall(input.name, input.args);
       return buildNamedProgressLine(
         input.event,
         input.name,
         [
-          options?.commandText === "status" && isCommandToolName(input.name)
+          options?.commandText !== "raw" && commandBearing
             ? undefined
             : inferToolMeta(input.name, input.args, options?.detailMode),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
         {
-          correlationKey: isCommandToolName(input.name)
-            ? resolveCommandProgressCorrelationKey(input)
-            : undefined,
+          correlationKey: commandBearing ? resolveCommandProgressCorrelationKey(input) : undefined,
           id: itemId,
         },
       );
@@ -553,11 +553,9 @@ export function buildChannelProgressDraftLine(
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
       const meta =
-        input.meta ??
-        input.summary ??
-        (options?.commandText === "status" && isCommandProgressItem(input)
+        options?.commandText !== "raw" && isCommandProgressItem(input)
           ? undefined
-          : input.progressText);
+          : (input.meta ?? input.summary ?? input.progressText);
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }
@@ -876,7 +874,7 @@ export function resolveChannelStreamingProgressNarration(
 
 export function resolveChannelStreamingPreviewCommandText(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue: ChannelStreamingCommandTextMode = "raw",
+  defaultValue: ChannelStreamingCommandTextMode = "status",
 ): ChannelStreamingCommandTextMode {
   const config = getChannelStreamingConfigObject(entry);
   return (

@@ -131,9 +131,22 @@ check(
   "schema-types.ts must remain a registry-free schema-modules wrapper",
 );
 
+const publicIndexSource = read("packages/gateway-protocol/src/index.ts");
+check(
+  publicIndexSource.includes('} from "./schema-modules.js";'),
+  "index.ts must explicitly export the reviewed public schema allowlist",
+);
+check(
+  !publicIndexSource.includes('export * from "./schema-modules.js";'),
+  "index.ts must not expose every schema module export implicitly",
+);
+check(
+  !fs.existsSync(path.join(repoRoot, "packages/gateway-protocol/src/schema-export-registry.ts")),
+  "the public schema allowlist must stay in the canonical package index",
+);
+
 for (const relativePath of [
   "packages/gateway-protocol/src/index.ts",
-  "packages/gateway-protocol/src/schema-export-registry.ts",
   "packages/gateway-protocol/src/validator-registry.ts",
 ]) {
   check(

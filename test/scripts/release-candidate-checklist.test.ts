@@ -578,6 +578,79 @@ describe("release candidate checklist", () => {
     ).toBe("full");
   });
 
+  it("defaults beta and alpha Parallels to postpublish confidence", () => {
+    const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);
+    const alpha = parseArgs([
+      "--tag",
+      "v2026.5.14-alpha.2",
+      "--workflow-ref",
+      "tideclaw/alpha/2026-07-10-1200Z",
+      "--npm-dist-tag",
+      "alpha",
+    ]);
+
+    for (const options of [beta, alpha]) {
+      expect(options.releaseProfile).toBe("beta");
+      expect(options.parallelsMode).toBe("auto");
+      expect(options.skipParallels).toBe(true);
+      expect(options.parallelsSkipReason).toBe("deferred to postpublish release:beta-smoke");
+    }
+  });
+
+  it("supports explicit and profile-default Parallels execution", () => {
+    const beta = parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels"]);
+    const stable = parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]);
+    const full = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--release-profile",
+      "full",
+    ]);
+
+    expect(beta).toMatchObject({
+      parallelsMode: "run",
+      parallelsSkipReason: "",
+      skipParallels: false,
+    });
+    for (const options of [stable, full]) {
+      expect(options.parallelsMode).toBe("auto");
+      expect(options.skipParallels).toBe(false);
+      expect(options.parallelsSkipReason).toBe("");
+    }
+  });
+
+  it("supports an explicit Parallels skip without changing persisted state shape", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--skip-parallels",
+    ]);
+    const state = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+
+    expect(options).toMatchObject({
+      parallelsMode: "skip",
+      parallelsSkipReason: "operator skipped --skip-parallels",
+      skipParallels: true,
+    });
+    expect(state.skipParallels).toBe(true);
+    expect(state).not.toHaveProperty("parallelsMode");
+    expect(state).not.toHaveProperty("parallelsSkipReason");
+    expect(state).not.toHaveProperty("runParallels");
+  });
+
+  it("rejects conflicting Parallels modes", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels", "--skip-parallels"]),
+    ).toThrow("--run-parallels and --skip-parallels cannot be combined");
+  });
+
   it("runs Parallels against the exact prepared candidate tarball", () => {
     expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [], "/trusted")).toEqual([
       "exec",
@@ -937,6 +1010,7 @@ describe("release candidate checklist", () => {
       duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
       duplicateFlag("--skip-dispatch"),
       duplicateFlag("--skip-local-generated-check"),
+      duplicateFlag("--run-parallels"),
       duplicateFlag("--skip-parallels"),
       duplicateFlag("--skip-telegram"),
       duplicateOption("--telegram-provider-mode", "mock-openai", "live-frontier"),

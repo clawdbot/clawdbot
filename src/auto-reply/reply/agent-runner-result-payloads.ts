@@ -21,7 +21,6 @@ import {
 import type { ReplyPayload } from "../types.js";
 import {
   buildSilentFallbackFailurePayload,
-  enqueueCommitmentExtractionForTurn,
   hasSuccessfulSourceReplyDelivery,
   hasSuccessfulTerminalSourceReplyDelivery,
   refreshSessionEntryFromStore,
@@ -55,7 +54,6 @@ export async function prepareReplyAgentPayloads(state: {
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,
-    commandBody,
     followupRun,
     isHeartbeat,
     opts,
@@ -467,18 +465,6 @@ export async function prepareReplyAgentPayloads(state: {
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
-
-  enqueueCommitmentExtractionForTurn({
-    cfg,
-    commandBody,
-    isHeartbeat,
-    followupRun,
-    sessionCtx,
-    sessionKey,
-    replyToChannel,
-    payloads: replyPayloads,
-    runId,
-  });
 
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 

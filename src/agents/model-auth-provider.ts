@@ -596,7 +596,9 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage);
+      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage, {
+        providerGuidance: true,
+      });
     }
   }
 

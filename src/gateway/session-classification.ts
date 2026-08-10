@@ -64,11 +64,7 @@ function classifyRest(rest: string): SessionClassification {
   if (normalized.startsWith("dreaming-narrative-")) {
     return "dreaming";
   }
-  if (
-    normalized === "boot" ||
-    normalized.startsWith("commitments:") ||
-    normalized.startsWith("internal-session-effects:")
-  ) {
+  if (normalized === "boot" || normalized.startsWith("internal-session-effects:")) {
     return "system";
   }
   return "custom";

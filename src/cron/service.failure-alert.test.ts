@@ -622,8 +622,8 @@ describe("CronService failure alerts", () => {
         if (typeof alertText !== "string") {
           throw new Error("expected failure alert text");
         }
-        expect(alertText).toMatch(
-          /Automation "gateway restart" skipped 2 times\nSkip reason: disabled/,
+        expect(alertText).toBe(
+          'Automation "gateway restart" skipped 2 times\nCheck automation history for details.',
         );
 
         const skippedJob = cron.getJob(job.id);
@@ -633,7 +633,7 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("surfaces classified causes before raw errors in failure alerts", async () => {
+  it("keeps classified raw errors out of chat failure alerts", async () => {
     await withFailureAlertCron(
       {
         failureAlert: { enabled: true, after: 1 },
@@ -648,11 +648,7 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         const alertText = alertCallArg(sendCronFailureAlert).text;
-        expect(alertText).toBe(
-          'Automation "timeout cause alert" failed 1 times\n' +
-            "Cause: timeout\n" +
-            "Last error: cron: job execution timed out",
-        );
+        expect(alertText).toBe('Automation "timeout cause alert" failed 1 times\nCause: timeout');
       },
     );
   });
@@ -734,11 +730,7 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         const alertText = alertCallArg(sendCronFailureAlert).text;
-        expect(alertText).toBe(
-          'Automation "provider limit alert" failed 1 times\n' +
-            "Cause: billing\n" +
-            "Last error: 403 Key limit exceeded (monthly limit)",
-        );
+        expect(alertText).toBe('Automation "provider limit alert" failed 1 times\nCause: billing');
       },
     );
   });
@@ -763,7 +755,7 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         expect(alertCallArg(sendCronFailureAlert).text).toBe(
           'Automation "permanent script alert" failed 1 times\n' +
-            "Last error: cron script failed after a tool side effect: request timed out",
+            "Check automation history for details.",
         );
       },
     );
@@ -785,7 +777,8 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
         const alertText = alertCallArg(sendCronFailureAlert).text;
         expect(alertText).toBe(
-          'Automation "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
+          'Automation "skipped timeout" skipped 1 times\n' +
+            "Check automation history for details.",
         );
       },
     );
@@ -811,12 +804,17 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("truncates failure alert error text on UTF-16 code-point boundary", async () => {
+  it("truncates webhook failure alert error text on UTF-16 code-point boundary", async () => {
     // 209 code units: emoji (surrogate pair) at positions 199-200 straddles the 200-unit boundary
     const longError = `${"x".repeat(199)}🎉trailing`;
     await withFailureAlertCron(
       {
-        failureAlert: { enabled: true, after: 1 },
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "webhook",
+          to: "https://alerts.example.test/failures",
+        },
         runResult: { status: "error", error: longError },
       },
       async ({ cron, sendCronFailureAlert, addJob }) => {

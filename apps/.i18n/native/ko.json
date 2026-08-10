@@ -24,6 +24,36 @@
       "translated": "Android 설정 따르기 · $systemLanguageTag"
     },
     {
+      "id": "native.android.0eb613765dffd7d5",
+      "source": "Chat failed",
+      "translated": "채팅 실패"
+    },
+    {
+      "id": "native.android.49b641d61b32710e",
+      "source": "Reply to OpenClaw…",
+      "translated": "OpenClaw에 답장…"
+    },
+    {
+      "id": "native.android.c17863b62b70d822",
+      "source": "Reply",
+      "translated": "답장"
+    },
+    {
+      "id": "native.android.8700c1dee5524079",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.2028e1559e760da1",
+      "source": "You",
+      "translated": "나"
+    },
+    {
+      "id": "native.android.38a6e56b90d42b9f",
+      "source": "Chat",
+      "translated": "채팅"
+    },
+    {
       "id": "native.android.2932b1c5134668df",
       "source": "Every ${days}d",
       "translated": "${days}일마다"
@@ -18619,6 +18649,11 @@
       "translated": "업데이트 확인…"
     },
     {
+      "id": "native.apple.2318ba3118a022eb",
+      "source": "App updates are unavailable while a profile is active.",
+      "translated": "프로필이 활성화된 동안에는 앱 업데이트를 사용할 수 없습니다."
+    },
+    {
       "id": "native.apple.ddec1d4e5e5b43cb",
       "source": "Updates unavailable in this build.",
       "translated": "이 빌드에서는 업데이트를 사용할 수 없습니다."
@@ -20209,6 +20244,11 @@
       "translated": "참고: macOS에서는 손쉬운 사용 또는 화면 기록을 활성화한 후 OpenClaw를 다시 시작해야 할 수 있습니다."
     },
     {
+      "id": "native.apple.974d1478dd99ffb0",
+      "source": "Login-agent restart is unavailable under a profile.",
+      "translated": "프로필에서는 로그인 에이전트 재시작을 사용할 수 없습니다."
+    },
+    {
       "id": "native.apple.e52d463773aef1e1",
       "source": "Restart OpenClaw",
       "translated": "OpenClaw 재시작"
@@ -20322,11 +20362,6 @@
       "id": "native.apple.e7d1ee5662c1d646",
       "source": "Degraded",
       "translated": "성능 저하"
-    },
-    {
-      "id": "native.apple.0397fa643df26663",
-      "source": "Test",
-      "translated": "테스트"
     },
     {
       "id": "native.apple.a8af393b84d63ab8",
@@ -20519,14 +20554,14 @@
       "translated": "Gateway 연결에 실패했습니다."
     },
     {
-      "id": "native.apple.8a9259535246e7cf",
-      "source": "OpenClaw needs attention",
-      "translated": "OpenClaw 주의 필요"
-    },
-    {
       "id": "native.apple.412b40dec8b94e09",
       "source": "Open Connection settings to fix it.",
       "translated": "연결 설정을 열어 문제를 해결하세요."
+    },
+    {
+      "id": "native.apple.8a9259535246e7cf",
+      "source": "OpenClaw needs attention",
+      "translated": "OpenClaw 주의 필요"
     },
     {
       "id": "native.apple.0bec3829fd3ff778",
@@ -20747,16 +20782,6 @@
       "id": "native.apple.a861b3a0aafb24cc",
       "source": "Launch at login",
       "translated": "로그인 시 실행"
-    },
-    {
-      "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "로그인하면 OpenClaw를 자동으로 시작합니다."
-    },
-    {
-      "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "로그인 시 실행을 활성화하기 전에 OpenClaw를 응용 프로그램 폴더로 옮기세요."
     },
     {
       "id": "native.apple.927819c087ca3520",
@@ -21199,6 +21224,21 @@
       "translated": "로그 열기"
     },
     {
+      "id": "native.apple.39f0173209fd7e74",
+      "source": "Launch at login is unavailable while an app profile is active.",
+      "translated": "앱 프로필이 활성화된 동안에는 로그인 시 실행을 사용할 수 없습니다."
+    },
+    {
+      "id": "native.apple.405e74c96498b7c0",
+      "source": "Automatically start OpenClaw after you sign in.",
+      "translated": "로그인하면 OpenClaw를 자동으로 시작합니다."
+    },
+    {
+      "id": "native.apple.8b74758a60f78642",
+      "source": "Move OpenClaw to Applications before enabling launch at login.",
+      "translated": "로그인 시 실행을 활성화하기 전에 OpenClaw를 응용 프로그램 폴더로 옮기세요."
+    },
+    {
       "id": "native.apple.4d96b20de25a9ddf",
       "source": "probe degraded",
       "translated": "프로브 성능 저하"
@@ -21312,21 +21352,6 @@
       "id": "native.apple.12d83e5f01c98fc0",
       "source": "\\(status.label) presence",
       "translated": "\\(status.label) presence"
-    },
-    {
-      "id": "native.apple.ee499f632a5076c5",
-      "source": "Android",
-      "translated": "Android"
-    },
-    {
-      "id": "native.apple.57ca2baac54a05fc",
-      "source": "Sparkles",
-      "translated": "반짝임"
-    },
-    {
-      "id": "native.apple.c9a63d0f5247185d",
-      "source": "Plain",
-      "translated": "일반"
     },
     {
       "id": "native.apple.3f4378c2de189ec9",
@@ -21784,6 +21809,11 @@
       "translated": "\\(self.label):"
     },
     {
+      "id": "native.apple.5ca13315339f6c15",
+      "source": "Persistent Mac node service unavailable under app profile; runtime node remains available.",
+      "translated": "앱 프로필에서는 영구 Mac 노드 서비스를 사용할 수 없습니다. 런타임 노드는 계속 사용할 수 있습니다."
+    },
+    {
       "id": "native.apple.800d9fd07f5dde85",
       "source": "Finish",
       "translated": "완료"
@@ -21872,26 +21902,6 @@
       "id": "native.apple.51a8291ef11e844d",
       "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
       "translated": "자세한 내용은 위 각 옵션에 표시되어 있습니다. 로그인을 수정한 후 다시 시도하거나, 아래에서 API 키 또는 토큰으로 연결할 수 있습니다."
-    },
-    {
-      "id": "native.apple.6526ced182e1fe50",
-      "source": "Your AI is ready",
-      "translated": "AI가 준비되었습니다"
-    },
-    {
-      "id": "native.apple.5d8998398be53d6f",
-      "source": "Setup details",
-      "translated": "설정 세부 정보"
-    },
-    {
-      "id": "native.apple.1967fcaeb9e74257",
-      "source": "Copy setup details",
-      "translated": "설정 세부 정보 복사"
-    },
-    {
-      "id": "native.apple.c90ec3f0f60d21bc",
-      "source": "Choose a different AI…",
-      "translated": "다른 AI 선택…"
     },
     {
       "id": "native.apple.e0458fcb8c0536ea",
@@ -22434,16 +22444,6 @@
       "translated": " · ssh \\(parsed.port)"
     },
     {
-      "id": "native.apple.4bad86566d023a64",
-      "source": "Grant permissions",
-      "translated": "권한 부여"
-    },
-    {
-      "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "이 macOS 권한을 통해 OpenClaw가 이 Mac에서 앱을 자동화하고 컨텍스트를 캡처할 수 있습니다. 상태는 자동으로 업데이트됩니다."
-    },
-    {
       "id": "native.apple.42af85cdf91d0264",
       "source": "Getting things ready",
       "translated": "준비 중"
@@ -22509,11 +22509,6 @@
       "translated": "모두 준비되었습니다!"
     },
     {
-      "id": "native.apple.9f73f753266a9fa2",
-      "source": "Finish opens the chat — say hi to your new agent.",
-      "translated": "마침을 누르면 채팅이 열립니다 — 새 에이전트에게 인사해 보세요."
-    },
-    {
       "id": "native.apple.678dee9dedd72ce4",
       "source": "Configure later",
       "translated": "나중에 구성"
@@ -22522,16 +22517,6 @@
       "id": "native.apple.f87bc67e676d1289",
       "source": "Pick Local or Remote in Settings → General whenever you’re ready.",
       "translated": "준비되면 Settings → General에서 Local 또는 Remote를 선택하세요."
-    },
-    {
-      "id": "native.apple.2eb061cd9d5f19fe",
-      "source": "Remote gateway checklist",
-      "translated": "Remote gateway 체크리스트"
-    },
-    {
-      "id": "native.apple.952e85bfb2d4b4f5",
-      "source": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.",
-      "translated": "gateway host에서 `openclaw` 패키지를 설치/업데이트하고 자격 증명이 있는지 확인하세요\n(일반적으로 `~/.openclaw/credentials/oauth.json`). 그런 다음 필요한 경우 다시 연결하세요."
     },
     {
       "id": "native.apple.4e5ccb411db3e80f",
@@ -22597,36 +22582,6 @@
       "id": "native.apple.e54dfc2913c56f6f",
       "source": "Launch at login",
       "translated": "로그인 시 실행"
-    },
-    {
-      "id": "native.apple.040f2884f928f376",
-      "source": "Skills included",
-      "translated": "포함된 Skills"
-    },
-    {
-      "id": "native.apple.e38ea89bafb6b75d",
-      "source": "Refresh",
-      "translated": "새로 고침"
-    },
-    {
-      "id": "native.apple.38fc7e2b80c4e0fa",
-      "source": "Couldn’t load skills from the Gateway.",
-      "translated": "Gateway에서 Skills를 불러올 수 없습니다."
-    },
-    {
-      "id": "native.apple.3b06694a81edc126",
-      "source": "Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).",
-      "translated": "Gateway가 실행 중이고 연결되어 있는지 확인한 다음 새로 고침을 누르세요(또는 Settings → Skills를 여세요)."
-    },
-    {
-      "id": "native.apple.b6de2a51e5fb8397",
-      "source": "Details: \\(error)",
-      "translated": "세부 정보: \\(error)"
-    },
-    {
-      "id": "native.apple.b82621bc28d4c6e3",
-      "source": "No skills reported yet.",
-      "translated": "아직 보고된 Skills가 없습니다."
     },
     {
       "id": "native.apple.048e9cc88fb7af55",
@@ -23884,6 +23839,11 @@
       "translated": "설정 필요"
     },
     {
+      "id": "native.apple.5bea2c67b8d4ccf9",
+      "source": "Bundled",
+      "translated": "번들됨"
+    },
+    {
       "id": "native.apple.1b2cab26853b1074",
       "source": "Managed",
       "translated": "관리됨"
@@ -23987,11 +23947,6 @@
       "id": "native.apple.6b59063df92d2991",
       "source": "Skill enabled",
       "translated": "Skill 활성화됨"
-    },
-    {
-      "id": "native.apple.5bea2c67b8d4ccf9",
-      "source": "Bundled",
-      "translated": "번들됨"
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",

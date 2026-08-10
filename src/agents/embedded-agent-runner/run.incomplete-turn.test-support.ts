@@ -1,8 +1,8 @@
 import { vi } from "vitest";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isStrictAgenticSupportedProviderModel } from "../execution-contract.js";
+import type { FailoverReason } from "../failover/signal.js";
 import type { AgentHarness } from "../harness/types.js";
 import { buildEmbeddedRunBlockedResult } from "./run/blocked-run-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";

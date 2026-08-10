@@ -46,6 +46,7 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  commandBearing: boolean;
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
@@ -84,6 +85,16 @@ export type EmbeddedAgentSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
+  liveEditDiffStateById: Map<
+    string,
+    {
+      added: number;
+      removed: number;
+      emittedAdded: number;
+      emittedRemoved: number;
+      lastCheckedAtMs: number;
+    }
+  >;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -215,7 +226,11 @@ export type EmbeddedAgentSubscribeContext = {
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (toolName?: string, meta?: string) => void;
+  emitToolSummary: (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   stripBlockTags: (
     text: string,
@@ -353,7 +368,9 @@ type ToolHandlerState = Pick<
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
   | "assistantMessageIndex"
->;
+> & {
+  liveEditDiffStateById?: EmbeddedAgentSubscribeState["liveEditDiffStateById"];
+};
 
 export type ToolHandlerContext = {
   params: ToolHandlerParams;
@@ -365,7 +382,11 @@ export type ToolHandlerContext = {
   flushBlockReplyBuffer: () => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (toolName?: string, meta?: string) => void;
+  emitToolSummary: (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;

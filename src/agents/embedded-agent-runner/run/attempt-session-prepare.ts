@@ -32,6 +32,7 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
@@ -44,7 +45,6 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";

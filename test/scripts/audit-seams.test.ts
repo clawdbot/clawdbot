@@ -31,7 +31,7 @@ describe("audit-seams cron seam classification", () => {
 
   it("detects scheduler-state seams in cron service orchestration", () => {
     const source = `
-      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs.js";
+      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs-scheduling.js";
       import { ensureLoaded, persist } from "./store.js";
       import { armTimer, runMissedJobs } from "./timer.js";
 
@@ -52,11 +52,11 @@ describe("audit-seams cron seam classification", () => {
 });
 
 describe("audit-seams subagent seam classification", () => {
-  it("detects subagent spawn and cleanup handoff boundaries", () => {
+  it("detects relocated native spawn executor seams", () => {
     const source = `
       import { callGateway } from "../../../gateway/call.js";
-      import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
       import { registerSubagentRun } from "../../subagent-registry.js";
+      import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
 
       export async function spawnSubagentDirect() {
         const response = await callGateway({ method: "agent.run", params: { task: "do it" } });

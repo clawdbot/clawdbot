@@ -51,13 +51,6 @@ export type RealtimeVoiceFastContextConsultResult =
 
 const MAX_SNIPPET_CHARS = 700;
 
-class RealtimeFastContextTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`fast context lookup timed out after ${timeoutMs}ms`);
-    this.name = "RealtimeFastContextTimeoutError";
-  }
-}
-
 function normalizeSnippet(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= MAX_SNIPPET_CHARS) {
@@ -172,7 +165,7 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
         query,
       }),
       timeoutMs,
-      { createError: () => new RealtimeFastContextTimeoutError(timeoutMs) },
+      { createError: () => new Error(`fast context lookup timed out after ${timeoutMs}ms`) },
     );
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);
