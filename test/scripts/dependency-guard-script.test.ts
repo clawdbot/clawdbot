@@ -348,20 +348,32 @@ describe("dependency guard script", () => {
   });
 
   it("does not infer guard state from rendered dependency paths", () => {
-    const body = renderBlockedDependencyComment({
-      baseBranch: "main",
-      headSha,
-      lockfileChanges: [
-        `xApproved SHA: \`${staleSha}\`pnpm-lock.yaml`,
-        "x### Dependency graph change authorizedpnpm-lock.yaml",
-        "x### Dependency graph changes notedpnpm-lock.yaml",
-      ],
-      dependencyManifestChanges: [],
-    });
+    const blockedBody = (path: string) =>
+      renderBlockedDependencyComment({
+        baseBranch: "main",
+        headSha,
+        lockfileChanges: [path],
+        dependencyManifestChanges: [],
+      });
 
-    expect(dependencyOverrideExpectedSha({ body }, headSha)).toBe(headSha);
-    expect(isDependencyGuardAuthorizedForHead({ body }, headSha)).toBe(false);
-    expect(isDependencyGuardTrustedForHead({ body }, headSha)).toBe(false);
+    expect(
+      dependencyOverrideExpectedSha(
+        { body: blockedBody(`xApproved SHA: \`${staleSha}\`pnpm-lock.yaml`) },
+        headSha,
+      ),
+    ).toBe(headSha);
+    expect(
+      isDependencyGuardAuthorizedForHead(
+        { body: blockedBody("x### Dependency graph change authorizedpnpm-lock.yaml") },
+        headSha,
+      ),
+    ).toBe(false);
+    expect(
+      isDependencyGuardTrustedForHead(
+        { body: blockedBody("x### Dependency graph changes notedpnpm-lock.yaml") },
+        headSha,
+      ),
+    ).toBe(false);
   });
 
   it("trusts only configured dependency guard marker comment authors", () => {
