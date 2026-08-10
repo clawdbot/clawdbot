@@ -10,7 +10,7 @@ import {
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-export const listChannelPlugins = listLoadedChannelPlugins as () => ChannelPlugin[];
+export const listChannelPlugins = () => listLoadedChannelPlugins() as ChannelPlugin[];
 
 /**
  * Returns a loaded channel plugin without falling back to bundled metadata.
