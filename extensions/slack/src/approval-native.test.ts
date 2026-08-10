@@ -274,7 +274,7 @@ describe("slack native approval adapter", () => {
       },
     });
 
-    expect(targets).toEqual([{ to: "U123APPROVER" }]);
+    expect(targets).toEqual([{ to: "user:U123APPROVER" }]);
   });
 
   it("routes plugin approval dm targets to plugin approvers", async () => {
@@ -304,7 +304,7 @@ describe("slack native approval adapter", () => {
       },
     });
 
-    expect(targets).toEqual([{ to: "U123OWNER" }]);
+    expect(targets).toEqual([{ to: "user:U123OWNER" }]);
   });
 
   it("enables native plugin delivery from plugin approvers without exec approvers", async () => {
@@ -359,7 +359,7 @@ describe("slack native approval adapter", () => {
         approvalKind: "plugin",
         request,
       }),
-    ).toEqual([{ to: "U123OWNER" }]);
+    ).toEqual([{ to: "user:U123OWNER" }]);
     expect(
       slackApprovalCapability.nativeRuntime?.availability.isConfigured({
         cfg,

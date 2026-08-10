@@ -109,7 +109,7 @@ function resolveSlackApproverDmTargets(params: {
       : getSlackExecApprovalApprovers(params);
   const teamId = resolveEnterpriseApprovalTeamId(params.request);
   return approvers.map((approver) => ({
-    to: formatSlackTarget({ kind: "user", id: approver, teamId }),
+    to: formatSlackTarget({ kind: "user", id: approver, teamId, explicitKind: true }),
   }));
 }
 

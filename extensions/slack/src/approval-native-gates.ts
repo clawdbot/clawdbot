@@ -38,7 +38,6 @@ import {
   canonicalizeSlackApiTargetId,
   formatSlackTarget,
   parseSlackTarget,
-  type SlackTarget,
 } from "./target-parsing.js";
 
 export type SlackApprovalKind = "exec" | "plugin";
@@ -136,7 +135,7 @@ export function resolveTurnSourceSlackOriginTarget(
     return null;
   }
   return {
-    to: formatSlackApprovalTarget(parsed),
+    to: formatSlackTarget({ ...parsed, explicitKind: true }),
     threadId: stringifyRouteThreadId(request.request.turnSourceThreadId),
   };
 }
@@ -169,7 +168,11 @@ export function resolveSlackFallbackOriginTarget(
     return null;
   }
   return {
-    to: formatSlackApprovalTarget(parsed, canonicalizeSlackApiTargetId(parsed.kind, parsed.id)),
+    to: formatSlackTarget({
+      ...parsed,
+      id: canonicalizeSlackApiTargetId(parsed.kind, parsed.id),
+      explicitKind: true,
+    }),
     threadId: sessionTarget.threadId,
   };
 }
@@ -240,7 +243,7 @@ export function normalizeSlackForwardTarget(
     return null;
   }
   return {
-    to: formatSlackApprovalTarget(parsed),
+    to: formatSlackTarget({ ...parsed, explicitKind: true }),
     accountId: normalizeOptionalString(target.accountId),
     threadId: stringifyRouteThreadId(target.threadId),
   };
@@ -454,12 +457,6 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
     agentFilter: config?.agentFilter,
     sessionFilter: config?.sessionFilter,
   });
-}
-
-function formatSlackApprovalTarget(target: SlackTarget, id = target.id): string {
-  return target.teamId
-    ? formatSlackTarget({ teamId: target.teamId, kind: target.kind, id })
-    : `${target.kind}:${id}`;
 }
 
 export function resolveEnterpriseApprovalTeamId(
