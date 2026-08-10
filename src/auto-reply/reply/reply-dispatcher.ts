@@ -8,6 +8,7 @@ import {
   isProvenDeliveryNotSentError,
 } from "../../infra/delivery-recovery.shared.js";
 import { collectErrorGraphCandidates } from "../../infra/errors.js";
+import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -442,6 +443,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   ): Promise<ReplyDispatchDeliveryOutcome> => {
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
+    const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
     try {
       if (beforeDeliver) {
         try {
@@ -451,21 +453,60 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           throw error;
         }
         if (!deliverPayload) {
+          // Record the intentional non-delivery before observers run so a
+          // restart during observer work cannot replay a suppressed final.
+          if (custody) {
+            await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "suppressed", [
+              "prepared",
+            ]);
+          }
           await notifyBeforeDeliverCancelled(payload, info);
           return "cancelled";
         }
         deliverPayload = copyReplyPayloadMetadata(payload, deliverPayload);
       }
+      if (custody) {
+        // Claim direct-send custody before provider I/O; a non-prepared marker
+        // means another owner already delivered, suppressed, or superseded this
+        // final, so repeating the send would duplicate it.
+        const claim = await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          "queued",
+          ["prepared"],
+        );
+        if (claim.state !== "queued") {
+          await notifyBeforeDeliverCancelled(payload, info);
+          return "cancelled";
+        }
+      }
       deliveryStarted = true;
       await options.deliver(deliverPayload, info);
+      if (custody) {
+        await settlePendingFinalDelivery({ kind: "pending-final", ...custody }, "delivered", [
+          "queued",
+        ]);
+      }
       return "delivered";
     } catch (error) {
+      const outcome =
+        deliveryStarted && !isRetryableNoSendFailure(error)
+          ? "failed-deliver"
+          : "failed-before-deliver";
+      if (custody && deliveryStarted) {
+        // Proven no-send keeps the marker replayable for restart recovery —
+        // including after direct custody escalated queued→unknown pre-I/O,
+        // since the error proves the send never crossed the wire. Anything
+        // else after platform I/O started fails closed as "unknown".
+        await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          outcome === "failed-deliver" ? "unknown" : "prepared",
+          outcome === "failed-deliver" ? ["queued"] : ["queued", "unknown"],
+        );
+      }
       try {
         await options.onError?.(error, info);
       } catch {}
-      return deliveryStarted && !isRetryableNoSendFailure(error)
-        ? "failed-deliver"
-        : "failed-before-deliver";
+      return outcome;
     }
   };
 

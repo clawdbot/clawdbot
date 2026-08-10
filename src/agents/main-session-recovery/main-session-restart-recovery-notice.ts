@@ -86,6 +86,7 @@ export async function failUnresumableMainSession(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
   observation: MainSessionRecoveryObservation;
   reason: string;
+  noticeText?: string;
   sessionKey: string;
   storePath: string;
 }): Promise<"failed" | "skipped"> {
@@ -105,6 +106,7 @@ export async function failUnresumableMainSession(params: {
       entry: params.entry,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
+      ...(params.noticeText ? { text: params.noticeText } : {}),
     })) !== "written"
   ) {
     // Keep ownership for another recovery attempt until its terminal notice is durable.
@@ -126,7 +128,7 @@ export async function failUnresumableMainSession(params: {
       gatewayRuntime: params.gatewayRuntime,
       reason: params.reason,
       sessionKey: params.sessionKey,
-      text: UNRESUMABLE_SESSION_NOTICE,
+      text: params.noticeText ?? UNRESUMABLE_SESSION_NOTICE,
     });
   }
   return "failed";
