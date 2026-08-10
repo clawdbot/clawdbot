@@ -101,16 +101,25 @@ describe("QA runner runtime integration", () => {
   it("marks and detects text-only errors across QA delivery paths", async () => {
     const failureText = "Text-only QA failure from the embedded runner.";
     const runtime = createQaRunnerRuntime();
-    runtime.channel.inbound.dispatch = async (params) => {
+    const dispatchFailure = async (
+      params: Parameters<typeof runtime.channel.inbound.dispatch>[0],
+    ) => {
+      if (!("deliver" in params.delivery) || typeof params.delivery.deliver !== "function") {
+        throw new Error("QA failure fixture requires core-managed delivery");
+      }
       await params.delivery.deliver({ text: failureText, isError: true }, { kind: "final" });
       return {
         admission: params.admission ?? { kind: "dispatch" as const },
         dispatched: true,
         ctxPayload: params.ctxPayload,
         routeSessionKey: params.route.sessionKey,
-        dispatchResult: undefined,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 1 },
+        },
       };
     };
+    runtime.channel.inbound.dispatch = dispatchFailure as typeof runtime.channel.inbound.dispatch;
     const harness = await startQaRuntimeIntegration(runtime);
     const transport = createQaChannelTransport(harness.state);
     let sent = false;
