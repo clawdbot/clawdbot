@@ -576,6 +576,7 @@ export async function runPreparedEmbeddedLoop(
         hasPartialAssistantTextAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
       } = terminalPrepared;
 
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
@@ -595,6 +596,7 @@ export async function runPreparedEmbeddedLoop(
         finalAssistantRawText,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
       });
       if (terminalTimeoutResult) {
         return terminalTimeoutResult;
@@ -621,6 +623,7 @@ export async function runPreparedEmbeddedLoop(
         agentMeta,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
         maxReasoningOnlyRetryAttempts,
         maxEmptyResponseRetryAttempts,
         attemptCompactionCount: terminalAttemptCompactionCount,

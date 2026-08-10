@@ -10,6 +10,65 @@ const cfg = {
   },
 } as OpenClawConfig;
 
+const MCP_SUPPRESSION_WARNING =
+  "This automation's explicit toolsAllow omits every configured MCP selector, so the bundle MCP runtime will not start. Add bundle-mcp, group:plugins, an exact <server>__<tool> selector, or * to enable configured MCP tools.";
+
+function makePreflightParams(toolsAllow: string[] | undefined) {
+  return {
+    cfg,
+    jobId: "job-explicit-cap",
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    workspaceDir: "/workspace",
+    agentPayload: {
+      kind: "agentTurn" as const,
+      message: "run",
+      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+    },
+  };
+}
+
+describe("configured MCP explicit-cap diagnostics", () => {
+  it("persists an actionable warning when a finite explicit cap suppresses configured MCP", async () => {
+    const diagnostics = await createCronToolsAllowPreflightDiagnostics(
+      makePreflightParams(["read"]),
+    );
+
+    expect(diagnostics).toMatchObject({
+      summary: MCP_SUPPRESSION_WARNING,
+      entries: [
+        expect.objectContaining({
+          source: "cron-preflight",
+          severity: "warn",
+          message: MCP_SUPPRESSION_WARNING,
+        }),
+      ],
+    });
+  });
+
+  it.each([
+    { name: "omitted cap", toolsAllow: undefined },
+    { name: "intentional deny-all cap", toolsAllow: [] },
+    { name: "wildcard cap", toolsAllow: ["*"] },
+    { name: "bundle group", toolsAllow: ["bundle-mcp"] },
+    { name: "plugin group", toolsAllow: ["group:plugins"] },
+    { name: "exact MCP tool", toolsAllow: ["notes__read"] },
+  ])("does not warn for $name", async ({ toolsAllow }) => {
+    await expect(
+      createCronToolsAllowPreflightDiagnostics(makePreflightParams(toolsAllow)),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not warn when the run has no enabled configured MCP server", async () => {
+    await expect(
+      createCronToolsAllowPreflightDiagnostics({
+        ...makePreflightParams(["read"]),
+        cfg: {},
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("configured MCP inherited-cap diagnostics", () => {
   it("persists an actionable warning for legacy Codex default caps", async () => {
     const diagnostics = await createCronToolsAllowPreflightDiagnostics({

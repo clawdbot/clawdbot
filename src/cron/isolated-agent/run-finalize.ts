@@ -307,6 +307,12 @@ export async function finalizeCronRun(params: {
     hasFatalErrorPayload,
     embeddedRunError,
   } = cronPayloadOutcome;
+  const terminalToolFailureMessage = normalizeOptionalString(
+    finalRunResult.meta?.terminalToolFailure?.message,
+  );
+  if (hasFatalErrorPayload && terminalToolFailureMessage) {
+    summary = terminalToolFailureMessage;
+  }
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -330,7 +336,7 @@ export async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
-        hasFatalErrorPayload
+        hasFatalErrorPayload && !terminalToolFailureMessage
           ? createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",

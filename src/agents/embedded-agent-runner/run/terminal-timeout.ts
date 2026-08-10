@@ -27,6 +27,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   finalAssistantRawText?: string;
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal: EmbeddedAgentRunResult["meta"]["failureSignal"];
+  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
 }): EmbeddedAgentRunResult | undefined {
   if (
     !input.timedOutDuringPrompt ||
@@ -95,6 +96,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
         : {}),
       toolSummary: input.attemptToolSummary,
       ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+      ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
       agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
     },
     ...copyAttemptDeliveryState(input.attempt),

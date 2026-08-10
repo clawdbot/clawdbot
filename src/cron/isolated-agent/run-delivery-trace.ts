@@ -1,5 +1,6 @@
 import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mcp-runtime-config.js";
 import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -15,6 +16,7 @@ import {
 import {
   createCronRunDiagnosticsFromError,
   createCronRunDiagnosticsFromMissingWebSearchProvider,
+  mergeCronRunDiagnostics,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
@@ -172,71 +174,89 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   toolsAllowProvenance?: CronToolsAllowProvenance;
 }): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
+  const diagnostics: Array<CronRunDiagnostics | undefined> = [];
+  const staticMcpServerNames = resolveStaticSessionMcpServerNames({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
+      agentId: params.agentId,
+      toolOverrides: undefined,
+    }),
+  });
+  const hasEnabledStaticMcp = staticMcpServerNames.length > 0;
   if (params.agentPayload?.toolsAllowIsDefault === true) {
-    const hasEnabledStaticMcp =
-      resolveStaticSessionMcpServerNames({
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
-          agentId: params.agentId,
-          toolOverrides: undefined,
-        }),
-      }).length > 0;
     if (
       params.agentRuntime === "codex" &&
       hasEnabledStaticMcp &&
       params.toolsAllowProvenance?.source !== "final-executable-surface"
     ) {
-      return createCronRunDiagnosticsFromError(
-        "cron-preflight",
-        `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
-        { severity: "warn" },
+      diagnostics.push(
+        createCronRunDiagnosticsFromError(
+          "cron-preflight",
+          `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
+          { severity: "warn" },
+        ),
       );
     }
-    return undefined;
+    return mergeCronRunDiagnostics(...diagnostics);
   }
-  if (!toolsAllowRequestsWebSearch(toolsAllow)) {
-    return undefined;
+
+  if (
+    toolsAllow &&
+    toolsAllow.length > 0 &&
+    hasEnabledStaticMcp &&
+    !shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow })
+  ) {
+    diagnostics.push(
+      createCronRunDiagnosticsFromError(
+        "cron-preflight",
+        "This automation's explicit toolsAllow omits every configured MCP selector, so the bundle MCP runtime will not start. Add bundle-mcp, group:plugins, an exact <server>__<tool> selector, or * to enable configured MCP tools.",
+        { severity: "warn" },
+      ),
+    );
   }
-  try {
-    const { shouldSuppressManagedWebSearchTool } = await loadCodexNativeWebSearch();
-    if (
-      shouldSuppressManagedWebSearchTool({
-        config: params.cfg,
-        modelProvider: params.provider,
-        modelApi: params.modelApi,
-        modelId: params.model,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        agentDir: params.agentDir,
-      })
-    ) {
-      return undefined;
+
+  if (toolsAllowRequestsWebSearch(toolsAllow)) {
+    try {
+      const { shouldSuppressManagedWebSearchTool } = await loadCodexNativeWebSearch();
+      if (
+        !shouldSuppressManagedWebSearchTool({
+          config: params.cfg,
+          modelProvider: params.provider,
+          modelApi: params.modelApi,
+          modelId: params.model,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          agentDir: params.agentDir,
+        })
+      ) {
+        const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
+        const { config, preferRuntimeProviders, runtimeWebSearch } =
+          resolveWebSearchToolRuntimeContext({
+            config: params.cfg,
+            lateBindRuntimeConfig: true,
+          });
+        const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
+        const hasWebSearchProvider = hasUsableWebSearchProvider({
+          config,
+          agentDir: params.agentDir,
+          runtimeWebSearch,
+          preferRuntimeProviders,
+        });
+        diagnostics.push(
+          createCronRunDiagnosticsFromMissingWebSearchProvider({
+            toolsAllow,
+            hasWebSearchProvider,
+          }),
+        );
+      }
+    } catch (error) {
+      logWarn(
+        `[cron:${params.jobId}] Failed to inspect web_search provider state for toolsAllow diagnostics: ${String(error)}`,
+      );
     }
-    const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
-    const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
-      {
-        config: params.cfg,
-        lateBindRuntimeConfig: true,
-      },
-    );
-    const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
-    const hasWebSearchProvider = hasUsableWebSearchProvider({
-      config,
-      agentDir: params.agentDir,
-      runtimeWebSearch,
-      preferRuntimeProviders,
-    });
-    return createCronRunDiagnosticsFromMissingWebSearchProvider({
-      toolsAllow,
-      hasWebSearchProvider,
-    });
-  } catch (error) {
-    logWarn(
-      `[cron:${params.jobId}] Failed to inspect web_search provider state for toolsAllow diagnostics: ${String(error)}`,
-    );
-    return undefined;
   }
+  return mergeCronRunDiagnostics(...diagnostics);
 }
 
 /** Resolves the delivery plan and concrete target for one isolated cron run. */

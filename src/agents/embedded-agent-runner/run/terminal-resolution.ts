@@ -162,6 +162,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   agentMeta: EmbeddedAgentMeta;
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal?: EmbeddedRunFailureSignal;
+  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
   maxReasoningOnlyRetryAttempts: number;
   maxEmptyResponseRetryAttempts: number;
   attemptCompactionCount: number;
@@ -491,6 +492,7 @@ async function surfaceIncompleteTurn(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
       },
       ...copyAttemptDeliveryState(input.attempt),
@@ -627,6 +629,7 @@ function completeEmbeddedRun(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         completion: {
           ...(stopReason ? { stopReason } : {}),
           ...(stopReason ? { finishReason: stopReason } : {}),

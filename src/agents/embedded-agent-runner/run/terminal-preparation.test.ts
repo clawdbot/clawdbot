@@ -108,6 +108,54 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect(prepared.finalAssistantRawText).toBeUndefined();
     },
   );
+
+  it("projects a Code Mode cron tool failure into terminal metadata", async () => {
+    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const assistant = assistantMessage("stop");
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        sessionId: "session-1",
+        runId: "run-1",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "hi",
+        trigger: "cron",
+        timeoutMs: 60_000,
+      },
+      attempt: attemptResult({
+        codeModeEngaged: true,
+        lastToolError: {
+          toolName: "exec",
+          errorCode: "invalid_input",
+          error: "Unknown tool id: MCP.notes.read",
+        },
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+      }),
+      currentAttemptCompletedAssistant: assistant,
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-1",
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.failureSignal).toBeUndefined();
+    expect(prepared.terminalToolFailure).toEqual({
+      source: "tool",
+      toolName: "exec",
+      code: "invalid_input",
+      message: "Unknown tool id: MCP.notes.read",
+    });
+  });
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {

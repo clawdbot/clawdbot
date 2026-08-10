@@ -18,6 +18,8 @@ import {
 
 const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
   "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
+const MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE =
+  "This automation's explicit toolsAllow omits every configured MCP selector, so the bundle MCP runtime will not start. Add bundle-mcp, group:plugins, an exact <server>__<tool> selector, or * to enable configured MCP tools.";
 
 const RUN_TOOLS_ALLOW_TIMEOUT_MS = 300_000;
 
@@ -237,6 +239,34 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
           severity: "warn",
           message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
           toolName: "web_search",
+        },
+      ]);
+    },
+  );
+
+  it(
+    "persists MCP suppression diagnostics through a successful run",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["read"]);
+      params.cfg = {
+        mcp: {
+          servers: {
+            notes: { transport: "stdio", command: "notes-mcp" },
+          },
+        },
+      } as never;
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics?.summary).toBe(MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE);
+      expect(result.diagnostics?.entries).toEqual([
+        {
+          ts: expect.any(Number),
+          source: "cron-preflight",
+          severity: "warn",
+          message: MCP_SUPPRESSION_DIAGNOSTIC_MESSAGE,
         },
       ]);
     },

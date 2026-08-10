@@ -250,6 +250,21 @@ export function createCronRunDiagnosticsFromAgentResult(
   if (typeof metaError?.message === "string") {
     diagnostics.push(createCronRunDiagnosticsFromError("agent-run", metaError.message, opts));
   }
+  const terminalToolFailure =
+    meta.terminalToolFailure && typeof meta.terminalToolFailure === "object"
+      ? (meta.terminalToolFailure as { message?: unknown; toolName?: unknown })
+      : undefined;
+  if (typeof terminalToolFailure?.message === "string") {
+    diagnostics.push(
+      createCronRunDiagnosticsFromError("tool", terminalToolFailure.message, {
+        ...opts,
+        toolName:
+          typeof terminalToolFailure.toolName === "string"
+            ? terminalToolFailure.toolName
+            : undefined,
+      }),
+    );
+  }
   const failureSignal =
     meta.failureSignal && typeof meta.failureSignal === "object"
       ? (meta.failureSignal as { message?: unknown })

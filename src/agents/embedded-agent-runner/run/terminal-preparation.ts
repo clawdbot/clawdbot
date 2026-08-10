@@ -6,6 +6,7 @@ import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.j
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
+import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { UsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -56,6 +57,7 @@ export function prepareEmbeddedRunTerminal(input: {
   hasPartialAssistantTextAfterPromptTimeout: boolean;
   attemptToolSummary: ReturnType<typeof buildTraceToolSummary>;
   failureSignal: ReturnType<typeof resolveEmbeddedRunFailureSignal>;
+  terminalToolFailure: ReturnType<typeof resolveEmbeddedRunTerminalToolFailure>;
 } {
   const { runParams, attempt } = input;
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
@@ -251,6 +253,11 @@ export function prepareEmbeddedRunTerminal(input: {
     trigger: runParams.trigger,
     lastToolError: attempt.lastToolError,
   });
+  const terminalToolFailure = resolveEmbeddedRunTerminalToolFailure({
+    trigger: runParams.trigger,
+    codeModeEngaged: attempt.codeModeEngaged,
+    lastToolError: attempt.lastToolError,
+  });
   return {
     agentMeta,
     reportedModelRef,
@@ -264,6 +271,7 @@ export function prepareEmbeddedRunTerminal(input: {
     hasPartialAssistantTextAfterPromptTimeout,
     attemptToolSummary,
     failureSignal,
+    terminalToolFailure,
   };
 }
 

@@ -168,6 +168,13 @@ export type EmbeddedRunFailureSignal = {
   fatalForCron: true;
 };
 
+export type EmbeddedRunTerminalToolFailure = {
+  source: "tool";
+  toolName: string;
+  code?: string;
+  message: string;
+};
+
 export type EmbeddedAgentRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedAgentMeta;
@@ -200,6 +207,8 @@ export type EmbeddedAgentRunMeta = {
     terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
+  /** Bounded, sanitized unresolved Code Mode failure for operator diagnostics. */
+  terminalToolFailure?: EmbeddedRunTerminalToolFailure;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
