@@ -17,6 +17,7 @@ import {
   shellBasename,
   TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
+  type TerminalControllerFactory,
   type TerminalOperation,
   type TerminalPanelCatalogReference,
   type TerminalPanelSessionControllerHost,
@@ -285,10 +286,10 @@ export class TerminalPanelSessionController
       getColors: () => terminalDynamicColors(this.host.themeMode),
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
-    const createController = (parent: HTMLElement) =>
+    const createController: TerminalControllerFactory = (parent, controllerOptions) =>
       this.host.createTerminalController({
         parent,
-        readOnly: false,
+        readOnly: controllerOptions?.readOnly ?? false,
         terminalOptions: {
           fontSize: 11,
           fontFamily: TERMINAL_FONT_FAMILY,

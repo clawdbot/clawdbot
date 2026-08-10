@@ -54,6 +54,9 @@ export async function replaceTerminalControllerForReplay(params: {
   const previousTerminalOwnedFocus =
     previouslyFocused === previousHost || previousHost.contains(previouslyFocused);
   const replacementHost = previousHost.cloneNode() as HTMLDivElement;
+  // The host is absolutely inset in the viewport. Keep it measurable while
+  // hidden so Ghostty fits the authoritative replay to the real terminal grid.
+  replacementHost.style.display = "block";
   replacementHost.style.visibility = "hidden";
   previousHost.before(replacementHost);
 
@@ -74,7 +77,9 @@ export async function replaceTerminalControllerForReplay(params: {
     }
   };
   try {
-    replacement = await params.createController(replacementHost);
+    // Ghostty autofocuses during open. Stage read-only so hidden focus can
+    // never forward keyboard input before the replacement is published.
+    replacement = await params.createController(replacementHost, { readOnly: true });
     if (!params.isCurrent()) {
       disposeUnpublishedReplacement();
       return false;
@@ -103,6 +108,7 @@ export async function replaceTerminalControllerForReplay(params: {
   const shouldFocusReplacement =
     previousTerminalOwnsCurrentFocus || (previousTerminalOwnedFocus && replacementOwnsCurrentFocus);
   const shouldRestorePreviousFocus = !previousTerminalOwnedFocus && replacementOwnsCurrentFocus;
+  replacement.setReadOnly(previousController.readOnly);
   replacementHost.style.display = previousHost.style.display;
   replacementHost.style.visibility = previousHost.style.visibility;
   params.target.controller = replacement;

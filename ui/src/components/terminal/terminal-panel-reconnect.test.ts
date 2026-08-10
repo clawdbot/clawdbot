@@ -270,6 +270,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
     await waitForFast(() => expect(controllers[1].dispose).toHaveBeenCalledOnce());
     expect(new TextDecoder().decode(controllers[2].write.mock.calls[0]?.[0])).toBe(recoveredReplay);
+    expect(controllers[2].setReadOnly).toHaveBeenCalledWith(false);
     expect(panel.shadowRoot?.activeElement).toBe(newerExternalInput);
     expect(controllerParents[2]?.style.display).toBe("none");
 
@@ -309,6 +310,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(new TextDecoder().decode(controllers[3].write.mock.calls[0]?.[0])).toBe(
       secondRecoveredReplay,
     );
+    expect(controllers[3].setReadOnly).toHaveBeenCalledWith(false);
     expect(panel.shadowRoot?.activeElement).toBe(controllerParents[3]);
     expect(controllers[3].terminal.focus).not.toHaveBeenCalled();
     expect(controllerParents[3]?.style.display).toBe("block");

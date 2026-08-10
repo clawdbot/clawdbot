@@ -25,7 +25,10 @@ describe("replaceTerminalControllerForReplay", () => {
 
     const replaced = await replaceTerminalControllerForReplay({
       target,
-      createController: async (parent) => {
+      createController: async (parent, options) => {
+        expect(options).toEqual({ readOnly: true });
+        expect(parent.style.display).toBe("block");
+        expect(parent.style.visibility).toBe("hidden");
         parent.tabIndex = 0;
         parent.focus();
         previousHost.remove();
