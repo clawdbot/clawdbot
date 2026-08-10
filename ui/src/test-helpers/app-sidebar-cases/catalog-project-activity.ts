@@ -49,6 +49,13 @@ describe("AppSidebar project session activity", () => {
     const active = sidebar.querySelector('[data-session-key*="active-thread"]');
     const idle = sidebar.querySelector('[data-session-key*="idle-thread"]');
     expect(project).not.toBeNull();
+    expect(project?.closest('[role="list"]')).toBeNull();
+    expect(active?.closest('[role="list"]')?.getAttribute("aria-label")).toBe(
+      "Local Codex: openclaw",
+    );
+    expect(idle?.closest('[role="list"]')?.getAttribute("aria-label")).toBe(
+      "Local Codex: openclaw",
+    );
     expect(active?.querySelector(".session-row-state .session-run-spinner")).not.toBeNull();
     expect(active?.querySelector(".session-run-spinner")?.getAttribute("aria-label")).toBe(
       "Active run",

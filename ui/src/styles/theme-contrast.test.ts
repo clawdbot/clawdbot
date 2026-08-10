@@ -97,7 +97,8 @@ function readOpacity(ruleBody: string): number {
 describe("Control UI theme contrast", () => {
   const baseCss = readFileSync(path.join(here, "base.css"), "utf8");
   const groupedCss = readFileSync(path.join(here, "chat", "grouped.css"), "utf8");
-  const layoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
+  const chatLayoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
+  const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
 
   it("keeps default dark muted text tokens at WCAG AA on declared surfaces", () => {
     const dark = readCssVarBlock(baseCss, ":root");
@@ -130,7 +131,7 @@ describe("Control UI theme contrast", () => {
       requireCssColor(dark, "card"),
     ];
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
-    const slashArgsRule = readRuleBody(layoutCss, ".slash-menu-args");
+    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args");
 
     expect(timestampRule).toMatch(/color:\s*var\(--muted\)/);
     expect(slashArgsRule).toMatch(/color:\s*var\(--muted\)/);
@@ -146,5 +147,19 @@ describe("Control UI theme contrast", () => {
       expect(contrastRatio(timestampFg, background)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(slashArgsFg, background)).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it("keeps sidebar metadata on the AA-tested muted token without opacity dimming", () => {
+    const groupLabelRule = readRuleBody(layoutCss, ".settings-sidebar__group-label");
+    const buildRule = readRuleBody(layoutCss, ".settings-sidebar__footer .sidebar-footer-build");
+    const sessionLabelRule = readRuleBody(
+      layoutCss,
+      ".sidebar-recent-sessions__label-text,\n.sidebar-session-catalog-host__label",
+    );
+
+    expect(groupLabelRule).toMatch(/color:\s*var\(--muted\)/);
+    expect(buildRule).toMatch(/color:\s*var\(--muted\)/);
+    expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
+    expect(readOpacity(sessionLabelRule)).toBe(1);
   });
 });
