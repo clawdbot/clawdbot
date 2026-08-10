@@ -1036,6 +1036,14 @@ class SessionsPage extends OpenClawLightDomElement {
   private dialogLifecycle: AbortController | null = null;
 
   private async withDialogLifecycle<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    // A second open while one is live must not take ownership. showInputDialog
+    // drops the reentrant request anyway, and if it installed its own controller
+    // it would clear this field on the way out, leaving the dialog that is
+    // actually on screen with nothing for disconnect to abort.
+    const active = this.dialogLifecycle;
+    if (active) {
+      return run(active.signal);
+    }
     const lifecycle = new AbortController();
     this.dialogLifecycle = lifecycle;
     try {

@@ -95,6 +95,31 @@ describe("sessions page new group", () => {
     expect(sessions.groupsPut).not.toHaveBeenCalled();
   });
 
+  it("keeps the live dialog abortable when a second open overlaps it", async () => {
+    const { page, sessions } = await mountGroupsPage(async () => "completed");
+    const signals: Array<AbortSignal | undefined> = [];
+    vi.mocked(showInputDialog).mockImplementation(async (options) => {
+      signals.push(options.signal);
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return null;
+    });
+
+    const first = page.requestNewCategory(SESSION_KEY);
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    // A reentrant open must not install a controller of its own: clearing it on
+    // the way out would strand the dialog that is actually on screen.
+    const second = page.requestNewCategory(SESSION_KEY);
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+
+    page.remove();
+    await Promise.all([first, second]);
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(sessions.groupsPut).not.toHaveBeenCalled();
+  });
+
   it("skips the assignment when its catalog write outlived the connection", async () => {
     let landCatalogWrite!: () => void;
     const pending = new Promise<SessionGroupMutationResult>((resolve) => {
