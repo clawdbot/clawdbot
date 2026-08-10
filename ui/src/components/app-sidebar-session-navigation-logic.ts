@@ -3,6 +3,7 @@ import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { t } from "../i18n/index.ts";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
