@@ -1753,6 +1753,8 @@ export async function handleToolExecutionEnd(
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
+  const completedArgs = sanitizeToolArgs(startArgs) as Record<string, unknown>;
+
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -1760,6 +1762,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
+      args: completedArgs,
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
@@ -1797,6 +1800,7 @@ export async function handleToolExecutionEnd(
       phase: "result",
       name: toolName,
       toolCallId,
+      args: completedArgs,
       meta,
       isError: isToolError,
       commandBearing: callSummary.commandBearing,

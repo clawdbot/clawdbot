@@ -589,6 +589,50 @@ describe("task-registry", () => {
     });
   });
 
+  it("keeps live activity deltas out of durable task writes", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const store = createInMemoryTaskRegistryStore();
+      const upsert = vi.spyOn(store, "upsertTaskWithDeliveryState");
+      configureTaskRegistryRuntime({ store });
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:ephemeral",
+        runId: "run-ephemeral-activity",
+        task: "Keep streaming state in memory",
+      });
+      upsert.mockClear();
+
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "thinking",
+        data: { text: "Planning" },
+      });
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "assistant",
+        data: { text: "Editing" },
+      });
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "write",
+          isError: false,
+          args: { path: "src/example.ts", content: "one\ntwo" },
+        },
+      });
+
+      expect(upsert).not.toHaveBeenCalled();
+      emitAgentEvent({
+        runId: "run-ephemeral-activity",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 200 },
+      });
+      expect(upsert).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([
     {
       name: "persists an ACP producer timestamp across lifecycle projection and SQLite reload",

@@ -66,7 +66,7 @@ function collectToolEvents(runId: string): {
 }
 
 describe("cli tool result events", () => {
-  it("carries the started args into the terminal event", () => {
+  it("carries the started args into terminal events across CLI tool paths", () => {
     const runId = "run-tool-result-args";
     const handlers = createCliEventHandlers({
       context: buildContext(runId),
@@ -88,10 +88,27 @@ describe("cli tool result events", () => {
         isError: true,
         result: "bash: nope-not-a-command: command not found",
       });
+      handlers.emitCliDisplayToolUseStart({
+        toolCallId: "call-2",
+        name: "write",
+        kind: "tool_use",
+        args: { path: "note.txt", content: "hello" },
+      });
+      handlers.emitCliDisplayToolResult({
+        toolCallId: "call-2",
+        name: "write",
+        isError: false,
+        result: "wrote note.txt",
+      });
 
-      const result = events.find((event) => event.data.phase === "result");
-      expect(result?.data.args).toEqual({ command: "nope-not-a-command" });
-      expect(result?.data.isError).toBe(true);
+      const results = events.filter((event) => event.data.phase === "result");
+      expect(results[0]?.data.args).toEqual({ command: "nope-not-a-command" });
+      expect(results[0]?.data.isError).toBe(true);
+      expect(results[1]?.data.args).toEqual({
+        path: "note.txt",
+        content: "hello",
+      });
+      expect(results[1]?.data.isError).toBe(false);
     } finally {
       dispose();
     }

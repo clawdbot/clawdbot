@@ -1,6 +1,7 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
   appendTaskEvent,
   mapAgentRunTerminalOutcomeToTaskStatus,
@@ -36,6 +37,9 @@ function ensureListener() {
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
       if (isTerminalTaskStatus(current.status)) {
+        continue;
+      }
+      if (recordTaskActivityEvent(current, evt)) {
         continue;
       }
       const patch: Partial<TaskRecord> = {
