@@ -15,7 +15,11 @@ const RETAINED_LOCAL = {
   nativeBootstrapDisabled: true,
 };
 
-function cleanupStorage(params: { registry?: unknown; registryPresent?: boolean }) {
+function cleanupStorage(params: {
+  registry?: unknown;
+  registryPresent?: boolean;
+  readError?: Error;
+}) {
   const localValues: Record<string, unknown> = {
     copilotDeviceIdentitiesV1: { device: "identity" },
     copilotDeviceTokensV1: { device: "token" },
@@ -42,13 +46,16 @@ function cleanupStorage(params: { registry?: unknown; registryPresent?: boolean 
     chromeApi: {
       storage: {
         local: {
-          get: vi.fn(async (keys: string[]) =>
-            Object.fromEntries(
+          get: vi.fn(async (keys: string[]) => {
+            if (params.readError) {
+              throw params.readError;
+            }
+            return Object.fromEntries(
               keys
                 .filter((key) => Object.hasOwn(localValues, key))
                 .map((key) => [key, localValues[key]]),
-            ),
-          ),
+            );
+          }),
           remove: localRemove,
         },
         session: { remove: sessionRemove },
@@ -61,33 +68,13 @@ function cleanupStorage(params: { registry?: unknown; registryPresent?: boolean 
   };
 }
 
-function inactiveSession() {
-  return {
-    tabId: 7,
-    browserInstanceId: "browser-instance",
-    gatewayScope: "ws://127.0.0.1:18789/",
-    sessionKey: "browser:tab:7",
-    binding: {
-      kind: "tab",
-      tabId: 7,
-      target: "host",
-      profile: "chrome",
-      targetId: "target-7",
-    },
-    createdAt: 1,
-    provisional: false,
-    creationPending: false,
-    abortPending: false,
-  };
-}
-
 describe("retired copilot cleanup", () => {
   it.each([
     { label: "no registry", registryPresent: false, registry: undefined },
     {
-      label: "a clean inactive registry",
+      label: "an exact empty registry",
       registryPresent: true,
-      registry: { sessions: { 7: inactiveSession() }, pendingArchives: [] },
+      registry: { sessions: {}, pendingArchives: [] },
     },
   ])("removes all retired keys for $label", async ({ registry, registryPresent }) => {
     const storage = cleanupStorage({ registry, registryPresent });
@@ -104,16 +91,32 @@ describe("retired copilot cleanup", () => {
 
   it.each([
     {
-      label: "an active run",
+      label: "session creation is pending",
       registry: {
-        sessions: { 7: { ...inactiveSession(), activeRunId: "run-7" } },
+        sessions: {
+          7: {
+            tabId: 7,
+            browserInstanceId: "browser-instance",
+            gatewayScope: "ws://127.0.0.1:18789/",
+            sessionKey: "browser:tab:7",
+            creationPending: true,
+          },
+        },
         pendingArchives: [],
       },
     },
     {
-      label: "an abort pending session",
+      label: "a confirmed session remains",
       registry: {
-        sessions: { 7: { ...inactiveSession(), abortPending: true } },
+        sessions: {
+          7: {
+            tabId: 7,
+            browserInstanceId: "browser-instance",
+            gatewayScope: "ws://127.0.0.1:18789/",
+            sessionKey: "browser:tab:7",
+            sessionId: "session-7",
+          },
+        },
         pendingArchives: [],
       },
     },
@@ -138,6 +141,20 @@ describe("retired copilot cleanup", () => {
     },
   ])("preserves every retired key for $label", async ({ registry }) => {
     const storage = cleanupStorage({ registry });
+    const beforeLocal = structuredClone(storage.localValues);
+    const beforeSession = structuredClone(storage.sessionValues);
+
+    await clearRetiredExtensionState(storage.chromeApi);
+
+    expect(storage.localRemove).not.toHaveBeenCalled();
+    expect(storage.sessionRemove).not.toHaveBeenCalled();
+    expect(storage.localValues).toEqual(beforeLocal);
+    expect(storage.sessionValues).toEqual(beforeSession);
+    expect(storage.localValues).toMatchObject(RETAINED_LOCAL);
+  });
+
+  it("preserves every retired key when the registry read fails", async () => {
+    const storage = cleanupStorage({ readError: new Error("storage unavailable") });
     const beforeLocal = structuredClone(storage.localValues);
     const beforeSession = structuredClone(storage.sessionValues);
 

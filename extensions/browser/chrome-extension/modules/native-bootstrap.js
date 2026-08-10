@@ -238,85 +238,16 @@ const COPILOT_LOCAL_KEYS = [
   "copilotDeviceTokensV1",
 ];
 const COPILOT_SESSION_KEYS = ["copilotBrowserInstanceV1", "copilotPanelBindingsV1"];
-const COPILOT_SESSION_ENTRY_KEYS = new Set([
-  "tabId",
-  "browserInstanceId",
-  "gatewayScope",
-  "sessionKey",
-  "sessionId",
-  "binding",
-  "createdAt",
-  "provisional",
-  "creationPending",
-  "activeRunId",
-  "abortPending",
-]);
-
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isRetiredBinding(value, tabId) {
-  return (
-    hasExactKeys(value, ["kind", "tabId", "target", "profile", "targetId"]) &&
-    value.kind === "tab" &&
-    value.tabId === tabId &&
-    value.target === "host" &&
-    isNonEmptyString(value.profile) &&
-    isNonEmptyString(value.targetId)
-  );
-}
-
-function isInactiveRetiredSession(value, rawTabId) {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    Object.keys(value).some((key) => !COPILOT_SESSION_ENTRY_KEYS.has(key))
-  ) {
-    return false;
-  }
-  const tabId = Number(rawTabId);
-  if (
-    !Number.isSafeInteger(tabId) ||
-    tabId < 0 ||
-    String(tabId) !== rawTabId ||
-    value.tabId !== tabId ||
-    !isNonEmptyString(value.browserInstanceId) ||
-    !isNonEmptyString(value.gatewayScope) ||
-    !isNonEmptyString(value.sessionKey)
-  ) {
-    return false;
-  }
-  if (
-    (Object.hasOwn(value, "sessionId") && !isNonEmptyString(value.sessionId)) ||
-    (Object.hasOwn(value, "binding") && !isRetiredBinding(value.binding, tabId)) ||
-    (Object.hasOwn(value, "createdAt") &&
-      (typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt))) ||
-    (Object.hasOwn(value, "provisional") && typeof value.provisional !== "boolean") ||
-    (Object.hasOwn(value, "creationPending") && typeof value.creationPending !== "boolean") ||
-    (Object.hasOwn(value, "abortPending") && typeof value.abortPending !== "boolean")
-  ) {
-    return false;
-  }
-  // These fields are durable cancellation custody. Even an unrecognized
-  // activeRunId fails closed so an upgrade cannot strand the owning run.
-  return !Object.hasOwn(value, "activeRunId") && value.abortPending !== true;
-}
 
 function canClearRetiredCopilotRegistry(value) {
-  if (
-    !hasExactKeys(value, ["sessions", "pendingArchives"]) ||
-    value.sessions === null ||
-    typeof value.sessions !== "object" ||
-    Array.isArray(value.sessions) ||
-    !Array.isArray(value.pendingArchives) ||
-    value.pendingArchives.length > 0
-  ) {
-    return false;
-  }
-  return Object.entries(value.sessions).every(([tabId, entry]) =>
-    isInactiveRetiredSession(entry, tabId),
+  return (
+    hasExactKeys(value, ["sessions", "pendingArchives"]) &&
+    value.sessions !== null &&
+    typeof value.sessions === "object" &&
+    !Array.isArray(value.sessions) &&
+    Object.keys(value.sessions).length === 0 &&
+    Array.isArray(value.pendingArchives) &&
+    value.pendingArchives.length === 0
   );
 }
 
