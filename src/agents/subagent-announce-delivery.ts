@@ -431,8 +431,8 @@ function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
 }
 
 function isTransientFailoverAnnounceError(error: unknown): boolean {
-  return Boolean(
-    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0),
+  return (
+    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0)
   );
 }
 
