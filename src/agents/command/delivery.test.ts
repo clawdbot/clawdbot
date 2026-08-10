@@ -177,6 +177,7 @@ function latestOutboundDeliveryArgs(): {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: { name?: string; emoji?: string; avatarUrl?: string; theme?: string };
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
@@ -192,6 +193,7 @@ function latestOutboundDeliveryArgs(): {
     accountId?: string;
     replyToId?: string | null;
     threadId?: string | number | null;
+    identity?: { name?: string; emoji?: string; avatarUrl?: string; theme?: string };
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
@@ -438,6 +440,55 @@ describe("deliverAgentCommandResult payload normalization", () => {
         runId: "run-1",
       },
     });
+  });
+
+  it("passes the delivering agent's configured identity through durable delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResultForTest({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "tester",
+              identity: { name: "Max", emoji: ":brain:" },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      opts: {
+        message: "go",
+        replyTo: "#general",
+      },
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      payloads: [{ text: "final answer" }],
+    });
+
+    expect(latestOutboundDeliveryArgs().identity).toEqual({
+      name: "Max",
+      emoji: ":brain:",
+    });
+  });
+
+  it("omits outbound identity when the delivering agent has none configured", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResultForTest({
+      opts: {
+        message: "go",
+        replyTo: "#general",
+      },
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      payloads: [{ text: "final answer" }],
+    });
+
+    expect(latestOutboundDeliveryArgs().identity).toBeUndefined();
   });
 
   it("renders response prefix templates with the selected runtime model", async () => {

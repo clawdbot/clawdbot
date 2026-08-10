@@ -36,6 +36,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
@@ -555,6 +556,7 @@ export async function deliverAgentCommandResult(
       config: cfg,
     }) ??
     resolveDefaultAgentId(cfg);
+  const outboundIdentity = resolveAgentOutboundIdentity(cfg, deliveryAgentId);
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
@@ -935,6 +937,7 @@ export async function deliverAgentCommandResult(
           channel: deliveryChannel,
           to: deliveryTarget,
           accountId: resolvedAccountId,
+          identity: outboundIdentity,
           payloads: deliveryPayloads,
           session: outboundSession,
           replyPayloadSendingHook: {
