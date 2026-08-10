@@ -437,6 +437,10 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Resolver injection hooks are intentionally test-only seams; production
+    // uses the default resolver internally. Focused Anthropic OAuth tests
+    // consume these directly (#94716).
+    "packages/ai/src/providers/claude-code-version.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

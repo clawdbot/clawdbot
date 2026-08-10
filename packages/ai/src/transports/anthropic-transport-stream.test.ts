@@ -13,6 +13,22 @@ import {
 } from "../host.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { withProviderAcceptanceObserver } from "./transport-stream-shared.js";
+import {
+  __resetClaudeCodeVersionResolver,
+  __setClaudeCodeVersionResolver,
+} from "../providers/claude-code-version.js";
+
+// This test environment has no @anthropic-ai/claude-code install and no
+// `claude` binary on PATH, so the real resolver would throw. Inject a stable
+// test version for the duration of this file; the resolver's own behavior is
+// covered by claude-code-version.test.ts.
+const TEST_CLAUDE_CODE_VERSION = "2.1.177";
+beforeAll(() => {
+  __setClaudeCodeVersionResolver(() => TEST_CLAUDE_CODE_VERSION);
+});
+afterAll(() => {
+  __resetClaudeCodeVersionResolver();
+});
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -2169,7 +2185,7 @@ describe("anthropic transport stream", () => {
     const firstCallParams = latestAnthropicRequest().payload;
     const system = requireArray(firstCallParams.system, "system");
     expect(requireRecord(system[0], "billing system item").text).toBe(
-      "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+      `x-anthropic-billing-header: cc_version=${TEST_CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`,
     );
     expect(
       system.some(

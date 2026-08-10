@@ -1,8 +1,24 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import {
+  __resetClaudeCodeVersionResolver,
+  __setClaudeCodeVersionResolver,
+} from "./claude-code-version.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+
+// This test environment has no @anthropic-ai/claude-code install and no
+// `claude` binary on PATH, so the real resolver would throw. Inject a stable
+// test version for the duration of this file; the resolver's own behavior is
+// covered by claude-code-version.test.ts.
+const TEST_CLAUDE_CODE_VERSION = "2.1.177";
+beforeAll(() => {
+  __setClaudeCodeVersionResolver(() => TEST_CLAUDE_CODE_VERSION);
+});
+afterAll(() => {
+  __resetClaudeCodeVersionResolver();
+});
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -290,7 +306,7 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { system?: unknown }).system).toEqual([
       {
         type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+        text: `x-anthropic-billing-header: cc_version=${TEST_CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`,
       },
       {
         type: "text",

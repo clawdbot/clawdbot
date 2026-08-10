@@ -11,6 +11,7 @@ import {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveClaudeCodeVersion } from "./claude-code-version.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { AnthropicEffort } from "../provider-options.js";
 import type {
@@ -34,8 +35,18 @@ export {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 
-export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.75";
-export const ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${ANTHROPIC_CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
+// Resolved from the installed Claude Code CLI at call time (see
+// ./claude-code-version.js) rather than hardcoded — a stale hardcoded value
+// causes Anthropic OAuth to reject the bearer request (#94716). Both the
+// user-agent header and the billing block must stay in sync, so both derive
+// from the same resolver call.
+export function getAnthropicClaudeCodeVersion(): string {
+  return resolveClaudeCodeVersion();
+}
+
+export function getAnthropicClaudeCodeBillingSystemBlock(): string {
+  return `x-anthropic-billing-header: cc_version=${resolveClaudeCodeVersion()}; cc_entrypoint=sdk-cli;`;
+}
 
 type ReplayModelRef = {
   provider?: string;
