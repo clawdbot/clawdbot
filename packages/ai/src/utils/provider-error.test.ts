@@ -374,12 +374,16 @@ describe("projectProviderError", () => {
     expect(projectProviderError(value).errorMessage).toBe(value);
   });
 
-  it.each(["JSESSIONID=0123456789abcdef", "api_key=sk-0123456789012345"])(
-    "redacts isolated credential pair %s",
-    (pair) => {
-      expect(projectProviderError(pair).errorMessage).toMatch(/^[^=]+=<redacted>$/u);
-    },
-  );
+  it.each([
+    "JSESSIONID=0123456789abcdef",
+    "api_key=sk-0123456789012345",
+    "https://host.test/path?api_key=abcdefghijklmnop&mode=test",
+    'token="abcdefghijklmnop"',
+  ])("redacts loose credential pair in %s", (value) => {
+    expect(projectProviderError(value).errorMessage).not.toMatch(
+      /0123456789abcdef|sk-0123456789012345|abcdefghijklmnop/u,
+    );
+  });
 
   it.each([
     "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",

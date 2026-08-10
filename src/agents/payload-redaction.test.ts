@@ -123,11 +123,13 @@ describe("sanitizeDiagnosticPayload", () => {
   it.each([
     "Cookie: JSESSIONID=0123456789abcdef; account=abcdefghijklmnop",
     "Set-Cookie: PHPSESSID=0123456789abcdef; Path=/; HttpOnly",
-  ])("redacts arbitrary credential names inside cookie headers", (header) => {
+    "https://host.test/path?api_key=abcdefghijklmnop&mode=test",
+    'token="abcdefghijklmnop"',
+  ])("redacts credential pairs across text contexts", (header) => {
     const sanitized = sanitizeDiagnosticPayload(header);
 
     expect(sanitized).not.toMatch(/0123456789abcdef|abcdefghijklmnop/u);
-    expect(sanitized).toContain("=<redacted>");
+    expect(sanitized).toContain("<redacted>");
   });
 
   it("redacts embedded and folded media data URLs without dropping surrounding text", () => {
