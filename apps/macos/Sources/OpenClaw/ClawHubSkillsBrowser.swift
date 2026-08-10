@@ -295,8 +295,7 @@ private final class ClawHubSkillsBrowserModel {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 throw ClawHubSkillsBrowserError.gatewayUnavailable
             }
-            let targetSlug = skill.ownerHandle.map { "@\($0)/\(skill.slug)" } ?? skill.slug
-            let detail = try await GatewayConnection.shared.skillsDetail(slug: targetSlug, on: route)
+            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.slug, on: route)
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }

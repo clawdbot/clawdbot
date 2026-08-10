@@ -223,11 +223,9 @@ public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
     public let displayName: String
     public let summary: String?
     public let version: String?
-    public let ownerHandle: String?
 
     public var id: String {
-        if let ownerHandle { return "@\(ownerHandle)/\(self.slug)" }
-        return self.slug
+        self.slug
     }
 }
 
