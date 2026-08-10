@@ -1,17 +1,18 @@
-/** Projects a bounded tool failure into terminal metadata for operator diagnostics. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { redactSensitiveText } from "../../logging/redact.js";
-import { truncateUtf16Safe } from "../../utils.js";
+/** Projects a safe Code Mode catalog miss into terminal metadata for operator diagnostics. */
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import type { ToolErrorSummary } from "../tool-error-summary.js";
 import { normalizeToolName } from "../tool-policy.js";
 import type { EmbeddedRunTerminalToolFailure } from "./types.js";
 
-const MAX_TERMINAL_TOOL_FAILURE_CHARS = 500;
+// Only persist the catalog-miss form emitted by the Code Mode bridge. Tool
+// error text otherwise can contain command output, private paths, or values
+// that known-secret redaction cannot establish as safe for durable history.
+const SAFE_MCP_CATALOG_MISS = /^Unknown tool id: (MCP\.[A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
 /**
- * Preserves the already-sanitized outer Code Mode failure for cron history.
- * Ordinary exec stderr stays on the existing generic presentation path.
+ * Preserves one strictly allowlisted Code Mode catalog-miss fact for cron
+ * history. All other tool errors stay on the existing generic presentation
+ * path.
  */
 export function resolveEmbeddedRunTerminalToolFailure(params: {
   trigger?: string | undefined;
@@ -29,22 +30,15 @@ export function resolveEmbeddedRunTerminalToolFailure(params: {
   ) {
     return undefined;
   }
-  if (failure.errorCode === "SYSTEM_RUN_DENIED" || failure.errorCode === "INVALID_REQUEST") {
+  const match =
+    typeof failure.error === "string" ? SAFE_MCP_CATALOG_MISS.exec(failure.error) : null;
+  if (!match) {
     return undefined;
   }
-  const rawMessage = normalizeOptionalString(failure.error);
-  if (!rawMessage) {
-    return undefined;
-  }
-  const singleLineMessage = redactSensitiveText(rawMessage, { mode: "tools" }).replace(/\s+/g, " ");
-  const message =
-    singleLineMessage.length > MAX_TERMINAL_TOOL_FAILURE_CHARS
-      ? `${truncateUtf16Safe(singleLineMessage, MAX_TERMINAL_TOOL_FAILURE_CHARS)}…`
-      : singleLineMessage;
   return {
     source: "tool",
     toolName: normalizedToolName,
-    ...(failure.errorCode ? { code: failure.errorCode } : {}),
-    message,
+    code: "UNKNOWN_TOOL_ID",
+    message: `Unknown tool id: ${match[1]}`,
   };
 }

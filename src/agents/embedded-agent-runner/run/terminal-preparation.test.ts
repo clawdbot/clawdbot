@@ -152,7 +152,7 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.terminalToolFailure).toEqual({
       source: "tool",
       toolName: "exec",
-      code: "invalid_input",
+      code: "UNKNOWN_TOOL_ID",
       message: "Unknown tool id: MCP.notes.read",
     });
   });

@@ -17,7 +17,7 @@ describe("resolveEmbeddedRunTerminalToolFailure", () => {
     ).toEqual({
       source: "tool",
       toolName: "exec",
-      code: "invalid_input",
+      code: "UNKNOWN_TOOL_ID",
       message: "Unknown tool id: MCP.notes.read",
     });
   });
@@ -36,12 +36,12 @@ describe("resolveEmbeddedRunTerminalToolFailure", () => {
     ).toEqual({
       source: "tool",
       toolName: "wait",
-      code: "invalid_input",
+      code: "UNKNOWN_TOOL_ID",
       message: "Unknown tool id: MCP.notes.read",
     });
   });
 
-  it("keeps ordinary exec and structured denial failures on their existing paths", () => {
+  it("keeps ordinary exec, structured denials, and arbitrary private errors on existing paths", () => {
     const base = {
       trigger: "cron",
       lastToolError: { toolName: "exec", error: "command failed" },
@@ -55,21 +55,43 @@ describe("resolveEmbeddedRunTerminalToolFailure", () => {
         lastToolError: { ...base.lastToolError, errorCode: "SYSTEM_RUN_DENIED" },
       }),
     ).toBeUndefined();
+    expect(
+      resolveEmbeddedRunTerminalToolFailure({
+        ...base,
+        codeModeEngaged: true,
+        lastToolError: {
+          ...base.lastToolError,
+          error: "Unknown tool id: MCP.notes.read; private output: /home/operator/.config/token",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveEmbeddedRunTerminalToolFailure({
+        ...base,
+        codeModeEngaged: true,
+        lastToolError: {
+          ...base.lastToolError,
+          error: "OPENAI_API_KEY=sk-test-abcdefghijklmnopqrstuvwxyz",
+        },
+      }),
+    ).toBeUndefined();
   });
 
-  it("redacts, flattens, and bounds terminal metadata", () => {
+  it("normalizes only the allowlisted tool identifier into history metadata", () => {
     const result = resolveEmbeddedRunTerminalToolFailure({
       trigger: "cron",
       codeModeEngaged: true,
       lastToolError: {
         toolName: "exec",
-        error: `OPENAI_API_KEY=sk-test-abcdefghijklmnopqrstuvwxyz\n${"x".repeat(700)}`,
+        error: "Unknown tool id: MCP.notes.read",
       },
     });
 
-    expect(result?.message).not.toContain("sk-test-abcdefghijklmnopqrstuvwxyz");
-    expect(result?.message).not.toContain("\n");
-    expect(result?.message.length).toBeLessThanOrEqual(501);
-    expect(result?.message.endsWith("…")).toBe(true);
+    expect(result).toEqual({
+      source: "tool",
+      toolName: "exec",
+      code: "UNKNOWN_TOOL_ID",
+      message: "Unknown tool id: MCP.notes.read",
+    });
   });
 });
