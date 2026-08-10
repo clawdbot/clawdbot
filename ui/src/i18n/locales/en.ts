@@ -1956,7 +1956,6 @@ export const en: TranslationMap = {
     unknownReason: "unknown reason",
     errors: {
       listFailed: "Could not load worker environments: {error}",
-      launchFailed: "Could not open {app}: {error}. Try again.",
       securityFailed: "Desktop security negotiation failed: {reason}",
     },
   },

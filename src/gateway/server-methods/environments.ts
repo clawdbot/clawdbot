@@ -317,7 +317,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
           actionable && error instanceof Error
             ? error.message
-            : "worker desktop app launch unavailable",
+            : "worker desktop app launch unavailable; try again",
         ),
       );
     }

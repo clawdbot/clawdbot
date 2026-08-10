@@ -449,7 +449,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return;
     }
     const operationId = ++this.launchOperationId;
-    const label = desktopAppLabel(app);
     this.launchingApp = app;
     this.launchErrorText = null;
     try {
@@ -466,10 +465,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         return;
       }
       this.launchingApp = null;
-      this.launchErrorText = t("desktop.errors.launchFailed", {
-        app: label,
-        error: formatUiError(error),
-      });
+      this.launchErrorText = formatUiError(error);
     }
   }
 

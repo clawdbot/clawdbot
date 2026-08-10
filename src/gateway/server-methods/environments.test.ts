@@ -588,7 +588,11 @@ describe("environment gateway methods", () => {
         ErrorCodes.UNAVAILABLE,
         "worker desktop browser launcher failed; verify the app is installed and retry",
       ],
-      ["provider_failure", ErrorCodes.UNAVAILABLE, "worker desktop app launch unavailable"],
+      [
+        "provider_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop app launch unavailable; try again",
+      ],
     ] as const;
     for (const [serviceCode, gatewayCode, message] of cases) {
       const service = workerService({

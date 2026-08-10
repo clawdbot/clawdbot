@@ -162,15 +162,22 @@ suite.define(() => {
       await browserButton.click();
       await gateway.waitForRequest("worker.desktop.launch");
       await gateway.rejectDeferred("worker.desktop.launch", {
-        message: "desktop launcher is not ready",
+        message: "worker desktop app launch unavailable; try again",
       });
-      await panel.getByText(/Could not open Browser: desktop launcher is not ready/).waitFor();
+      await panel
+        .getByRole("alert")
+        .filter({ hasText: "worker desktop app launch unavailable; try again" })
+        .waitFor();
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
       expect(await browserButton.isEnabled()).toBe(true);
 
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
       await panel.getByText("Cloud worker desktops", { exact: true }).waitFor();
-      expect(await panel.getByText(/Could not open Browser/).count()).toBe(0);
+      expect(
+        await panel
+          .getByText("worker desktop app launch unavailable; try again", { exact: true })
+          .count(),
+      ).toBe(0);
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
       await expect
         .poll(async () => (await gateway.getRequests("worker.desktop.observe")).length)
