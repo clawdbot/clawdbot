@@ -31,9 +31,11 @@ const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
-vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
-vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
-vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
+vi.mock("../../media-generation-task-status.js", () => ({
+  ...imageGenerationTaskStatusMocks,
+  ...musicGenerationTaskStatusMocks,
+  ...videoGenerationTaskStatusMocks,
+}));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-skip.js";
