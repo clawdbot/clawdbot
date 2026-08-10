@@ -7,19 +7,16 @@ const hoisted = vi.hoisted(() => ({
   submitEmbeddedAttemptPrompt: vi.fn(),
 }));
 
-vi.mock("./attempt-prompt-execution-prepare.js", () => ({
+vi.mock("./attempt-prompt-submit.js", () => ({
   prepareEmbeddedAttemptPromptExecution: hoisted.prepareEmbeddedAttemptPromptExecution,
+  submitEmbeddedAttemptPrompt: hoisted.submitEmbeddedAttemptPrompt,
 }));
-vi.mock("./attempt-prompt-observability.js", () => ({
+vi.mock("./attempt-prompt-support.js", () => ({
   observeEmbeddedAttemptPrompt: hoisted.observeEmbeddedAttemptPrompt,
 }));
 vi.mock("./attempt-prompt-preflight.js", () => ({
   prepareEmbeddedAttemptPromptPreflight: hoisted.prepareEmbeddedAttemptPromptPreflight,
 }));
-vi.mock("./attempt-prompt-submit.js", () => ({
-  submitEmbeddedAttemptPrompt: hoisted.submitEmbeddedAttemptPrompt,
-}));
-
 import { dispatchEmbeddedAttemptPrompt } from "./attempt-prompt-dispatch.js";
 
 type DispatchInput = Parameters<typeof dispatchEmbeddedAttemptPrompt>[0];

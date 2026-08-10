@@ -100,7 +100,7 @@ New `tools.swarm` (global + per-agent override, same merge pattern as
   carries `structured: undefined` plus the raw text and a `schemaError`.
 - `fastMode: true | "auto" | false` — threaded into the child session patch
   alongside model/thinking via `resolveSubagentModelAndThinkingPlan`
-  (`src/agents/subagent-spawn-plan.ts`), using the existing `FastMode` axis
+  (`src/agents/subagents/spawn/subagent-spawn-plan.ts`), using the existing `FastMode` axis
   (`src/shared/fast-mode.ts`). Omitted = inherit.
 - `groupId: string` — swarm group stamp. Defaults to
   `swarm:<requesterSessionKey>:<runId-of-requesting-run>`. Persisted on the

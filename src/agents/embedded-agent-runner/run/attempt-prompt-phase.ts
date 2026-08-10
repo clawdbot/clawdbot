@@ -9,12 +9,14 @@ import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
-import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
-import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import {
+  prepareEmbeddedAttemptPromptAssembly,
+  prepareEmbeddedAttemptPromptContext,
+} from "./attempt-prompt-build.js";
 import { dispatchEmbeddedAttemptPrompt } from "./attempt-prompt-dispatch.js";
-import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
 import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
-import { applyPromptBuildToolsAllow } from "./attempt-prompt-tool-policy.js";
+import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-submit.js";
+import { applyPromptBuildToolsAllow } from "./attempt-prompt-support.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 

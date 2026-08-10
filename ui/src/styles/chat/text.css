@@ -50,7 +50,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
   line-height: 1.2;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-message-disclosure__toggle:hover {

@@ -429,13 +429,16 @@ const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
 
 /**
  * Signatures of a failure that happened before the remote command was dispatched:
- * the broker or its API was unreachable, or no lease was ever obtained.
+ * the broker or its API was unreachable, no lease was ever obtained, or workload
+ * routing exhausted its provider chain (every provider doctor failed).
  */
 const BACKEND_UNAVAILABLE_SIGNATURES = [
   /request failed: \w+ "https?:\/\/[^"]*blacksmith[^"]*"/iu,
   /context deadline exceeded/iu,
   /(?:no such host|dial tcp|connection refused|network is unreachable)/iu,
   /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
+  // crabbox-wrapper prints this and exits before dispatching anything remote.
+  /\[crabbox\] no ready provider for workload=/u,
 ];
 
 /**
@@ -1257,7 +1260,7 @@ async function main() {
           // Say this loudly: the proof below is local, so whoever reads the run
           // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] Blacksmith never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
           );
         }
         process.exitCode = delegated.backendUnavailable

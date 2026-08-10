@@ -7,7 +7,7 @@ import { testing } from "./code-mode.test-support.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "./swarm-code-mode.js";
+} from "./subagents/swarm/swarm-code-mode.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 

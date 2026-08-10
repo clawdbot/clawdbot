@@ -9,7 +9,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,

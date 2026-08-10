@@ -67,6 +67,8 @@ const WINDOWS_SECRETREF_TEST_SCOPE_RE =
   /^(?:src\/commands\/doctor-gateway-auth-token\.windows\.test\.ts|src\/secrets\/test-node-command\.test-support\.ts|test\/e2e\/qa-lab\/runtime\/doctor-auth-secretref-checks\.e2e\.test\.ts|test\/fixtures\/windows-acl-tools-unavailable\.mjs)$/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
+const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
+  /^src\/auto-reply\/usage-bar\/template(?:\.windows\.test)?\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:catalog|config|raw-copy|sync-plan)\.ts)$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
@@ -174,12 +176,14 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_SQLITE_SCOPE_RE.test(path) ||
         WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_SECRETREF_SCOPE_RE.test(path) ||
-        WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
+        WINDOWS_DAEMON_SCOPE_RE.test(path) ||
+        WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
         WINDOWS_TEST_SCOPE_RE.test(path) ||
         WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_SECRETREF_TEST_SCOPE_RE.test(path) ||
-        WINDOWS_DAEMON_SCOPE_RE.test(path))
+        WINDOWS_DAEMON_SCOPE_RE.test(path) ||
+        WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }

@@ -35,7 +35,7 @@ vi.mock("./attempt-session-settle.js", () => ({
 vi.mock("./attempt-session.js", () => ({
   prepareEmbeddedAttemptAgentSession: mocks.prepareAgentSession,
 }));
-vi.mock("./attempt-stream-transport.js", () => ({
+vi.mock("./attempt-stream-settle.js", () => ({
   prepareEmbeddedAttemptTransport: mocks.prepareTransport,
 }));
 vi.mock("./attempt-trajectory.js", () => ({

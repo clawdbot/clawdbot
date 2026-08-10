@@ -6,6 +6,7 @@ import type {
   SubagentRegistryLifecycleState,
 } from "./subagent-registry-lifecycle-contracts.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 type RequesterSettleWakeBatchState =
   import("./subagent-announce.requester-settle-wake.js").RequesterSettleWakeBatchState;
@@ -207,8 +208,12 @@ export function createSubagentRegistryLifecycleRequesterWake(
 
   function scheduleRequesterSettleWake(runId: string, entry: SubagentRunRecord): void {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
+    // A replayed lifecycle start can retain an older endedAt; require both
+    // terminal status and end evidence so a live child never wakes its requester.
     if (
       entry.collect ||
+      entry.execution.status === "running" ||
+      !hasSubagentRunEnded(entry) ||
       !requesterSessionKey ||
       (entry.requesterTurnRunId && entry.requesterTurnYielded === true) ||
       scheduledRequesterSettleWakeRuns.has(runId) ||

@@ -4,7 +4,7 @@ import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
-} from "./subagent-spawn.test-helpers.js";
+} from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -12,7 +12,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
 function resolveAgentConfigFromList(cfg: Record<string, unknown>, agentId: string) {
   const agents = (cfg.agents as { list?: Array<Record<string, unknown>> } | undefined)?.list;

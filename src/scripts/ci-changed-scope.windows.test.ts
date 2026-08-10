@@ -138,6 +138,18 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes usage footer template changes and native coverage to Windows", () => {
+    for (const templatePath of [
+      "src/auto-reply/usage-bar/template.ts",
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([templatePath]), templatePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SecretRef path-security changes and native fixtures to Windows", () => {
     for (const secretRefPath of [
       "src/commands/doctor-gateway-auth-token.ts",

@@ -58,9 +58,11 @@ type MessageCut = {
 
 type SessionTranscriptMutationResult =
   | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult;
+  | SessionBranchSwitchMutationResult
+  | { status: "conflict" };
 
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
 const BRANCH_HEADLINE_MAX_CHARS = 120;
 const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
@@ -167,34 +169,44 @@ export function resolveSessionTranscriptActiveLeafEntryId(
 
 export async function rewindSqliteSessionToMessage(
   params: SessionMessageCutMutationParams,
-): Promise<SessionMessageCutMutationResult> {
-  return await mutateSqliteSessionAtMessage(params, "rewind");
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(params, "rewind", expectedState);
 }
 
 export async function forkSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams & { targetKey: string },
-): Promise<SessionMessageCutMutationResult> {
-  return await mutateSqliteSessionAtMessage(params, "fork");
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
 export async function switchSqliteSessionBranch(
   params: SessionBranchSwitchMutationParams,
-): Promise<SessionBranchSwitchMutationResult> {
-  return await mutateSqliteSessionAtMessage({ ...params, entryId: params.leafEntryId }, "switch");
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(
+    { ...params, entryId: params.leafEntryId },
+    "switch",
+    expectedState,
+  );
 }
 
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
-): Promise<SessionMessageCutMutationResult>;
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
-): Promise<SessionBranchSwitchMutationResult>;
+  expectedState?: SessionEntryExpectedState,
+): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
 
 async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
+  expectedState?: SessionEntryExpectedState,
 ): Promise<SessionTranscriptMutationResult> {
   const canonicalSourceKey = normalizeSqliteSessionKey(params.sessionKey);
   const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
@@ -206,6 +218,18 @@ async function mutateSqliteSessionAtMessage(
     sessionKey: sourceKey,
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
+  const preparedEntry = readSessionEntryRow(
+    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
+    sourceKey,
+  )?.entry;
+  const preparedExpectedState =
+    expectedState ??
+    (preparedEntry?.sessionId
+      ? {
+          sessionId: preparedEntry.sessionId,
+          lifecycleRevision: preparedEntry.lifecycleRevision,
+        }
+      : undefined);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
@@ -222,6 +246,7 @@ async function mutateSqliteSessionAtMessage(
         canonicalSourceKey,
         creation: params.creation,
         mode,
+        expectedState: preparedExpectedState,
         sourceKey,
         targetKey,
       });
@@ -248,6 +273,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     canonicalSourceKey: string;
     creation?: SessionMessageCutMutationParams["creation"];
     entryId: string;
+    expectedState: SessionEntryExpectedState | undefined;
     mode: SessionTranscriptMutationMode;
     sourceKey: string;
     targetKey: string;
@@ -256,6 +282,13 @@ function mutateSqliteSessionAtMessageInTransaction(
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
+  }
+  if (
+    !params.expectedState ||
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
   }
   const events = loadSqliteTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);

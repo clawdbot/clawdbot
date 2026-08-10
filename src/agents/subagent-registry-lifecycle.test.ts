@@ -4121,6 +4121,26 @@ describe("requester settle wake trigger", () => {
     expect(later.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
   });
 
+  it("does not resume a persisted settle wake until its registry row is terminal", async () => {
+    const entry = createRunEntry({
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.resumeRequesterSettleWake(entry.runId, entry);
+    await Promise.resolve();
+    expect(settleWake).not.toHaveBeenCalled();
+
+    entry.execution = { ...entry.execution, status: "terminal", endedAt: 4_000 };
+    controller.resumeRequesterSettleWake(entry.runId, entry);
+
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
+  });
+
   it("keeps a yielded completion parked until its requester turn settles", async () => {
     const entry = createRunEntry({
       requesterTurnRunId: "run-requester",

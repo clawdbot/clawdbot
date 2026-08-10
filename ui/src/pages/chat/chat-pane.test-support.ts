@@ -46,6 +46,7 @@ export type TestChatPane = HTMLElement & {
     mode: TaskSuggestionAcceptMode,
     cloudProfileId?: string,
   ) => Promise<void>;
+  copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
