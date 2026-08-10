@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
@@ -20,6 +21,8 @@ import {
 } from "./server.auth.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const BROWSER_ORIGIN = "https://control.example.com";
 const TRUSTED_PROXY_HEADERS = {
@@ -62,30 +65,43 @@ describe("gateway identity scope grants", () => {
     });
     const identityPath = deviceIdentityPath("identity-scope-device");
     const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+    const configuredWorkspace = tempDirs.make("openclaw-identity-workspace-");
+    const outsideWorkspace = tempDirs.make("openclaw-identity-outside-");
+    testState.agentConfig = { workspace: configuredWorkspace };
 
-    await withGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, {
-        ...TRUSTED_PROXY_HEADERS,
-        "x-forwarded-user": "Admin@Example.com",
-      });
-      try {
-        const connected = await connectReq(ws, {
-          skipDefaultAuth: true,
-          prePairDevice: true,
-          scopes: ["operator.read"],
-          client: CONTROL_UI_CLIENT,
-          deviceIdentityPath: identityPath,
-          browserOrigin: BROWSER_ORIGIN,
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, {
+          ...TRUSTED_PROXY_HEADERS,
+          "x-forwarded-user": "Admin@Example.com",
         });
-        expect(connected.ok).toBe(true);
-        expect(responseScopes(connected)).toEqual(["operator.read", "operator.admin"]);
-        expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
-      } finally {
-        ws.close();
-      }
-    });
+        try {
+          const connected = await connectReq(ws, {
+            skipDefaultAuth: true,
+            prePairDevice: true,
+            scopes: ["operator.write"],
+            client: CONTROL_UI_CLIENT,
+            deviceIdentityPath: identityPath,
+            browserOrigin: BROWSER_ORIGIN,
+          });
+          expect(connected.ok).toBe(true);
+          expect(responseScopes(connected)).toEqual(["operator.write", "operator.admin"]);
+          expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
 
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
+          const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
+            path: outsideWorkspace,
+          });
+          expect(browse.ok, JSON.stringify(browse.error)).toBe(true);
+          expect(browse.payload?.path).toBe(outsideWorkspace);
+        } finally {
+          ws.close();
+        }
+      });
+    } finally {
+      testState.agentConfig = undefined;
+    }
+
+    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.write"]);
     expect(
       (await listDevicePairing()).pending.filter((entry) => entry.deviceId === identity.deviceId),
     ).toEqual([]);
