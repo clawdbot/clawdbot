@@ -1047,22 +1047,13 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.repository = { kind: "idle" };
     this.baseRef = "";
     const selectedProject = this.selectedProject();
-    if (selectedProject) {
-      this.repository = {
-        kind: "git",
-        repoRoot: selectedProject.repoRoot,
-        branches: [],
-      };
-      this.preferredWorktreeRestore = false;
-      return;
-    }
     if (this.execNode) {
       this.preferredWorktreeRestore = false;
       return;
     }
-    const repoRoot = this.folder.trim() || this.workspacePath();
+    const repoRoot = selectedProject?.repoRoot ?? (this.folder.trim() || this.workspacePath());
     const agent = this.selectedAgent();
-    const usesWorkspace = repoRoot === this.workspacePath();
+    const usesWorkspace = !selectedProject && repoRoot === this.workspacePath();
     if (!repoRoot) {
       this.preferredWorktreeRestore = false;
       return;

@@ -314,6 +314,7 @@ suite.define(() => {
         "sessions.create",
         "sessions.dispatch",
         "projects.list",
+        "worktrees.branches",
       ],
       methodResponses: {
         "projects.list": {
@@ -333,6 +334,11 @@ suite.define(() => {
             },
           ],
         },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
         "sessions.create": { key: "agent:main:project-e2e" },
       },
     });
@@ -349,6 +355,9 @@ suite.define(() => {
         "Recorded OpenClaw",
       );
       expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toEqual({ repoRoot: "/recorded/openclaw", includeRepositoryStatus: true });
 
       await trigger.click();
       await place.getByRole("button", { name: "Worktree" }).click();
@@ -363,6 +372,7 @@ suite.define(() => {
         message: "inspect the project",
         projectId: "recorded-openclaw",
         worktree: true,
+        worktreeBaseRef: "main",
       });
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");

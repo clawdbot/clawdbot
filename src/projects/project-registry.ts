@@ -208,6 +208,22 @@ export function resolveProjectRegistry(
   return row ? rowToProject(row) : undefined;
 }
 
+export async function resolveRecordedProjectRoot(
+  projectPath: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<string | undefined> {
+  const repoRoot = await fs.realpath(projectPath).catch(() => undefined);
+  if (!repoRoot) {
+    return undefined;
+  }
+  const { sqlite, kysely } = openProjectsDatabase(options);
+  const row = executeSqliteQueryTakeFirstSync(
+    sqlite,
+    kysely.selectFrom("projects").select("repo_root").where("repo_root", "=", repoRoot),
+  );
+  return row?.repo_root;
+}
+
 export function removeProjectRegistry(
   id: string,
   options: OpenClawStateDatabaseOptions = {},
