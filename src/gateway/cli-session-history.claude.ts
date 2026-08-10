@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { asFiniteNumber, parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
@@ -69,7 +69,7 @@ export function resolveClaudeCliBindingSessionId(
 }
 
 export function resolveClaudeCliTimestampMs(value: unknown): number | undefined {
-  return typeof value === "string" ? parseDateTimestampMs(value) : undefined;
+  return typeof value === "string" ? asFiniteNumber(Date.parse(value)) : undefined;
 }
 
 function resolveClaudeCliUsage(raw: ClaudeCliUsage) {

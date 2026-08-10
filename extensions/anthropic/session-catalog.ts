@@ -12,7 +12,7 @@ import type {
   SessionCatalogPullRequestSummary,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord, parseDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
@@ -323,6 +323,12 @@ function isCliEntrypoint(value: unknown): value is string {
   return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
 }
 
+// Claude's persisted string timestamps are date expressions, including numeric-looking years.
+// Numeric fields are already millisecond values, so preserve that distinct mixed-input contract.
+function parseClaudeCatalogTimestampMs(value: unknown): number | undefined {
+  return typeof value === "string" ? asFiniteNumber(Date.parse(value)) : asFiniteNumber(value);
+}
+
 function isWithin(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -629,8 +635,10 @@ async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
     if (!safeFile) {
       continue;
     }
-    const createdAt = parseDateTimestampMs(entry.created);
-    const updatedAt = parseDateTimestampMs(entry.modified) ?? parseDateTimestampMs(entry.fileMtime);
+    const createdAt = parseClaudeCatalogTimestampMs(entry.created);
+    const updatedAt =
+      parseClaudeCatalogTimestampMs(entry.modified) ??
+      parseClaudeCatalogTimestampMs(entry.fileMtime);
     const summary = readBoundedString(entry.summary, 500);
     const firstPrompt = readBoundedString(entry.firstPrompt, 500);
     records.set(sessionId, {
@@ -810,7 +818,7 @@ async function discoverCliRecords(
         const fragments: string[] = [];
         collectTranscriptText(raw.message.content, fragments);
         const firstPrompt = readBoundedString(fragments[0], 500);
-        const createdAt = parseDateTimestampMs(raw.timestamp);
+        const createdAt = parseClaudeCatalogTimestampMs(raw.timestamp);
         records.set(sessionId, {
           threadId: sessionId,
           name: aiTitle ?? firstPrompt ?? null,
@@ -926,8 +934,8 @@ async function scanClaudeSessions(
     if (!filePath) {
       continue;
     }
-    const createdAt = parseDateTimestampMs(metadata.createdAt) ?? existing?.createdAt;
-    const updatedAt = parseDateTimestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
+    const createdAt = parseClaudeCatalogTimestampMs(metadata.createdAt) ?? existing?.createdAt;
+    const updatedAt = parseClaudeCatalogTimestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
     const customGroup = readBoundedString(metadata.customGroup, 500);
     const pullRequest = desktopPullRequestSummary(metadata);
     records.set(sessionId, {
