@@ -49,7 +49,7 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import * as gatewaySocket from "./gateway-browser-socket.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 import {
   enrichProtocolMismatchDetails,
@@ -246,7 +246,7 @@ export class GatewayBrowserClient {
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
         this.maxPayloadBytes = undefined;
-        const socket = createBrowserGatewaySocket(this.opts.url, handlers);
+        const socket = gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
         return {
           ...socket,
           send: (data) => {
@@ -261,6 +261,8 @@ export class GatewayBrowserClient {
         };
       },
       createRequestId: generateUUID,
+      validateRequestFrame: (frame, method) =>
+        gatewaySocket.validateGatewayRequestFrame(frame, method, this.maxPayloadBytes),
       createRequestError: (error) =>
         new GatewayRequestError({
           code: error.code ?? "UNAVAILABLE",
@@ -477,7 +479,7 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
-    this.maxPayloadBytes = hello.policy?.maxPayload;
+    this.maxPayloadBytes = gatewaySocket.resolveGatewayMaxPayloadBytes(hello.policy);
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -628,12 +630,12 @@ export class GatewayBrowserClient {
     });
   }
 
-  async request<T = unknown>(
+  request<T = unknown>(
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    return await this.client.request<T>(method, params, options);
+    return this.client.request<T>(method, params, options);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {

@@ -133,7 +133,17 @@ export class GatewayProtocolClient<TPlan> {
     if (typeof method !== "string" || method.length === 0) {
       return Promise.reject(new Error("invalid request frame: method must be a non-empty string"));
     }
-    return this.requests.request<T>(socket, method, params, options);
+    return this.requests.request<T>(
+      {
+        send: (frame) => {
+          this.opts.validateRequestFrame?.(frame, method);
+          socket.send(frame);
+        },
+      },
+      method,
+      params,
+      options,
+    );
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
