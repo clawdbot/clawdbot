@@ -15,7 +15,7 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { capText } from "./store-text.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -517,12 +517,7 @@ export function computeCardDiagnostics(card: WorkboardCard, now: number): Workbo
   return diagnostics;
 }
 
-export function capText(value: string | undefined, max: number): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
-}
+export { capText } from "./store-text.js";
 
 export function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";

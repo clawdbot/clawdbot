@@ -60,7 +60,7 @@ import {
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
-import { capText } from "./store-card-helpers.js";
+import { capText } from "./store-text.js";
 import type {
   WorkboardAttachmentInput,
   WorkboardBoardInput,
