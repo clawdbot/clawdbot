@@ -19,7 +19,10 @@ import {
   hasSnapshotProviderEnvAvailability,
   loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
-import { isCapabilityProviderConfigured } from "./tools/media-tool-shared.js";
+import {
+  hasGenerationToolAvailability,
+  isCapabilityProviderConfigured,
+} from "./tools/media-tool-shared.js";
 
 /**
  * Plans optional media-tool factory registration from config, policy, capabilities, and auth.
@@ -101,11 +104,15 @@ function planGenerationToolAvailability(params: {
       }),
     );
   }
-  return hasSnapshotCapabilityAvailability({
-    snapshot: params.snapshot,
+  // Prefer the shared helper so config-auth + snapshot stay one owner with factories/tests.
+  // Snapshot is still passed via process/current metadata; explicit models already returned above.
+  return hasGenerationToolAvailability({
+    cfg: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-    key: params.providerKey,
-    config: params.config,
+    modelConfig: params.modelConfig,
+    providerKey: params.providerKey,
   });
 }
 
