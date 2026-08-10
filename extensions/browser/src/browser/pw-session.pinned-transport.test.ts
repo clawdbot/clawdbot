@@ -23,6 +23,10 @@ const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 const TEST_CDP_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
+function webSocketMessageToString(data: import("ws").Data): string {
+  return typeof data === "string" ? data : rawDataToString(data);
+}
+
 function makeBrowser(
   targetId: string,
   url: string,
@@ -86,7 +90,7 @@ describe("pw-session pinned Playwright transport", () => {
     server.on("connection", (socket, request) => {
       requestHeaders.push(request.headers);
       socket.addEventListener("message", (event) => {
-        const msg = JSON.parse(rawDataToString(event.data)) as { id?: number };
+        const msg = JSON.parse(webSocketMessageToString(event.data)) as { id?: number };
         socket.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
       });
     });
@@ -136,7 +140,7 @@ describe("pw-session pinned Playwright transport", () => {
     const redirectedUpgradePaths: string[] = [];
     wss.on("connection", (socket) => {
       socket.addEventListener("message", (event) => {
-        const msg = JSON.parse(rawDataToString(event.data)) as { id?: number };
+        const msg = JSON.parse(webSocketMessageToString(event.data)) as { id?: number };
         socket.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
       });
     });
@@ -347,11 +351,10 @@ describe("pw-session pinned Playwright transport", () => {
         // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onclose property.
         transport.onclose = (reason) => resolve(reason);
       });
-      const socket = (await serverSocket) as import("ws").WebSocket & {
-        _socket: { write(data: Buffer): void };
-      };
+      const socket = await serverSocket;
+      const rawSocket = Reflect.get(socket, "_socket") as { write(data: Buffer): void };
       // Send an invalid reserved opcode so the real ws client emits an error.
-      socket._socket.write(Buffer.from([0x83, 0x00]));
+      rawSocket.write(Buffer.from([0x83, 0x00]));
       await expect(closed).resolves.toContain("Invalid WebSocket frame");
       return browser.browser;
     }) as never);
