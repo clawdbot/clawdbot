@@ -543,6 +543,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       approvalKind: target.approvalKind,
       decision,
       channel: "imessage",
+      accountId: params.accountId,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),

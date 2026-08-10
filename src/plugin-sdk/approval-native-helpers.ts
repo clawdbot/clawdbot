@@ -7,7 +7,7 @@ import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardingMode,
 } from "../config/types.approvals.js";
-import { doesApprovalRequestMatchChannelAccount } from "../infra/approval-request-account-binding.js";
+import { doesApprovalRequestSelectChannelAccount } from "../infra/approval-request-account-binding.js";
 import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import {
   getExecApprovalReplyMetadata,
@@ -545,16 +545,6 @@ function isSessionApprovalEligibleViaForwarding(
   if (!matchesForwardingFilters({ config: forwarding.config, request: params.request })) {
     return false;
   }
-  if (
-    !doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: params.channel,
-      accountId: params.accountId,
-    })
-  ) {
-    return false;
-  }
   return params.hasOriginOrSessionTarget({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -695,21 +685,7 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     }
     const normalizedAccountId = normalizeAccountId(accountId);
     const defaultAccountId = normalizeAccountId(params.resolveDefaultAccountId(input.cfg));
-    if (normalizedAccountId === defaultAccountId) {
-      return true;
-    }
-    const enabledAccountIds = params
-      .listAccountIds(input.cfg)
-      .filter((candidateAccountId) =>
-        params.isTransportEnabled({
-          cfg: input.cfg,
-          accountId: candidateAccountId,
-        }),
-      )
-      .map((candidateAccountId) => normalizeAccountId(candidateAccountId));
-    // Unscoped targets are safe for a non-default account only when exactly
-    // one enabled account can receive them; otherwise they would be ambiguous.
-    return enabledAccountIds.length === 1 && enabledAccountIds[0] === normalizedAccountId;
+    return normalizedAccountId === defaultAccountId;
   };
 
   const hasMatchingChannelTarget = (input: {
@@ -797,6 +773,22 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     approvalKind: ApprovalKind;
     request: ApprovalRequest;
   }): boolean => {
+    const accountId = input.accountId ?? params.resolveDefaultAccountId(input.cfg);
+    const eligibleAccountIds = params.isTransportEnabled({ cfg: input.cfg, accountId })
+      ? [accountId]
+      : [];
+    if (
+      !doesApprovalRequestSelectChannelAccount({
+        cfg: input.cfg,
+        request: input.request,
+        channel: params.channel,
+        accountId: input.accountId,
+        defaultAccountId: params.resolveDefaultAccountId(input.cfg),
+        eligibleAccountIds,
+      })
+    ) {
+      return false;
+    }
     return isSessionApprovalEligibleViaForwarding({
       ...input,
       channel: params.channel,

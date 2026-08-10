@@ -8,18 +8,14 @@ import {
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
+import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listQQBotAccountIds, resolveQQBotAccount } from "./bridge/config.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./bridge/config.js";
 import type { QQBotExecApprovalConfig } from "./types.js";
 
 function normalizeApproverId(value: string | number): string | undefined {
@@ -54,32 +50,28 @@ function getQQBotExecApprovalApprovers(params: {
   });
 }
 
-function countQQBotExecApprovalEligibleAccounts(params: {
+function isQQBotExecApprovalAccountEligible(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   request: ExecApprovalRequest | PluginApprovalRequest;
-}): number {
-  return listQQBotAccountIds(params.cfg).filter((accountId) => {
-    const account = resolveQQBotAccount(params.cfg, accountId);
-    if (!account.enabled || account.secretSource === "none") {
-      return false;
-    }
-    const config = resolveQQBotExecApprovalConfig({
-      cfg: params.cfg,
-      accountId,
-    });
-    return (
-      isChannelExecApprovalClientEnabledFromConfig({
-        enabled: config?.enabled,
-        approverCount: getQQBotExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
-      }) &&
-      matchesApprovalRequestFilters({
-        request: params.request.request,
-        agentFilter: config?.agentFilter,
-        sessionFilter: config?.sessionFilter,
-        fallbackAgentIdFromSessionKey: true,
-      })
-    );
-  }).length;
+}): boolean {
+  const account = resolveQQBotAccount(params.cfg, params.accountId);
+  if (!account.enabled || account.secretSource === "none") {
+    return false;
+  }
+  const config = resolveQQBotExecApprovalConfig(params);
+  return (
+    isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: getQQBotExecApprovalApprovers(params).length,
+    }) &&
+    matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: config?.agentFilter,
+      sessionFilter: config?.sessionFilter,
+      fallbackAgentIdFromSessionKey: true,
+    })
+  );
 }
 
 function matchesQQBotRequestAccount(params: {
@@ -87,81 +79,30 @@ function matchesQQBotRequestAccount(params: {
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): boolean {
-  const turnSourceChannel = normalizeLowercaseStringOrEmpty(
-    params.request.request.turnSourceChannel,
-  );
-  const boundAccountId = resolveApprovalRequestChannelAccountId({
-    cfg: params.cfg,
-    request: params.request,
+  const accountId = params.accountId ?? resolveDefaultQQBotAccountId(params.cfg);
+  return doesApprovalRequestSelectChannelAccount({
+    ...params,
     channel: "qqbot",
+    defaultAccountId: resolveDefaultQQBotAccountId(params.cfg),
+    eligibleAccountIds: isQQBotExecApprovalAccountEligible({ ...params, accountId })
+      ? [accountId]
+      : [],
   });
-  if (turnSourceChannel && turnSourceChannel !== "qqbot" && !boundAccountId) {
-    return (
-      countQQBotExecApprovalEligibleAccounts({
-        cfg: params.cfg,
-        request: params.request,
-      }) <= 1
-    );
-  }
-  return (
-    !boundAccountId ||
-    !params.accountId ||
-    normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
-  );
 }
 
-/**
- * Count QQBot accounts that could actually deliver a native approval
- * message — i.e. accounts that are enabled and have resolvable secrets.
- * Disabled or unconfigured accounts never spawn a handler, so they
- * must not contribute to the single-account shortcut in the fallback
- * ownership check below.
- */
-function countQQBotFallbackEligibleAccounts(cfg: OpenClawConfig): number {
-  return listQQBotAccountIds(cfg).filter((accountId) => {
-    const account = resolveQQBotAccount(cfg, accountId);
-    return account.enabled && account.secretSource !== "none";
-  }).length;
-}
-
-/**
- * Fallback account-ownership check — applied when `execApprovals` is NOT
- * configured for any QQBot account. In this mode every enabled account
- * handler would otherwise race to deliver the same approval to its own
- * openid namespace, so we must enforce per-account isolation.
- *
- * Rules:
- *   - If the request carries a bound account (via `turnSourceAccountId`
- *     or session binding), only the handler whose `accountId` matches it
- *     delivers the approval. This is strict: a handler with an unknown
- *     `accountId` (null/undefined) must not claim a bound request.
- *   - If no account is bound, only deliver when there is a single
- *     *eligible* QQBot account (enabled + secret resolved). Disabled or
- *     unconfigured accounts never deliver anyway, so they shouldn't
- *     block the remaining single account from handling the approval.
- *     Multiple eligible accounts cannot safely race because openids are
- *     account-scoped — cross-account delivery hits the QQ Bot API with
- *     a mismatched token and fails.
- */
 function matchesQQBotFallbackRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): boolean {
-  const boundAccountId = resolveApprovalRequestChannelAccountId({
-    cfg: params.cfg,
-    request: params.request,
+  const accountId = params.accountId ?? resolveDefaultQQBotAccountId(params.cfg);
+  const account = resolveQQBotAccount(params.cfg, accountId);
+  return doesApprovalRequestSelectChannelAccount({
+    ...params,
     channel: "qqbot",
+    defaultAccountId: resolveDefaultQQBotAccountId(params.cfg),
+    eligibleAccountIds: account.enabled && account.secretSource !== "none" ? [accountId] : [],
   });
-
-  if (boundAccountId) {
-    if (!params.accountId) {
-      return false;
-    }
-    return normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId);
-  }
-
-  return countQQBotFallbackEligibleAccounts(params.cfg) <= 1;
 }
 
 /**
