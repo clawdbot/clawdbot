@@ -59,11 +59,7 @@ export function createApplicationCloudStartup(
   let runtimeError: string | undefined;
   const listeners = new Set<() => void>();
 
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const publish = () => listeners.forEach((listener) => listener());
 
   const ensureRuntime = (): Promise<void> =>
     (runtimeLoad ??= loadRuntime().then(
@@ -104,28 +100,27 @@ export function createApplicationCloudStartup(
 
   return {
     get(sessionKey) {
+      if (runtime) {
+        return runtime.get(sessionKey);
+      }
       const input = preRuntimeEntries.get(sessionKey);
-      return (
-        runtime?.get(sessionKey) ??
-        (input
-          ? {
-              sessionKey,
-              phase: runtimeError ? "failed" : "pending",
-              startedAt: input.createdAt,
-              error: runtimeError,
-              retryable: Boolean(runtimeError),
-            }
-          : null)
-      );
+      return input
+        ? {
+            sessionKey,
+            phase: runtimeError ? "failed" : "pending",
+            startedAt: input.createdAt,
+            error: runtimeError,
+            retryable: Boolean(runtimeError),
+          }
+        : null;
     },
     start,
     retry(sessionKey) {
       const input = preRuntimeEntries.get(sessionKey);
       if (input) {
-        start(input);
-      } else {
-        runtime?.retry(sessionKey);
+        return start(input);
       }
+      runtime?.retry(sessionKey);
     },
     resumeRecovery() {
       // Ready-connection prewarm resumes durable recovery and removes first-Start chunk latency.
