@@ -9,12 +9,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import {
-  isDesktopPanelAvailable,
-  openDesktopPanel,
-} from "../../components/desktop/desktop-panel-action.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  type DesktopPanelToggleDetail,
+} from "../../components/panel-toggle-contract.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
@@ -151,7 +152,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
             class="btn btn--ghost btn--icon chat-icon-btn chat-desktop-panel-toggle"
             type="button"
             aria-label=${t("desktop.toggle")}
-            @click=${openDesktopPanel}
+            @click=${() =>
+              window.dispatchEvent(
+                new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true },
+                }),
+              )}
           >
             ${icons.monitor}
           </button>

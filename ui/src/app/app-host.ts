@@ -20,7 +20,6 @@ import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
-import { isDesktopPanelAvailable } from "../components/desktop/desktop-panel-action.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -45,6 +44,7 @@ import { selectShellRouteState, type ShellRouteState } from "./app-host-route-st
 import { OpenClawApp } from "./app-root.ts";
 import {
   isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
   ShellChromeOwner,
   type ShellChromeHost,
 } from "./app-shell-chrome.ts";
@@ -523,13 +523,17 @@ class OpenClawShell
     }
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      if (this.commandPalette) {
+        this.commandPalette.desktopAvailable = desktopAvailable;
+      }
       if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
         preloadOptionalElement(this, this.terminalPanelElement);
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
       }
-      if (isDesktopPanelAvailable(gatewaySnapshot)) {
+      if (desktopAvailable) {
         preloadOptionalElement(this, this.desktopPanelElement);
       }
       if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {

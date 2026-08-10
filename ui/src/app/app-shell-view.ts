@@ -6,7 +6,6 @@ import type {
   SidebarWorkboardRenderers,
   SidebarWorkboardSnapshot,
 } from "../components/app-sidebar-workboard.ts";
-import { isDesktopPanelAvailable } from "../components/desktop/desktop-panel-action.ts";
 import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
@@ -21,7 +20,7 @@ import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
-import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -296,7 +295,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
-          .desktopAvailable=${desktopPanelAvailable}
         ></openclaw-command-palette>`
       : nothing}
     <div

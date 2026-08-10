@@ -13,9 +13,9 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
-import { openDesktopPanel } from "./desktop/desktop-panel-action.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./modal-dialog.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 type PaletteItem = {
   id: string;
@@ -174,7 +174,7 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
   } else if (item.action === "panel:desktop") {
-    openDesktopPanel();
+    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else {
     props.onSlashCommand?.(item.action);
   }
