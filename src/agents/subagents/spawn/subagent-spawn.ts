@@ -25,7 +25,7 @@ import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
-} from "../../subagent-registry.js";
+} from "../registry/subagent-registry.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   materializeSubagentAttachments,

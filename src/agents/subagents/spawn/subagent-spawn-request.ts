@@ -10,7 +10,7 @@ import {
 import { listAgentIds } from "../../agent-scope-config.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
-import { listSwarmRunsForGroup } from "../../subagent-registry.js";
+import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { reserveSwarmRun } from "../swarm/swarm-scheduler.js";

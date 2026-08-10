@@ -335,8 +335,8 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
-vi.mock("../../subagent-registry.js", () => subagentRegistryMock);
-vi.mock("../../subagent-registry-runtime.js", () => subagentRegistryMock);
+vi.mock("../registry/subagent-registry.js", () => subagentRegistryMock);
+vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryMock);
 
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;

@@ -17,8 +17,8 @@ import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   bindSubagentRunRecord,
   upsertSubagentRunRowInDatabase,
-} from "../../subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+} from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 type AdmissionTestHooks = {
   afterBind?: () => unknown;

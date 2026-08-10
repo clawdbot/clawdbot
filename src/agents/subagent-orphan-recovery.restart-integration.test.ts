@@ -23,15 +23,15 @@ import {
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
+import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+} from "./subagents/registry/subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -39,8 +39,8 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+} from "./subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,

@@ -18,7 +18,7 @@ import {
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
   type SessionCapabilityStore,
-} from "./subagent-capabilities.js";
+} from "./subagents/spawn/subagent-capabilities.js";
 import {
   isTrustedSubagentCompletionHandoffForRun,
   type TrustedSubagentCompletionHandoff,

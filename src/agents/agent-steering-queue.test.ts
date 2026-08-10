@@ -6,7 +6,7 @@ import {
   prependAgentSteeringPrompt,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "./agent-steering-queue.js";
-import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 const requesterSessionKey = "agent:main:main";
 

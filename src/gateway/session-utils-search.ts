@@ -6,7 +6,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagent-registry-read.js";
+import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   buildGroupDisplayName,
   type InternalSessionEntry,

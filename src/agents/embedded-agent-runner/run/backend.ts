@@ -6,7 +6,7 @@ import {
   runAgentHarnessSettledTurnFinalization,
 } from "../../harness/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
-import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
+import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**

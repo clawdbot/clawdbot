@@ -1310,7 +1310,7 @@ export async function startGatewayPostAttachRuntime(
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
         try {
-          const { scheduleSubagentRegistrySweep } = await import("../agents/subagent-registry.js");
+          const { scheduleSubagentRegistrySweep } = await import("../agents/subagents/registry/subagent-registry.js");
           scheduleSubagentRegistrySweep();
         } catch (err) {
           params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);

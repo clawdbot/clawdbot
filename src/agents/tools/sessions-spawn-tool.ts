@@ -22,7 +22,7 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { getSubagentDeliveryBacklogPressure } from "../subagent-registry.js";
+import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,

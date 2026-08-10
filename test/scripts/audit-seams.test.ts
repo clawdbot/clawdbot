@@ -90,7 +90,7 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
+    expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual([
       "subagent-announce-delivery",
       "subagent-lifecycle-registry",
     ]);

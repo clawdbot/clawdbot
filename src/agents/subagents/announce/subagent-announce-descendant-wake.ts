@@ -20,7 +20,7 @@ type DescendantWakeDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
-  replaceSubagentRunAfterSteer: typeof import("../../subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
+  replaceSubagentRunAfterSteer: typeof import("../registry/subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
 };
 
 type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;

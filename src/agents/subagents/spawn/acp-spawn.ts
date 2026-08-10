@@ -63,7 +63,7 @@ import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
-} from "../../subagent-capabilities.js";
+} from "./subagent-capabilities.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,

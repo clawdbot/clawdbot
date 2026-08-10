@@ -16,8 +16,8 @@ import {
   listControlledSubagentRuns,
   MAX_RECENT_MINUTES,
   resolveSubagentController,
-} from "../subagent-control.js";
-import { buildSubagentList } from "../subagent-list.js";
+} from "../subagents/registry/subagent-control.js";
+import { buildSubagentList } from "../subagents/registry/subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 

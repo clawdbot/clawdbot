@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";

@@ -119,7 +119,7 @@ vi.mock("../agents/session-dirs.js", () => ({
   resolveAgentSessionDirs: vi.fn(async () => []),
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
 }));
 

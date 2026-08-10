@@ -14,8 +14,8 @@ import {
 } from "../../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "../../subagent-registry.types.js";
-import { hasSubagentRunEnded } from "../../subagent-run-liveness.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   deliverSubagentAnnouncement,
@@ -30,7 +30,7 @@ import {
 import { hasUsableSessionEntry } from "./subagent-announce.js";
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("../../subagent-registry-runtime.js"),
+  () => import("../registry/subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {

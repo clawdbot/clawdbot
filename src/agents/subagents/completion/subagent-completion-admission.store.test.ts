@@ -22,15 +22,15 @@ import {
   resolveCorrelatedSubagentDelivery,
   retrySubagentCompletionDelivery,
 } from "./subagent-completion-delivery.js";
-import { subagentRuns } from "../../subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "../../subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("../../subagent-registry.js", () => ({ resumeSubagentRun }));
+vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
 
 describe("atomic subagent completion admission store", () => {
   let tempDir: string;
