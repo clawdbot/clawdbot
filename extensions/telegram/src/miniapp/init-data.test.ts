@@ -51,6 +51,26 @@ describe("validateTelegramMiniAppInitData", () => {
       }),
     ).toBeNull();
   });
+
+  it("rejects non-canonical auth dates even when they are signed", () => {
+    for (const authDate of [
+      "1.8e9",
+      "0x6b49d200",
+      "1800000000.0",
+      "+1800000000",
+      " 1800000000 ",
+      "01800000000",
+      "0",
+    ]) {
+      expect(
+        validateTelegramMiniAppInitData({
+          initData: signedInitData({ auth_date: authDate }),
+          botToken: BOT_TOKEN,
+          nowMs: AUTH_DATE * 1000 + 10_000,
+        }),
+      ).toBeNull();
+    }
+  });
 });
 
 function signedInitData(overrides: Record<string, string>): string {

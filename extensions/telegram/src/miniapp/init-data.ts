@@ -1,5 +1,6 @@
 // Telegram Mini App init-data validation.
 import crypto from "node:crypto";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 
 const INIT_DATA_MAX_AGE_MS = 300_000;
@@ -23,14 +24,17 @@ export function validateTelegramMiniAppInitData(params: {
 
   const parsed = new URLSearchParams(initData);
   const receivedHash = parsed.get("hash")?.trim() ?? "";
-  const authDateRaw = parsed.get("auth_date")?.trim() ?? "";
+  const authDateRaw = parsed.get("auth_date") ?? "";
   const userRaw = parsed.get("user")?.trim() ?? "";
   if (!receivedHash || !authDateRaw || !userRaw) {
     return null;
   }
 
-  const authDateSeconds = Number(authDateRaw);
-  if (!Number.isInteger(authDateSeconds) || authDateSeconds <= 0) {
+  if (!/^[1-9]\d*$/.test(authDateRaw)) {
+    return null;
+  }
+  const authDateSeconds = parseStrictPositiveInteger(authDateRaw);
+  if (authDateSeconds === undefined) {
     return null;
   }
   const authDateMs = authDateSeconds * 1000;
