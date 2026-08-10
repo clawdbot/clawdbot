@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
@@ -38,7 +39,9 @@ describe("skill_workshop tool", () => {
     const schema = JSON.stringify(tool.parameters);
 
     expect(schema).toContain("create = new skill");
-    expect(schema).toContain("update = existing live skill");
+    expect(schema).toContain("patch = targeted");
+    expect(schema).toContain("read = existing live skill");
+    expect(schema).toContain("update = full-body rewrite");
     expect(schema).toContain("revise = existing pending proposal");
     expect(schema).toContain("evaluate runs plugin evaluators");
     expect(schema).toContain("not filesystem search");
@@ -140,7 +143,7 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(true);
   });
 
-  it("does not nudge the foreground model when autonomy is enabled", () => {
+  it("describes the configured foreground repair outcome", () => {
     const disabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
       config: { skills: { workshop: { autonomous: { mode: "off" } } } },
@@ -150,7 +153,8 @@ describe("skill_workshop tool", () => {
       config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
-    expect(enabled.description).toBe(disabled.description);
+    expect(disabled.description).toContain("Foreground repair is disabled.");
+    expect(enabled.description).toContain("stays pending for review");
     expect(enabled.description).not.toContain("Experience capture");
   });
 
@@ -773,6 +777,125 @@ describe("skill_workshop tool", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
     ).rejects.toThrow();
+  });
+
+  it.each(["off", "propose", "auto"] as const)(
+    "enforces foreground repair receipts in autonomous mode %s",
+    async (mode) => {
+      const workspaceDir = await tempDirs.make(`openclaw-skill-workshop-repair-${mode}-`);
+      const runId = `repair-${mode}`;
+      const skillName = `weather-planner-${mode}`;
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { workshop: { autonomous: { mode } } } },
+        agentId: "main",
+        origin: { agentId: "main", runId },
+      });
+      const created = await tool.execute("repair-create", {
+        action: "create",
+        name: skillName,
+        description: "Plan around current weather",
+        proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+      });
+      await tool.execute("repair-create-apply", {
+        action: "apply",
+        proposal_id: (created.details as { id: string }).id,
+      });
+
+      await tool.execute("repair-read", { action: "read", skill_name: skillName });
+
+      const patchArgs = {
+        action: "patch",
+        skill_name: skillName,
+        old_string: "Check weather before outdoor recommendations.",
+        new_string: "Check weather and alerts before outdoor recommendations.",
+      };
+      if (mode === "off") {
+        await expect(tool.execute("repair-disabled", patchArgs)).rejects.toThrow(
+          "disabled by autonomous mode off",
+        );
+        return;
+      }
+
+      await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(
+        "was not used in this run",
+      );
+      recordRunSkillUsage({
+        runId,
+        name: skillName,
+        source: "workspace",
+        activation: "read",
+        skillFile: path.join(workspaceDir, "skills", skillName, "SKILL.md"),
+      });
+      const patch = await tool.execute("repair-patch", patchArgs);
+      expect(patch.details).toMatchObject({
+        status: mode === "auto" ? "applied" : "pending",
+        kind: "update",
+      });
+
+      const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+      if (mode === "propose") {
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
+          "Check weather before outdoor recommendations.",
+        );
+        await expect(
+          tool.execute("repair-apply", {
+            action: "apply",
+            proposal_id: (patch.details as { id: string }).id,
+          }),
+        ).resolves.toMatchObject({ details: { status: "applied" } });
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
+          "Check weather and alerts before outdoor recommendations.",
+        );
+      } else {
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
+          "Check weather and alerts before outdoor recommendations.",
+        );
+      }
+      consumeRunSkillUsage(runId);
+    },
+  );
+
+  it("matches an aliased used-skill receipt by canonical file", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-alias-");
+    const runId = "repair-alias";
+    const skillName = "canonical-skill-key";
+    const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      agentId: "main",
+      origin: { agentId: "main", runId },
+    });
+    const created = await tool.execute("alias-create", {
+      action: "create",
+      name: skillName,
+      description: "Exercise canonical receipt identity",
+      proposal_content: "# Aliased Skill\n\nUse OLD_TOKEN.\n",
+    });
+    await tool.execute("alias-create-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+    });
+    await tool.execute("alias-read", { action: "read", skill_name: skillName });
+    recordRunSkillUsage({
+      runId,
+      name: "frontmatter-skill-name",
+      source: "workspace",
+      activation: "read",
+      skillFile,
+    });
+
+    await expect(
+      tool.execute("alias-patch", {
+        action: "patch",
+        skill_name: skillName,
+        old_string: "Use OLD_TOKEN.",
+        new_string: "Use NEW_TOKEN.",
+      }),
+    ).resolves.toMatchObject({ details: { status: "applied" } });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Use NEW_TOKEN.");
+    consumeRunSkillUsage(runId);
   });
 
   it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {

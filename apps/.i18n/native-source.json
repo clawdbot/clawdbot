@@ -38139,6 +38139,14 @@
     },
     {
       "kind": "conditional-branch",
+      "line": 436,
+      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
+      "source": "Bundled",
+      "surface": "apple",
+      "id": "native.apple.5bea2c67b8d4ccf9"
+    },
+    {
+      "kind": "conditional-branch",
       "line": 438,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Managed",
@@ -38304,14 +38312,6 @@
       "source": "Skill enabled",
       "surface": "apple",
       "id": "native.apple.6b59063df92d2991"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 947,
-      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
-      "source": "Bundled",
-      "surface": "apple",
-      "id": "native.apple.5bea2c67b8d4ccf9"
     },
     {
       "kind": "ui-named-argument",
@@ -42883,7 +42883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 354,
+      "line": 348,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/SkillManagement.swift",
       "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
       "surface": "apple",

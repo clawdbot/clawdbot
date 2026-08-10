@@ -1497,7 +1497,12 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
       expect(consumeRunSkillUsage("run-1")).toEqual([
-        { name: "demo-skill", source: "workspace", activation: "read" },
+        {
+          name: "demo-skill",
+          source: "workspace",
+          activation: "read",
+          skillFile: skillFilePath,
+        },
       ]);
       expect(consumeRunSkillUsage("run-1")).toEqual([]);
     });

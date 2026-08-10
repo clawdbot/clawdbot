@@ -61,10 +61,8 @@ import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import {
-  admitInitialTurnHandoff,
-  admitInitialUserMessageHandoff as admitInitialMessage,
-} from "./initial-turn-handoff.ts";
+import { admitInitialUserMessageHandoff } from "./history-merge.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
@@ -504,7 +502,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        admitInitialMessage(pageState.initialUserMessage, pageState, initialSessionKey);
+        admitInitialUserMessageHandoff(pageState, initialSessionKey);
       }
     }
     chatState.attach(pageState);
@@ -615,8 +613,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        const initialUserMessage = this.state.initialUserMessage;
-        const acceptedPrompt = admitInitialMessage(initialUserMessage, this.state, nextSessionKey);
+        const acceptedPrompt = admitInitialUserMessageHandoff(this.state, nextSessionKey);
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

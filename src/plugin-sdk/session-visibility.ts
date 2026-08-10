@@ -11,15 +11,6 @@ import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.j
 
 type GatewayCaller = typeof defaultCallGateway;
 
-let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
-
-/** Test hook: must stay aligned with `sessions-resolution` `testing.setDepsForTest`. */
-export const sessionVisibilityGatewayTesting = {
-  setCallGatewayForListSpawned(overrides?: GatewayCaller) {
-    callGatewayForListSpawned = overrides ?? defaultCallGateway;
-  },
-};
-
 /** Configured visibility mode for session tools and session-related commands. */
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
 
@@ -87,13 +78,16 @@ export type SessionVisibilityRow = {
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
+  callGateway?: GatewayCaller;
 }): Promise<Set<string>> {
   const limit =
     typeof params.limit === "number" && Number.isFinite(params.limit)
       ? Math.max(1, Math.floor(params.limit))
       : undefined;
   try {
-    const list = await callGatewayForListSpawned<{ sessions: Array<{ key?: unknown }> }>({
+    const list = await (params.callGateway ?? defaultCallGateway)<{
+      sessions: Array<{ key?: unknown }>;
+    }>({
       method: "sessions.list",
       params: {
         includeGlobal: false,
@@ -478,6 +472,7 @@ export async function createSessionVisibilityGuard(params: {
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
+  callGateway?: GatewayCaller;
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
@@ -485,7 +480,10 @@ export async function createSessionVisibilityGuard(params: {
   // this lookup until every caller can pass a normalized session row.
   const spawnedKeys =
     params.action !== "list" && (params.visibility === "tree" || params.visibility === "all")
-      ? await listSpawnedSessionKeys({ requesterSessionKey: params.requesterSessionKey })
+      ? await listSpawnedSessionKeys({
+          requesterSessionKey: params.requesterSessionKey,
+          callGateway: params.callGateway,
+        })
       : null;
   return createSessionVisibilityChecker({
     action: params.action,

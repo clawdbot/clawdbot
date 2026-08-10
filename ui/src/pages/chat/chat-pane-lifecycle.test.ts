@@ -120,6 +120,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
       targetSessionKey,
       { attachments: [], createdAt: 1, text: "keep the first prompt visible" },
       client,
+      { runId: "initial-run" },
     );
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = new Map();

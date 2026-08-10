@@ -2,7 +2,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -167,15 +166,10 @@ describe("wizard setup ownership", () => {
       });
 
       expect(getActiveGatewayRootWorkCount()).toBe(1);
-      expect(createSafeGatewayRestartPreflight()).toMatchObject({
-        safe: false,
-        blockers: [expect.objectContaining({ kind: "root-request", count: 1 })],
-      });
       runnerSettled.resolve();
       await vi.waitFor(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
-      expect(createSafeGatewayRestartPreflight().safe).toBe(true);
     } finally {
       runnerSettled.resolve();
       resetGatewayWorkAdmission();

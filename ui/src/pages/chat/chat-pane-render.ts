@@ -355,7 +355,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
       suggestionComposer: suggestionViewer,
-      typingLabel: multiIdentity ? this.typingLabel() : null,
+      typingActors: multiIdentity ? this.typingActorViews() : [],
       onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
