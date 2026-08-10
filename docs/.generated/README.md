@@ -25,7 +25,10 @@ Do not edit any of these files by hand.
 
 The Plugin SDK contract sorts modules by import specifier and exports by kind
 then name. Its line-delimited records keep concurrent changes to separate
-exports mergeable while preserving the declaration closure in reviewable text.
+exports mergeable. Export records carry the normalized `declaration` and an
+explicit `closureHash` for surface-reachable repo declarations. Committed
+records omit source paths so file moves do not change the contract; origin
+`source` fields remain available in the local pretty JSON snapshot.
 
 - Regenerate SQLite sessions/transcripts schema baseline: `pnpm sqlite:sessions-schema:gen`
 - Validate SQLite sessions/transcripts schema baseline: `pnpm sqlite:sessions-schema:check`

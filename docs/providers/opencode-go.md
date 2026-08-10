@@ -66,7 +66,7 @@ interactive onboarding or pass the shared OpenCode API key directly.
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
+  env: { vars: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" } }, // pragma: allowlist secret
   agents: { defaults: { model: { primary: "opencode-go/kimi-k3" } } },
 }
 ```
