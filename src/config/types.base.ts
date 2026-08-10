@@ -98,7 +98,9 @@ export type ChannelStreamingBlockConfig = {
   coalesce?: BlockStreamingCoalesceConfig;
 };
 
-export type ChannelStreamingConfig = {
+export type ChannelStreamingConfig<
+  TProgress extends ChannelStreamingProgressConfig = ChannelStreamingProgressConfig,
+> = {
   /**
    * Preview streaming mode:
    * - "off": disable preview updates
@@ -109,13 +111,10 @@ export type ChannelStreamingConfig = {
   mode?: StreamingMode;
   /** Chunking mode for outbound text delivery. */
   chunkMode?: TextChunkMode;
-  /**
-   * Channel-specific native transport streaming toggle.
-   * Used today by Slack's native stream API.
-   */
+  /** Prefer a channel's native streaming transport over its portable draft path. */
   nativeTransport?: boolean;
   preview?: ChannelStreamingPreviewConfig;
-  progress?: ChannelStreamingProgressConfig;
+  progress?: TProgress;
   block?: ChannelStreamingBlockConfig;
 };
 

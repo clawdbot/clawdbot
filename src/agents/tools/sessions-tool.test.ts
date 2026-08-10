@@ -611,23 +611,6 @@ describe("sessions tool", () => {
     expect(callGateway).toHaveBeenCalledTimes(4);
   });
 
-  it("patches and clears a sidebar icon", async () => {
-    const callGateway = vi.fn(async () => ({ ok: true }));
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      callGateway: callGateway as never,
-    });
-
-    await tool.execute("patch-icon", { action: "patch", icon: "  name:lobster  " });
-    await tool.execute("clear-icon", { action: "patch", icon: "" });
-
-    expect(callGateway.mock.calls).toEqual([
-      ["sessions.patch", { key: "agent:main:main", icon: "name:lobster" }],
-      ["sessions.patch", { key: "agent:main:main", icon: null }],
-    ]);
-  });
-
   it("returns a bounded acknowledgement instead of the patched session entry", async () => {
     const callGateway = vi.fn(async () => ({
       ok: true,
@@ -651,18 +634,16 @@ describe("sessions tool", () => {
     const result = await tool.execute("patch-sidebar", {
       action: "patch",
       label: "Movies",
-      icon: "name:film",
     });
 
     expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       label: "Movies",
-      icon: "name:film",
     });
     expect(result.details).toEqual({
       status: "updated",
       sessionKey: "agent:main:main",
-      updated: ["label", "icon"],
+      updated: ["label"],
     });
     const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
     expect(text).not.toContain('"entry"');

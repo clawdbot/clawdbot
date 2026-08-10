@@ -22,6 +22,7 @@ import type {
   SessionTranscriptInstance,
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
+  SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import {
   readSqliteSessionEntryCache,
@@ -450,7 +451,8 @@ export function replaceSqliteSessionEntrySync(
 
 /** Creates a missing session identity without replacing a concurrently owned row. */
 export function ensureSqliteSessionEntrySync(
-  scope: SessionAccessScope,
+  scope: SessionAccessScope &
+    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
   entry: SessionEntry,
 ): boolean {
   const resolved = resolveSqliteScope(scope);
@@ -463,7 +465,14 @@ export function ensureSqliteSessionEntrySync(
     previous = readSqliteSessionIdentitySnapshot(database, identityKeys);
     const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
     if (existing) {
+      // This branch is a read-only ownership probe. The immediately following
+      // transcript mutation rechecks the lifecycle and writer claim in its own
+      // transaction, where a rebound can be reported precisely.
       owned = existing.sessionId === entry.sessionId;
+      current = previous;
+      return;
+    }
+    if (scope.expectedWriterRunId !== undefined) {
       current = previous;
       return;
     }

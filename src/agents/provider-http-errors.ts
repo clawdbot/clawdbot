@@ -4,6 +4,7 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -44,13 +45,6 @@ class ProviderErrorBodyTimeout extends Error {
     this.name = "ProviderErrorBodyTimeout";
     this.timeoutError = timeoutError;
   }
-}
-
-/** Returns a plain object view for provider JSON payloads when one exists. */
-export function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
@@ -107,9 +101,9 @@ export async function readProviderTextResponse(
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */
 export function formatProviderErrorPayload(payload: unknown): string | undefined {
-  const root = asObject(payload);
-  const detailObject = asObject(root?.detail);
-  const subject = asObject(root?.error) ?? detailObject ?? root;
+  const root = asOptionalRecord(payload);
+  const detailObject = asOptionalRecord(root?.detail);
+  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
     return undefined;
   }
@@ -147,9 +141,9 @@ type ProviderErrorPayloadMetadata = {
 };
 
 function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
-  const root = asObject(payload);
-  const detailObject = asObject(root?.detail);
-  const subject = asObject(root?.error) ?? detailObject ?? root;
+  const root = asOptionalRecord(payload);
+  const detailObject = asOptionalRecord(root?.detail);
+  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
     return {};
   }
@@ -376,7 +370,7 @@ export async function readProviderJsonObjectResponse(
   opts?: ProviderResponseReadOptions,
 ): Promise<Record<string, unknown>> {
   const payload = await readProviderJsonResponse<unknown>(response, label, opts);
-  const object = asObject(payload);
+  const object = asOptionalRecord(payload);
   if (!object) {
     throw new Error(`${label}: malformed JSON response`);
   }

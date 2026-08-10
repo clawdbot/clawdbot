@@ -2044,6 +2044,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/lib/failed-trailer.mts", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
+  ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
@@ -2510,7 +2511,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     /^scripts\/e2e\/session-runtime-context-docker\.sh$/u,
     [
-      "docker-e2e-clients",
       dockerE2e,
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
       "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -2539,12 +2539,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/e2e\/live-plugin-tool-docker\.sh$/u, ["live-plugin-tool-assertions"]],
   [
     /^scripts\/e2e\/commitments-safety-docker\.sh$/u,
-    [
-      "docker-e2e-clients",
-      dockerE2e,
-      "src/commitments/runtime.test.ts",
-      "src/commitments/store.test.ts",
-    ],
+    [dockerE2e, "src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
   ],
   [/^scripts\/e2e\/onboard-docker\.sh$/u, [dockerBuild, "openclaw-test-state"]],
   [
@@ -2636,12 +2631,11 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/commitments-safety-docker(?:-client)?\.(?:sh|ts)$/u,
-    ["docker-e2e-clients", "src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
+    ["src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
   ],
   [
     /^scripts\/e2e\/session-runtime-context-docker(?:-client)?\.(?:sh|ts)$/u,
     [
-      "docker-e2e-clients",
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
       "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     ],

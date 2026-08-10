@@ -505,6 +505,23 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("prints extra path glob patterns in status output", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () =>
+        makeMemoryStatus({
+          extraPaths: [{ path: "notes", pattern: "runbooks/**/*.md" }],
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Extra paths: /tmp/openclaw/notes (pattern: runbooks/**/*.md)");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("still aborts status when its own memory SecretRef cannot be resolved", async () => {
     getRuntimeConfig.mockReturnValue({
       memory: {
@@ -1554,21 +1571,6 @@ describe("memory cli", () => {
       agentId: "main",
       purpose: "cli",
       acquireLocalService,
-    });
-  });
-
-  it("passes the host SQLite lease hook to CLI memory managers", async () => {
-    const close = vi.fn(async () => {});
-    mockManager({ search: vi.fn(async () => []), close });
-    const withLease = vi.fn();
-
-    await runMemoryCli(["search", "hello"], { withLease });
-
-    expect(getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      purpose: "cli",
-      withLease,
     });
   });
 

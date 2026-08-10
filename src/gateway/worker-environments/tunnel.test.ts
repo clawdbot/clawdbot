@@ -17,6 +17,37 @@ import {
 import { sshArgvPort } from "./worker-ssh-argv.test-support.js";
 
 describe("worker tunnel manager", () => {
+  it("cascades only an epoch-matched environment stop into the desktop tunnel owner", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.desktop.acquire({
+      environmentId: "worker:desktop-cascade",
+      ownerEpoch: 2,
+      ssh: SSH,
+      desktop: { protocol: "rfb", port: 5900 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await starting;
+    const close = vi.fn();
+    manager.desktop.attachObserver("worker:desktop-cascade", {
+      control: false,
+      ownerEpoch: 2,
+      close,
+    });
+
+    await manager.stop("worker:desktop-cascade", 1);
+
+    expect(fake.starts[0]?.process.stopCount).toBe(0);
+    expect(close).not.toHaveBeenCalled();
+
+    await manager.stop("worker:desktop-cascade", 2);
+
+    expect(fake.starts[0]?.process.stopCount).toBe(1);
+    expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed");
+  });
+
   it("establishes a pinned reverse socket with keepalives and a separate workspace connection", async () => {
     const fake = fakeRunner();
     const { manager, handle, start: tunnel } = await startConnectedTunnel(fake, "worker:one", 3);

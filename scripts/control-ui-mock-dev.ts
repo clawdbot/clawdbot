@@ -1306,7 +1306,6 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
-      icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
       category: "Research",
@@ -1337,7 +1336,6 @@ async function createChatPickerScenario(
       execCwd: "/Users/peter/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       pinned: true,
-      icon: "🛠️",
     }),
     sessionRow("agent:main:whatsapp:group:family", "Family", baseTime - 90_000, {
       kind: "group",
@@ -1454,6 +1452,10 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    // Advertised Gateway methods gate session actions (see
+    // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
+    // every session context-menu row disabled, so the harness could not show
+    // the menu operators actually see.
     featureMethods: [
       "chat.metadata",
       "chat.startup",
@@ -1461,8 +1463,16 @@ async function createChatPickerScenario(
       "openclaw.changes.list",
       "openclaw.chat",
       "openclaw.chat.history",
+      "sessions.delete",
       "sessions.diff",
       "sessions.files.set",
+      "sessions.fork",
+      "sessions.groups.delete",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.patch",
+      "sessions.patchMany",
       "sessions.catalog.list",
       "sessions.catalog.read",
       "system.info",

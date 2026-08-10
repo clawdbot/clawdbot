@@ -57,8 +57,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
         waitForCompactionRetry: async () => {
@@ -138,8 +137,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [{ toolName: "exec", asyncStarted: true }],
         waitForCompactionRetry: async () => {},
@@ -224,8 +222,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [
           { toolName: "read", isError: true },
@@ -321,8 +318,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn(), getLeafId: vi.fn(() => "terminal") } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
         yieldAborted: false,
@@ -371,8 +367,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: abortError,
         yieldAborted: false,
@@ -420,8 +415,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => {
+      withOwnedTranscriptWrite: async (operation) => {
         aborted = true;
         return await operation();
       },
@@ -473,8 +467,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
         yieldAborted: false,

@@ -7,10 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import type { MemoryExtraPath } from "./types.js";
 export { normalizeAgentId };
 
 // Shared OpenClaw config helpers used by memory host and agent context code.
@@ -29,8 +26,26 @@ type MemoryConfig = {
 type MemorySearchConfig = {
   enabled?: boolean;
   rememberAcrossConversations?: boolean;
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
 };
+
+/** Trim and deduplicate configured extra-memory roots without losing pattern identity. */
+export function normalizeConfiguredMemoryExtraPaths(
+  extraPaths?: MemoryExtraPath[],
+): MemoryExtraPath[] {
+  const normalized = new Map<string, MemoryExtraPath>();
+  for (const entry of extraPaths ?? []) {
+    const configuredPath = (typeof entry === "string" ? entry : entry.path).trim();
+    const pattern = typeof entry === "string" ? "" : entry.pattern?.trim() || "";
+    if (configuredPath) {
+      normalized.set(
+        `${configuredPath}\0${pattern}`,
+        pattern ? { path: configuredPath, pattern } : configuredPath,
+      );
+    }
+  }
+  return Array.from(normalized.values());
+}
 
 /** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
@@ -287,20 +302,24 @@ export function resolveMemoryHostAgentContextLimits(
 export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
-): { enabled: boolean; rememberAcrossConversations: boolean; extraPaths: string[] } | null {
+): {
+  enabled: boolean;
+  rememberAcrossConversations: boolean;
+  extraPaths: MemoryExtraPath[];
+} | null {
   const defaults = cfg.memory?.search;
   const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   if (!enabled) {
     return null;
   }
-  const rawPaths = normalizeStringEntries([
+  const extraPaths = normalizeConfiguredMemoryExtraPaths([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
   ]);
   return {
     enabled,
     rememberAcrossConversations: resolveRememberAcrossConversations(cfg, agentId),
-    extraPaths: uniqueStrings(rawPaths),
+    extraPaths,
   };
 }

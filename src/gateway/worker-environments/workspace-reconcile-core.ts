@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -324,6 +325,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   current: WorkerWorkspaceManifest;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
   const root = await fs.realpath(params.root);
+  const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
   const preserveDirectories = new Set(reconciliationDirectories(params.current.directories));
   const actual = await readActualWorkspaceManifest({
     root,
@@ -341,16 +343,20 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const conflictPaths = params.allowAdvancedLocalState
     ? retainedConflictPaths(preflight)
     : preflight.conflictPaths;
+  const verifyLocalStable = async () =>
+    await assertActualWorkspaceManifest({
+      root,
+      expectedRef: actual.manifestRef,
+      baseCommit: actual.manifest.baseCommit,
+      preserveDirectories,
+    });
   return {
     ...actual,
     conflictPaths,
     verifyLocalStable: async () =>
-      await assertActualWorkspaceManifest({
-        root,
-        expectedRef: actual.manifestRef,
-        baseCommit: actual.manifest.baseCommit,
-        preserveDirectories,
-      }),
+      hashMemo
+        ? await withWorkspaceHashMemo(hashMemo, verifyLocalStable, metrics)
+        : await verifyLocalStable(),
   };
 }
 
@@ -526,6 +532,18 @@ export async function preflightWorkspaceApply(params: {
   const applyPaths = new Set<string>();
   const conflicts = new Set<string>();
   const blockingConflicts = new Set<string>();
+  // Node snapshots may be shared only inside this pass. Separate preflight
+  // calls are concurrency fences and must stat paths again.
+  const localNodes = new Map<string, Promise<WorkspaceNode>>();
+  const localNode = (entryPath: string): Promise<WorkspaceNode> => {
+    const existing = localNodes.get(entryPath);
+    if (existing) {
+      return existing;
+    }
+    const node = localWorkspaceNode(params.root, entryPath);
+    localNodes.set(entryPath, node);
+    return node;
+  };
   for (const entryPath of paths) {
     if (hasPathAncestor(blockingConflicts, entryPath)) {
       continue;
@@ -551,7 +569,7 @@ export async function preflightWorkspaceApply(params: {
       const baseAncestor = baseNodes.get(ancestor);
       const currentAncestor = currentNodes.get(ancestor);
       if (!baseAncestor && !currentAncestor) {
-        const localAncestor = await localWorkspaceNode(params.root, ancestor);
+        const localAncestor = await localNode(ancestor);
         if (localAncestor && localAncestor.type !== "directory") {
           conflicts.add(ancestor);
           blockingConflicts.add(ancestor);
@@ -560,7 +578,7 @@ export async function preflightWorkspaceApply(params: {
         }
         continue;
       }
-      const localAncestor = await localWorkspaceNode(params.root, ancestor);
+      const localAncestor = await localNode(ancestor);
       const localStructurallyMatchesBase =
         localAncestor?.type === "directory" && baseAncestor?.type === "directory"
           ? true
@@ -588,7 +606,7 @@ export async function preflightWorkspaceApply(params: {
         baseAncestor &&
         baseAncestor.type !== "directory" &&
         !sameEntry(baseAncestor, currentNodes.get(ancestor)) &&
-        sameEntry(await localWorkspaceNode(params.root, ancestor), baseAncestor)
+        sameEntry(await localNode(ancestor), baseAncestor)
       ) {
         replacedBaseAncestor = true;
         break;
@@ -597,7 +615,7 @@ export async function preflightWorkspaceApply(params: {
     if (replacedBaseAncestor) {
       local = undefined;
     } else {
-      local = await localWorkspaceNode(params.root, entryPath);
+      local = await localNode(entryPath);
       if (
         local?.type === "directory" &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&

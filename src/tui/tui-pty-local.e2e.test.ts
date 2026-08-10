@@ -899,7 +899,11 @@ async function startGatewayModeTui(
     timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     read: () => {
       const screen = synchronizedFrameRows(run.output(), run)[0]?.join("\n") ?? "";
-      return screen.includes(sessionAcknowledgement) && screen.includes("| idle") ? true : null;
+      return screen.includes(sessionAcknowledgement) &&
+        screen.includes(scenario.modelId) &&
+        screen.includes("| idle")
+        ? true
+        : null;
     },
     onTimeout: () => new Error("adopted Gateway session did not reach an idle final screen"),
   });
@@ -1211,9 +1215,12 @@ describe("TUI PTY real backends", () => {
         const newOutput = fixture.run.visibleOutput().slice(newOffset);
         const createdKey = newOutput.match(/new session: (agent:main:tui-\S+)/)?.[1];
         expect(createdKey).toBeDefined();
-        const screen =
-          synchronizedFrameRows(fixture.run.output(), fixture.run)[0]?.join("\n") ?? "";
-        expect(screen).toContain(`session ${createdKey!.split(":").at(-1)}`);
+        const sessionLabel = `session ${createdKey!.split(":").at(-1)}`;
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (rows) => rows.some((row) => row.includes(sessionLabel)),
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
         const afterOffset = fixture.run.visibleOutput().length;
         await fixture.run.write("T03_LIFECYCLE_AFTER\r");
         await waitForOutputAfter(fixture.run, reply, afterOffset);

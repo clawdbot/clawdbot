@@ -127,33 +127,27 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:extra"]')).toBeNull();
   });
 
-  it("renders pinned emoji and named icons with unknown-name fallback", async () => {
-    const keys = ["agent:main:main", "agent:main:emoji", "agent:main:named", "agent:main:unknown"];
+  it("renders the generic icon for pinned sessions", async () => {
+    const keys = ["agent:main:main", "agent:main:pinned"];
     const sessions = createSessionsHarness("main", keys);
     const result = sessions.sessions.state.result;
     expect(result).not.toBeNull();
     if (!result) {
       return;
     }
-    const iconsByKey = new Map([
-      ["agent:main:emoji", "🦞"],
-      ["agent:main:named", "name:spark"],
-      ["agent:main:unknown", "name:constructor"],
-    ]);
     for (const row of result.sessions) {
-      const icon = iconsByKey.get(row.key);
-      if (icon) {
-        Object.assign(row, { pinned: true, icon });
+      if (row.key === "agent:main:pinned") {
+        Object.assign(row, { pinned: true });
       }
     }
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
 
-    const iconFor = (key: string) =>
-      sidebar.querySelector(`[data-session-key="${key}"] .sidebar-pinned-session__icon`);
-    expect(iconFor("agent:main:emoji")?.textContent).toContain("🦞");
-    expect(iconFor("agent:main:named")?.querySelector('path[d^="M9.937"]')).not.toBeNull();
-    expect(iconFor("agent:main:unknown")?.querySelector('path[d^="M21 15"]')).not.toBeNull();
+    expect(
+      sidebar.querySelector(
+        '[data-session-key="agent:main:pinned"] .sidebar-pinned-session__icon svg',
+      ),
+    ).not.toBeNull();
   });
 
   it("keeps a pinned icon leading while activity trails the row", async () => {
@@ -166,7 +160,7 @@ describe("AppSidebar interleaved zone", () => {
     }
     for (const row of result.sessions) {
       if (row.key === "agent:main:page") {
-        Object.assign(row, { pinned: true, icon: "🦞", hasActiveRun: true, unread: true });
+        Object.assign(row, { pinned: true, hasActiveRun: true, unread: true });
       }
     }
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -174,7 +168,7 @@ describe("AppSidebar interleaved zone", () => {
 
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
     const glyph = row?.querySelector(".sidebar-session-indicator .session-glyph");
-    expect(glyph?.querySelector(".sidebar-pinned-session__icon")?.textContent).toContain("🦞");
+    expect(glyph?.querySelector(".sidebar-pinned-session__icon svg")).not.toBeNull();
     expect(glyph?.classList.contains("session-glyph--running")).toBe(false);
     expect(glyph?.querySelector(".session-glyph__ring")).toBeNull();
     expect(glyph?.querySelector(".session-glyph__badge--unread")).toBeNull();
@@ -194,7 +188,6 @@ describe("AppSidebar interleaved zone", () => {
       if (row.key === "agent:main:page") {
         Object.assign(row, {
           pinned: true,
-          icon: "🦞",
           unread: true,
           status: "failed",
           lastRunError: "boom",

@@ -1015,7 +1015,7 @@ describe("createBackupArchive", () => {
             INSERT INTO state_leases (
               scope, lease_key, owner, expires_at, heartbeat_at,
               payload_json, created_at, updated_at
-            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+            ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 10, NULL, 10, 10)
           `,
         ).run();
 
@@ -1199,7 +1199,7 @@ describe("createBackupArchive", () => {
                 INSERT INTO state_leases (
                   scope, lease_key, owner, expires_at, heartbeat_at,
                   payload_json, created_at, updated_at
-                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
+                ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
               `,
             )
             .run();
@@ -2407,7 +2407,7 @@ describe("createBackupArchive", () => {
           PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
-          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('core:test-fixture', 'write');
         `);
         await fs.symlink(backingDbPath, linkedDbPath);
         await fs.link(backingDbPath, hardlinkedDbPath);

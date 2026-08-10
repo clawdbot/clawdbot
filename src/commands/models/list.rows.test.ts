@@ -948,6 +948,29 @@ describe("appendConfiguredProviderRows", () => {
 });
 
 describe("appendAuthenticatedCatalogRows", () => {
+  it("does not append authenticated catalog rows in replace mode", async () => {
+    const rows: ModelRow[] = [];
+
+    await appendAuthenticatedCatalogRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: { models: { mode: "replace" } },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: {
+          evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
+        },
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: {},
+      },
+    });
+
+    expect(rows).toEqual([]);
+    expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadScopedModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("keeps runnable synthetic local catalog rows", async () => {
     const entries = [
       {

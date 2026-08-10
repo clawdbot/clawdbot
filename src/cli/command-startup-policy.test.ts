@@ -26,6 +26,7 @@ describe("command-startup-policy", () => {
   it("resolves config guard policy for Commander and invocation-aware commands", () => {
     for (const commandPath of [
       ["backup", "create"],
+      ["database"],
       ["config"],
       ["config", "file"],
       ["config", "validate"],

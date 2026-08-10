@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
@@ -144,6 +145,8 @@ export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreatePara
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
 export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);
 export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusParamsSchema);
+export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserveParamsSchema);
+export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
@@ -173,6 +176,9 @@ export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListPa
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
 export const validateSessionsCatalogArchiveParams = compile(S.SessionsCatalogArchiveParamsSchema);
+export const validateSessionsCatalogStartTerminalParams = compile(
+  S.SessionsCatalogStartTerminalParamsSchema,
+);
 export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema);
 export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);
@@ -213,7 +219,18 @@ export const validateSessionsViewerPresenceSetParams = compile(
   S.SessionsViewerPresenceSetParamsSchema,
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
-export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+// Keep the current generated/client contract icon-free while accepting the
+// retired field from beta v4 clients at the raw Gateway validation boundary.
+const SessionsPatchV4CompatibilityParamsSchema = Type.Object(
+  {
+    ...S.SessionsPatchParamsSchema.properties,
+    icon: Type.Optional(Type.Union([S.NonEmptyString, Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+export const validateSessionsPatchParams = compile<S.SessionsPatchParams>(
+  SessionsPatchV4CompatibilityParamsSchema,
+);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);

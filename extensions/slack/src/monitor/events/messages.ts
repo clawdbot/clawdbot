@@ -16,7 +16,7 @@ import { noteSlackDraftConversationMessage } from "../../draft-message-boundarie
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
@@ -194,6 +194,20 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
+  const resolveEventScope = (args: {
+    body: unknown;
+    context: AllMiddlewareArgs["context"];
+    client: AllMiddlewareArgs["client"];
+  }) =>
+    resolveSlackListenerEventScope({
+      identity: ctx.installationIdentity,
+      body: args.body,
+      context: args.context,
+      client: args.client,
+      clientOptions: ctx.app.webClientOptions,
+      onDrop: (reason) => logVerbose(`slack: drop event (${reason})`),
+    });
+
   const noteConversationMessage = (
     message: SlackMessageEvent | SlackAppMentionEvent,
     eventScope?: SlackEventScope,
@@ -211,25 +225,6 @@ export function registerSlackMessageEvents(params: {
     });
   };
 
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }): SlackEventScope | null | undefined => {
-    const resolved = resolveSlackEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
-    });
-    if (!resolved.ok) {
-      logVerbose(`slack: drop event (${resolved.reason})`);
-      return null;
-    }
-    return resolved.scope;
-  };
-
   const handleIncomingMessageEvent = async ({
     event,
     body,
@@ -237,7 +232,7 @@ export function registerSlackMessageEvents(params: {
     client,
   }: {
     event: unknown;
-    body: unknown;
+    body: SlackEventMiddlewareArgs<"message">["body"];
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
@@ -300,13 +295,14 @@ export function registerSlackMessageEvents(params: {
           channelId,
           channelType: subtypeHandler.resolveChannelType(message),
           eventKind: subtypeHandler.eventKind,
+          ...(eventScope ? { eventScope } : {}),
         });
         if (!ingressContext) {
           return;
         }
         enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
           sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
+          contextKey: `${subtypeHandler.contextKey(message)}:${body.event_id}`,
         });
         return;
       }

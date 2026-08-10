@@ -180,6 +180,9 @@ async function invokeSessionMutation({
     respond,
     context: {
       broadcastToConnIds,
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => subscribedConnIds,
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig,
@@ -1020,26 +1023,6 @@ test("sessions.changed mutation events include session management metadata", asy
     reason: "patch",
     pinned: false,
     pinnedAt: null,
-  });
-
-  const icon = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    icon: "name:spark",
-  });
-  expectChangedBroadcast(icon.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    icon: "name:spark",
-  });
-
-  const iconCleared = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    icon: null,
-  });
-  expectChangedBroadcast(iconCleared.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    icon: null,
   });
 
   const unread = await invokeSessionsPatch({

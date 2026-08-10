@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
-  type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -16,61 +15,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
-
-/**
- * Additive Claw provenance columns that only a writable open can ensure. A
- * same-version database written before them stays readable so read-only
- * planning surfaces are not refused before they can report anything.
- */
-export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
-  "claw_installs.bootstrap_content_digest",
-  "claw_installs.bootstrap_source_path",
-  "claw_package_refs.extension_adapter_identity",
-  "claw_package_refs.extension_detected_format",
-  "claw_package_refs.extension_format",
-  "claw_package_refs.extension_id",
-  "claw_package_refs.extension_mapped_json",
-  "claw_package_refs.extension_unavailable_json",
-  "worker_environments.shared_host",
-  "worktrees.run_end_cleanup_json",
-] as const;
-
-const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
-  allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
-  allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
-  allowedColumnDefinitions: {
-    "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
-    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
-    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
-    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
-    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
-    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
-    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
-    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
-    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
-    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
-    "claw_package_refs.package_integrity": [
-      "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
-    ],
-    "claw_package_refs.updated_at_ms": ["updated_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "cron_jobs.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
-    "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
-    "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
-    "cron_jobs.payload_kind": ["payload_kind TEXT NOT NULL DEFAULT 'message'"],
-    "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
-    "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
-    "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
-    "current_conversation_bindings.conversation_kind": [
-      "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
-    ],
-    "current_conversation_bindings.target_agent_id": [
-      "target_agent_id TEXT NOT NULL DEFAULT 'main'",
-    ],
-    "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
-  },
-} satisfies SqliteSchemaCompatibility;
 
 const STATE_V5_ADDITIVE_TABLES = [
   "agent_database_leases",
@@ -144,7 +90,7 @@ export function assertOpenClawStateDatabaseOwner(
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
-  options: { pathname: string; allowedMissingColumns?: readonly string[] },
+  options: { pathname: string },
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -176,12 +122,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
     database,
     options.pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
-    options.allowedMissingColumns
-      ? {
-          ...OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
-          allowedMissingColumns: options.allowedMissingColumns,
-        }
-      : OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   );
 }
 

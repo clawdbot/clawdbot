@@ -49,9 +49,9 @@ import type {
   ConfigSchemaLookupParams,
   ModelsListParams,
   SessionsCatalogListParams,
+  SessionsCatalogStartTerminalParams,
   TalkEvent,
 } from "./index.js";
-import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
@@ -110,11 +110,9 @@ const talkSession = (overrides: Record<string, unknown>) => ({
 });
 
 describe("protocol export registries", () => {
-  it("re-exports every runtime registry symbol by identity", () => {
-    for (const registry of [schemaExportRegistry, validatorRegistry]) {
-      for (const [name, value] of Object.entries(registry)) {
-        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
-      }
+  it("re-exports every validator registry symbol by identity", () => {
+    for (const [name, value] of Object.entries(validatorRegistry)) {
+      expect((protocol as Record<string, unknown>)[name], name).toBe(value);
     }
   });
 
@@ -122,21 +120,22 @@ describe("protocol export registries", () => {
     expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
     expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
     expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<SessionsCatalogStartTerminalParams>().toEqualTypeOf<Schema.SessionsCatalogStartTerminalParams>();
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
 
   it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
     expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+      protocol.SkillsProposalEvaluateParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+      protocol.SkillsProposalEvaluateResultSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
-      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+      protocol.SkillsProposalEventsListParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
-      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+      protocol.SkillsProposalEventsListResultSchema,
     );
   });
 });
@@ -212,7 +211,6 @@ describe("lazy protocol validators", () => {
       label: "Label",
       category: "Category",
       boardFace: "dashboard",
-      icon: "name:spark",
       statusNote: "Working",
       attention: "hand",
       ttlMinutes: 30,
@@ -482,6 +480,47 @@ describe("lazy protocol validators", () => {
       {},
       { visible: "true" },
       { visible: false, extra: true },
+    ]);
+  });
+
+  it("validates worker desktop observer request and result contracts", () => {
+    expectAccepted(protocol.validateWorkerDesktopObserveParams, [
+      { environmentId: "worker:one" },
+      { environmentId: "worker:one", control: true },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopObserveParams, [
+      { environmentId: "" },
+      { environmentId: "worker:one", control: "yes" },
+      { environmentId: "worker:one", extra: true },
+    ]);
+    expectAccepted(protocol.validateWorkerDesktopObserveResult, [
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+      {
+        transport: "rfb",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: true,
+        vncPassword: "secret",
+      },
+    ]);
+    expectRejected(protocol.validateWorkerDesktopObserveResult, [
+      {
+        transport: "vnc",
+        wsPath: "/worker-desktop/observe?token=abc",
+        expiresAtMs: 60_000,
+        control: false,
+      },
+      {
+        transport: "rfb",
+        wsPath: "",
+        expiresAtMs: -1,
+        control: false,
+      },
     ]);
   });
 

@@ -362,6 +362,8 @@ describe("sessions.patchMany orchestration", () => {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set(),
       chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
       ...overrides,
     }) as never;
 
@@ -667,6 +669,89 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
+  it("rejects an alias inserted after single-patch preflight while waiting for the writer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        session: { mainKey: "work" },
+        agents: { list: [{ id: "main", default: true }] },
+      } satisfies OpenClawConfig;
+      const canonicalKey = "agent:main:work";
+      const conflictingAlias = "agent:main:main";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: canonicalKey },
+        { sessionId: "session-single-alias-race-canonical", updatedAt: 1 },
+      );
+
+      const storePath = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: conflictingAlias,
+      }).storePath;
+      const writerStarted = createDeferred();
+      const insertConflictingAlias = createDeferred();
+      const writer = applySqliteSessionEntryCanonicalReplacements({
+        agentId: "main",
+        sessionKeys: [conflictingAlias],
+        storePath,
+        update: async () => {
+          writerStarted.resolve();
+          await insertConflictingAlias.promise;
+          return {
+            replacements: [
+              {
+                entry: { sessionId: "session-single-alias-race-conflict", updatedAt: 2 },
+                previousSessionKeys: [],
+                sessionKey: conflictingAlias,
+              },
+            ],
+            result: undefined,
+          };
+        },
+      });
+      await writerStarted.promise;
+
+      const preflightCompleted = createDeferred();
+      const respond = vi.fn();
+      const request = sessionMutationHandlers["sessions.patch"]!({
+        params: { key: conflictingAlias, pinned: true },
+        respond,
+        context: context({
+          getRuntimeConfig: () => cfg,
+          workerSessionPlacementService: {
+            getMany: (sessionIds: string[]) => {
+              if (sessionIds.includes("session-single-alias-race-canonical")) {
+                preflightCompleted.resolve();
+              }
+              return new Map();
+            },
+          },
+        }),
+      } as never);
+
+      await preflightCompleted.promise;
+      insertConflictingAlias.resolve();
+      await writer;
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "Session patch failed unexpectedly. Retry the request.",
+        retryable: true,
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).toMatchObject({
+        sessionId: "session-single-alias-race-canonical",
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).not.toHaveProperty(
+        "pinnedAt",
+      );
+      expect(loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias })).toMatchObject({
+        sessionId: "session-single-alias-race-conflict",
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias }),
+      ).not.toHaveProperty("pinnedAt");
+    });
+  });
+
   it("isolates a target authorization race from sibling patches", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (let index = 0; index < 3; index += 1) {
@@ -726,6 +811,78 @@ describe("sessions.patchMany orchestration", () => {
       expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-2" })).toHaveProperty(
         "lastReadAt",
       );
+    });
+  });
+
+  it("isolates archive preparation authorization per target and continues in input order", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      for (let index = 0; index < 3; index += 1) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:archive-auth-${index}` },
+          { sessionId: `session-archive-auth-${index}`, updatedAt: 1 },
+        );
+      }
+      const respond = vi.fn();
+      const assertCurrent = vi.fn(() => {
+        throw new Error("outer all-target guard must not be used");
+      });
+      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
+        if (sessionKey.endsWith("-1")) {
+          throw new SessionMutationAuthorizationChangedError({
+            code: "INVALID_REQUEST",
+            message: "archive authorization changed; retry the request",
+          });
+        }
+      });
+
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => ({
+            key: `agent:main:archive-auth-${index}`,
+          })),
+          patch: { archived: true },
+        },
+        respond,
+        context: context(),
+        client: { connect: { scopes: ["operator.write"] } },
+        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
+      } as never);
+
+      expect(assertCurrent).not.toHaveBeenCalled();
+      expect(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)).toEqual([
+        "agent:main:archive-auth-0",
+        "agent:main:archive-auth-1",
+        "agent:main:archive-auth-2",
+        "agent:main:archive-auth-0",
+        "agent:main:archive-auth-2",
+      ]);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          outcomes: [
+            { ok: true, key: "agent:main:archive-auth-0" },
+            {
+              ok: false,
+              key: "agent:main:archive-auth-1",
+              error: {
+                code: "INVALID_REQUEST",
+                message: "archive authorization changed; retry the request",
+              },
+            },
+            { ok: true, key: "agent:main:archive-auth-2" },
+          ],
+        },
+        undefined,
+      );
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-0" }),
+      ).toHaveProperty("archivedAt");
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-1" }),
+      ).not.toHaveProperty("archivedAt");
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-2" }),
+      ).toHaveProperty("archivedAt");
     });
   });
 

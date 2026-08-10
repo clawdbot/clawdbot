@@ -65,7 +65,7 @@ openclaw-new-session-page {
   color: var(--muted);
   font: inherit;
   font-size: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__visibility:hover:not(:disabled),
@@ -156,7 +156,7 @@ openclaw-new-session-page {
   font-size: 12px;
   color: var(--muted);
   list-style: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   user-select: none;
   border: 0;
   border-radius: 999px;
@@ -338,6 +338,35 @@ wa-popover.new-session-page__place-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
+.new-session-page__start-split {
+  display: inline-flex;
+  align-items: center;
+}
+
+.new-session-page__start-primary {
+  width: 34px;
+  min-width: 34px;
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+wa-dropdown.new-session-page__start-menu {
+  display: inline-flex;
+}
+
+.new-session-page__start-menu-trigger {
+  width: 22px;
+  min-width: 22px;
+  height: 36px;
+  padding: 0 4px 0 2px;
+  border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.new-session-page__start-menu-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
 .new-session-page__composer .new-session-page__message {
@@ -397,7 +426,7 @@ wa-popover.new-session-page__place-popover::part(body) {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-nav:hover:not(:disabled) {
@@ -463,7 +492,7 @@ wa-popover.new-session-page__place-popover::part(body) {
   color: var(--text);
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-entry:hover {
@@ -553,7 +582,7 @@ wa-popover.new-session-page__place-popover::part(body) {
   color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-use:disabled {

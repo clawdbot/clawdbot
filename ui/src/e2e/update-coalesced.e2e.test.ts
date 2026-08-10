@@ -82,6 +82,7 @@ suite.define(() => {
         });
 
         await page.getByRole("button", { name: /Update Gateway/ }).click();
+        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
         await page
           .getByText(
             "Update error: global-install-failed. The global package install did not verify on disk. Retry or reinstall from the CLI.",
@@ -130,6 +131,7 @@ suite.define(() => {
         });
 
         await page.getByRole("button", { name: /Update Gateway/ }).click();
+        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
         await page
           .getByText(
             "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
@@ -212,6 +214,7 @@ suite.define(() => {
           });
 
           await page.getByRole("button", { name: /Update Gateway/ }).click();
+          await page.getByRole("button", { name: "Update and restart", exact: true }).click();
           await gateway.waitForRequest("update.run");
           if (responseFirst) {
             await gateway.resolveDeferred("update.run", MANAGED_UPDATE_HANDOFF_RESPONSE);
@@ -281,6 +284,7 @@ suite.define(() => {
       });
 
       await page.getByRole("button", { name: /Update Mac app \+ Gateway/ }).click();
+      await page.getByRole("button", { name: "Update Mac app and restart", exact: true }).click();
       expect(
         await page.evaluate(
           () => (window as unknown as { openClawUpdateMessages: unknown[] }).openClawUpdateMessages,
@@ -293,6 +297,7 @@ suite.define(() => {
         window.dispatchEvent(new CustomEvent(eventName));
       }, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT);
       await page.getByRole("button", { name: /Update Gateway/ }).click();
+      await page.getByRole("button", { name: "Update and restart", exact: true }).click();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(pageErrors).toEqual([]);

@@ -6,6 +6,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
@@ -56,8 +57,10 @@ function evaluate(params: {
   ref?: ModelAuthAvailabilityRef;
   resolution?: ProviderModelRouteResolution | null;
   store?: AuthProfileStore;
+  preparedRuntimeAuthStore?: AuthProfileStore;
   syntheticAuthProviderRefs?: readonly string[];
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
 }) {
   return createModelAuthAvailabilityResolver({
     cfg: (params.cfg ?? {}) as OpenClawConfig,
@@ -66,6 +69,8 @@ function evaluate(params: {
     routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedRuntimeAuthStore: params.preparedRuntimeAuthStore,
+    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
   }).evaluateModelAuth("openai", params.ref);
 }
 
@@ -155,6 +160,104 @@ describe("createModelAuthAvailabilityResolver", () => {
       });
     },
   );
+
+  it("keeps successful harness auth scoped to the exact model route", () => {
+    const materialization = {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+      requestTransportOverrides: "none",
+      authMode: "oauth",
+      runtimeOwnerId: "codex",
+    } as const;
+    const store = authStore({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+    });
+
+    expect(
+      evaluate({
+        store,
+        ref: { modelId: "gpt-5.4" },
+        preparedRuntimeAuthMaterializations: [materialization],
+      }),
+    ).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      selectedRoute: subscriptionRoute,
+    });
+    expect(
+      evaluate({
+        store,
+        ref: { modelId: "gpt-5.5" },
+        preparedRuntimeAuthMaterializations: [materialization],
+      }).availability,
+    ).not.toBe(true);
+    expect(
+      evaluate({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                apiKey: "configured-platform-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        store,
+        ref: { modelId: "gpt-5.4" },
+        preparedRuntimeAuthMaterializations: [materialization],
+      }),
+    ).toMatchObject({
+      availability: true,
+      evidence: "provider-config",
+      selectedRoute: platformRoute,
+    });
+  });
+
+  it.each([
+    { label: "resolved", key: "runtime-key", availability: true },
+    { label: "unresolved", key: undefined, availability: undefined },
+  ])("uses an exact $label prepared SecretRef profile", ({ key, availability }) => {
+    const keyRef = { source: "file" as const, provider: "vault", id: "value" };
+    const persisted = authStore({
+      "openai:default": { type: "api_key", provider: "openai", keyRef },
+    });
+    const preparedRuntimeAuthStore = authStore({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef,
+        ...(key ? { key } : {}),
+      },
+    });
+
+    expect(
+      evaluate({
+        cfg: {
+          secrets: {
+            providers: {
+              vault: { source: "file", path: "/tmp/test-secret", mode: "singleValue" },
+            },
+          },
+        },
+        store: persisted,
+        preparedRuntimeAuthStore,
+      }),
+    ).toMatchObject({
+      availability,
+      evidence: "profile",
+      selectedProfileId: "openai:default",
+      selectedRoute: platformRoute,
+    });
+  });
 
   it("keeps a selected profile with missing credential material unavailable", () => {
     expect(

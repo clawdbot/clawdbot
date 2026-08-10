@@ -18,6 +18,7 @@ import {
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type {
   SessionMenuAction,
@@ -57,6 +58,7 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canArchiveSessionRow,
+  canDeleteSessionRows,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
@@ -476,7 +478,6 @@ class SessionsPage extends OpenClawLightDomElement {
       ...(patchReason
         ? {
             "toggle-pin": patchReason,
-            "set-icon": patchReason,
             "toggle-unread": patchReason,
             rename: patchReason,
             "move-to-group": patchReason,
@@ -1077,11 +1078,11 @@ class SessionsPage extends OpenClawLightDomElement {
     }
   }
 
-  private renameSession(row: GatewaySessionRow) {
-    const value = window.prompt(
-      t("sessionsView.renameSessionPrompt"),
-      normalizeOptionalString(row.label) ?? "",
-    );
+  private async renameSession(row: GatewaySessionRow) {
+    const value = await showInputDialog({
+      title: t("sessionsView.renameSessionPrompt"),
+      defaultValue: normalizeOptionalString(row.label) ?? "",
+    });
     if (value === null) {
       return;
     }
@@ -1402,13 +1403,12 @@ class SessionsPage extends OpenClawLightDomElement {
         .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
         .filter((key): key is string => typeof key === "string" && key.length > 0),
     );
-    const archiveAllowed = canArchiveSessionRow(
-      row,
-      resolveUiConfiguredMainKey({
-        agentsList: context.agents.state.agentsList,
-        hello: gateway.hello,
-      }),
-    );
+    const configuredMainKey = resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: gateway.hello,
+    });
+    const archiveAllowed = canArchiveSessionRow(row, configuredMainKey);
+    const deleteAllowed = canDeleteSessionRows([row], configuredMainKey);
     const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
     const cloudWorkerStopAllowed = Boolean(
       cloudWorkerStopAction &&
@@ -1419,7 +1419,6 @@ class SessionsPage extends OpenClawLightDomElement {
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
-          icon: row.icon,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
@@ -1431,9 +1430,9 @@ class SessionsPage extends OpenClawLightDomElement {
         .actionDisabledReasons=${this.sessionMenuActionDisabledReasons(row)}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
+        .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
-        .canOpenChat=${row.kind !== "global"}
         .work=${this.sessionMenuWork}
         .workboard=${canCapture && row.kind !== "global"
           ? {
@@ -1444,17 +1443,6 @@ class SessionsPage extends OpenClawLightDomElement {
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
-            case "open-chat":
-              context.navigate("chat", {
-                ...sessionNavigationTarget({
-                  context,
-                  face: "chat",
-                  sessionKey: row.key,
-                  agentId: this.sessionPathAgentId(row.key, context),
-                }).options,
-                hash: "",
-              });
-              break;
             case "open-pr":
               openExternalUrlSafe(action.url);
               break;
@@ -1464,14 +1452,11 @@ class SessionsPage extends OpenClawLightDomElement {
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });
               break;
-            case "set-icon":
-              void this.patchSession(row.key, { icon: action.icon });
-              break;
             case "toggle-unread":
               void this.patchSession(row.key, { unread: row.unread !== true });
               break;
             case "rename":
-              this.renameSession(row);
+              void this.renameSession(row);
               break;
             case "fork":
               void this.forkSession(row.key);

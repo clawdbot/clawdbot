@@ -11,7 +11,11 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type { RealtimeTalkCameraDevice, RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
+import type {
+  RealtimeTalkCameraDevice,
+  RealtimeTalkDeviceIssue,
+  RealtimeTalkInputDevice,
+} from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -172,7 +176,9 @@ export type ChatComposerState = {
   microphonePickerOpen: boolean;
   microphonePickerLoading: boolean;
   microphoneDevices: RealtimeTalkInputDevice[];
-  microphoneWarning: string | null;
+  microphoneIssue: RealtimeTalkDeviceIssue | null;
+  /** Unsubscribe for the devicechange watch; non-null only while the picker is open. */
+  microphoneDeviceWatch: (() => void) | null;
   microphoneDiscoveryRequest: number;
   capabilityMenuOpen: boolean;
   capabilityMenuView: ChatComposerPlusMenuView;

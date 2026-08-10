@@ -84,7 +84,7 @@ export async function forkSqliteSessionTranscriptFromParent(
   // in the source agent database while the child transcript must be owned by
   // the target agent's database. Two databases cannot share one transaction,
   // so read the parent branch first, then write the child under the target's
-  // exclusive session write lock.
+  // exclusive target-database writer queue.
   if (!params.parentEntry.sessionId) {
     return { status: "missing-parent" };
   }

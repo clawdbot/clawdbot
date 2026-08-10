@@ -237,6 +237,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     topicConfig?: TelegramTopicConfig;
   };
 }): Promise<{
+  threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;
   dmThreadId?: number;
   storeAllowFrom: string[];
@@ -293,6 +294,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
+    threadSpec,
     resolvedThreadId,
     dmThreadId,
     storeAllowFrom,

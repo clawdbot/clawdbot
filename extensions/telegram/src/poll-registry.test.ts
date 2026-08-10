@@ -9,6 +9,7 @@ import {
   findTelegramPollRegistryEntry,
   recordTelegramPollRegistryEntry,
   retireTelegramPollRegistryEntry,
+  type TelegramPollRegistryEntry,
 } from "./poll-registry.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
@@ -16,15 +17,6 @@ import type { TelegramRuntime } from "./runtime.types.js";
 
 const TELEGRAM_POLL_REGISTRY_NAMESPACE = "telegram.poll-registry";
 const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 10_000;
-
-type TelegramPollRegistryEntry = {
-  pollId: string;
-  chat: { id: number; type: "private"; first_name: string };
-  messageId: number;
-  messageThreadId?: number;
-  question: string;
-  options: string[];
-};
 
 function installTelegramStateRuntime(
   openKeyedStore: TelegramRuntime["state"]["openKeyedStore"],
@@ -56,22 +48,44 @@ describe("telegram poll registry", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("stores and retrieves poll registry entries", async () => {
+  it.each([
+    {
+      name: "base private chat",
+      chat: { id: 123, type: "private" as const, first_name: "Ada" },
+      threadSpec: { scope: "dm" as const },
+    },
+    {
+      name: "bot-private topic",
+      chat: { id: 123, type: "private" as const, first_name: "Ada" },
+      threadSpec: { scope: "dm" as const, id: 77 },
+    },
+    {
+      name: "regular group",
+      chat: { id: -123, type: "group" as const, title: "Reviewers" },
+      threadSpec: { scope: "none" as const },
+    },
+    {
+      name: "forum topic without redundant chat metadata",
+      chat: { id: -124, type: "supergroup" as const, title: "Reviewers" },
+      threadSpec: { scope: "forum" as const, id: 88 },
+    },
+  ])("stores and retrieves $name thread specs", async ({ chat, threadSpec }) => {
+    const threadId = "id" in threadSpec ? threadSpec.id : undefined;
+    const pollId = `poll-${threadSpec.scope}-${threadId ?? "base"}`;
     await recordTelegramPollRegistryEntry({
-      pollId: "poll-1",
-      chat: { id: 123, type: "private", first_name: "Ada" },
+      pollId,
+      chat,
       messageId: 44,
-      messageThreadId: 77,
+      threadSpec,
       question: "Ready?",
       options: ["Yes", "No"],
     });
 
-    await expect(findTelegramPollRegistryEntry({ pollId: "poll-1" })).resolves.toEqual(
+    await expect(findTelegramPollRegistryEntry({ pollId })).resolves.toEqual(
       expect.objectContaining({
-        pollId: "poll-1",
-        chat: { id: 123, type: "private", first_name: "Ada" },
+        chat,
         messageId: 44,
-        messageThreadId: 77,
+        threadSpec,
         question: "Ready?",
         options: ["Yes", "No"],
       }),
@@ -89,6 +103,7 @@ describe("telegram poll registry", () => {
       pollId: "poll-closed",
       chat: { id: 123, type: "private", first_name: "Ada" },
       messageId: 44,
+      threadSpec: { scope: "dm" },
       question: "Ready?",
       options: ["Yes", "No"],
     });
@@ -104,12 +119,63 @@ describe("telegram poll registry", () => {
     await expect(retireTelegramPollRegistryEntry({ pollId: "missing" })).resolves.toBeUndefined();
   });
 
-  it("rejects malformed stored origin data", async () => {
+  it.each([
+    {
+      name: "invalid chat id",
+      chat: { id: "not-a-chat", type: "private", first_name: "Ada" },
+      threadSpec: { scope: "dm" },
+    },
+    {
+      name: "old numeric-only shape",
+      chat: { id: 123, type: "private", first_name: "Ada" },
+      threadSpec: undefined,
+      messageThreadId: 77,
+    },
+    {
+      name: "direct messages scope",
+      chat: { id: -123, type: "supergroup", title: "Channel replies" },
+      threadSpec: { scope: "direct-messages", id: 77 },
+    },
+    {
+      name: "direct messages chat",
+      chat: {
+        id: -123,
+        type: "supergroup",
+        title: "Channel replies",
+        is_direct_messages: true,
+      },
+      threadSpec: { scope: "forum", id: 77 },
+    },
+    {
+      name: "forum without id",
+      chat: { id: -123, type: "supergroup", title: "Forum" },
+      threadSpec: { scope: "forum" },
+    },
+    {
+      name: "none with id",
+      chat: { id: -123, type: "group", title: "Reviewers" },
+      threadSpec: { scope: "none", id: 77 },
+    },
+    {
+      name: "dm scope on a group",
+      chat: { id: -123, type: "group", title: "Reviewers" },
+      threadSpec: { scope: "dm", id: 77 },
+    },
+    {
+      name: "forum scope on a private chat",
+      chat: { id: 123, type: "private", first_name: "Ada" },
+      threadSpec: { scope: "forum", id: 77 },
+    },
+  ])("rejects malformed stored origin data: $name", async (invalid) => {
     installTelegramStateRuntime((() => ({
       lookup: async () => ({
         pollId: "poll-invalid-chat",
-        chat: { id: "not-a-chat", type: "private", first_name: "Ada" },
+        chat: invalid.chat,
         messageId: 44,
+        ...(invalid.threadSpec === undefined ? {} : { threadSpec: invalid.threadSpec }),
+        ...(invalid.messageThreadId === undefined
+          ? {}
+          : { messageThreadId: invalid.messageThreadId }),
         question: "Ready?",
         options: ["Yes", "No"],
       }),

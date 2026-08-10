@@ -98,7 +98,7 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
 }));
 
-vi.mock("../../agents/acp-spawn.js", () => ({
+vi.mock("../../agents/subagents/spawn/acp-spawn.js", () => ({
   resolveAcpSpawnRuntimePolicyError: (params: { cfg?: OpenClawConfig }) =>
     params.cfg?.agents?.defaults?.sandbox?.mode === "all"
       ? 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.'

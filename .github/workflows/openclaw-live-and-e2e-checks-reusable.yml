@@ -1256,6 +1256,12 @@ jobs:
           fetch-depth: 1
           path: .release-harness
 
+      - name: Setup trusted release harness
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Log in to GHCR for shared Docker E2E image
         if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
@@ -1632,6 +1638,11 @@ jobs:
           fetch-depth: 1
           path: .release-harness
 
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Log in to GHCR for shared Docker E2E image
         if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
@@ -1919,6 +1930,11 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Log in to GHCR for shared Docker E2E image
         if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
@@ -2141,6 +2157,11 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Plan Docker E2E images
         id: plan
         shell: bash
@@ -2186,24 +2207,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
-
-      - name: Setup artifact package validation environment
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-file: .release-harness/package.json
-          use-actions-cache: "false"
-
-      - name: Install trusted package validation dependencies
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        env:
-          CI: "true"
-        # Corepack resolves packageManager from the process cwd before pnpm can
-        # process --dir. Keep this in the trusted harness so a frozen candidate
-        # pin cannot select a different pnpm binary for its harness install.
-        working-directory: .release-harness
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact

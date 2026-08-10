@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
-import { rawDataToString } from "../../infra/ws.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,

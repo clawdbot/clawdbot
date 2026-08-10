@@ -769,8 +769,8 @@ export function getActiveEmbeddedRunSnapshot(
 /**
  * Wait for active embedded runs to drain.
  *
- * Used during restarts so in-flight runs can release session write locks before
- * the next lifecycle starts. If no timeout is passed, waits indefinitely.
+ * Used during restarts so in-flight runs can finish transcript writes before the
+ * next lifecycle starts. If no timeout is passed, waits indefinitely.
  */
 export async function waitForActiveEmbeddedRuns(
   timeoutMs?: number,

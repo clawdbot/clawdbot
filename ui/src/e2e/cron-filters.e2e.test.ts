@@ -33,6 +33,7 @@ function cronJob(id: string, name: string, schedule: Record<string, unknown>, st
 function cronListResponse(jobs: unknown[], total = jobs.length) {
   return {
     jobs,
+    snapshotRevision: "cron-filters-fixture",
     total,
     offset: 0,
     limit: 50,

@@ -1151,6 +1151,7 @@ describe("plugin sdk alias helpers", () => {
     const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
       ["@openclaw/gateway-client", "gateway-client", "index"],
       ["@openclaw/gateway-client/timeouts", "gateway-client", "timeouts"],
+      ["@openclaw/gateway-client/websocket-data", "gateway-client", "websocket-data"],
       ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
       ["@openclaw/gateway-protocol/schema", "gateway-protocol", "schema"],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],

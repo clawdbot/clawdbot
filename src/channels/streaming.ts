@@ -44,7 +44,6 @@ export type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 // Runtime reads are nested-only; doctor migrates legacy streaming spellings.
 

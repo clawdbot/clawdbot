@@ -8,9 +8,7 @@ const CuaComputerConfigSchema = z.strictObject({
   driverPath: z.string().optional(),
 });
 
-const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema, {
-  uiHints: {},
-});
+const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema);
 
 export default definePluginEntry({
   id: "cua-computer",

@@ -11,7 +11,6 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
-  icon?: string;
 };
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
@@ -32,10 +31,10 @@ afterEach(() => {
 async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
-    canOpenChat?: boolean;
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
     lastActive?: string;
@@ -68,9 +67,10 @@ async function mountMenu(
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
       .archiveAllowed=${options.archiveAllowed ?? true}
+      .deleteAllowed=${options.deleteAllowed ??
+      (session.archived || (options.archiveAllowed ?? true))}
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
-      .canOpenChat=${options.canOpenChat ?? true}
       .work=${options.work ?? null}
       .workboard=${options.workboard === undefined
         ? { captured: false, busy: false }
@@ -110,12 +110,6 @@ function menuItem(menu: ParentNode, label: string): SessionMenuItem {
   return item;
 }
 
-async function openIconPicker(menu: SessionMenuElement) {
-  menuItem(menu, "Change icon").click();
-  await menu.updateComplete;
-  await Promise.resolve();
-}
-
 describe("session menu", () => {
   it("disables only denied mutation actions and ignores forced selection", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
@@ -126,11 +120,9 @@ describe("session menu", () => {
         "toggle-pin": "This action requires operator.write access.",
       },
     });
-    const openChat = menuItem(menu, "Open chat");
     const pin = menuItem(menu, "Pin session");
     const deleteItem = menuItem(menu, "Delete…");
 
-    expect(openChat.disabled).toBe(false);
     expect(pin.disabled).toBe(true);
     expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
     expect(deleteItem.disabled).toBe(true);
@@ -154,9 +146,7 @@ describe("session menu", () => {
     const menu = await mountMenu();
 
     expect(menuItemLabels(menu)).toEqual([
-      "Open chat",
       "Pin session",
-      "Change icon",
       "Mark as unread",
       "Rename…",
       "Fork",
@@ -209,10 +199,9 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).not.toContain("Archive 2");
   });
 
-  it("omits Open chat and Workboard when unavailable", async () => {
-    const menu = await mountMenu({ canOpenChat: false, workboard: null });
+  it("omits Workboard when unavailable", async () => {
+    const menu = await mountMenu({ workboard: null });
 
-    expect(menuItemLabels(menu)).not.toContain("Open chat");
     expect(menuItemLabels(menu)).not.toContain("Add to Workboard");
   });
 
@@ -227,11 +216,22 @@ describe("session menu", () => {
     expect(menuItem(menu, "Pin session").disabled).toBe(true);
   });
 
-  it("disables archive and delete when an active session cannot be archived", async () => {
-    const menu = await mountMenu({ archiveAllowed: false });
+  it("enables archive while preserving disabled delete for an active session", async () => {
+    const menu = await mountMenu({ archiveAllowed: true, deleteAllowed: false });
 
-    expect(menuItem(menu, "Archive session").disabled).toBe(true);
+    expect(menuItem(menu, "Archive session").disabled).toBe(false);
     expect(menuItem(menu, "Delete…").disabled).toBe(true);
+  });
+
+  it("keeps batch archive enabled while independently guarding delete", async () => {
+    const menu = await mountMenu({
+      selectionCount: 2,
+      archiveAllowed: false,
+      deleteAllowed: false,
+    });
+
+    expect(menuItem(menu, "Archive 2").disabled).toBe(false);
+    expect(menuItem(menu, "Delete 2…").disabled).toBe(true);
   });
 
   it("closes before dispatching Pin", async () => {
@@ -244,88 +244,6 @@ describe("session menu", () => {
     menuItem(menu, "Pin session").click();
 
     expect(calls).toEqual(["close", "toggle-pin"]);
-  });
-
-  it("dispatches curated, emoji, and remove icon choices", async () => {
-    const onAction = vi.fn<(action: SessionMenuAction) => void>();
-    let menu = await mountMenu({ onAction });
-    await openIconPicker(menu);
-
-    menu
-      .querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="spark"]')
-      ?.click();
-    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "name:spark" });
-
-    menu = await mountMenu({ onAction });
-    await openIconPicker(menu);
-    const input = menu.querySelector<HTMLInputElement>(".session-menu__emoji-field input");
-    if (input) {
-      input.value = "🦞";
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    }
-    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "🦞" });
-
-    menu = await mountMenu({ session: { icon: "name:spark" }, onAction });
-    await openIconPicker(menu);
-    menu.querySelector<HTMLButtonElement>(".session-menu__remove-icon")?.click();
-    expect(onAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: null });
-  });
-
-  it("opens an accessible icon picker with keyboard grid navigation", async () => {
-    const menu = await mountMenu();
-    const dropdown = menu.querySelector("wa-dropdown");
-
-    await openIconPicker(menu);
-
-    expect(menu.querySelector("wa-dropdown")).toBe(dropdown);
-    expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("role")).toBe("dialog");
-    const choices = Array.from(
-      menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"),
-    );
-    expect(document.activeElement).toBe(choices[0]);
-    choices[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    expect(document.activeElement).toBe(choices[1]);
-  });
-
-  it("keeps Tab ownership inside the nested icon-picker dialog", async () => {
-    const trigger = document.createElement("button");
-    document.body.append(trigger);
-    containers.push(trigger);
-    const menu = await mountMenu({ trigger });
-
-    await openIconPicker(menu);
-
-    const choice = menu.querySelector<HTMLButtonElement>(".session-menu__icon-choice");
-    expect(document.activeElement).toBe(choice);
-    choice?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
-    );
-
-    expect(document.activeElement).toBe(choice);
-  });
-
-  it("preserves an intentionally focused icon-picker field after the dropdown opens", async () => {
-    const menu = await mountMenu();
-    await openIconPicker(menu);
-    const input = menu.querySelector<HTMLInputElement>(".session-menu__emoji-field input");
-    input?.focus();
-
-    menu.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-after-show"));
-
-    expect(document.activeElement).toBe(input);
-  });
-
-  it("keeps one dropdown and restores its originating item after leaving the icon picker", async () => {
-    const menu = await mountMenu();
-    const dropdown = menu.querySelector("wa-dropdown");
-    await openIconPicker(menu);
-
-    menu.querySelector<HTMLButtonElement>(".session-menu__icon-picker-back")?.click();
-    await menu.updateComplete;
-    await Promise.resolve();
-
-    expect(menu.querySelector("wa-dropdown")).toBe(dropdown);
-    expect(document.activeElement).toBe(menuItem(menu, "Change icon"));
   });
 
   it("opens group actions and dispatches group, removal, and creation choices", async () => {
@@ -523,7 +441,7 @@ describe("session menu", () => {
     document.body.append(trigger);
     containers.push(trigger);
     const menu = await mountMenu({ trigger });
-    const item = menuItem(menu, "Open chat");
+    const item = menuItem(menu, "Pin session");
     item.focus();
 
     const keydown = new KeyboardEvent("keydown", {
