@@ -131,7 +131,7 @@ import {
 import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
-import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, resolveNodeClaudePlacement } from "./prepare-claude.js";
+import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -517,7 +517,7 @@ export async function prepareCliRunContext(
     };
   }
   const internalParams = params as RunCliAgentPrepareParams;
-  const nodeClaudePlacement = resolveNodeClaudePlacement({
+  const nodeClaudePlacement = detectNodeClaudePlacement({
     backendId: backendResolved.id,
     execHost: params.sessionEntry?.execHost,
     execNode: params.sessionEntry?.execNode,
