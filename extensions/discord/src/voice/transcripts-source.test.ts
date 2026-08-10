@@ -176,15 +176,16 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       accountId: "primary",
       manager: { join: primaryJoin } as unknown as DiscordVoiceManager,
     });
+    const unavailableAccount = {
+      token: { source: "env", provider: "default", id: "DISCORD_WORK_TOKEN" },
+      voice: { enabled: true },
+    };
     const cfg = {
       channels: {
         discord: {
           accounts: {
             primary: { token: "available-token", voice: { enabled: true } },
-            work: {
-              token: { source: "env", provider: "default", id: "DISCORD_WORK_TOKEN" },
-              voice: { enabled: true },
-            },
+            work: unavailableAccount,
           },
         },
       },
@@ -223,7 +224,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     expect(primaryJoin).not.toHaveBeenCalled();
 
     const unavailableOnly = {
-      channels: { discord: { accounts: { work: cfg.channels.discord.accounts.work } } },
+      channels: { discord: { accounts: { work: unavailableAccount } } },
     } as unknown as OpenClawConfig;
     expect(
       discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg: unavailableOnly, source }),
