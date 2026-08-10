@@ -2,7 +2,39 @@ import type { ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
 import type { SpawnSecretInput } from "./supervisor/types.js";
 
-export type SpawnStdioEntry = "ignore" | "inherit" | "overlapped" | "pipe";
+// A positive integer entry is a descriptor already open in the parent, which
+// the child inherits at `fork` — before `exec`. That ordering is what makes an
+// inherited descriptor usable as ownership evidence (see addInheritedFdStdio).
+export type SpawnStdioEntry = "ignore" | "inherit" | "overlapped" | "pipe" | number;
+
+/**
+ * Append a parent-owned descriptor to `stdio` so the child inherits it.
+ *
+ * Unlike `addSecretInputStdio` (which opens a fresh pipe in the slot), this
+ * hands the child a descriptor the parent already holds. The distinction
+ * matters: inheritance happens at `fork`, so the child holds the descriptor
+ * during the whole pre-`exec` window in which its argv still belongs to the
+ * parent and reveals nothing about what it is about to run.
+ *
+ * Returns the slot used, or undefined when there is nothing to inherit.
+ */
+export function addInheritedFdStdio(
+  stdio: SpawnStdioEntry[],
+  fd: number | undefined,
+): number | undefined {
+  if (fd === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(fd) || fd < 0) {
+    throw new Error("inherited file descriptor must be a non-negative integer");
+  }
+  // Never displace stdin/stdout/stderr or an already-assigned slot.
+  while (stdio.length < 3) {
+    stdio.push("ignore");
+  }
+  stdio.push(fd);
+  return stdio.length - 1;
+}
 
 export function addSecretInputStdio(
   stdio: SpawnStdioEntry[],

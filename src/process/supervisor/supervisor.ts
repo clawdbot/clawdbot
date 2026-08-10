@@ -296,6 +296,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
               input: input.input,
               stdinMode: input.stdinMode,
               secretInput: input.secretInput,
+              inheritFd: input.inheritFd,
             });
 
       registry.updateState(runId, forcedReason ? "exiting" : "running", {

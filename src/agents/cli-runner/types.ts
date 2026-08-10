@@ -282,6 +282,13 @@ type CliPreparedBackend = {
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;
+  /**
+   * Descriptor into this run's rendered MCP config, handed to the CLI child so
+   * it inherits it at `fork`. It is the run's durable ownership claim on the
+   * temp dir during the pre-`exec` window, where argv still belongs to the
+   * parent. The parent's copy is closed by `cleanup`.
+   */
+  ownershipFd?: number;
 };
 
 /** Reusable CLI session id, soft content drift, or hard invalidation. */

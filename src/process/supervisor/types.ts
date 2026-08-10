@@ -105,6 +105,13 @@ type SpawnChildInput = SpawnBaseInput & {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  /**
+   * A descriptor the parent already holds, handed to the child so it inherits
+   * it at `fork`. Only `mode: "child"` supports this — the pty adapter has no
+   * extra-descriptor channel, so a caller that needs the child to carry
+   * inherited state must not route through pty.
+   */
+  inheritFd?: number;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {

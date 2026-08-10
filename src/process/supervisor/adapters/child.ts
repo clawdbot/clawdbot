@@ -9,6 +9,7 @@ import {
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
+  addInheritedFdStdio,
   addSecretInputStdio,
   type SpawnStdioEntry,
   writeSecretInputToChild,
@@ -84,6 +85,7 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  inheritFd?: number;
 }): Promise<ChildAdapter> {
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
@@ -104,6 +106,7 @@ export async function createChildAdapter(params: {
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
   addSecretInputStdio(stdio, params.secretInput);
+  addInheritedFdStdio(stdio, params.inheritFd);
 
   const options: SpawnOptions = {
     cwd: params.cwd,

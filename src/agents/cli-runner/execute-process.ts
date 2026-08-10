@@ -275,6 +275,11 @@ export async function executeCliProcess(params: {
         env: params.env,
         input: params.stdin ?? "",
         secretInput: context.preparedBackend.secretInput,
+        // Inherited at `fork`, so the child holds a claim on its MCP temp dir
+        // from before it `exec`s — the window in which argv cannot show one.
+        ...(context.preparedBackend.ownershipFd === undefined
+          ? {}
+          : { inheritFd: context.preparedBackend.ownershipFd }),
         captureOutput: false,
         onStdout: consumeStdout,
         onStderr: consumeStderr,

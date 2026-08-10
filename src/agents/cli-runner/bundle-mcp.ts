@@ -49,6 +49,12 @@ type PreparedCliBundleMcpConfig = {
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;
+  /**
+   * Descriptor into the rendered config, to be inherited by the CLI child so
+   * the directory is provably claimed from `fork` onward (see the Claude
+   * preparation below). Undefined for backends that do not render one.
+   */
+  ownershipFd?: number;
 };
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
@@ -267,11 +273,16 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   // path in argv, has not spawned yet). Reuse the shared temporary-config writer
   // (which rolls the dir back on a failed write) so Claude cleanup stays in lock
   // step with the Codex and Gemini backends.
+  // The ownership descriptor is opened here and inherited by the CLI child at
+  // `fork`, which closes the one window the name-encoded owner cannot cover: a
+  // child forked before its gateway died but not yet `exec`ed, whose argv is
+  // still the parent's and so references no config at all.
   const temporary = await writeTemporaryBundleMcpJson(
     await bundleMcpOwnedMkdtempPrefixName(),
     resolveOpenClawMcpEnvTemplates(params.mergedConfig, params.env) as BundleMcpConfig,
     "mcp.json",
     false,
+    { openOwnershipFd: true },
   );
   return {
     backend: injectBundleMcpBackendArgs(params.backend, (args) =>
@@ -281,6 +292,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     mcpResumeHash,
     env: params.env,
     cleanup: temporary.cleanup,
+    ...(temporary.ownershipFd === undefined ? {} : { ownershipFd: temporary.ownershipFd }),
   };
 }
 

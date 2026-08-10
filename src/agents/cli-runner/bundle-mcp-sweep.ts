@@ -357,6 +357,57 @@ async function listProcessCommandLines(): Promise<string[]> {
   return [];
 }
 
+/**
+ * Directories that some live process holds a descriptor into, from
+ * `/proc/<pid>/fd`. Linux-only; returns undefined when `/proc` is unreadable
+ * (callers must treat that as unknown, never as "nothing is held").
+ *
+ * This is the durable half of ownership. A CLI child receives a descriptor on
+ * its MCP config at `fork` — strictly before `exec` — so it appears here during
+ * the entire window in which its argv still belongs to the parent and names no
+ * config. Argv answers "which config is this process using"; this answers "is
+ * anyone holding this directory at all", which is the question that survives
+ * the fork→exec transition.
+ */
+async function listDirsHeldByOpenDescriptors(tmpRoot: string): Promise<Set<string> | undefined> {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  let pids: string[];
+  try {
+    pids = (await fs.readdir("/proc")).filter((entry) => /^\d+$/.test(entry));
+  } catch {
+    return undefined;
+  }
+  const held = new Set<string>();
+  const rootPrefix = `${tmpRoot}${path.sep}`;
+  for (const pid of pids) {
+    let fds: string[];
+    try {
+      fds = await fs.readdir(`/proc/${pid}/fd`);
+    } catch {
+      continue; // Exited mid-scan, or owned by another uid — skip.
+    }
+    for (const fd of fds) {
+      try {
+        const target = await fs.readlink(`/proc/${pid}/fd/${fd}`);
+        if (!target.startsWith(rootPrefix)) {
+          continue;
+        }
+        // Record the temp dir itself, not the file inside it.
+        const rest = target.slice(rootPrefix.length);
+        const first = rest.split(path.sep)[0];
+        if (first) {
+          held.add(path.join(tmpRoot, first));
+        }
+      } catch {
+        // Descriptor closed mid-scan.
+      }
+    }
+  }
+  return held;
+}
+
 function lineReferencesDir(line: string, dir: string): boolean {
   // Live CLI children carry `--mcp-config <dir>/mcp.json` in their argv; the
   // bare-dir check keeps anything else that mentions the dir (safe direction).
@@ -390,6 +441,8 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   settleMs?: number;
   /** Override the delay implementation (tests). */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Override the open-descriptor probe (tests). Undefined result = unknown. */
+  listHeldDirs?: (tmpRoot: string) => Promise<Set<string> | undefined>;
   /**
    * The sidecar's abort signal. Cuts the settle short on gateway close and
    * stops the sweep before any removal — a cleanup must never outlive the
@@ -496,13 +549,25 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     return { removed, kept: [...kept, ...candidates] };
   }
 
-  // Phase 2 — re-scan argv immediately before removing. After the settle above,
-  // any surviving child of a dead owner has execed and carries the config path
-  // in its argv, so a fresh reference means keep. An unusable (empty) re-scan is
-  // treated as unknown and keeps every candidate (fail-closed).
+  // Phase 2 — the durable check, then the argv re-scan, immediately before
+  // removing.
+  //
+  // The descriptor probe is what makes this decisive rather than timing-bound:
+  // a CLI child inherits a descriptor on its config at `fork`, so it is visible
+  // here even while still pre-`exec` and argv-invisible. On Linux this covers
+  // the fork→exec window by construction. Off-Linux the probe returns undefined
+  // (unknown) and the argv re-scan after the settle remains the only signal, so
+  // the settle is retained as the second line rather than the only one.
+  const heldDirs = await (params?.listHeldDirs ?? listDirsHeldByOpenDescriptors)(tmpRoot);
   const recheck = await (params?.listCommandLines ?? listProcessCommandLines)();
   const recheckUsable = recheck.length > 0;
   for (const dir of candidates) {
+    if (heldDirs?.has(dir)) {
+      // Someone holds a descriptor into it — claimed, whether or not it has
+      // execed yet. This is the pre-exec case argv cannot answer.
+      kept.push(dir);
+      continue;
+    }
     if (!recheckUsable || recheck.some((line) => lineReferencesDir(line, dir))) {
       kept.push(dir);
       continue;

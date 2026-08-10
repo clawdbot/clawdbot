@@ -366,6 +366,36 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     expect(result.removed).toEqual([]);
   });
 
+  it("keeps a dir held by an inherited descriptor even when argv never mentions it (pre-exec child)", async () => {
+    const preExec = await createDir(root, "held-pre-exec", { owner: { pid: 4242 } });
+    const result = await sweep(root, {
+      isPidAlive: () => false, // owner provably dead
+      listCommandLines: () => ["node /usr/bin/unrelated"], // argv is blind, as it is pre-exec
+      listHeldDirs: async () => new Set([preExec]), // but the descriptor is durable evidence
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toContain(preExec);
+    await expect(fs.stat(preExec)).resolves.toBeDefined();
+  });
+
+  it("still removes a dead-owner dir that nobody holds a descriptor into", async () => {
+    const doomed = await createDir(root, "unheld", { owner: { pid: 4242 } });
+    const result = await sweep(root, {
+      isPidAlive: () => false,
+      listHeldDirs: async () => new Set<string>(), // probe worked; nothing is held
+    });
+    expect(result.removed).toEqual([doomed]);
+  });
+
+  it("falls back to the argv re-scan when the descriptor probe is unavailable (off-Linux)", async () => {
+    const doomed = await createDir(root, "no-probe", { owner: { pid: 4242 } });
+    const result = await sweep(root, {
+      isPidAlive: () => false,
+      listHeldDirs: async () => undefined, // unknown, e.g. /proc unreadable
+    });
+    expect(result.removed).toEqual([doomed]); // argv re-scan still governs
+  });
+
   it("keeps legacy empty dirs (mcp.json already gone) — still never auto-removed", async () => {
     const empty = await createDir(root, "empty", { withMcpJson: false });
     const result = await sweep(root);
