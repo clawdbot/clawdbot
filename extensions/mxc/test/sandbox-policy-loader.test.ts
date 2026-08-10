@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -222,5 +222,44 @@ describeOnWindows("loadSandboxBaselinePolicy validation", () => {
         item.detail,
       );
     }
+  });
+});
+
+describe("sandbox policy bounded reads", () => {
+  const MX_SANDBOX_POLICY_MAX_BYTES = 1024 * 1024;
+
+  test("small valid policy file loads successfully", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "normal-policy.json");
+    writePolicy(policyPath, {
+      filesystem: { additionalReadonlyPaths: [] },
+      process: { timeoutSeconds: 60 },
+    });
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(60);
+  });
+
+  test("loads a configured policy through a symlink", () => {
+    const dir = makeTestDir();
+    const targetPath = join(dir, "target-policy.json");
+    const policyPath = join(dir, "linked-policy.json");
+    writePolicy(targetPath, { process: { timeoutSeconds: 45 } });
+    symlinkSync(targetPath, policyPath, "file");
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(45);
+  });
+
+  test("oversized policy file is rejected with the documented size limit", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "huge-policy.json");
+    writeFileSync(policyPath, "x".repeat(MX_SANDBOX_POLICY_MAX_BYTES + 1), "utf-8");
+
+    expect(() => loadSandboxBaselinePolicy({ policyPaths: [policyPath] })).toThrow(
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MX_SANDBOX_POLICY_MAX_BYTES} bytes (${MX_SANDBOX_POLICY_MAX_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
+    );
   });
 });

@@ -1,6 +1,7 @@
-import { readFileSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { FsSafeError, readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { z } from "zod";
 import {
   DEFAULT_SANDBOX_BASELINE,
@@ -91,10 +92,24 @@ export function loadSandboxBaselinePolicy(
   };
 }
 
+/**
+ * Cap sandbox policy file reads at 1 MiB. Operator-authored policy files
+ * are configuration artifacts far below this ceiling; rejecting oversized
+ * files before {@link JSON.parse} prevents unbounded memory use.
+ *
+ * Resolve configured symlinks first to preserve existing policyPaths behavior;
+ * {@link readRegularFileSync} still rejects a non-regular final target.
+ */
+const MX_SANDBOX_POLICY_MAX_BYTES = 1024 * 1024;
+
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
+    const { buffer } = readRegularFileSync({
+      filePath: realpathSync(policyPath),
+      maxBytes: MX_SANDBOX_POLICY_MAX_BYTES,
+    });
+    parsed = JSON.parse(buffer.toString("utf-8"));
   } catch (err) {
     throw policyFileError(policyPath, err);
   }
@@ -307,12 +322,24 @@ function policyFileError(policyPath: string, err: unknown): Error {
       { cause: err },
     );
   }
-  return new Error(
-    `Failed to load sandbox policy file at ${policyPath}: ${formatErrorMessage(err)}`,
-    {
+  if (err instanceof FsSafeError && err.code === "too-large") {
+    return new Error(
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MX_SANDBOX_POLICY_MAX_BYTES} bytes (${MX_SANDBOX_POLICY_MAX_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
+      { cause: err },
+    );
+  }
+  // readRegularFileSync already includes an actionable message with the file
+  // path for oversized and non-regular-file rejections. Preserve that message
+  // as-is and avoid prepending the path a second time.
+  const causeMsg = formatErrorMessage(err);
+  if (causeMsg.includes(policyPath)) {
+    return new Error(`Failed to load sandbox policy file: ${causeMsg}`, {
       cause: err instanceof Error ? err : undefined,
-    },
-  );
+    });
+  }
+  return new Error(`Failed to load sandbox policy file at ${policyPath}: ${causeMsg}`, {
+    cause: err instanceof Error ? err : undefined,
+  });
 }
 
 function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undefined): string {
