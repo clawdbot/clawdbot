@@ -519,6 +519,26 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("dispatches a bare retained-owner turn to the local gateway global session", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({
+          agentId: undefined,
+          sessionKey: undefined,
+        });
+      },
+      {
+        agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
   it("reads a UTF-8 message file for gateway dispatch", async () => {
     await withTempStore(async ({ dir }) => {
       const messageFile = path.join(dir, "task.md");

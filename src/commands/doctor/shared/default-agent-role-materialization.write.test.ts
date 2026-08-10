@@ -138,4 +138,88 @@ describe("default role materialization authored writes", () => {
       expect(persisted.agents?.defaults?.sessionStore?.agentId).toBe(sameStore ? "ops" : undefined);
     },
   );
+
+  it.each([
+    ["another fixed store", "destination-sessions.json"],
+    ["a per-agent store", "sessions-{agentId}.json"],
+  ])("drops a persisted fixed-store owner when switching to %s", async (_label, storeName) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-owner-switch-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: path.join(root, "source-sessions.json") },
+      }),
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+
+    await io.writeConfigFile(
+      {
+        ...snapshot.config,
+        session: { ...snapshot.config.session, store: path.join(root, storeName) },
+      },
+      { baseSnapshot: snapshot },
+    );
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.agents?.defaults?.sessionStore?.agentId).toBeUndefined();
+  });
+
+  it("keeps an explicitly supplied owner when switching fixed stores", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-owner-switch-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: path.join(root, "source-sessions.json") },
+      }),
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig: OpenClawConfig = {
+      ...snapshot.config,
+      agents: {
+        ...snapshot.config.agents,
+        defaults: {
+          ...snapshot.config.agents?.defaults,
+          sessionStore: { agentId: "research" },
+        },
+      },
+      session: { ...snapshot.config.session, store: path.join(root, "destination-sessions.json") },
+    };
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "defaults", "sessionStore", "agentId"]],
+      explicitSetValueSource: nextConfig,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.agents?.defaults?.sessionStore?.agentId).toBe("research");
+  });
 });

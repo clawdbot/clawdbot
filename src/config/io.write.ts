@@ -22,11 +22,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
-import {
-  getConfigValueAtPath,
-  setConfigValueAtPath,
-  unsetConfigValueAtPath,
-} from "./config-paths.js";
+import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import {
   EnvRefArrayMutationError,
   restoreEnvRefsFromMap,
@@ -56,6 +52,7 @@ import {
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
+import { prepareSessionStoreOwnershipForWrite } from "./io.session-store-owner.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteOptions,
@@ -86,7 +83,6 @@ import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
-import { isSameFixedSessionStoreConfig } from "./sessions/session-store-config.js";
 import type { OpenClawConfig } from "./types.js";
 import {
   materializeLegacyAgentOwnershipForActiveChannelsResult,
@@ -172,23 +168,16 @@ export async function writeConfigFileFromContext(
     };
   }
 
-  const sameFixedSessionStore = isSameFixedSessionStoreConfig(
-    (snapshot.sourceConfigBeforeMigrations ?? snapshot.config).session?.store,
-    nextConfig.session?.store,
-    deps.env,
-  );
-  const generatedSessionStoreOwner = sourceRosterMigration.insertedPaths?.some(
-    (entry) => entry.join(".") === "agents.defaults.sessionStore.agentId",
-  );
-  if (!sameFixedSessionStore && generatedSessionStoreOwner) {
-    const agents = structuredClone(nextConfig.agents ?? {});
-    unsetConfigValueAtPath(agents as Record<string, unknown>, [
-      "defaults",
-      "sessionStore",
-      "agentId",
-    ]);
-    nextConfig = { ...nextConfig, agents };
-  }
+  const sessionStoreOwnership = prepareSessionStoreOwnershipForWrite({
+    currentConfig: snapshot.config,
+    currentStore: (snapshot.sourceConfigBeforeMigrations ?? snapshot.config).session?.store,
+    targetConfig: nextConfig,
+    env: deps.env,
+    explicitSetPaths: options.explicitSetPaths,
+    explicitSetValueSource: options.explicitSetValueSource,
+  });
+  nextConfig = sessionStoreOwnership.config;
+  const { sameFixedSessionStore } = sessionStoreOwnership;
   const retainedFleetOwner =
     retainedLegacyDefaultAgentId &&
     writesOwnershipTopology &&
@@ -225,7 +214,7 @@ export async function writeConfigFileFromContext(
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 
-  const nextSessionStoreOwner = nextConfig.agents?.defaults?.sessionStore;
+  const nextSessionStoreConfig = nextConfig.agents?.defaults?.sessionStore;
   if (
     !ownerAgentId &&
     writesOwnershipTopology &&
@@ -233,8 +222,8 @@ export async function writeConfigFileFromContext(
     previousSoleAgentId &&
     !previousSoleRemains &&
     sameFixedSessionStore &&
-    (nextSessionStoreOwner === undefined ||
-      (isRecord(nextSessionStoreOwner) && !Object.hasOwn(nextSessionStoreOwner, "agentId")))
+    (nextSessionStoreConfig === undefined ||
+      (isRecord(nextSessionStoreConfig) && !Object.hasOwn(nextSessionStoreConfig, "agentId")))
   ) {
     nextConfig = {
       ...nextConfig,
@@ -243,7 +232,7 @@ export async function writeConfigFileFromContext(
         defaults: {
           ...nextConfig.agents?.defaults,
           sessionStore: {
-            ...(isRecord(nextSessionStoreOwner) ? nextSessionStoreOwner : {}),
+            ...(isRecord(nextSessionStoreConfig) ? nextSessionStoreConfig : {}),
             agentId: normalizeAgentId(previousSoleAgentId),
           },
         },
