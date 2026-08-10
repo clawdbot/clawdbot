@@ -1234,6 +1234,10 @@ async function sendSubagentAnnounceDirectly(params: {
     }
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
+    const directAnnounceStatus =
+      directAnnounceResponse && typeof directAnnounceResponse === "object"
+        ? (directAnnounceResponse as { status?: unknown }).status
+        : undefined;
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
@@ -1369,7 +1373,11 @@ async function sendSubagentAnnounceDirectly(params: {
             directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
     );
     const acceptsIntentionalSilentCompletion = params.requireRequesterSettlement
-      ? Boolean(directAnnounceResult && hasExplicitRequesterQuietDecision(directAnnounceResult))
+      ? Boolean(
+          directAnnounceResult &&
+          (directAnnounceStatus == null || directAnnounceStatus === "ok") &&
+          hasExplicitRequesterQuietDecision(directAnnounceResult),
+        )
       : hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       params.requireRequesterSettlement &&

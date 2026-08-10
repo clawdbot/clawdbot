@@ -3821,6 +3821,7 @@ describe("requester settle wake trigger", () => {
   beforeEach(() => {
     helperMocks.safeRemoveAttachmentsDir.mockClear();
     helperMocks.logAnnounceGiveUp.mockClear();
+    taskExecutorMocks.completeTaskRunByRunId.mockClear();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockReset().mockResolvedValue(true);
     internalSessionEffectsMocks.removeInternalSessionEffectsSession
@@ -4246,6 +4247,52 @@ describe("requester settle wake trigger", () => {
     });
   });
 
+  it("settles through the native requester owner when the optional Task projection is absent", () => {
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValue([]);
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      delivery: {
+        status: "pending",
+        disposition: "intentional_non_delivery",
+        lastDropReason: "waiting_for_requester_turn",
+      },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        requesterYieldBatch: true,
+      },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      resolveSubagentTask: () => ({ lookup: "available" }),
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+    const wakeParams = firstCallArg(settleWake) as unknown as {
+      prepareBatch(runIds: readonly string[], rearmGeneration?: number): boolean;
+      completeBatch(
+        runIds: readonly string[],
+        rearmGeneration?: number,
+        resolution?: { status: "delivered" },
+      ): boolean;
+    };
+
+    expect(wakeParams.prepareBatch([entry.runId])).toBe(true);
+    expect(wakeParams.completeBatch([entry.runId], undefined, { status: "delivered" })).toBe(true);
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(entry.delivery).toMatchObject({ status: "delivered", disposition: "delivered" });
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
   it("marks requester settlement failure blocked before retiring its wake", () => {
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValueOnce([
       { taskId: "task-1" },
@@ -4318,6 +4365,126 @@ describe("requester settle wake trigger", () => {
     );
   });
 
+  it.each(["failed", "timed_out", "cancelled", "lost"] as const)(
+    "preserves an already-terminal %s child while settling requester failure",
+    (status) => {
+      taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValueOnce([
+        { taskId: "task-1", status },
+      ]);
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        outcome: { status: "error", error: "child did not complete successfully" },
+        expectsCompletionMessage: true,
+        delivery: {
+          status: "pending",
+          disposition: "intentional_non_delivery",
+          lastDropReason: "waiting_for_requester_turn",
+        },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          requesterYieldBatch: true,
+        },
+      });
+      const settleWake = vi.fn(async () => false);
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      });
+
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      });
+      const completeBatch = firstCallArg(settleWake).completeBatch as (
+        runIds: readonly string[],
+        rearmGeneration?: number,
+        resolution?: { status: "failed"; error: string },
+      ) => boolean;
+
+      expect(
+        completeBatch([entry.runId], undefined, {
+          status: "failed",
+          error: "requester settle wake retry limit reached",
+        }),
+      ).toBe(true);
+      expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+      expect(entry.requesterSettleWake).toBeUndefined();
+      expect(entry.delivery).toMatchObject({
+        status: "failed",
+        disposition: "permanent_failure",
+        lastError: "requester settle wake retry limit reached",
+      });
+    },
+  );
+
+  it.each([
+    {
+      taskStatus: "queued",
+      outcome: { status: "error", error: "child failed before task finalization" } as const,
+    },
+    {
+      taskStatus: "running",
+      outcome: { status: "timeout" } as const,
+    },
+  ])(
+    "does not launder a $taskStatus child with $outcome.status execution into succeeded+blocked",
+    ({ taskStatus, outcome }) => {
+      taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReturnValueOnce([
+        { taskId: "task-1", status: taskStatus },
+      ]);
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        outcome,
+        expectsCompletionMessage: true,
+        delivery: {
+          status: "pending",
+          disposition: "intentional_non_delivery",
+          lastDropReason: "waiting_for_requester_turn",
+        },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          requesterYieldBatch: true,
+        },
+      });
+      const settleWake = vi.fn(async () => false);
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      });
+
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      });
+      const completeBatch = firstCallArg(settleWake).completeBatch as (
+        runIds: readonly string[],
+        rearmGeneration?: number,
+        resolution?: { status: "failed"; error: string },
+      ) => boolean;
+
+      expect(
+        completeBatch([entry.runId], undefined, {
+          status: "failed",
+          error: "requester settle wake retry limit reached",
+        }),
+      ).toBe(true);
+      expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+      expect(entry.requesterSettleWake).toBeUndefined();
+      expect(entry.execution.outcome).toEqual(outcome);
+      expect(entry.delivery).toMatchObject({
+        status: "failed",
+        disposition: "permanent_failure",
+        lastError: "requester settle wake retry limit reached",
+      });
+    },
+  );
+
   it("retains the requester settlement wake when Task projection fails", () => {
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -4338,6 +4505,7 @@ describe("requester settle wake trigger", () => {
     const settleWake = vi.fn(async () => false);
     const controller = createLifecycleController({
       entry,
+      resolveSubagentTask: () => ({ lookup: "unavailable" }),
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
 

@@ -3626,6 +3626,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "accepts an explicit yielded requester decision to remain quiet",
       response: {
+        status: "ok",
         result: {
           payloads: [],
           meta: {
@@ -3687,6 +3688,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
+    ...(["error", "timeout"] as const).map((status) => ({
+      name: `rejects an outer gateway ${status} that wraps stale quiet evidence`,
+      response: {
+        status,
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    })),
     {
       name: "accepts the exact quiet token in both raw and internally visible terminal metadata",
       response: {

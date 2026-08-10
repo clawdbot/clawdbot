@@ -14,6 +14,7 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../tasks/task-completion-contract.js";
+import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -269,7 +270,8 @@ export function createSubagentRegistryLifecycleDelivery(
     entry: SubagentRunRecord,
     resolution: Exclude<RequesterSettleWakeResolution, { status: "unchanged" }>,
   ): boolean => {
-    const target = resolveSubagentTaskTarget(entry);
+    const taskResolution = params.resolveSubagentTask(entry);
+    const target = resolveSubagentTaskTarget(entry, taskResolution);
     try {
       const deliveryUpdates = setDetachedTaskDeliveryStatusByRunId({
         runId: target.runId,
@@ -278,10 +280,18 @@ export function createSubagentRegistryLifecycleDelivery(
         deliveryStatus: resolution.status === "failed" ? "failed" : "delivered",
         error: resolution.status === "failed" ? resolution.error : undefined,
       });
-      if (deliveryUpdates.length === 0) {
+      const taskProjectionKnownAbsent =
+        taskResolution.lookup === "available" && taskResolution.task === undefined;
+      if (deliveryUpdates.length === 0 && !taskProjectionKnownAbsent) {
         return false;
       }
-      if (resolution.status === "failed") {
+      const shouldProjectBlockedOutcome =
+        resolution.status === "failed" &&
+        entry.execution.outcome?.status === "ok" &&
+        deliveryUpdates.some(
+          (task) => task.status === "succeeded" || !isTerminalTaskStatus(task.status),
+        );
+      if (shouldProjectBlockedOutcome) {
         const endedAt = entry.execution.endedAt ?? Date.now();
         const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
           resolution.error,
@@ -332,15 +342,18 @@ export function createSubagentRegistryLifecycleDelivery(
   };
 
   const markSubagentTaskDeliveryPendingForRequesterSettle = (entry: SubagentRunRecord): boolean => {
-    const target = resolveSubagentTaskTarget(entry);
+    const taskResolution = params.resolveSubagentTask(entry);
+    const target = resolveSubagentTaskTarget(entry, taskResolution);
     try {
+      const updates = setDetachedTaskDeliveryStatusByRunId({
+        runId: target.runId,
+        runtime: "subagent",
+        sessionKey: target.sessionKey,
+        deliveryStatus: "pending",
+      });
       return (
-        setDetachedTaskDeliveryStatusByRunId({
-          runId: target.runId,
-          runtime: "subagent",
-          sessionKey: target.sessionKey,
-          deliveryStatus: "pending",
-        }).length > 0
+        updates.length > 0 ||
+        (taskResolution.lookup === "available" && taskResolution.task === undefined)
       );
     } catch (err) {
       params.warn("failed to defer subagent task delivery for requester settlement", {
