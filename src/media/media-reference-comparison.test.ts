@@ -6,6 +6,9 @@ describe("normalizeMediaReferenceForComparison", () => {
     expect(normalizeMediaReferenceForComparison("file:///tmp/generated%20image.png")).toBe(
       normalizeMediaReferenceForComparison("/tmp/generated image.png"),
     );
+    expect(normalizeMediaReferenceForComparison("FILE:/tmp/generated%20image.png")).toBe(
+      normalizeMediaReferenceForComparison("/tmp/generated image.png"),
+    );
   });
 
   it("keeps parent segments distinct without resolving filesystem identity", () => {
@@ -58,6 +61,9 @@ describe("normalizeMediaReferenceForComparison", () => {
 
   it("keeps malformed local file URLs comparable with their paths", () => {
     expect(normalizeMediaReferenceForComparison("file:///tmp/100%.png")).toBe(
+      normalizeMediaReferenceForComparison("/tmp/100%.png"),
+    );
+    expect(normalizeMediaReferenceForComparison("FILE:/tmp/100%.png")).toBe(
       normalizeMediaReferenceForComparison("/tmp/100%.png"),
     );
     expect(normalizeMediaReferenceForComparison("file:///tmp/link/../asset%.png")).toBe(
