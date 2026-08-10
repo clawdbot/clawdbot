@@ -3792,47 +3792,43 @@ describe("grouped chat rendering", () => {
     const fetchMock = vi.fn(async () => new Response(giantBody));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const decodedByteLengths: number[] = [];
-    const originalDecode = TextDecoder.prototype.decode;
-    const decodeSpy = vi
-      .spyOn(TextDecoder.prototype, "decode")
-      .mockImplementation(function (this: TextDecoder, input?, options?) {
+    class TrackingTextDecoder extends TextDecoder {
+      override decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions): string {
         if (input) {
           decodedByteLengths.push(input.byteLength);
         }
-        return originalDecode.call(this, input, options);
-      });
-    try {
-      const container = document.createElement("div");
-      const message = createAssistantMessage(
-        [
-          createAttachmentBlock(
-            "https://example.com/one-giant-chunk.txt",
-            "document",
-            "one-giant-chunk.txt",
-            "text/plain",
-          ),
-        ],
-        { id: "assistant-oversized-chunk-text-document" },
-      );
-      const rerender = () =>
-        renderAssistantMessage(container, message, {
-          showToolCalls: false,
-          onRequestUpdate: rerender,
-        });
-      documentPreviewSubscribers.add(rerender);
-
-      rerender();
-
-      await vi.waitFor(() => {
-        expect(
-          container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
-        ).toBe(`${"z".repeat(16 * 1024)}…`);
-      });
-      // The 1 MiB chunk must be sliced to the byte budget before decoding.
-      expect(Math.max(...decodedByteLengths)).toBeLessThanOrEqual((16 * 1024 + 1) * 4);
-    } finally {
-      decodeSpy.mockRestore();
+        return super.decode(input, options);
+      }
     }
+    vi.stubGlobal("TextDecoder", TrackingTextDecoder);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/one-giant-chunk.txt",
+          "document",
+          "one-giant-chunk.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-oversized-chunk-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${"z".repeat(16 * 1024)}…`);
+    });
+    // The 1 MiB chunk must be sliced to the byte budget before decoding.
+    expect(Math.max(...decodedByteLengths)).toBeLessThanOrEqual((16 * 1024 + 1) * 4);
   });
 
   it("omits attachment anchors for unsafe transcript URLs", async () => {
