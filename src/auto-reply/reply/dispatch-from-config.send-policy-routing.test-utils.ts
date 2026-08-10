@@ -6,6 +6,7 @@ import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { NO_VISIBLE_REPLY_FALLBACK_TEXT } from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -827,6 +828,76 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       text: "private final reply",
     },
   ] satisfies HarnessDeliveryCase[])("$name", runHarnessDeliveryCase);
+
+  it("delivers a short final after a runtime-derived tool owner falls back to embedded", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { visibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = { ...codexEntry };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const internalOpts = opts as
+        | (GetReplyOptions & {
+            sourceReplyDeliveryModeOrigin?: "stable_policy" | "runtime_default";
+            onSourceReplyDeliveryModeResolved?: (mode: "automatic" | "message_tool_only") => void;
+          })
+        | undefined;
+      expect(internalOpts?.sourceReplyDeliveryModeOrigin).toBe("runtime_default");
+      internalOpts?.onSourceReplyDeliveryModeResolved?.("automatic");
+      return { text: "Short fallback final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", Provider: "discord", Surface: "discord" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({ queuedFinal: true });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({ text: "Short fallback final" });
+  });
+
+  it("records a rejected short-final attempt after a runtime-derived fallback", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { visibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = { ...codexEntry };
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.sendFinalReply).mockReturnValue(false);
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const internalOpts = opts as
+        | (GetReplyOptions & {
+            onSourceReplyDeliveryModeResolved?: (mode: "automatic") => void;
+          })
+        | undefined;
+      internalOpts?.onSourceReplyDeliveryModeResolved?.("automatic");
+      return { text: "Rejected fallback final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({ queuedFinal: false });
+    expect(
+      vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
+    ).toEqual(["Rejected fallback final", NO_VISIBLE_REPLY_FALLBACK_TEXT]);
+  });
 
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {
     setNoAbort();

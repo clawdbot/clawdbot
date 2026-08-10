@@ -35,6 +35,10 @@ import { createReplyOperation, getActiveReplyRunCount } from "./reply-run-regist
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { routeReply } from "./route-reply.runtime.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import {
+  readSourceReplyDeliveryModeOrigin,
+  type SourceReplyDeliveryRuntimeOptions,
+} from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
@@ -783,6 +787,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it("carries source delivery provenance into the queue-owned run", async () => {
+    await runPrepared({
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyDeliveryModeOrigin: "runtime_default",
+      } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> &
+        SourceReplyDeliveryRuntimeOptions,
+    });
+
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(readSourceReplyDeliveryModeOrigin(run)).toBe("runtime_default");
   });
 
   it("persists pure media turns without the model-facing placeholder", async () => {

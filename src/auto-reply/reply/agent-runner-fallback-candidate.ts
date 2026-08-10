@@ -21,13 +21,21 @@ import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
+import {
+  readSourceReplyDeliveryModeOrigin,
+  type SourceReplyDeliveryRuntimeOptions,
+} from "./source-reply-delivery-runtime.js";
 
 /** Runs the provider/model fallback candidates while preserving cross-candidate delivery state. */
 export async function runAgentFallbackCandidates(params: AgentFallbackCycleParams) {
   const turn = params.turn;
+  const sourceReplyDeliveryRuntimeOptions = turn.opts as
+    | SourceReplyDeliveryRuntimeOptions
+    | undefined;
+  const sourceReplyDeliveryModeOrigin =
+    readSourceReplyDeliveryModeOrigin(turn.followupRun.run) ??
+    sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const sourceRepliesAreToolOnly =
-    turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
   const runLane = CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   let assistantErrorPersistedAcrossFallback = false;
@@ -169,6 +177,22 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           resolveCandidateRuntime(provider, model),
         );
         const candidateRun = runtime.candidateRun;
+        const candidateSourceReplyDeliveryMode =
+          sourceReplyDeliveryModeOrigin === "runtime_default"
+            ? runtime.useCliExecution
+              ? "message_tool_only"
+              : "automatic"
+            : turn.followupRun.run.sourceReplyDeliveryMode;
+        if (candidateSourceReplyDeliveryMode) {
+          candidateRun.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
+          turn.followupRun.run.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
+          if (turn.opts) {
+            turn.opts.sourceReplyDeliveryMode = candidateSourceReplyDeliveryMode;
+          }
+          sourceReplyDeliveryRuntimeOptions?.onSourceReplyDeliveryModeResolved?.(
+            candidateSourceReplyDeliveryMode,
+          );
+        }
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.runtimeConfig,
           provider,
@@ -251,7 +275,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             assistantErrorPersistedAcrossFallback = true;
           },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
-          sourceRepliesAreToolOnly,
+          sourceRepliesAreToolOnly: candidateSourceReplyDeliveryMode === "message_tool_only",
           messageToolDeliveryState,
           onCompactionCount: (count) => {
             params.state.autoCompactionCount += count;

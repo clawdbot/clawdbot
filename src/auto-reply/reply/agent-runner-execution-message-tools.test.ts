@@ -12,6 +12,7 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { setSourceReplyDeliveryModeOrigin } from "./source-reply-delivery-runtime.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -199,6 +200,63 @@ describe("executeAgentTurn: message tool progress", () => {
 
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
+  });
+
+  it("releases a runtime-derived tool owner for an embedded fallback", async () => {
+    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "primary").catch(() => undefined);
+      return {
+        result: await params.run("openai", "fallback"),
+        provider: "openai",
+        model: "fallback",
+        attempts: [],
+      };
+    });
+    state.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Short fallback final" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    setSourceReplyDeliveryModeOrigin(followupRun.run, "runtime_default");
+    const onCandidateMode = vi.fn();
+    await executeAgentTurn({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {
+        onSourceReplyDeliveryModeResolved: onCandidateMode,
+      } as InternalGetReplyOptions & {
+        onSourceReplyDeliveryModeResolved: (mode: "automatic" | "message_tool_only") => void;
+      },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    const embeddedParams = state.runEmbeddedAgentMock.mock.calls[0]?.[0] as {
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      forceMessageTool?: boolean;
+    };
+    expect(embeddedParams).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      forceMessageTool: false,
+    });
+    expect(onCandidateMode.mock.calls).toEqual([["message_tool_only"], ["automatic"]]);
   });
 
   it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
