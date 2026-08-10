@@ -423,7 +423,8 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+        // Onboarding chrome keeps only the header actions; no identity heading.
+        await page.locator(".custodian__header--minimal").waitFor();
         await gateway.emitGatewayEvent("health", {
           channelLabels: { telegram: "Telegram" },
           channels: {
