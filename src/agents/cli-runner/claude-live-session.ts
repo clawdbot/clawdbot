@@ -38,15 +38,15 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
-import {
-  type CliOutput,
-  type CliUsage,
-  type CliStreamJsonOutputLimits,
-  type CliStreamingDelta,
-  type CliThinkingDelta,
-  type CliThinkingProgress,
-  type CliToolResultDelta,
-  type CliToolUseStartDelta,
+import type {
+  CliOutput,
+  CliStreamingDelta,
+  CliStreamJsonOutputLimits,
+  CliThinkingDelta,
+  CliThinkingProgress,
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+  CliUsage,
 } from "../cli-output-contracts.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
