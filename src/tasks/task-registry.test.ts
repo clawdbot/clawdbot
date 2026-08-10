@@ -589,7 +589,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("keeps live activity deltas out of durable task writes", async () => {
+  it("bounds durable liveness writes for live activity deltas", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
       const store = createInMemoryTaskRegistryStore();
@@ -600,6 +600,7 @@ describe("task-registry", () => {
         runId: "run-ephemeral-activity",
         task: "Keep streaming state in memory",
       });
+      const initialLastEventAt = requireTaskByRunId("run-ephemeral-activity").lastEventAt!;
       upsert.mockClear();
 
       emitAgentEvent({
@@ -613,6 +614,21 @@ describe("task-registry", () => {
         data: { text: "Editing" },
       });
       expect(upsert).not.toHaveBeenCalled();
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(initialLastEventAt + 60_000);
+      try {
+        emitAgentEvent({
+          runId: "run-ephemeral-activity",
+          stream: "assistant",
+          data: { text: "Still editing" },
+        });
+      } finally {
+        dateNow.mockRestore();
+      }
+      expect(upsert).toHaveBeenCalledOnce();
+      expect(requireTaskByRunId("run-ephemeral-activity").lastEventAt).toBe(
+        initialLastEventAt + 60_000,
+      );
+      upsert.mockClear();
       emitAgentEvent({
         runId: "run-ephemeral-activity",
         stream: "tool",

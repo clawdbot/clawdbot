@@ -21,6 +21,9 @@ import {
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+// Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
+const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
+
 function ensureListener() {
   if (!claimTaskRegistryListenerStart()) {
     return;
@@ -40,6 +43,10 @@ function ensureListener() {
         continue;
       }
       if (recordTaskActivityEvent(current, evt)) {
+        const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
+        if (now - lastEventAt >= ACTIVITY_LIVENESS_WRITE_MS) {
+          updateTask(current.taskId, { lastEventAt: now });
+        }
         continue;
       }
       const patch: Partial<TaskRecord> = {
