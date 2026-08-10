@@ -85,6 +85,7 @@ jobs:
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
+      frozen_target: ${{ steps.manifest.outputs.frozen_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
@@ -713,6 +714,7 @@ jobs:
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
+            frozen_target: frozenTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
@@ -1339,7 +1341,7 @@ jobs:
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
-              node --import tsx scripts/check-gateway-watch-regression.mts --skip-build
+              pnpm test:gateway:watch-regression -- --skip-build
           fi
 
           wait_checks
@@ -1348,7 +1350,7 @@ jobs:
           # starve the Gateway readiness deadline used by this regression gate.
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
             start_check "gateway-watch" \
-              node --import tsx scripts/check-gateway-watch-regression.mts --skip-build
+              pnpm test:gateway:watch-regression -- --skip-build
             wait_checks
           fi
 
@@ -1468,14 +1470,22 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Install Playwright Chromium
+      - &install_playwright_chromium
+        name: Install Playwright Chromium
+        env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         run: |
-          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+          if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]; then
             # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
             # Install the managed browser revision pinned by the selected target instead.
             pnpm --dir ui exec playwright install chromium
-          else
+          elif [[ -f scripts/ensure-playwright-chromium.mts ]]; then
             node --import tsx scripts/ensure-playwright-chromium.mts
+          elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]; then
+            node scripts/ensure-playwright-chromium.mjs
+          else
+            echo "Target does not provide a supported Playwright Chromium installer." >&2
+            exit 1
           fi
 
       - name: Lint Control UI window.open usage
@@ -1526,8 +1536,7 @@ jobs:
           sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
-      - name: Install Playwright Chromium
-        run: node --import tsx scripts/ensure-playwright-chromium.mts
+      - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
         run: >-
@@ -1563,8 +1572,7 @@ jobs:
           sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
-      - name: Install Playwright Chromium
-        run: node --import tsx scripts/ensure-playwright-chromium.mts
+      - *install_playwright_chromium
 
       - name: Test MCP app conformance with a real Gateway
         run: >-
@@ -1807,18 +1815,22 @@ jobs:
         run: |
           # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
           unset OPENCLAW_BUILD_PRIVATE_QA
-          node --import tsx scripts/build-all.mts qaRuntime
+          pnpm build qaRuntime
           pnpm ui:build
           package_args=(
             --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
-          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
+          package_script="scripts/package-openclaw-for-docker.mts"
+          if [[ ! -f "$package_script" ]]; then
+            package_script="scripts/package-openclaw-for-docker.mjs"
+          fi
+          if grep -Fq -- '--allow-unreleased-changelog' "$package_script"; then
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime
+          OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime
 
       - name: Run smoke profile part
         env:
@@ -2275,6 +2287,7 @@ jobs:
 
       - name: Run check shard
         env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
@@ -2294,10 +2307,10 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-                echo "[skip] historical target skips the wall-clock doctor deprecation registry guard"
-              elif has_package_script "check:doctor-deprecation-registry"; then
+              if has_package_script "check:doctor-deprecation-registry"; then
                 pnpm check:doctor-deprecation-registry
+              elif [[ "$FROZEN_TARGET" == "true" ]]; then
+                echo "[skip] frozen target predates the wall-clock doctor deprecation registry guard"
               else
                 echo "Current CI targets must provide the check:doctor-deprecation-registry package script." >&2
                 exit 1
@@ -2450,6 +2463,9 @@ jobs:
           - check_name: check-prompt-snapshots
             group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
+          - check_name: check-export-name-collisions
+            group: export-name-collisions
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -2635,7 +2651,11 @@ jobs:
 
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
-              node --import tsx scripts/run-additional-boundary-checks.mts
+              boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)
+              if [[ ! -f scripts/run-additional-boundary-checks.mts ]]; then
+                boundary_runner=(node scripts/run-additional-boundary-checks.mjs)
+              fi
+              "${boundary_runner[@]}"
               ;;
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
@@ -2649,26 +2669,29 @@ jobs:
                 run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               fi
               ;;
+            export-name-collisions)
+              if [ ! -f scripts/check-export-name-collisions.mts ]; then
+                echo "[skip] export name collision check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:export-name-collisions"] ? 0 : 1);'; then
+                echo "[skip] export name collision script is not present in package.json"
+              else
+                run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions
+              fi
+              ;;
             session-accessor-boundary)
-              if [ ! -f scripts/check-session-accessor-boundary.mts ]; then
-                echo "[skip] session accessor boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
                 echo "[skip] session accessor boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
-              if [ ! -f scripts/check-sqlite-transaction-boundary.mts ]; then
-                echo "[skip] SQLite transaction boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
                 echo "[skip] SQLite transaction boundary script is not present in package.json"
               else
                 run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
               fi
               ;;
             session-transcript-reader-boundary)
-              if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]; then
-                echo "[skip] session transcript reader boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary

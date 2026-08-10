@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -6,11 +7,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import {
-  isJsonRecord,
-  parseOpaqueLeafEntry,
-  parseParentLinkedOpaqueEntry,
-} from "./session-manager-codec.js";
+import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -35,7 +32,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
     for (const opaqueEntry of this.opaqueFileEntries) {
       const leafEntry = parseOpaqueLeafEntry(opaqueEntry.record);
       const link = leafEntry ?? parseParentLinkedOpaqueEntry(opaqueEntry.record);
-      if (link && isJsonRecord(opaqueEntry.record)) {
+      if (link && isRecord(opaqueEntry.record)) {
         opaqueById.set(link.id, opaqueEntry.record);
       }
     }

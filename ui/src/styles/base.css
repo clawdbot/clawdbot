@@ -21,11 +21,13 @@
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
   /* Text - Clean contrast
-   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity. */
+   * Keep --muted AA on dark surfaces; do not dim muted body text with opacity.
+   * --text targets ~10:1 on --bg #0e1015 (10.1; 9.3 on --card) — the dark
+   * comfort band is ~10-12 and brighter body text halates on dark. */
 
-  --text: #d4d4d8;
+  --text: #bcbcc0;
   --text-strong: #f4f4f5;
-  --chat-text: #d4d4d8;
+  --chat-text: #bcbcc0;
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;

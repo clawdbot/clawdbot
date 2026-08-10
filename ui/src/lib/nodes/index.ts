@@ -1,7 +1,7 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
-// Presentation-free by contract: destructive confirmations belong to the owning page,
-// because native window.confirm silently returns false in webviews with no dialog bridge
-// and would end the action with no outcome and no recorded reason.
+// Presentation-free by contract: confirmations and secret reveals belong to the owning
+// page, because native window.confirm/window.prompt silently answer in webviews with no
+// dialog bridge and would end the action with no outcome and no recorded reason.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import {
@@ -405,13 +405,14 @@ export async function rejectNodePairingRequest(state: InventoryState, requestId:
   }
 }
 
+/** Returns the rotated token for the owning page to reveal; the Gateway never resends it. */
 export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
-) {
+): Promise<string | null> {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
+    return null;
   }
   const generation = state.requestGeneration;
   try {
@@ -422,13 +423,17 @@ export async function rotateDeviceToken(
       deviceId?: string;
       scopes?: Array<string>;
     }>("device.token.rotate", requestParams);
+    const token = res?.token ?? null;
+    // A retired epoch stops every state write below, but never the return: the previous
+    // credential is already dead on the server, so discarding this response would leave
+    // the operator locked out with no way to ask for the replacement again.
     if (!isCurrentNodesRequest(state, client, generation)) {
-      return;
+      return token;
     }
-    if (res?.token) {
+    if (token) {
       const identity = await loadOrCreateDeviceIdentity();
       if (!isCurrentNodesRequest(state, client, generation)) {
-        return;
+        return token;
       }
       const role = res.role ?? params.role;
       if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
@@ -436,19 +441,18 @@ export async function rotateDeviceToken(
           deviceId: identity.deviceId,
           gatewayUrl,
           role,
-          token: res.token,
+          token,
           scopes: res.scopes ?? params.scopes ?? [],
         });
       }
-      window.prompt("New device token (copy and store securely):", res.token);
     }
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
+    await loadDevices(state);
+    return token;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesError = String(err);
     }
+    return null;
   }
 }
 

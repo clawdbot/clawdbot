@@ -24,6 +24,7 @@ type GitUpdateStatus = {
   tag: string | null;
   branch: string | null;
   upstream: string | null;
+  upstreamSource?: "tracking" | "receipt";
   upstreamSha?: string | null;
   commitAtMs?: number | null;
   dirty: boolean | null;
@@ -228,6 +229,7 @@ async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
   fetch?: boolean;
+  upstreamFallback?: { currentSha: string; upstreamRef: string };
 }): Promise<GitUpdateStatus> {
   const timeoutMs = params.timeoutMs ?? 6000;
   const root = path.resolve(params.root);
@@ -281,7 +283,21 @@ async function checkGitUpdateStatus(params: {
 
   const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
 
-  const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
+  const trackingUpstream =
+    upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
+  const receiptUpstream =
+    !trackingUpstream &&
+    branch === "HEAD" &&
+    sha &&
+    params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
+      ? params.upstreamFallback.upstreamRef.trim() || null
+      : null;
+  const upstream = trackingUpstream ?? receiptUpstream;
+  const upstreamSource = trackingUpstream
+    ? ("tracking" as const)
+    : receiptUpstream
+      ? ("receipt" as const)
+      : undefined;
 
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
@@ -293,13 +309,14 @@ async function checkGitUpdateStatus(params: {
 
   const canCompareUpstream = !params.fetch || fetchOk === true;
 
-  // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
-  // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
-  // still counts disconnected or truncated histories, so require a visible common ancestor.
+  // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
+  // a matching successful update receipt keeps intentional detached installs comparable.
+  const upstreamRevision =
+    upstreamSource === "tracking" ? "@{upstream}^{commit}" : `${upstream}^{commit}`;
   const upstreamCommitRes =
     canCompareUpstream && upstream && sha
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
+          ["git", "-C", root, "rev-parse", "--verify", upstreamRevision],
           { timeoutMs },
         ).catch(() => null)
       : null;
@@ -339,6 +356,7 @@ async function checkGitUpdateStatus(params: {
     tag,
     branch,
     upstream,
+    ...(upstreamSource ? { upstreamSource } : {}),
     upstreamSha: upstreamCommit,
     commitAtMs,
     dirty,
@@ -590,6 +608,7 @@ export async function checkUpdateStatus(params: {
   root: string | null;
   timeoutMs?: number;
   fetchGit?: boolean;
+  gitUpstreamFallback?: { currentSha: string; upstreamRef: string };
   includeRegistry?: boolean;
   registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (
@@ -639,6 +658,7 @@ export async function checkUpdateStatus(params: {
           root,
           timeoutMs,
           fetch: Boolean(params.fetchGit),
+          upstreamFallback: params.gitUpstreamFallback,
         })
       : Promise.resolve(undefined),
     checkDepsStatus({ root, manager: packageManager }),

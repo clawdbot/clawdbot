@@ -562,18 +562,16 @@ Keep Claude as the default agent and add a named Codex agent:
     defaults: {
       model: "anthropic/claude-opus-4-6",
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         model: "anthropic/claude-opus-4-6",
       },
-      {
-        id: "codex",
+      codex: {
         name: "Codex",
         model: "openai/gpt-5.6-sol",
       },
-    ],
+    },
   },
 }
 ```

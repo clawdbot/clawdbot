@@ -11,7 +11,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../src/config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../../src/config/sessions/session-accessor.sqlite.js";
+import { replaceSqliteTranscriptEvents } from "../../src/config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../src/config/sessions/session-sqlite-target.js";
 import {
   connectGatewayClient,

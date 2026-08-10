@@ -11,6 +11,7 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -416,6 +417,30 @@ class DevicesPage extends OpenClawLightDomElement {
     );
   }
 
+  // The rotate response carries the only copy of the new credential, so the reveal is
+  // deliberately outside pendingConfirmation: a reconnect aborts pending confirmations,
+  // and aborting this one would destroy a secret the Gateway cannot reissue.
+  private async revealRotatedToken(deviceId: string, role: string, scopes?: string[]) {
+    const token = await this.runPageTask((pageState) =>
+      rotateDeviceToken(pageState, {
+        deviceId,
+        gatewayUrl: this.context.gateway.connection.gatewayUrl,
+        role,
+        scopes,
+      }),
+    );
+    if (!token) {
+      return;
+    }
+    await showSecretRevealDialog({
+      title: t("devices.inventory.rotatePromptTitle", { role }),
+      message: t("devices.inventory.rotatePromptBody"),
+      secret: token,
+      acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
+      dismissHint: t("devices.inventory.rotateDismissHint"),
+    });
+  }
+
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
     return this.execApprovalsTarget === "node" && this.execApprovalsTargetNodeId
       ? { kind: "node", nodeId: this.execApprovalsTargetNodeId }
@@ -478,14 +503,7 @@ class DevicesPage extends OpenClawLightDomElement {
             }
           },
           onDeviceRotate: (deviceId, role, scopes) =>
-            void this.runPageTask((pageState) =>
-              rotateDeviceToken(pageState, {
-                deviceId,
-                gatewayUrl: this.context.gateway.connection.gatewayUrl,
-                role,
-                scopes,
-              }),
-            ),
+            void this.revealRotatedToken(deviceId, role, scopes),
           onDeviceRevoke: (deviceId, role) => void this.confirmTokenRevoke(deviceId, role),
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),

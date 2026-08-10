@@ -14,7 +14,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
-import type { CliOutput } from "./cli-output.js";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import { FailoverError } from "./failover-error.js";

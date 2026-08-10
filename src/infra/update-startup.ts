@@ -36,7 +36,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import { readUpdateInstallReceipt, type RestartSentinelPayload } from "./restart-sentinel.js";
+import {
+  readSuccessfulGitUpdateReceipt,
+  type SuccessfulGitUpdateReceipt,
+} from "./restart-sentinel.js";
 import {
   resolveGatewayRestartDeferralTimeoutMs,
   scheduleGatewaySigusr1Restart,
@@ -45,6 +48,7 @@ import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-ma
 import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-campaign.js";
 import {
   channelToNpmTag,
+  DEV_BRANCH,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
   DEFAULT_PACKAGE_CHANNEL,
@@ -57,6 +61,11 @@ import {
   type UpdateCheckResult,
 } from "./update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
+import {
+  applyDevUpdateTargetEnv,
+  devUpdateTargetFromGitCampaign,
+  type TrackedDevUpdateTarget,
+} from "./update-dev-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
@@ -93,14 +102,16 @@ type AutoUpdateRunResult = {
   logPath?: string;
 };
 
-type AutoUpdateRunner = (params: {
+type AutoUpdateRunParams = {
   channel: "stable" | "beta" | "dev";
   timeoutMs: number;
   restartDrainTimeoutMs: number | undefined;
   root?: string;
   packageTargetVersion?: string;
-  devTargetSha?: string;
-}) => Promise<AutoUpdateRunResult>;
+  devTarget?: TrackedDevUpdateTarget;
+};
+
+type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
 
 export type {
   UpdateAvailable,
@@ -419,15 +430,9 @@ function resolveManagedAutoUpdateRestartDelayMs(supervisor: RespawnSupervisor): 
   return supervisor === "systemd" ? MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS : 0;
 }
 
-async function startManagedServiceAutoUpdateHandoff(params: {
-  channel: "stable" | "beta" | "dev";
-  timeoutMs: number;
-  restartDrainTimeoutMs: number | undefined;
-  root?: string;
-  packageTargetVersion?: string;
-  devTargetSha?: string;
-  supervisor: RespawnSupervisor;
-}): Promise<AutoUpdateRunResult> {
+async function startManagedServiceAutoUpdateHandoff(
+  params: AutoUpdateRunParams & { supervisor: RespawnSupervisor },
+): Promise<AutoUpdateRunResult> {
   const restartDelayMs = resolveManagedAutoUpdateRestartDelayMs(params.supervisor);
   const handoffId = randomUUID();
   try {
@@ -443,14 +448,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
       restartDelayMs,
       supervisor: params.supervisor,
       handoffId,
-      ...(params.devTargetSha
-        ? {
-            env: {
-              ...process.env,
-              OPENCLAW_UPDATE_DEV_TARGET_REF: params.devTargetSha,
-            },
-          }
-        : {}),
+      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
       meta: {
         handoffId,
         note: "background auto-update",
@@ -482,14 +480,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
   }
 }
 
-async function runAutoUpdateCommand(params: {
-  channel: "stable" | "beta" | "dev";
-  timeoutMs: number;
-  restartDrainTimeoutMs: number | undefined;
-  root?: string;
-  packageTargetVersion?: string;
-  devTargetSha?: string;
-}): Promise<AutoUpdateRunResult> {
+async function runAutoUpdateCommand(params: AutoUpdateRunParams): Promise<AutoUpdateRunResult> {
   if (isGatewayExternallySupervised()) {
     return {
       ok: false,
@@ -507,7 +498,7 @@ async function runAutoUpdateCommand(params: {
       restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       root: params.root,
       ...(params.packageTargetVersion ? { packageTargetVersion: params.packageTargetVersion } : {}),
-      ...(params.devTargetSha ? { devTargetSha: params.devTargetSha } : {}),
+      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
       supervisor,
     });
   }
@@ -555,9 +546,7 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
-      ...(params.devTargetSha
-        ? { env: { OPENCLAW_UPDATE_DEV_TARGET_REF: params.devTargetSha } }
-        : {}),
+      ...(params.devTarget ? { env: applyDevUpdateTargetEnv({}, params.devTarget) } : {}),
     });
     return {
       ok: res.code === 0,
@@ -582,21 +571,26 @@ function clearAutoState(nextState: UpdateCheckState): void {
 }
 
 async function resolveStartupInstallStatus(fetchGit: boolean) {
-  const resolvedRoot = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
-  const [status, installReceipt] = await Promise.all([
-    checkUpdateStatus({
-      root: resolvedRoot,
-      timeoutMs: 2500,
-      fetchGit,
-      includeRegistry: false,
+  const [root, installReceipt] = await Promise.all([
+    resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
     }),
-    readUpdateInstallReceipt(),
+    readSuccessfulGitUpdateReceipt(),
   ]);
-  return { root: resolvedRoot, status, installReceipt };
+  const gitUpstreamFallback =
+    installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
+      ? { currentSha: installReceipt.sha, upstreamRef: installReceipt.upstreamRef }
+      : undefined;
+  const status = await checkUpdateStatus({
+    root,
+    timeoutMs: 2500,
+    fetchGit,
+    includeRegistry: false,
+    ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
+  });
+  return { root, status, installReceipt };
 }
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
@@ -613,27 +607,21 @@ function gitCommitsMatch(left: string, right: string): boolean {
 
 function resolveGitInstalledAtMs(
   git: NonNullable<UpdateCheckResult["git"]>,
-  installReceipt: RestartSentinelPayload | null,
+  installReceipt: SuccessfulGitUpdateReceipt | null,
   root: string | null,
 ): number | undefined {
-  const receiptSha = installReceipt?.stats?.after?.sha;
-  const receiptRoot = installReceipt?.stats?.root;
-  return installReceipt?.kind === "update" &&
-    installReceipt.status === "ok" &&
-    installReceipt.stats?.mode === "git" &&
-    typeof receiptSha === "string" &&
-    typeof receiptRoot === "string" &&
+  return installReceipt &&
     root !== null &&
-    updateInstallRootsMatch(root, receiptRoot) &&
+    updateInstallRootsMatch(root, installReceipt.root) &&
     git.sha &&
-    gitCommitsMatch(receiptSha, git.sha)
-    ? installReceipt.ts
+    gitCommitsMatch(installReceipt.sha, git.sha)
+    ? installReceipt.installedAtMs
     : undefined;
 }
 
 function resolveGitScheduleStatus(
   update: UpdateCheckResult,
-  installReceipt: RestartSentinelPayload | null,
+  installReceipt: SuccessfulGitUpdateReceipt | null,
   root: string | null,
 ): GitScheduleStatus | undefined {
   if (update.installKind !== "git") {
@@ -684,7 +672,7 @@ function withInstallStatus(
   schedule: UpdateScheduleState,
   update: UpdateCheckResult,
   includeGitStatus: boolean,
-  installReceipt: RestartSentinelPayload | null,
+  installReceipt: SuccessfulGitUpdateReceipt | null,
   root: string | null,
 ): UpdateScheduleState {
   const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;
@@ -756,19 +744,18 @@ async function resolveDevGitCommits(params: {
 }
 
 async function runCampaignUpdate(params: {
-  identity: string;
   channel: "stable" | "beta" | "dev";
   version: string;
   tag: string;
   forced: boolean;
   root?: string;
-  devTargetSha?: string;
+  devTarget?: TrackedDevUpdateTarget;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   runAuto: AutoUpdateRunner;
 }): Promise<"handoff" | "applied" | "failed"> {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = await readState();
-  attemptState.autoLastAttemptVersion = params.identity;
+  attemptState.autoLastAttemptVersion = params.version;
   attemptState.autoLastAttemptAt = resolveUpdateCheckTimestamp(attemptAt);
   await writeState(attemptState);
 
@@ -778,7 +765,7 @@ async function runCampaignUpdate(params: {
     restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
     ...(params.root ? { root: params.root } : {}),
     ...(params.channel === "dev" ? {} : { packageTargetVersion: params.version }),
-    ...(params.devTargetSha ? { devTargetSha: params.devTargetSha } : {}),
+    ...(params.devTarget ? { devTarget: params.devTarget } : {}),
   });
   if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
     params.log.info("auto-update handoff started", {
@@ -793,7 +780,7 @@ async function runCampaignUpdate(params: {
   }
   if (outcome.ok) {
     const successState = await readState();
-    successState.autoLastSuccessVersion = params.identity;
+    successState.autoLastSuccessVersion = params.version;
     successState.autoLastSuccessAt = resolveUpdateCheckTimestamp(Date.now());
     await writeState(successState);
     params.log.info("auto-update applied", {
@@ -823,14 +810,7 @@ export async function runGatewayUpdateCheck(params: {
   onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
   updateCampaign?: UpdateCampaignController;
-  runAutoUpdate?: (params: {
-    channel: "stable" | "beta" | "dev";
-    timeoutMs: number;
-    restartDrainTimeoutMs: number | undefined;
-    root?: string;
-    packageTargetVersion?: string;
-    devTargetSha?: string;
-  }) => Promise<AutoUpdateRunResult>;
+  runAutoUpdate?: AutoUpdateRunner;
 }): Promise<void> {
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
     return;
@@ -1144,7 +1124,11 @@ export async function runGatewayUpdateCheck(params: {
         reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
       });
     }
-    if (shouldRunAutoUpdate) {
+    const hasTrackedMain = git.branch === DEV_BRANCH && git.upstreamSource === "tracking";
+    const hasReceiptBackedDetachedHead = git.branch === "HEAD" && git.upstreamSource === "receipt";
+    const canRunTrackedDevCampaign =
+      (hasTrackedMain || hasReceiptBackedDetachedHead) && git.ahead === 0;
+    if (shouldRunAutoUpdate && canRunTrackedDevCampaign) {
       const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
       const recentAttempt =
         state.autoLastAttemptVersion === upstreamSha &&
@@ -1159,13 +1143,12 @@ export async function runGatewayUpdateCheck(params: {
           onChange: onCampaignChange,
           apply: async ({ forced }) =>
             await runCampaignUpdate({
-              identity: upstreamSha,
               channel: "dev",
               version: upstreamSha,
               tag: "dev",
               forced,
               root: root ?? status.root ?? undefined,
-              devTargetSha: target.upstreamSha,
+              devTarget: devUpdateTargetFromGitCampaign(target),
               log: params.log,
               runAuto,
             }),
@@ -1312,7 +1295,6 @@ export async function runGatewayUpdateCheck(params: {
           onChange: onCampaignChange,
           apply: async ({ forced }) =>
             await runCampaignUpdate({
-              identity: resolvedVersion,
               channel,
               version: resolvedVersion,
               tag,

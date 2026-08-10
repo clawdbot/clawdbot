@@ -80,9 +80,16 @@ suite.define(() => {
 
       const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.getByRole("button", { name: "More ways to start this task" }).count()).toBe(
-        0,
-      );
+      const moreActions = page.getByRole("button", { name: "More ways to start this task" });
+      expect(await moreActions.count()).toBe(1);
+      await moreActions.click();
+      await page
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+      expect(await page.getByText("Start locally", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Fix in this session", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Send to cloud", { exact: true }).count()).toBe(0);
+      await page.keyboard.press("Escape");
       await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })
@@ -208,7 +215,7 @@ suite.define(() => {
     }
   });
 
-  it("hides model-suggested follow-ups when only listing is advertised", async () => {
+  it("keeps copy available when only listing is advertised", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -222,9 +229,9 @@ suite.define(() => {
           suggestions: [
             {
               id: "task_list_only",
-              title: "Unavailable follow-up",
-              prompt: "This suggestion has no advertised action methods.",
-              tldr: "Listing alone must not expose an unusable chip.",
+              title: "Read-only follow-up",
+              prompt: "Copy this suggestion without mutating it.",
+              tldr: "Listing alone still exposes the client-local copy action.",
               cwd: "/projects/example",
               sessionKey: "main",
               agentId: "main",
@@ -253,8 +260,15 @@ suite.define(() => {
       await page
         .locator(".agent-chat__composer-shell")
         .waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.getByRole("button", { name: "Start with worktree" }).count()).toBe(0);
-      expect(await page.locator(".task-suggestion").count()).toBe(0);
+      const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await card.getByRole("button", { name: "Start with worktree" }).isDisabled()).toBe(
+        true,
+      );
+      await card.getByRole("button", { name: "More ways to start this task" }).click();
+      await card
+        .getByText("Copy prompt", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }

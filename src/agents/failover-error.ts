@@ -11,11 +11,9 @@ import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
   isUnclassifiedNoBodyHttpSignal,
-  type FailoverClassification,
-  type FailoverSignal,
-} from "./embedded-agent-helpers/errors.js";
-import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+  isTimeoutErrorMessage,
+} from "./failover/classify.js";
+import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;

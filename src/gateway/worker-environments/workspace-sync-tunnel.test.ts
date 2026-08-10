@@ -517,6 +517,11 @@ describe("worker tunnel manager", () => {
             entry.argv[0] === "rsync" && entry.argv.some((arg) => arg.startsWith("--files-from=")),
         );
         expect(transfers.map((entry) => rsyncArgvPort(entry.argv))).toEqual([2222, 22]);
+        const fileLists = transfers.map((entry) =>
+          entry.argv.find((arg) => arg.startsWith("--files-from="))!.slice(13),
+        );
+        expect(new Set(fileLists.map((file) => path.dirname(file))).size).toBe(1);
+        expect(fileLists.map((file) => path.basename(file))).toEqual(["attempt-0", "attempt-1"]);
         for (const transfer of transfers) {
           expect(transfer.argv).toContain("--delete-delay");
           expect(transfer.argv).not.toContain("--delete-excluded");

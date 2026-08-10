@@ -8,7 +8,7 @@ import {
   type WorkerLiveEventParams as Params,
   WorkerLiveEventParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {
@@ -328,6 +328,7 @@ describe("worker live events", () => {
         phase: "fallback_step",
         fallbackStepType: "fallback_step",
         fallbackStepFromModel: "openai/gpt-primary",
+        fallbackStepFromFailureReason: "tls_certificate",
         fallbackStepFinalOutcome: "next_fallback",
       }),
     ];
@@ -340,6 +341,9 @@ describe("worker live events", () => {
     expect(events[4]?.data).toMatchObject({
       name: "exec",
       result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
+    });
+    expect(events[8]?.data).toMatchObject({
+      fallbackStepFromFailureReason: "tls_certificate",
     });
     expect(JSON.stringify(events)).not.toContain(credential);
   });

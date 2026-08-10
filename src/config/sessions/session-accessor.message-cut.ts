@@ -4,7 +4,7 @@ import {
   resolveSessionTranscriptActiveLeafEntryId as resolveSqliteSessionTranscriptActiveLeafEntryId,
   rewindSqliteSessionToMessage,
   switchSqliteSessionBranch,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-message-cut.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
 import type {
   SessionBranchListParams,

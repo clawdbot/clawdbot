@@ -5,7 +5,7 @@ import type {
   RetryableCompactionFailureReason,
   TerminalCompactionFailureReason,
 } from "../../context-engine/types.js";
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../failover/signal.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 

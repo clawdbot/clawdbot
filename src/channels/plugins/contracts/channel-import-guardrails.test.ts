@@ -177,7 +177,6 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "synology-chat",
   "talk-voice",
   "telegram",
-  "thread-ownership",
   "tlon",
   "voice-call",
   "vllm",

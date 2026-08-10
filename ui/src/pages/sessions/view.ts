@@ -131,7 +131,6 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       category?: string | null;
-      icon?: string | null;
       archived?: boolean;
       pinned?: boolean;
       unread?: boolean;

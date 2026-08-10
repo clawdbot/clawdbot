@@ -24,6 +24,12 @@ import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 
+type RateLimitAuthProfileContext = {
+  failoverProvider: string;
+  failoverModel: string;
+  logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+};
+
 export function createEmbeddedRunFailoverRetryController(input: {
   runParams: PreparedEmbeddedRunInput["runParams"];
   provider: string;
@@ -37,6 +43,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   harnessOwnsTransport: () => boolean;
   getRuntimeAuthOwnerId: () => string;
   getApiKeyInfo: () => ResolvedProviderAuth | null;
+  advanceAuthProfile: PreparedRuntime["advanceAttemptAuthProfile"];
 }) {
   const {
     runParams: params,
@@ -68,10 +75,6 @@ export function createEmbeddedRunFailoverRetryController(input: {
 
   return {
     overloadProfileRotationLimit,
-    rateLimitProfileRotationLimit,
-    get rateLimitProfileRotations() {
-      return rateLimitProfileRotations;
-    },
     get consecutiveSameModelRateLimitRetries() {
       return consecutiveSameModelRateLimitRetries;
     },
@@ -81,37 +84,32 @@ export function createEmbeddedRunFailoverRetryController(input: {
         retriedSameModelRateLimit: false,
       });
     },
-    maybeEscalateRateLimitProfileFallback: (paramsLocal: {
-      failoverProvider: string;
-      failoverModel: string;
-      logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
-    }) => {
-      if (!fallbackConfigured) {
-        return;
+    advanceAuthProfile: input.advanceAuthProfile,
+    advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
+      if (rateLimitProfileRotations >= rateLimitProfileRotationLimit && fallbackConfigured) {
+        const status = resolveFailoverStatus("rate_limit");
+        log.warn(
+          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+        );
+        context.logFallbackDecision("fallback_model", { status });
+        throw new FailoverError(
+          "The AI service is temporarily rate-limited. Please try again in a moment.",
+          {
+            reason: "rate_limit",
+            provider: context.failoverProvider,
+            model: context.failoverModel,
+            profileId: input.getLastProfileId(),
+            sessionId: input.getSessionId(),
+            lane: globalLane,
+            status,
+          },
+        );
       }
-      if (rateLimitProfileRotations < rateLimitProfileRotationLimit) {
-        // This state gates same-model retries, so skipped rotations must not consume it;
-        // otherwise one rate-limit response can disable the remaining retry budget.
+      const rotated = await input.advanceAuthProfile();
+      if (rotated) {
         rateLimitProfileRotations += 1;
-        return;
       }
-      const status = resolveFailoverStatus("rate_limit");
-      log.warn(
-        `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
-      );
-      paramsLocal.logFallbackDecision("fallback_model", { status });
-      throw new FailoverError(
-        "The AI service is temporarily rate-limited. Please try again in a moment.",
-        {
-          reason: "rate_limit",
-          provider: paramsLocal.failoverProvider,
-          model: paramsLocal.failoverModel,
-          profileId: input.getLastProfileId(),
-          sessionId: input.getSessionId(),
-          lane: globalLane,
-          status,
-        },
-      );
+      return rotated;
     },
     maybeMarkAuthProfileFailure: async (failure: {
       profileId?: string;
@@ -195,7 +193,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
     maybeRetrySameModelRateLimit: async (retry?: {
       retryAfterSeconds?: number;
     }): Promise<boolean> => {
-      if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+      if (
+        rateLimitProfileRotations >= rateLimitProfileRotationLimit ||
+        consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES
+      ) {
         return false;
       }
       const delayMs = resolveSameModelRateLimitRetryDelayMs({

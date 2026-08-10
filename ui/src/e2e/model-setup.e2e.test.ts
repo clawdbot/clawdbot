@@ -119,7 +119,9 @@ suite.define(() => {
         await page.getByRole("button", { name: "Continue setup" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
-        await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
+        // Onboarding chrome keeps only the header actions; no identity heading.
+        await page.locator(".custodian__header--minimal").waitFor();
+        await page.getByRole("button", { name: "Exit setup" }).waitFor();
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--onboarding");

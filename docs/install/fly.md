@@ -146,12 +146,11 @@ read_when:
           },
           "maxConcurrent": 4
         },
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
             "default": true
           }
-        ]
+        }
       },
       "auth": {
         "profiles": {
