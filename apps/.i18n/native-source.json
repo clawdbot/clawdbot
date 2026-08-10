@@ -18659,7 +18659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 186,
+      "line": 188,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Install %@",
       "surface": "apple",
@@ -18667,7 +18667,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 194,
+      "line": 196,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Installed Skills",
       "surface": "apple",
@@ -18675,7 +18675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 200,
+      "line": 202,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "No skills found",
       "surface": "apple",
@@ -18683,7 +18683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 200,
+      "line": 202,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skills unavailable",
       "surface": "apple",
@@ -18691,7 +18691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 202,
+      "line": 204,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Try a different search or refresh from the gateway.",
       "surface": "apple",
@@ -18699,7 +18699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 203,
+      "line": 205,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Connect a gateway to load workspace skills.",
       "surface": "apple",
@@ -18707,7 +18707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 315,
+      "line": 317,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Setup: %@",
       "surface": "apple",
@@ -18715,7 +18715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 337,
+      "line": 339,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Set up %@",
       "surface": "apple",
@@ -18723,7 +18723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 349,
+      "line": 351,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Edit %@",
       "surface": "apple",
@@ -18731,7 +18731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 353,
+      "line": 355,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "saving",
       "surface": "apple",
@@ -18739,7 +18739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 418,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill unavailable",
       "surface": "apple",
@@ -18747,7 +18747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 418,
+      "line": 420,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Return to the skills list and choose another skill.",
       "surface": "apple",
@@ -18755,7 +18755,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 425,
+      "line": 427,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill",
       "surface": "apple",
@@ -18763,7 +18763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 460,
+      "line": 462,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Close",
       "surface": "apple",
@@ -18771,7 +18771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 480,
+      "line": 482,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Workspace skill",
       "surface": "apple",
@@ -18779,7 +18779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 495,
+      "line": 497,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Enabled globally",
       "surface": "apple",
@@ -18787,7 +18787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 505,
+      "line": 507,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "API key",
       "surface": "apple",
@@ -18795,7 +18795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 513,
+      "line": 515,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Save key",
       "surface": "apple",
@@ -18803,7 +18803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 520,
+      "line": 522,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Get key",
       "surface": "apple",
@@ -18811,7 +18811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 574,
+      "line": 576,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Off",
       "surface": "apple",
@@ -18819,7 +18819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 574,
+      "line": 576,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "On",
       "surface": "apple",
@@ -18827,7 +18827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 580,
+      "line": 582,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Setup",
       "surface": "apple",
@@ -18835,7 +18835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 584,
+      "line": 586,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Missing: %@",
       "surface": "apple",
@@ -18843,7 +18843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 589,
+      "line": 591,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "No missing requirements reported.",
       "surface": "apple",
@@ -18851,7 +18851,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 612,
+      "line": 614,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Key",
       "surface": "apple",
@@ -18859,7 +18859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 613,
+      "line": 615,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Source",
       "surface": "apple",
@@ -18867,7 +18867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 696,
+      "line": 698,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill policy reset.",
       "surface": "apple",
@@ -18875,7 +18875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 696,
+      "line": 698,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill policy saved.",
       "surface": "apple",
@@ -18883,7 +18883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 709,
+      "line": 711,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill disabled.",
       "surface": "apple",
@@ -18891,7 +18891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 709,
+      "line": 711,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill enabled.",
       "surface": "apple",
@@ -18899,7 +18899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 721,
+      "line": 723,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "API key cleared.",
       "surface": "apple",
@@ -18907,7 +18907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 722,
+      "line": 724,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "API key saved.",
       "surface": "apple",
@@ -18915,7 +18915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 877,
+      "line": 879,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "off",
       "surface": "apple",
@@ -18923,7 +18923,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 879,
+      "line": 881,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "blocked",
       "surface": "apple",
@@ -18931,7 +18931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 881,
+      "line": 883,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "disabled",
       "surface": "apple",
@@ -18939,7 +18939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 883,
+      "line": 885,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "setup",
       "surface": "apple",
@@ -18947,7 +18947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 885,
+      "line": 887,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "enabled",
       "surface": "apple",
@@ -30771,7 +30771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 138,
+      "line": 145,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Installed",
       "surface": "apple",
@@ -30779,7 +30779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 138,
+      "line": 145,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review",
       "surface": "apple",
@@ -30787,7 +30787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 153,
+      "line": 160,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review ClawHub skill",
       "surface": "apple",
@@ -30795,7 +30795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 155,
+      "line": 162,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "The Gateway will verify this exact release with ClawHub before download.",
       "surface": "apple",
@@ -30803,7 +30803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 161,
+      "line": 168,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Verify and install",
       "surface": "apple",
@@ -30811,7 +30811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 182,
+      "line": 189,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Gateway warning",
       "surface": "apple",
@@ -30819,7 +30819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 187,
+      "line": 194,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review warning details",
       "surface": "apple",
@@ -30827,7 +30827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 193,
+      "line": 200,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Expand and review the Gateway warning before acknowledging this exact version.",
       "surface": "apple",
@@ -30835,7 +30835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 198,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -30843,7 +30843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 199,
+      "line": 206,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Acknowledge and install",
       "surface": "apple",
@@ -30851,7 +30851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 218,
+      "line": 225,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Version",
       "surface": "apple",
@@ -30859,7 +30859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 219,
+      "line": 226,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Publisher",
       "surface": "apple",
