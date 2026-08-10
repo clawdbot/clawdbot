@@ -7,19 +7,18 @@ import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-con
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
-import { parseGitHubItemPath, type GitHubItemTarget } from "./github-link-target.ts";
+import {
+  GITHUB_HOVERCARD_OPEN_DELAY_MS,
+  githubLinkAnchorFromEvent,
+  parseGitHubLinkTarget,
+  type GitHubLinkTarget,
+} from "./github-link-target.ts";
 
-const GITHUB_HOST = "github.com";
-const OPEN_DELAY_MS = 250;
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
 const VIEWPORT_PADDING = 12;
 const CARD_GAP = 10;
-
-type GitHubLinkTarget = GitHubItemTarget & {
-  href: string;
-};
 
 type GitHubPreview = GitHubLinkTarget & ControlUiGitHubPreview;
 
@@ -41,27 +40,6 @@ function requiredString(record: Record<string, unknown>, key: string): string {
     throw new Error(`GitHub response omitted ${key}`);
   }
   return value;
-}
-
-function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
-  let url: URL;
-  try {
-    url = new URL(href, globalThis.location?.href ?? "http://localhost/");
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== GITHUB_HOST) {
-    return null;
-  }
-  if (url.username || url.password || (url.port && url.port !== "443")) {
-    return null;
-  }
-  const target = parseGitHubItemPath(url);
-  return target ? { ...target, href: url.href } : null;
-}
-
-export function isGitHubPullRequestLink(href: string): boolean {
-  return parseGitHubIssueOrPullRequestLink(href)?.kind === "pull";
 }
 
 function safeAvatarDataUrl(value: unknown): string | undefined {
@@ -250,18 +228,6 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
   );
 }
 
-function anchorFromEvent(event: Event): HTMLAnchorElement | null {
-  for (const candidate of event.composedPath()) {
-    if (candidate instanceof HTMLAnchorElement) {
-      return candidate;
-    }
-    if (candidate === event.currentTarget) {
-      break;
-    }
-  }
-  return null;
-}
-
 export class GitHubLinkHovercardProvider extends ReactiveElement {
   client: GatewayBrowserClient | null = null;
 
@@ -357,17 +323,16 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (pointer.pointerType === "touch") {
       return;
     }
-    const anchor = anchorFromEvent(event);
-    const target = anchor ? parseGitHubIssueOrPullRequestLink(anchor.href) : null;
+    const anchor = githubLinkAnchorFromEvent(event);
+    const target = anchor ? parseGitHubLinkTarget(anchor.href) : null;
     if (!anchor || !target) {
       return;
     }
-    this.activate(anchor, target, OPEN_DELAY_MS);
-    this.pointerInside = true;
+    this.activateFromBootstrap(anchor, target, "pointer", GITHUB_HOVERCARD_OPEN_DELAY_MS);
   };
 
   private readonly handlePointerOut = (event: PointerEvent) => {
-    const anchor = anchorFromEvent(event);
+    const anchor = githubLinkAnchorFromEvent(event);
     if (!anchor || anchor !== this.activeAnchor) {
       return;
     }
@@ -381,13 +346,12 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleFocusIn = (event: Event) => {
-    const anchor = anchorFromEvent(event);
-    const target = anchor ? parseGitHubIssueOrPullRequestLink(anchor.href) : null;
+    const anchor = githubLinkAnchorFromEvent(event);
+    const target = anchor ? parseGitHubLinkTarget(anchor.href) : null;
     if (!anchor || !target) {
       return;
     }
-    this.activate(anchor, target, 0);
-    this.focusInside = true;
+    this.activateFromBootstrap(anchor, target, "focus", 0);
   };
 
   private readonly handleFocusOut = (event: FocusEvent) => {
@@ -412,6 +376,20 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private readonly handleClick = () => {
     this.close();
   };
+
+  activateFromBootstrap(
+    anchor: HTMLAnchorElement,
+    target: GitHubLinkTarget,
+    trigger: "focus" | "pointer",
+    delay: number,
+  ): void {
+    this.activate(anchor, target, delay);
+    if (trigger === "pointer") {
+      this.pointerInside = true;
+    } else {
+      this.focusInside = true;
+    }
+  }
 
   private activate(anchor: HTMLAnchorElement, target: GitHubLinkTarget, delay: number): void {
     if (anchor === this.activeAnchor && this.activeTarget?.href === target.href) {
