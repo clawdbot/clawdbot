@@ -7,7 +7,11 @@ import {
 function prepare(schemaVersion: "openclaw.clawInstallRecord.v1" | "openclaw.clawInstallRecord.v2") {
   const tools = { profile: schemaVersion.endsWith(".v2") ? "full" : "coding", allow: ["read"] };
   const readSchemaVersions = vi.fn(
-    () => new Map([["worker", { kind: "ok" as const, schemaVersion }]]),
+    () =>
+      ({
+        kind: "ready",
+        schemaVersions: new Map([["worker", { kind: "ok" as const, schemaVersion }]]),
+      }) as const,
   );
   prepareClawToolPolicyConsent(
     { agents: { list: [{ id: "worker", tools }] } },
@@ -75,13 +79,16 @@ describe("resolveClawToolPolicyConsent", () => {
       },
       {
         readSchemaVersions: () =>
-          new Map([
-            [
-              "valid",
-              { kind: "ok" as const, schemaVersion: "openclaw.clawInstallRecord.v2" as const },
-            ],
-            ["invalid", { kind: "error" as const, error: invalidError }],
-          ]),
+          ({
+            kind: "ready",
+            schemaVersions: new Map([
+              [
+                "valid",
+                { kind: "ok" as const, schemaVersion: "openclaw.clawInstallRecord.v2" as const },
+              ],
+              ["invalid", { kind: "error" as const, error: invalidError }],
+            ]),
+          }) as const,
       },
     );
 

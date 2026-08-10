@@ -22,6 +22,10 @@ import {
   selectClawBootstrapProvenanceColumns,
 } from "./provenance-bootstrap.js";
 import { legacySafeColumnProjection } from "./provenance-legacy-columns.js";
+import {
+  cacheClawInstallSchemaVersion,
+  deleteCachedClawInstallSchemaVersion,
+} from "./provenance-runtime-read.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
 export {
@@ -186,7 +190,7 @@ export function persistClawInstallRecord(
   const agentConfigDigest = digestAgentConfig(plan);
   const ownedPaths = agentOwnedPaths(plan);
   const bootstrap = bootstrapProvenance(plan);
-  return runOpenClawStateWriteTransaction(({ db }) => {
+  const persistedRecord = runOpenClawStateWriteTransaction(({ db }) => {
     const existing = selectClawInstallRow(db, plan.agent.finalId);
     if (existing) {
       const record = rowToRecord(existing);
@@ -259,6 +263,8 @@ export function persistClawInstallRecord(
       updatedAtMs: nowMs,
     };
   }, options);
+  cacheClawInstallSchemaVersion(plan.agent.finalId, persistedRecord.schemaVersion, options);
+  return persistedRecord;
 }
 
 export function updateClawInstallRecordStatus(
@@ -311,6 +317,7 @@ export function deleteClawInstallRecord(
       );
     }
   }, options);
+  deleteCachedClawInstallSchemaVersion(agentId, options);
 }
 
 export function readClawInstallRecords(
@@ -410,7 +417,7 @@ export function updateClawInstallRecord(
       );
     }
   }, options);
-  return {
+  const record = {
     schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
     claw: plan.claw,
     manifestSchemaVersion: plan.manifestSchemaVersion,
@@ -424,6 +431,8 @@ export function updateClawInstallRecord(
     addedAtMs: current.addedAtMs,
     updatedAtMs,
   };
+  cacheClawInstallSchemaVersion(plan.agent.finalId, record.schemaVersion, options);
+  return record;
 }
 
 export function persistClawPackageRef(

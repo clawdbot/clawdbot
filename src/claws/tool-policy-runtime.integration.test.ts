@@ -13,6 +13,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import {
+  closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -57,6 +58,7 @@ describe("Claw tool policy consent provenance", () => {
         list: [{ id: "worker", tools: { profile: "full" as const, allow: ["read"] } }],
       },
     };
+    expect(() => openOpenClawStateDatabase({ env })).toThrow();
     setRuntimeConfigSnapshot(config);
 
     expect(() =>
@@ -161,6 +163,8 @@ describe("Claw tool policy consent provenance", () => {
       .db /* sqlite-allow-raw: test-only corruption verifies per-agent failure isolation. */
       .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
       .run("openclaw.clawInstallRecord.unsupported", "invalid");
+    closeOpenClawStateDatabase();
+    openOpenClawStateDatabase({ env });
 
     const config = { agents: { list: [validPlan.agent.config, invalidPlan.agent.config] } };
     setRuntimeConfigSnapshot(config);

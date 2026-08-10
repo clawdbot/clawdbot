@@ -2,7 +2,10 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { registerRuntimeConfigSnapshotPreparer } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { readExistingClawInstallSchemaVersionsSync } from "./provenance-runtime-read.js";
+import {
+  readCachedClawInstallSchemaVersions,
+  registerClawInstallSchemaVersionSnapshotListener,
+} from "./provenance-runtime-read.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 
 const frozenToolAllowPolicies = new WeakSet<object>();
@@ -11,6 +14,10 @@ type PreparedClawToolPolicy =
   | { kind: "legacy" }
   | { kind: "state-error"; error: unknown };
 const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
+type ClawToolPolicyCandidate = { agentId: string; tools: object };
+let preparedCandidates: ClawToolPolicyCandidate[] = [];
+let preparedStateOptions: OpenClawStateDatabaseOptions = {};
+let readPreparedSchemaVersions = readCachedClawInstallSchemaVersions;
 
 export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
   if (policy) {
@@ -22,32 +29,21 @@ export function isFrozenClawToolAllowPolicy(policy: object | undefined): boolean
   return policy ? frozenToolAllowPolicies.has(policy) : false;
 }
 
-export function prepareClawToolPolicyConsent(
-  config: OpenClawConfig,
-  options: OpenClawStateDatabaseOptions & {
-    readSchemaVersions?: typeof readExistingClawInstallSchemaVersionsSync;
-  } = {},
-): void {
-  const candidates = listAgentEntries(config).flatMap((agent) => {
-    const tools = agent.tools;
-    return tools && (tools.profile || tools.allow?.length) ? [{ agentId: agent.id, tools }] : [];
-  });
-  if (candidates.length === 0) {
-    return;
-  }
-  let schemaVersions;
-  try {
-    schemaVersions = (options.readSchemaVersions ?? readExistingClawInstallSchemaVersionsSync)(
-      options,
-    );
-  } catch (error) {
-    for (const candidate of candidates) {
-      preparedClawToolPolicies.set(candidate.tools, { kind: "state-error", error });
+function applyPreparedClawToolPolicyConsent(): void {
+  const snapshot = readPreparedSchemaVersions(preparedStateOptions);
+  for (const candidate of preparedCandidates) {
+    if (snapshot.kind === "uninitialized") {
+      preparedClawToolPolicies.delete(candidate.tools);
+      continue;
     }
-    return;
-  }
-  for (const candidate of candidates) {
-    const schemaVersionRead = schemaVersions.get(candidate.agentId);
+    if (snapshot.kind === "state-error") {
+      preparedClawToolPolicies.set(candidate.tools, {
+        kind: "state-error",
+        error: snapshot.error,
+      });
+      continue;
+    }
+    const schemaVersionRead = snapshot.schemaVersions.get(candidate.agentId);
     if (!schemaVersionRead) {
       preparedClawToolPolicies.delete(candidate.tools);
       continue;
@@ -68,6 +64,26 @@ export function prepareClawToolPolicyConsent(
   }
 }
 
+export function prepareClawToolPolicyConsent(
+  config: OpenClawConfig,
+  options: OpenClawStateDatabaseOptions & {
+    readSchemaVersions?: typeof readCachedClawInstallSchemaVersions;
+  } = {},
+): void {
+  for (const candidate of preparedCandidates) {
+    preparedClawToolPolicies.delete(candidate.tools);
+  }
+  preparedCandidates = listAgentEntries(config).flatMap((agent) => {
+    const tools = agent.tools;
+    return tools && (tools.profile || tools.allow?.length) ? [{ agentId: agent.id, tools }] : [];
+  });
+  const { readSchemaVersions, ...stateOptions } = options;
+  preparedStateOptions = stateOptions;
+  readPreparedSchemaVersions = readSchemaVersions ?? readCachedClawInstallSchemaVersions;
+  applyPreparedClawToolPolicyConsent();
+}
+
+registerClawInstallSchemaVersionSnapshotListener(() => applyPreparedClawToolPolicyConsent());
 registerRuntimeConfigSnapshotPreparer((config) => prepareClawToolPolicyConsent(config));
 
 class ClawToolProfileConsentError extends Error {
