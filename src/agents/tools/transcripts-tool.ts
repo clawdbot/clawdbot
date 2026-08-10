@@ -98,15 +98,16 @@ function ownsTranscriptSession(
     if (ownerAgentId !== ctx.agentId) {
       return false;
     }
-    if (providerUsesAccountOwnership && !sourceAccountId) {
-      // An account-bound legacy row without an account has no channel claim to verify.
-      // Keep recovery local to its recorded agent instead of trusting another surface.
-      return !channel;
-    }
-    if (channel && accountBindingChannels.includes(channel)) {
-      // Shipped rows can still prove same-channel ownership from their persisted
-      // source account while other surfaces retain the existing agent boundary.
-      return Boolean(sourceAccountId && ctx.agentAccountId?.trim() === sourceAccountId);
+    if (providerUsesAccountOwnership) {
+      if (!channel) {
+        return true;
+      }
+      // A binding provider's historical account can authorize only its own channel.
+      // Other remote surfaces must wait for Doctor to persist complete ownership.
+      return (
+        accountBindingChannels.includes(channel) &&
+        Boolean(sourceAccountId && ctx.agentAccountId?.trim() === sourceAccountId)
+      );
     }
     return true;
   }

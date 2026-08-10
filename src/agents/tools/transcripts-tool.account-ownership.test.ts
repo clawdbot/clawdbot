@@ -481,7 +481,7 @@ describe("transcripts tool account ownership", () => {
       ),
     ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
 
-    for (const tool of [discordTool, webchatTool, localMainTool]) {
+    for (const tool of [discordTool, localMainTool]) {
       await expect(
         tool.execute(
           "call-main-owned-legacy",
@@ -491,6 +491,14 @@ describe("transcripts tool account ownership", () => {
         ),
       ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
     }
+    await expect(
+      webchatTool.execute(
+        "call-main-owned-other-channel",
+        { action: "summarize", sessionId: "beta-agent-only" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: beta-agent-only");
     await expect(
       createTool(stateDir, "main", { channel: "discord", accountId: "account-b" }).execute(
         "call-main-owned-wrong-account",
@@ -502,7 +510,6 @@ describe("transcripts tool account ownership", () => {
 
     const researchTools = [
       createTool(stateDir, "research", { channel: "discord", accountId: "account-a" }),
-      createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }),
       createTool(stateDir, "research"),
     ];
     for (const tool of researchTools) {
@@ -515,6 +522,14 @@ describe("transcripts tool account ownership", () => {
         ),
       ).resolves.toMatchObject({ details: { sessionId: "beta-named-agent" } });
     }
+    await expect(
+      createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }).execute(
+        "call-named-agent-other-channel",
+        { action: "summarize", sessionId: "beta-named-agent" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: beta-named-agent");
     await expect(
       localMainTool.execute(
         "call-named-agent-boundary",
