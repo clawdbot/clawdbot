@@ -211,7 +211,7 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
   });
 
-  it("rejects an empty final answer before transcript mutation", async () => {
+  it("returns an empty completed final answer for lifecycle classification", async () => {
     mocks.runBounded.mockResolvedValue({ text: " ", items: [], model: "gpt-5.4" });
 
     await expect(
@@ -219,7 +219,7 @@ describe("runCodexSettledTurnFinalization", () => {
         { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
         {},
       ),
-    ).rejects.toThrow("completed without a visible answer");
+    ).resolves.toMatchObject({ assistant: { content: [{ type: "text", text: "" }] } });
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 

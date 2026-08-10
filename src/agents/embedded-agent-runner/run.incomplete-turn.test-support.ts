@@ -426,7 +426,7 @@ export async function runIncompleteTurnOwnerHarness(params: OwnerHarnessParams) 
       attemptAuthProfileStore: { version: 1, profiles: {} },
       apiKeyInfo: null,
       agentHarnessId: selectedHarness.id,
-      settledTurnFinalizationAttempted: finalized.finalizationAttempted,
+      settledTurnFinalizationOutcome: finalized.finalizationOutcome,
       pluginHarnessOwnsTransport: false,
       pluginHarnessOwnsAuthBootstrap: false,
       reportedModelRef: prepared.reportedModelRef,
