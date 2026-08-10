@@ -612,13 +612,16 @@ describe("createVerifiedSqliteSnapshot", () => {
         linked = true;
       }
     });
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const [filePath] = args;
+    // Forward only the path, not lstat options: passing bigint options through
+    // changes which publication-identity call the injected EIO lands on, and on
+    // Windows that surfaces "publication source identity did not match" instead
+    // of the inspection failure under test (broke checks-windows-node-test).
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
       if (linked && !failedInspection && path.resolve(String(filePath)) === targetPath) {
         failedInspection = true;
         throw Object.assign(new Error("target inspection failed"), { code: "EIO" });
       }
-      return await originalLstat(...args);
+      return await originalLstat(filePath);
     });
 
     await expectSnapshotFailureWithoutTarget(
