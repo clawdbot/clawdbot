@@ -86,11 +86,6 @@ export class AgentSelect extends OpenClawLightDomElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
-    // Cached blobs and failures belong to the credential that fetched them;
-    // a rotated token must refetch with the current authorization.
-    if (changed.has("authToken")) {
-      this.avatarLoader.reset();
-    }
     if (changed.has("disabled") && this.disabled) {
       const dropdown = this.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
       if (dropdown) {
@@ -153,6 +148,10 @@ export class AgentSelect extends OpenClawLightDomElement {
   };
 
   override render() {
+    return this.avatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
     const selectedOption = this.options.find((option) => option.value === this.value);
     const missingValueOption: AgentSelectOption | null =
       !selectedOption && this.value

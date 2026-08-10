@@ -40,7 +40,7 @@ it("shares pending fetches and revokes the resolved blob on reset", async () => 
   expect(loader.resolve("/avatar/main", "token")).toBe("blob:assistant-avatar");
 
   loader.reset();
-  expect(revokeObjectURL).toHaveBeenCalledWith("blob:assistant-avatar");
+  await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:assistant-avatar"));
 });
 
 it("leaves misses retryable for a later identity update", async () => {
@@ -68,4 +68,50 @@ it("leaves misses retryable for a later identity update", async () => {
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(loader.resolve("/avatar/main", "token")).toBe("blob:retried-avatar");
   loader.reset();
+});
+
+it("releases resolved and pending routes that leave the active render", async () => {
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:first-avatar");
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  const pending: Array<{
+    resolve: (response: Response) => void;
+    signal: AbortSignal;
+  }> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing avatar fetch signal");
+      }
+      return new Promise<Response>((resolve, reject) => {
+        pending.push({ resolve, signal });
+        signal.addEventListener("abort", () => reject(new Error("avatar fetch aborted")), {
+          once: true,
+        });
+      });
+    }) as unknown as typeof fetch,
+  );
+  const onUpdate = vi.fn();
+  const loader = new AuthenticatedAvatarRouteLoader(onUpdate);
+
+  expect(loader.withActiveRoutes(() => loader.resolve("/avatar/first", "token"))).toBeNull();
+  pending[0]?.resolve({ ok: true, blob: async () => new Blob(["avatar"]) } as Response);
+  await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+  expect(loader.withActiveRoutes(() => loader.resolve("/avatar/first", "token"))).toBe(
+    "blob:first-avatar",
+  );
+
+  expect(loader.withActiveRoutes(() => loader.resolve("/avatar/second", "token"))).toBeNull();
+  await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:first-avatar"));
+  expect(pending[0]?.signal.aborted).toBe(true);
+
+  loader.withActiveRoutes(() => null);
+  await vi.waitFor(() => expect(pending[1]?.signal.aborted).toBe(true));
 });

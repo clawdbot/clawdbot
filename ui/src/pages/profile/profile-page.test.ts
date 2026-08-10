@@ -366,7 +366,7 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   });
 
   page.remove();
-  expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar");
+  await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar"));
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {

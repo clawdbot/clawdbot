@@ -102,7 +102,6 @@ export class ProfilePage extends OpenClawLightDomElement {
       password: this.context.gateway.connection.password,
     });
     if (nextHeroAvatarAuthToken !== this.heroAvatarAuthToken) {
-      this.heroAvatarLoader.reset();
       this.heroAvatarAuthToken = nextHeroAvatarAuthToken;
     }
     this.heroAvatarAuthReady = Boolean(
@@ -414,6 +413,10 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   override render() {
+    return this.heroAvatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
     return html`
       <section class="content-header">
         <div>

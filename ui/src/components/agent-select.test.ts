@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -9,6 +9,11 @@ import { AgentSelect, type AgentSelectOption } from "./agent-select.ts";
 const AGENT_SELECT_TEST_TAG = `test-openclaw-agent-select-${crypto.randomUUID()}`;
 
 customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
+
+afterEach(async () => {
+  document.body.replaceChildren();
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+});
 
 type AgentSelectElement = HTMLElement & {
   options: AgentSelectOption[];
@@ -179,7 +184,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
     expect(createObjectURL).toHaveBeenCalledTimes(1);
 
     element.remove();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-avatar");
+    await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-avatar"));
   } finally {
     element.remove();
     vi.unstubAllGlobals();
@@ -252,6 +257,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     });
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const avatarCalls = () => fetchMock.mock.calls.filter(([url]) => url === "/avatar/alpha");
 
   const element = await createAgentSelect({
     authToken: "tok",
@@ -259,14 +265,14 @@ it("aborts the stale request on auth rotation without duplicating the current fe
   });
 
   try {
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(avatarCalls()).toHaveLength(1);
     element.authToken = "tok2";
     await element.updateComplete;
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(avatarCalls()).toHaveLength(2));
 
-    expect(pending[0]?.signal.aborted).toBe(true);
+    await waitForFast(() => expect(pending[0]?.signal.aborted).toBe(true));
     expect(
-      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+      avatarCalls().map(([, init]) => new Headers(init?.headers).get("Authorization")),
     ).toEqual(["Bearer tok", "Bearer tok2"]);
 
     // Let the canceled request's rejection settle, then force another render while
@@ -274,7 +280,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     await Promise.resolve();
     element.identityById = { ...element.identityById };
     await element.updateComplete;
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(avatarCalls()).toHaveLength(2);
 
     pending[1]?.resolve({
       ok: true,
@@ -337,6 +343,7 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
     expect(vi.getTimerCount()).toBe(0);
   } finally {
     element.remove();
+    await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   }
@@ -383,6 +390,7 @@ it("aborts a stalled local avatar body after the request deadline", async () => 
     expect(vi.getTimerCount()).toBe(0);
   } finally {
     element.remove();
+    await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   }

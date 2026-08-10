@@ -2,6 +2,7 @@ type AvatarRouteEntry = {
   blobUrl: string | null;
   consumers: Map<symbol, () => void>;
   controller: AbortController;
+  releaseTimer: ReturnType<typeof setTimeout> | undefined;
 };
 
 /** Bound protected avatar fetches so a stalled Gateway route cannot pin UI state forever. */
@@ -18,14 +19,22 @@ function releaseEntry(key: string, owner: symbol) {
     return;
   }
   entry.consumers.delete(owner);
-  if (entry.consumers.size > 0) {
+  if (entry.consumers.size > 0 || entry.releaseTimer !== undefined) {
     return;
   }
-  sharedAvatarRoutes.delete(key);
-  entry.controller.abort();
-  if (entry.blobUrl) {
-    URL.revokeObjectURL(entry.blobUrl);
-  }
+  // Lit can replace one route consumer with another in a later microtask. Finalize
+  // unowned routes on the next task so the shared request survives that DOM handoff.
+  entry.releaseTimer = setTimeout(() => {
+    entry.releaseTimer = undefined;
+    if (sharedAvatarRoutes.get(key) !== entry || entry.consumers.size > 0) {
+      return;
+    }
+    sharedAvatarRoutes.delete(key);
+    entry.controller.abort();
+    if (entry.blobUrl) {
+      URL.revokeObjectURL(entry.blobUrl);
+    }
+  }, 0);
 }
 
 async function fetchAvatarRoute(
@@ -73,7 +82,7 @@ async function fetchAvatarRoute(
  */
 export class AuthenticatedAvatarRouteLoader {
   private readonly owner = Symbol("authenticated-avatar-route-owner");
-  private readonly keys = new Set<string>();
+  private keys = new Set<string>();
 
   constructor(private readonly onUpdate: () => void) {}
 
@@ -82,6 +91,20 @@ export class AuthenticatedAvatarRouteLoader {
       releaseEntry(key, this.owner);
     }
     this.keys.clear();
+  }
+
+  withActiveRoutes<T>(render: () => T): T {
+    const previousKeys = this.keys;
+    this.keys = new Set();
+    try {
+      return render();
+    } finally {
+      for (const key of previousKeys) {
+        if (!this.keys.has(key)) {
+          releaseEntry(key, this.owner);
+        }
+      }
+    }
   }
 
   resolve(url: string, authToken: string | null): string | null {
@@ -95,9 +118,14 @@ export class AuthenticatedAvatarRouteLoader {
         blobUrl: null,
         consumers: new Map(),
         controller: new AbortController(),
+        releaseTimer: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
       void fetchAvatarRoute(key, url, authToken, entry);
+    }
+    if (entry.releaseTimer !== undefined) {
+      clearTimeout(entry.releaseTimer);
+      entry.releaseTimer = undefined;
     }
     entry.consumers.set(this.owner, this.onUpdate);
     this.keys.add(key);

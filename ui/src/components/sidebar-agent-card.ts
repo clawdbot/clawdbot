@@ -1,4 +1,4 @@
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
@@ -35,13 +35,11 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(changed: PropertyValues<this>) {
-    if (changed.has("authToken") || changed.has("avatarAuthReady")) {
-      this.avatarLoader.reset();
-    }
+  override render() {
+    return this.avatarLoader.withActiveRoutes(() => this.renderContent());
   }
 
-  override render() {
+  private renderContent() {
     const avatarUrl = this.avatarUrl?.startsWith("/")
       ? this.avatarAuthReady
         ? this.avatarLoader.resolve(this.avatarUrl, this.authToken)
