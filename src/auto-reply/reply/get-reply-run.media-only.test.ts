@@ -3090,6 +3090,16 @@ describe("runPreparedReply media-only handling", () => {
             sourceReplyDeliveryMode ?? "automatic",
           ].join(":"),
       );
+      // The direct-caller heartbeat run below resolves the stable mode from
+      // config instead of injected opts; keep both sources agreeing per case.
+      const caseCfg = {
+        session: {},
+        channels: {},
+        agents: { defaults: {} },
+        ...(stableMode === "message_tool_only"
+          ? { messages: { visibleReplies: "message_tool" as const } }
+          : {}),
+      };
       const sessionEntry: SessionEntry = {
         sessionId: "session-telegram-group",
         updatedAt: 1,
@@ -3107,6 +3117,7 @@ describe("runPreparedReply media-only handling", () => {
       };
 
       await runPrepared({
+        cfg: caseCfg,
         opts: {
           sourceReplyDeliveryMode: "message_tool_only",
           sessionPromptSourceReplyDeliveryMode: stableMode,
@@ -3125,6 +3136,7 @@ describe("runPreparedReply media-only handling", () => {
         },
       });
       await runPrepared({
+        cfg: caseCfg,
         opts: {
           sourceReplyDeliveryMode: stableMode,
           sessionPromptSourceReplyDeliveryMode: stableMode,
@@ -3142,6 +3154,7 @@ describe("runPreparedReply media-only handling", () => {
         },
       });
       await runPrepared({
+        cfg: caseCfg,
         opts: {
           isHeartbeat: true,
           sourceReplyDeliveryMode: stableMode,
@@ -3160,10 +3173,30 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "cron-event",
         },
       });
+      // Production heartbeat wakes call the reply resolver directly, without
+      // dispatch's injected delivery modes; their binding facts must still
+      // match dispatched turns or the CLI session ping-pongs (#121485).
+      await runPrepared({
+        cfg: caseCfg,
+        opts: { isHeartbeat: true },
+        isNewSession: false,
+        systemSent: true,
+        sessionEntry,
+        ctx: {
+          ...createInboundBody("scheduled wake"),
+          Provider: "heartbeat",
+          SessionKey: "agent:main:telegram:-100123",
+        },
+        sessionCtx: {
+          ...createSessionBody("scheduled wake"),
+          Provider: "heartbeat",
+        },
+      });
 
       const roomEventRun = requireRunReplyAgentCall(0).followupRun.run;
       const primaryRun = requireRunReplyAgentCall(1).followupRun.run;
       const heartbeatRun = requireRunReplyAgentCall(2).followupRun.run;
+      const directHeartbeatRun = requireRunReplyAgentCall(3).followupRun.run;
       expect(roomEventRun.sourceReplyDeliveryMode).toBe("message_tool_only");
       expect(primaryRun.sourceReplyDeliveryMode).toBe(stableMode);
       expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
@@ -3180,6 +3213,9 @@ describe("runPreparedReply media-only handling", () => {
       });
       expect(primaryRun.cliSessionBindingFacts).toEqual(roomEventRun.cliSessionBindingFacts);
       expect(heartbeatRun.cliSessionBindingFacts).toEqual(roomEventRun.cliSessionBindingFacts);
+      expect(directHeartbeatRun.cliSessionBindingFacts).toEqual(
+        roomEventRun.cliSessionBindingFacts,
+      );
     },
   );
 
