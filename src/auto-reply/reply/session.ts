@@ -799,10 +799,13 @@ async function initSessionStateAttemptLocked(
     persistedLabel = reusableEntry.label;
   } else {
     // Explicit resets of provider-owned sessions mint a physical generation so delayed
-    // harness work cannot reattach retired conversation state. Ordinary local and implicit
-    // daily/idle boundaries retain transcript identity for cursor continuity.
+    // harness work cannot reattach retired conversation state. The built-in OpenClaw
+    // harness and implicit daily/idle boundaries retain transcript identity for cursor continuity.
+    const agentHarnessId = normalizeOptionalString(entry?.agentHarnessId);
     const rotateProviderSession =
-      resetTriggered && (Boolean(entry?.agentHarnessId) || hasProviderOwnedSession(entry));
+      resetTriggered &&
+      ((agentHarnessId !== undefined && agentHarnessId !== "openclaw") ||
+        hasProviderOwnedSession(entry));
     sessionId =
       rotateProviderSession || isAcpSessionKey(sessionKey)
         ? crypto.randomUUID()

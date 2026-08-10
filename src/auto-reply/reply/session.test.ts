@@ -3358,6 +3358,39 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
   });
+  it("retains ordinary OpenClaw session identity on /new", async () => {
+    const storePath = await createStorePath("openclaw-native-reset-");
+    const sessionKey = "agent:main:telegram:dm:user-native-reset";
+    const existingSessionId = "existing-session-native-reset";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { agentHarnessId: "openclaw" },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-native-reset",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.sessionEntry.sessionId).toBe(existingSessionId);
+  });
+
   it("rotates provider-owned session state and records the old transcript boundary on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
