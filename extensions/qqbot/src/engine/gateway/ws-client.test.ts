@@ -19,6 +19,7 @@ vi.mock("ws", () => ({
 
 type CreateQQWSClient = typeof import("./ws-client.js").createQQWSClient;
 let createQQWSClient: CreateQQWSClient;
+const qqbotGatewayPayloadLimitBytes = 16 * 1024 * 1024;
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 
 beforeAll(async () => {
@@ -78,6 +79,7 @@ describe("createQQWSClient", () => {
       {
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: qqbotGatewayPayloadLimitBytes,
       },
     ]);
   });
@@ -98,6 +100,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: qqbotGatewayPayloadLimitBytes,
       },
     ]);
   });
@@ -118,6 +121,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: qqbotGatewayPayloadLimitBytes,
       },
     ]);
   });
@@ -138,6 +142,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: qqbotGatewayPayloadLimitBytes,
       },
     ]);
   });
