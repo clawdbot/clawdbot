@@ -14,6 +14,10 @@ const OBSERVED_PENDING_ACTIONS = new Set<PluginHookSkillProposalChangedEvent["ac
 ]);
 
 type SkillProposalObserverStore = Pick<WorkboardStore, "create">;
+export type WorkboardSkillProposalFollowup = Pick<
+  PluginHookSkillProposalChangedEvent["proposal"],
+  "id" | "kind" | "status" | "skillName" | "source"
+>;
 type SkillProposalChangedHandler = (
   event: PluginHookSkillProposalChangedEvent,
   ctx: PluginHookSkillContext,
@@ -24,35 +28,32 @@ function buildSkillProposalFollowupIdempotencyKey(proposalId: string): string {
   return `${SKILL_PROPOSAL_FOLLOWUP_PREFIX}:${digest}`;
 }
 
-function buildSkillProposalFollowupNotes(event: PluginHookSkillProposalChangedEvent): string {
-  const source = event.proposal.source?.trim();
+function buildSkillProposalFollowupNotes(proposal: WorkboardSkillProposalFollowup): string {
+  const source = proposal.source?.trim();
   return [
     "A committed Skill Workshop proposal is pending operator review.",
-    `Proposal: ${event.proposal.id}`,
-    `Kind: ${event.proposal.kind}`,
+    `Proposal: ${proposal.id}`,
+    `Kind: ${proposal.kind}`,
     ...(source ? [`Source: ${source}`] : []),
     "Approval boundary: this card does not apply, publish, reject, or modify the skill.",
   ].join("\n");
 }
 
-async function captureSkillProposalFollowup(params: {
-  event: PluginHookSkillProposalChangedEvent;
-  ctx: PluginHookSkillContext;
+export async function captureWorkboardSkillProposalFollowup(params: {
+  proposal: WorkboardSkillProposalFollowup;
+  agentId?: string;
   store: SkillProposalObserverStore;
 }): Promise<{ cardId: string } | undefined> {
-  if (
-    params.event.proposal.status !== "pending" ||
-    !OBSERVED_PENDING_ACTIONS.has(params.event.action)
-  ) {
+  if (params.proposal.status !== "pending") {
     return undefined;
   }
   const card = await params.store.create({
-    title: `Review proposed skill: ${params.event.proposal.skillName}`,
-    notes: buildSkillProposalFollowupNotes(params.event),
+    title: `Review proposed skill: ${params.proposal.skillName}`,
+    notes: buildSkillProposalFollowupNotes(params.proposal),
     status: "todo",
     labels: ["skill-workshop", "proposal-review"],
-    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-    idempotencyKey: buildSkillProposalFollowupIdempotencyKey(params.event.proposal.id),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    idempotencyKey: buildSkillProposalFollowupIdempotencyKey(params.proposal.id),
   });
   return { cardId: card.id };
 }
@@ -63,7 +64,14 @@ export function createWorkboardSkillProposalHandler(params: {
 }): SkillProposalChangedHandler {
   return async (event, ctx) => {
     try {
-      const captured = await captureSkillProposalFollowup({ event, ctx, store: params.store });
+      if (!OBSERVED_PENDING_ACTIONS.has(event.action)) {
+        return;
+      }
+      const captured = await captureWorkboardSkillProposalFollowup({
+        proposal: event.proposal,
+        agentId: ctx.agentId,
+        store: params.store,
+      });
       if (captured) {
         params.api.logger.info?.(
           `workboard: ensured skill proposal follow-up event=${event.eventId} card=${captured.cardId}`,

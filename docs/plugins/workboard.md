@@ -72,6 +72,13 @@ proposal event and records the proposal identifier in its notes for review in
 Skill Workshop. It does not use the card's Gateway-task field, because proposal
 identifiers are not Gateway task IDs.
 
+The live plugin hook creates the card immediately for Gateway-originated
+events. Workboard also reconciles the durable pending-proposal manifest every
+30 seconds for each configured agent, so proposals committed by the standalone
+`openclaw skills workshop` CLI converge on the same card after the Gateway is
+running. Gateway restarts replay current pending state through that same
+idempotent path.
+
 Repeated events for the same proposal reuse one card. That card is labeled
 `skill-workshop` and `proposal-review`; it records the proposal kind and source
 when available, but it does not copy mutable proposal content. Terminal or
