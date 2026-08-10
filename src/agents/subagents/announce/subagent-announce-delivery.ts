@@ -9,7 +9,7 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
-import { resolvePersistedSessionStoreOwner } from "../../../config/sessions/session-store-owner.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { isOutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
@@ -106,13 +106,20 @@ function tryResolveRequesterAgentId(
   if (requestedAgentId && parsedAgentId && requestedAgentId !== parsedAgentId) {
     return undefined;
   }
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, requesterSessionKey);
+  if (persistedStoreOwner.kind === "retired") {
+    return undefined;
+  }
+  if (
+    requestedAgentId &&
+    persistedStoreOwner.kind === "configured" &&
+    requestedAgentId !== persistedStoreOwner.agentId
+  ) {
+    return undefined;
+  }
   const resolvedAgentId = requestedAgentId ?? parsedAgentId;
   if (resolvedAgentId) {
     return resolvedAgentId;
-  }
-  const persistedStoreOwner = resolvePersistedSessionStoreOwner(cfg);
-  if (persistedStoreOwner.kind === "retired") {
-    return undefined;
   }
   return (
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??

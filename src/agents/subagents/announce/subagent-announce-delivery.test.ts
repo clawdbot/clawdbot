@@ -890,6 +890,48 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     );
   });
 
+  it("rejects a restored bare requester whose explicit agent conflicts with the store owner", async () => {
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+      callGateway: vi.fn(async () => {
+        throw new Error("requester owner conflict");
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      requesterAgentId: "research",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-conflicting-restored-entry",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
   it("fails closed for a restored bare requester key with a retired store owner", async () => {
     const cfg = {
       session: { scope: "global", store: "/stores/shared.sqlite" },

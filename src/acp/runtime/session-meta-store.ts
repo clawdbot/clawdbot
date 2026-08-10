@@ -1,6 +1,10 @@
 /** Store binding for ACP session metadata: resolves which session-store row owns a key. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  tryResolveSoleAgentId,
+} from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -8,7 +12,7 @@ import {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntryReadOnly,
 } from "../../config/sessions/session-accessor.js";
-import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -76,9 +80,25 @@ export function resolveSessionStorePathForAcp(params: {
       `Agent id "${requestedAgentId}" does not match session key agent "${parsedAgentId}".`,
     );
   }
-  const persistedStoreOwner = resolvePersistedSessionStoreOwner(cfg);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);
   const agentId = requestedAgentId ?? parsedAgentId;
-  if (!agentId && persistedStoreOwner.kind === "retired") {
+  if (
+    requestedAgentId &&
+    persistedStoreOwner.kind === "configured" &&
+    requestedAgentId !== persistedStoreOwner.agentId
+  ) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `ACP session key "${params.sessionKey}"`,
+      hint: `The shared fixed-store row belongs to agent "${persistedStoreOwner.agentId}", not agent "${requestedAgentId}".`,
+    });
+  }
+  if (persistedStoreOwner.kind === "retired") {
+    if (requestedAgentId) {
+      throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+        surface: `ACP session key "${params.sessionKey}"`,
+        hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
+      });
+    }
     return { cfg };
   }
   const resolvedAgentId =

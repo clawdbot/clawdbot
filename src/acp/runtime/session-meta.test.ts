@@ -96,6 +96,17 @@ describe("ACP session metadata SQLite store", () => {
           sessionKey: "global",
         })?.runtimeSessionName,
       ).toBe("global");
+      const conflictingMutate = vi.fn(mutate);
+      await expect(
+        upsertAcpSessionMeta({
+          cfg,
+          databasePath,
+          sessionKey: "global",
+          agentId: "research",
+          mutate: conflictingMutate,
+        }),
+      ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+      expect(conflictingMutate).not.toHaveBeenCalled();
       const ownerlessCfg = {
         ...cfg,
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },

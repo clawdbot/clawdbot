@@ -27,6 +27,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
+  canonicalizeMainSessionAlias: ({ sessionKey }: { sessionKey: string }) => sessionKey,
   resolveAgentIdFromSessionKey: () => "main",
   resolveExplicitAgentSessionKey: () => undefined,
 }));
@@ -211,6 +212,32 @@ describe("resolveSessionKeyForRequest", () => {
 
     expect(result.agentId).toBe("ops");
     expect(result.sessionKey).toBe("main");
+  });
+
+  it("rejects an explicit agent that conflicts with an unscoped fixed-store owner", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveSessionKeyForRequest({ cfg, agentId: "research", sessionKey: "global" }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    expect(hoisted.listSessionEntriesMock).not.toHaveBeenCalled();
+
+    mockSessionStores({ "/stores/shared.sqlite": {} });
+    expect(
+      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionKey: "global" }),
+    ).toMatchObject({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/stores/shared.sqlite",
+    });
   });
 
   it("fails closed for an ownerless unscoped row during a cross-agent shared-store scan", () => {

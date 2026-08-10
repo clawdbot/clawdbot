@@ -68,4 +68,76 @@ describe("transcript turn logical ownership", () => {
       );
     });
   });
+
+  it("rejects a conflicting scope agent for a persisted fixed-store owner", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: storePath },
+      } satisfies OpenClawConfig;
+      const scope = {
+        agentId: "research",
+        sessionId: "persisted-owner-transcript-session",
+        sessionKey: "global",
+        storePath,
+      };
+
+      await expect(
+        persistSessionTranscriptTurn(scope, {
+          config: cfg,
+          messages: [{ message: { role: "user", content: "wrong owner" } }],
+          updateMode: "none",
+        }),
+      ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+
+      await replaceSessionEntry(
+        { agentId: "ops", sessionKey: scope.sessionKey, storePath },
+        { sessionId: scope.sessionId, updatedAt: 1 },
+      );
+      await expect(
+        persistSessionTranscriptTurn(
+          { ...scope, agentId: "ops" },
+          {
+            config: cfg,
+            messages: [{ message: { role: "user", content: "right owner" } }],
+            updateMode: "none",
+          },
+        ),
+      ).resolves.toMatchObject({ appendedCount: 1 });
+    });
+  });
+
+  it("rejects a bare-key write for a retired persisted owner", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "retired" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { store: storePath },
+      } satisfies OpenClawConfig;
+
+      await expect(
+        persistSessionTranscriptTurn(
+          {
+            sessionId: "retired-owner-transcript-session",
+            sessionKey: "global",
+            storePath,
+          },
+          {
+            config: cfg,
+            messages: [{ message: { role: "user", content: "retired owner" } }],
+            updateMode: "none",
+          },
+        ),
+      ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+    });
+  });
 });

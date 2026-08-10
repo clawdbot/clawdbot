@@ -44,7 +44,10 @@ import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sen
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
-import type { DoctorPluginMetadataSnapshotState } from "./shared/plugin-metadata-snapshot-scope.js";
+import {
+  resolveConfigWideDoctorPluginMetadataSnapshot,
+  type DoctorPluginMetadataSnapshotState,
+} from "./shared/plugin-metadata-snapshot-scope.js";
 import { repairStaleAgentModelRefs } from "./shared/stale-agent-model-ref-repair.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
@@ -205,10 +208,14 @@ export async function runDoctorRepairSequence(params: {
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
     const currentScope = resolveCurrentPluginMetadataScope();
-    pluginMetadataSnapshotState.current = loadPluginMetadataSnapshot({
+    pluginMetadataSnapshotState.current = resolveConfigWideDoctorPluginMetadataSnapshot({
+      snapshot: loadPluginMetadataSnapshot({
+        config: currentScope.config,
+        env,
+        workspaceDir: currentScope.workspaceDir,
+      }),
       config: currentScope.config,
       env,
-      workspaceDir: currentScope.workspaceDir,
     });
   }
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {

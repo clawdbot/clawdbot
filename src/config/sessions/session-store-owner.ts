@@ -1,5 +1,6 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
+import { classifySessionKeyShape } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 
@@ -25,4 +26,14 @@ export function resolvePersistedSessionStoreOwner(
   )
     ? { kind: "configured", agentId }
     : { kind: "retired", agentId };
+}
+
+/** Applies fixed-store ownership only to keys without an agent-qualified namespace. */
+export function resolvePersistedSessionStoreOwnerForKey(
+  config: OpenClawConfig,
+  sessionKey: string | undefined,
+): PersistedSessionStoreOwner {
+  return classifySessionKeyShape(sessionKey) === "legacy_or_alias"
+    ? resolvePersistedSessionStoreOwner(config)
+    : { kind: "none" };
 }

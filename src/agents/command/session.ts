@@ -29,7 +29,10 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
+import {
+  resolvePersistedSessionStoreOwner,
+  resolvePersistedSessionStoreOwnerForKey,
+} from "../../config/sessions/session-store-owner.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -354,6 +357,26 @@ export function resolveSessionKeyForRequestCore(opts: {
         })
       : undefined);
   const scopedSessionAgentId = parseAgentSessionKey(explicitSessionKey)?.agentId;
+  const explicitKeyStoreOwner = resolvePersistedSessionStoreOwnerForKey(
+    opts.cfg,
+    explicitSessionKey,
+  );
+  if (
+    explicitKeyStoreOwner.kind === "configured" &&
+    requestedAgentId &&
+    requestedAgentId !== explicitKeyStoreOwner.agentId
+  ) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `session key "${explicitSessionKey}"`,
+      hint: `The shared fixed-store row belongs to agent "${explicitKeyStoreOwner.agentId}", not --agent "${requestedAgentId}".`,
+    });
+  }
+  if (explicitKeyStoreOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `session key "${explicitSessionKey}"`,
+      hint: `The shared fixed-store row belongs to retired agent "${explicitKeyStoreOwner.agentId}".`,
+    });
+  }
   // A session id is already an explicit target: seed its store scan from a live roster owner
   // instead of inventing a `main` owner that may not exist in an explicit fleet.
   const sessionIdScanAnchor = requestedSessionId
@@ -362,6 +385,7 @@ export function resolveSessionKeyForRequestCore(opts: {
   const defaultAgentId = normalizeAgentId(
     requestedAgentId ??
       scopedSessionAgentId ??
+      (explicitKeyStoreOwner.kind === "configured" ? explicitKeyStoreOwner.agentId : undefined) ??
       sessionIdScanAnchor ??
       resolveDefaultAgentId(opts.cfg, {
         surface: "agent command session routing",
