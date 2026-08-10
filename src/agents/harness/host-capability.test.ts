@@ -12,6 +12,7 @@ import {
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { runAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
@@ -129,7 +130,6 @@ describe("agent harness host capability", () => {
         sessionKey: "agent:main:session-1",
         channelId: "chat-1",
       }),
-      expect.objectContaining({ beforeSourceExecution: expect.any(Function) }),
     );
 
     const forgedRequest = {
@@ -337,12 +337,12 @@ describe("agent harness host capability", () => {
     const { attempt, admission } = await admittedAttempt("run-bound-policy-race");
     const policyStarted = createDeferred<void>();
     const policyResult = createDeferred<void>();
-    mockRewrap.mockImplementationOnce((tool, _ctx, options) => ({
+    mockRewrap.mockImplementationOnce((tool) => ({
       ...tool,
       execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
         policyStarted.resolve();
         await policyResult.promise;
-        options.beforeSourceExecution?.();
+        runAgentToolSourceExecutionGuard(tool);
         return await tool.execute?.(...args);
       },
     }));

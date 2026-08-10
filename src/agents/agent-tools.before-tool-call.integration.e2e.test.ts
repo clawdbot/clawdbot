@@ -38,12 +38,14 @@ import {
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
+import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
+  rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
@@ -661,17 +663,15 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     });
     let authorityActive = true;
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    const source = wrapToolWithBeforeToolCallHook(
+    const guarded = bindAgentToolSourceExecutionGuard(
       asAgentTool({ name: "read", execute }),
-      undefined,
-      {
-        beforeSourceExecution: () => {
-          if (!authorityActive) {
-            throw new Error("delegated authority closed");
-          }
-        },
+      () => {
+        if (!authorityActive) {
+          throw new Error("delegated authority closed");
+        }
       },
     );
+    const source = rewrapToolWithBeforeToolCallHook(guarded);
 
     const pending = expectDefined(source.execute, "guarded source execute")("call-guard", {});
     await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());

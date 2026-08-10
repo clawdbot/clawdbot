@@ -16,6 +16,10 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import {
+  copyAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+} from "./agent-tool-source-execution-guard.js";
+import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
@@ -81,7 +85,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 type BeforeToolCallWrapperOptions = {
   approvalMode?: "request" | "report" | "deny";
   emitDiagnostics: boolean;
-  beforeSourceExecution?: () => void;
 };
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -278,11 +281,7 @@ export function buildBlockedToolResult(params: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: {
-    approvalMode?: "request" | "report" | "deny";
-    emitDiagnostics?: boolean;
-    beforeSourceExecution?: () => void;
-  } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -498,7 +497,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
-      options.beforeSourceExecution?.();
+      runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -687,11 +686,7 @@ export function wrapToolWithBeforeToolCallHook(
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: {
-    approvalMode?: "request" | "report" | "deny";
-    emitDiagnostics?: boolean;
-    beforeSourceExecution?: () => void;
-  } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
@@ -713,6 +708,7 @@ export function rewrapToolWithBeforeToolCallHook(
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 

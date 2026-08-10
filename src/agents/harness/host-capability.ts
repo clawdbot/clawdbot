@@ -3,6 +3,7 @@ import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-co
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import {
   rewrapToolWithBeforeToolCallHook,
@@ -201,11 +202,8 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       return (
         tools
-          .map((tool) =>
-            rewrapToolWithBeforeToolCallHook(tool, hookContext, {
-              beforeSourceExecution: assertActive,
-            }),
-          )
+          .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
+          .map((tool) => rewrapToolWithBeforeToolCallHook(tool, hookContext))
           .map((tool) =>
             callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
           )
