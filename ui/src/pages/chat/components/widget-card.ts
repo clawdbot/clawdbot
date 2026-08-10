@@ -48,17 +48,15 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
   }
   button.disabled = true;
   const pendingLabel = t("chat.toolCards.pinToDashboardPending");
-  button.title = pendingLabel;
-  button.setAttribute("aria-label", pendingLabel);
+  button.title = button.ariaLabel = pendingLabel;
   try {
     await pin();
     const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
-    button.title = pinnedLabel;
-    button.setAttribute("aria-label", pinnedLabel);
+    button.title = button.ariaLabel = pinnedLabel;
     button.dataset.pinned = "true";
   } catch (error) {
     button.disabled = false;
-    button.setAttribute("aria-label", t("chat.toolCards.pinToDashboard"));
+    button.ariaLabel = t("chat.toolCards.pinToDashboard");
     button.title = error instanceof Error ? error.message : String(error);
   }
 }
@@ -507,6 +505,7 @@ function renderWidgetCard(
     ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
     : undefined;
   const pinned = Boolean(pinnedWidget);
+  const pinLabel = t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
   // Chat keeps its labeled card shell, but the inner inset follows the pinned
   // widget's presentation so authored edge-to-edge content matches the board.
   const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
@@ -524,10 +523,8 @@ function renderWidgetCard(
           data-pin-widget
           ?disabled=${pinned}
           ?data-pinned=${pinned}
-          title=${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
-          aria-label=${t(
-            pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
-          )}
+          title=${pinLabel}
+          aria-label=${pinLabel}
           @click=${(event: Event) =>
             contentKind === "mcp-app" && mcpAppViewId
               ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
