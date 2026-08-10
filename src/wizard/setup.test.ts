@@ -12,6 +12,7 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import { ConfigMutationConflictError } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
@@ -169,7 +170,13 @@ function providerPluginStub(
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const replaceConfigFile = vi.hoisted(() =>
-  vi.fn(async (params: { nextConfig: OpenClawConfig }) => ({ config: params.nextConfig })),
+  vi.fn(
+    async (params: {
+      nextConfig: OpenClawConfig;
+      snapshot?: { hash?: string };
+      baseHash?: string;
+    }) => ({ config: params.nextConfig }),
+  ),
 );
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
@@ -404,13 +411,17 @@ vi.mock("../system-agent/setup-inference.js", () => ({
   verifySetupInferenceConfig,
 }));
 
-vi.mock("../config/config.js", () => ({
-  DEFAULT_GATEWAY_PORT: 18789,
-  createConfigIO,
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-  replaceConfigFile,
-}));
+vi.mock("../config/config.js", async (importActual) => {
+  const actual = await importActual<typeof import("../config/config.js")>();
+  return {
+    DEFAULT_GATEWAY_PORT: 18789,
+    ConfigMutationConflictError: actual.ConfigMutationConflictError,
+    createConfigIO,
+    readConfigFileSnapshot,
+    resolveGatewayPort,
+    replaceConfigFile,
+  };
+});
 vi.mock("../commands/onboard-agent.js", async () => {
   const { resolveDefaultAgentId } = await import("../agents/agent-scope-config.js");
   return {
@@ -585,10 +596,18 @@ describe("runSetupWizard", () => {
         tailscaleResetOnExit: false,
       },
     }));
+    let authoredConfig: OpenClawConfig | undefined;
     readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockResolvedValue(
-      configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
+    readConfigFileSnapshot.mockImplementation(async () =>
+      authoredConfig
+        ? configSnapshot(authoredConfig)
+        : configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
     );
+    replaceConfigFile.mockReset();
+    replaceConfigFile.mockImplementation(async (params) => {
+      authoredConfig = structuredClone(params.nextConfig);
+      return { config: params.nextConfig };
+    });
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false });
     resolvePreferredProviderForAuthChoice.mockReset();
@@ -799,6 +818,99 @@ describe("runSetupWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("preserves an unrelated config edit made during classic onboarding", async () => {
+    const initialConfig: OpenClawConfig = { ui: { seamColor: "blue" } };
+    let diskConfig = structuredClone(initialConfig);
+    let diskHash = "hash-1";
+    const snapshotFromDisk = () => ({
+      ...configSnapshot(diskConfig),
+      hash: diskHash,
+    });
+    readConfigFileSnapshot.mockImplementation(async () => snapshotFromDisk());
+    replaceConfigFile.mockImplementation(async (params) => {
+      expect(params.snapshot?.hash).toBe(diskHash);
+      expect(params.baseHash).toBe(diskHash);
+      diskConfig = structuredClone(params.nextConfig);
+      diskHash = `hash-${Number(diskHash.slice(5)) + 1}`;
+      return { config: diskConfig };
+    });
+    setupChannels.mockImplementationOnce(async (config) => {
+      diskConfig = {
+        ...diskConfig,
+        ui: { ...diskConfig.ui, seamColor: "green" },
+      };
+      diskHash = "external-edit";
+      return config;
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/concurrent-onboarding-workspace",
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(diskConfig.ui?.seamColor).toBe("green");
+    expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/concurrent-onboarding-workspace");
+    expect(diskConfig.hooks?.internal?.entries?.["session-memory"]?.enabled).toBe(true);
+  });
+
+  it("re-reads and merges the latest config after a write conflict", async () => {
+    let diskConfig: OpenClawConfig = { ui: { seamColor: "blue" } };
+    let diskHash = "hash-1";
+    let writeAttempts = 0;
+    readConfigFileSnapshot.mockImplementation(async () => ({
+      ...configSnapshot(diskConfig),
+      hash: diskHash,
+    }));
+    replaceConfigFile.mockImplementation(async (params) => {
+      expect(params.snapshot?.hash).toBe(diskHash);
+      expect(params.baseHash).toBe(diskHash);
+      writeAttempts += 1;
+      if (writeAttempts === 1) {
+        diskConfig = { ...diskConfig, ui: { ...diskConfig.ui, seamColor: "green" } };
+        diskHash = "external-edit";
+        throw new ConfigMutationConflictError("config changed since last load", {
+          currentHash: diskHash,
+        });
+      }
+      diskConfig = structuredClone(params.nextConfig);
+      diskHash = `committed-${writeAttempts}`;
+      return { config: diskConfig, persistedHash: diskHash };
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: "/tmp/conflicting-onboarding-workspace",
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(writeAttempts).toBe(4);
+    expect(diskConfig.ui?.seamColor).toBe("green");
+    expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/conflicting-onboarding-workspace");
   });
 
   it("seeds interactive remote setup from command flags", async () => {
@@ -1321,13 +1433,9 @@ describe("runSetupWizard", () => {
 
   it("keeps verification optional when provider setup supplies the post-import model", async () => {
     const workspaceDir = await makeCaseDir("provider-after-import-");
-    readConfigFileSnapshot
-      .mockResolvedValueOnce(
-        configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
-      )
-      .mockResolvedValue(
-        configSnapshot({}, true, { agents: { entries: { main: { default: true } } } }),
-      );
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({}, false, { agents: { entries: { main: { default: true } } } }),
+    );
     applyAuthChoice.mockImplementation(async (args) => ({
       config: {
         ...args.config,
@@ -1445,9 +1553,8 @@ describe("runSetupWizard", () => {
     expect(prompter.select).not.toHaveBeenCalled();
   });
 
-  it("allows size-drop writes for pending plugin install record migration", async () => {
-    replaceConfigFile.mockClear();
-    readConfigFileSnapshot.mockResolvedValueOnce({
+  it("preserves concurrent edits while migrating pending plugin install records", async () => {
+    const pendingInstallSnapshot = {
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
       raw: "{}",
@@ -1466,6 +1573,40 @@ describe("runSetupWizard", () => {
       issues: [],
       warnings: [],
       legacyIssues: [],
+    };
+    let diskConfig = structuredClone(pendingInstallSnapshot.config) as OpenClawConfig;
+    let diskHash = "pending-1";
+    let snapshotReads = 0;
+    let writeAttempts = 0;
+    readConfigFileSnapshot.mockImplementation(async () => {
+      snapshotReads += 1;
+      if (snapshotReads === 2) {
+        diskConfig = { ...diskConfig, ui: { seamColor: "red" } };
+        diskHash = "external-before-migration";
+      }
+      return {
+        ...pendingInstallSnapshot,
+        config: diskConfig,
+        sourceConfig: diskConfig,
+        parsed: diskConfig,
+        resolved: diskConfig,
+        sourceConfigBeforeMigrations: diskConfig,
+        hash: diskHash,
+      };
+    });
+    replaceConfigFile.mockImplementation(async (params) => {
+      expect(params.snapshot?.hash ?? params.baseHash).toBe(diskHash);
+      writeAttempts += 1;
+      if (writeAttempts === 2) {
+        diskConfig = { ...diskConfig, ui: { seamColor: "green" } };
+        diskHash = "external-pending-edit";
+        throw new ConfigMutationConflictError("config changed since last load", {
+          currentHash: diskHash,
+        });
+      }
+      diskConfig = structuredClone(params.nextConfig);
+      diskHash = `pending-${writeAttempts + 1}`;
+      return { config: diskConfig, persistedHash: diskHash };
     });
 
     const workspaceDir = await makeCaseDir("plugin-install-migration-");
@@ -1503,8 +1644,8 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    // Migration write + pre-channels persist + post-channels write + final write.
-    expect(replaceConfigFile).toHaveBeenCalledTimes(4);
+    // Migration write + conflicted persist + retry + post-channels write + final write.
+    expect(replaceConfigFile).toHaveBeenCalledTimes(5);
     const migrationParams = requireRecord(
       getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
       "migration config replacement params",
@@ -1512,6 +1653,9 @@ describe("runSetupWizard", () => {
     expect(
       requireRecord(migrationParams.nextConfig, "migration next config").plugins,
     ).toBeUndefined();
+    expect(requireRecord(migrationParams.nextConfig, "migration next config").ui).toEqual({
+      seamColor: "red",
+    });
     const migrationWriteOptions = expectRecordFields(
       migrationParams.writeOptions,
       { allowConfigSizeDrop: true },
@@ -1520,10 +1664,13 @@ describe("runSetupWizard", () => {
     expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
 
     const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, 3, 0, "config replacement"),
+      getMockCallArg(replaceConfigFile, 4, 0, "config replacement"),
       "config replacement params",
     );
     expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
+    expect(requireRecord(replaceParams.nextConfig, "next config").ui).toEqual({
+      seamColor: "green",
+    });
     expectRecordFields(
       replaceParams.writeOptions,
       { allowConfigSizeDrop: false },

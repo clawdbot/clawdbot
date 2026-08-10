@@ -336,26 +336,71 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     // no partial destructive effects and cannot discard its own lock sidecar.
     await assertFullResetPreservesOnboardingLock(workspaceDir);
   }
-  await moveToTrash(resolveConfigPath(), runtime);
+  const failures: string[] = [];
+  const trashRequiredPath = async (targetPath: string) => {
+    if (!(await moveToTrash(targetPath, runtime))) {
+      failures.push(targetPath);
+    }
+  };
+
+  await trashRequiredPath(resolveConfigPath());
   if (scope === "config") {
+    throwIfResetFailed(failures);
     return;
   }
-  await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  const sessionDirs = await listAgentSessionDirs(resolveStateDir());
-  for (const sessionDir of sessionDirs) {
-    await moveToTrash(sessionDir, runtime);
+  await trashRequiredPath(path.join(resolveConfigDir(), "credentials"));
+  const stateDir = resolveStateDir();
+  try {
+    const sessionDirs = await listAgentSessionDirs(stateDir);
+    for (const sessionDir of sessionDirs) {
+      await trashRequiredPath(sessionDir);
+    }
+  } catch {
+    failures.push(path.join(stateDir, "agents"));
   }
   if (scope === "full") {
-    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
-    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    let legacyPlan: ReturnType<typeof prepareLegacyWorkspaceStateReset> | undefined;
+    let statePlan: ReturnType<typeof prepareWorkspaceStateDeletion> | undefined;
+    try {
+      legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    } catch {
+      failures.push(`${workspaceDir} (retired workspace state)`);
+    }
+    try {
+      statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    } catch {
+      failures.push(`${workspaceDir} (workspace state)`);
+    }
     const workspaceRemoved = await moveToTrash(workspaceDir, runtime);
     if (workspaceRemoved) {
-      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
-      for (const warning of legacyCleanup.warnings) {
-        runtime.log(warning);
+      if (legacyPlan) {
+        try {
+          const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+          for (const warning of legacyCleanup.warnings) {
+            runtime.log(warning);
+            failures.push(warning);
+          }
+        } catch {
+          failures.push(`${workspaceDir} (retired workspace state)`);
+        }
       }
-      deleteWorkspaceState(statePlan);
+      if (statePlan) {
+        try {
+          deleteWorkspaceState(statePlan);
+        } catch {
+          failures.push(`${workspaceDir} (workspace state)`);
+        }
+      }
+    } else {
+      failures.push(workspaceDir);
     }
+  }
+  throwIfResetFailed(failures);
+}
+
+function throwIfResetFailed(failures: string[]): void {
+  if (failures.length > 0) {
+    throw new Error(`Reset failed to remove required state:\n${failures.join("\n")}`);
   }
 }
 

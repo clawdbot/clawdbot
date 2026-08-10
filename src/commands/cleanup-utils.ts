@@ -286,7 +286,10 @@ export async function listAgentSessionDirs(stateDir: string): Promise<string[]> 
     return entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => path.join(root, entry.name, "sessions"));
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
   }
 }

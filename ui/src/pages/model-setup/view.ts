@@ -556,18 +556,39 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
         onVerify: props.onVerify,
       })
     : nothing;
+  const continueSetup =
+    props.firstRun &&
+    result.setupComplete &&
+    result.configuredModel &&
+    props.activation.phase !== "success"
+      ? html`
+          <section class="settings-section" aria-labelledby="model-setup-continue-title">
+            <div class="settings-section__header">
+              <div>
+                <h2 id="model-setup-continue-title">${t("modelSetup.success.title")}</h2>
+                <p>${t("modelSetup.success.body", { modelRef: result.configuredModel })}</p>
+              </div>
+              <div class="settings-section__actions">
+                <button type="button" class="btn primary" @click=${props.onOpenChat}>
+                  ${icons.messageSquare} ${t("modelSetup.success.continueSetup")}
+                </button>
+              </div>
+            </div>
+          </section>
+        `
+      : nothing;
   if (!props.canAdmin) {
-    return html`${current}
+    return html`${current} ${continueSetup}
       <div class="callout warning" role="note">${t("modelSetup.access.adminRequired")}</div>`;
   }
   if (props.gatewayTooOld) {
-    return html`${current}
+    return html`${current} ${continueSetup}
       <div class="callout warning" role="note">${t("modelSetup.access.gatewayTooOld")}</div>`;
   }
   return html`
-    ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
-    ${renderUnavailable(props, result)} ${renderPrepare(props, result)}
-    ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${current} ${continueSetup} ${renderEmptyState(props, result)}
+    ${renderCandidateRows(props, result)} ${renderUnavailable(props, result)}
+    ${renderPrepare(props, result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }
 

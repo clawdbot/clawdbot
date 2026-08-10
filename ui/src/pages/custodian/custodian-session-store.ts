@@ -67,6 +67,7 @@ export class CustodianSessionStore {
   private sessionVariant: CustodianSessionVariant | null = null;
   private sessionId = createCustodianSessionId();
   private requestEpoch = 0;
+  private navigationGeneration = 0;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
   private sessionClient: GatewayBrowserClient | null = null;
@@ -261,6 +262,7 @@ export class CustodianSessionStore {
 
   openChannelsFromOnboarding(): void {
     this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
     this.emit();
     this.context?.navigate("channels");
   }
@@ -316,10 +318,18 @@ export class CustodianSessionStore {
   }
 
   exitSetup(): void {
+    // Leaving setup revokes navigation authority from every in-flight reply.
+    // The destination surface separately decides whether to retain or rotate context.
+    this.revokeNavigationAuthority();
     this.context?.navigate("chat");
   }
 
+  private revokeNavigationAuthority(): void {
+    this.navigationGeneration += 1;
+  }
+
   openModelSetup(): void {
+    this.revokeNavigationAuthority();
     this.context?.navigate("model-setup");
   }
 
@@ -589,6 +599,7 @@ export class CustodianSessionStore {
       return "rejected";
     }
     const epoch = ++this.requestEpoch;
+    const navigationGeneration = this.navigationGeneration;
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
@@ -620,10 +631,17 @@ export class CustodianSessionStore {
         this.appendAssistant(silentReply ? "" : result.reply, question, step);
       }
       if (result.action === "open-agent") {
+        if (navigationGeneration !== this.navigationGeneration) {
+          return "sent";
+        }
         let sessionKey = context.gateway.snapshot.sessionKey?.trim();
         if (result.agentId) {
           const roster = await context.agents.refreshList();
-          if (epoch !== this.requestEpoch || client !== this.activeClient) {
+          if (
+            epoch !== this.requestEpoch ||
+            client !== this.activeClient ||
+            navigationGeneration !== this.navigationGeneration
+          ) {
             return "sent";
           }
           sessionKey = buildAgentMainSessionKey({
@@ -645,7 +663,7 @@ export class CustodianSessionStore {
         } else {
           this.exitSetup();
         }
-      } else if (result.action === "exit") {
+      } else if (result.action === "exit" && navigationGeneration === this.navigationGeneration) {
         this.exitSetup();
       }
       return "sent";

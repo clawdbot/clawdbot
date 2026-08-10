@@ -50,6 +50,13 @@ import {
   handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
+import {
+  createAdmittedSetupSession,
+  runExclusiveSystemAgentSetupActivation,
+  SETUP_ADMISSION_BUSY_MESSAGE,
+  SetupAdmissionBusyError,
+  tryAcquireSetupAdmission,
+} from "./setup-admission.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
   buildSystemAgentChatResult,
@@ -57,7 +64,10 @@ import {
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+export { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
 
 /**
  * `openclaw.chat` lets clients (macOS app onboarding, future UIs) run the
@@ -138,27 +148,6 @@ function resolveSystemAgentSessionOwnerKey(params: {
   }
   const connId = params.client?.connId?.trim();
   return connId ? `connection:${connId}` : undefined;
-}
-
-let systemAgentSetupActivationInProgress = false;
-
-class SystemAgentSetupActivationBusyError extends Error {}
-
-/** Admit one setup mutation without queueing work past a caller timeout. */
-export async function runExclusiveSystemAgentSetupActivation<T>(
-  task: () => Promise<T>,
-): Promise<T> {
-  if (systemAgentSetupActivationInProgress) {
-    throw new SystemAgentSetupActivationBusyError(
-      "OpenClaw setup is already in progress; try again when it finishes.",
-    );
-  }
-  systemAgentSetupActivationInProgress = true;
-  try {
-    return await task();
-  } finally {
-    systemAgentSetupActivationInProgress = false;
-  }
 }
 
 async function evictOldestSession(
@@ -264,6 +253,10 @@ function queueDelegatedApproval(params: {
   return record.id;
 }
 
+function respondRetryableSetupUnavailable(respond: RespondFn, message: string): void {
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true }));
+}
+
 export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.approval.list": async ({ respond, client, context }) => {
     const manager = context.systemAgentApprovalManager;
@@ -338,42 +331,49 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     if (context.findRunningWizard()) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      respondRetryableSetupUnavailable(respond, "wizard already running");
+      return;
+    }
+    const releaseSetupAdmission = tryAcquireSetupAdmission();
+    if (!releaseSetupAdmission) {
+      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
       return;
     }
     const sessionId = params.sessionId;
-    const session = new WizardSession(
-      async (prompter, signal) => {
-        // Match setup.activate's lock order: setup admission before the Gateway
-        // queue. Both stay held for the session, so a relaunched client cannot
-        // start competing setup work while this server-owned flow can commit.
-        const result = await runExclusiveSystemAgentSetupActivation(async () =>
-          runSystemAgentGatewayTask(async () => {
-            const { activateSetupInference } =
-              await import("../../system-agent/setup-inference.js");
-            return await activateSetupInference({
-              kind: "provider-auth",
-              authChoice: params.authChoice,
-              ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
-              surface: "gateway",
-              runtime: {
-                ...defaultRuntime,
-                exit: (code: number | undefined): never => {
-                  throw new Error(`setup step exited with code ${String(code)}`);
+    const session = createAdmittedSetupSession(
+      releaseSetupAdmission,
+      () =>
+        new WizardSession(
+          async (prompter, signal) => {
+            // Match setup.activate's lock order: setup admission before the Gateway
+            // queue. Both stay held for the session, so a relaunched client cannot
+            // start competing setup work while this server-owned flow can commit.
+            const result = await runSystemAgentGatewayTask(async () => {
+              const { activateSetupInference } =
+                await import("../../system-agent/setup-inference.js");
+              return await activateSetupInference({
+                kind: "provider-auth",
+                authChoice: params.authChoice,
+                ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+                surface: "gateway",
+                runtime: {
+                  ...defaultRuntime,
+                  exit: (code: number | undefined): never => {
+                    throw new Error(`setup step exited with code ${String(code)}`);
+                  },
                 },
-              },
-              prompter,
-              signal,
-              isCancelled: () => signal.aborted,
-              onCommitStarted: () => session.lockCancellation(),
+                prompter,
+                signal,
+                isCancelled: () => signal.aborted,
+                onCommitStarted: () => session.lockCancellation(),
+              });
             });
-          }),
-        );
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
-      },
-      { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+            if (!result.ok) {
+              throw new Error(result.error);
+            }
+          },
+          { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+        ),
     );
     context.wizardSessions.set(sessionId, session);
     // Return ownership immediately so the client can cancel while provider auth waits.
@@ -392,66 +392,75 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     if (context.findRunningWizard()) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      respondRetryableSetupUnavailable(respond, "wizard already running");
+      return;
+    }
+    const releaseSetupAdmission = tryAcquireSetupAdmission();
+    if (!releaseSetupAdmission) {
+      respondRetryableSetupUnavailable(respond, SETUP_ADMISSION_BUSY_MESSAGE);
       return;
     }
     const sessionId = params.sessionId;
-    const session = new WizardSession(
-      async (prompter, signal) => {
-        await runExclusiveSystemAgentSetupActivation(async () =>
-          runSystemAgentGatewayTask(async () => {
-            const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
-              import("../../plugins/provider-auth-choice.js"),
-              import("../../wizard/setup.shared.js"),
-            ]);
-            const snapshot = await setupShared.readSetupConfigFileSnapshot();
-            if (!snapshot.valid) {
-              throw new Error("Config is invalid. Run `openclaw doctor` before preparing a model.");
-            }
-            // Match the classic wizard: mutate the authored shape, not runtimeConfig,
-            // so setup never writes resolved runtime defaults into openclaw.json.
-            const baseConfig = snapshot.exists ? snapshot.sourceConfig : {};
-            const workspaceDir = params.workspace?.trim()
-              ? resolveUserPath(params.workspace.trim())
-              : undefined;
-            const applied = await applyAuthChoiceLoadedPluginProvider({
-              authChoice: params.authChoice,
-              config: baseConfig,
-              prompter,
-              runtime: {
-                ...defaultRuntime,
-                exit: (code: number | undefined): never => {
-                  throw new Error(`setup step exited with code ${String(code)}`);
+    const session = createAdmittedSetupSession(
+      releaseSetupAdmission,
+      () =>
+        new WizardSession(
+          async (prompter, signal) => {
+            await runSystemAgentGatewayTask(async () => {
+              const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
+                import("../../plugins/provider-auth-choice.js"),
+                import("../../wizard/setup.shared.js"),
+              ]);
+              const snapshot = await setupShared.readSetupConfigFileSnapshot();
+              if (!snapshot.valid) {
+                throw new Error(
+                  "Config is invalid. Run `openclaw doctor` before preparing a model.",
+                );
+              }
+              // Match the classic wizard: mutate the authored shape, not runtimeConfig,
+              // so setup never writes resolved runtime defaults into openclaw.json.
+              const baseConfig = snapshot.exists ? snapshot.sourceConfig : {};
+              const workspaceDir = params.workspace?.trim()
+                ? resolveUserPath(params.workspace.trim())
+                : undefined;
+              const applied = await applyAuthChoiceLoadedPluginProvider({
+                authChoice: params.authChoice,
+                config: baseConfig,
+                prompter,
+                runtime: {
+                  ...defaultRuntime,
+                  exit: (code: number | undefined): never => {
+                    throw new Error(`setup step exited with code ${String(code)}`);
+                  },
                 },
-              },
-              setDefaultModel: false,
-              preserveExistingDefaultModel: true,
-              ...(workspaceDir ? { workspaceDir } : {}),
-              signal,
-              isRemote: true,
-              beforePersistentEffect: () => {
-                signal.throwIfAborted();
-                session.lockCancellation();
-              },
+                setDefaultModel: false,
+                preserveExistingDefaultModel: true,
+                ...(workspaceDir ? { workspaceDir } : {}),
+                signal,
+                isRemote: true,
+                beforePersistentEffect: () => {
+                  signal.throwIfAborted();
+                  session.lockCancellation();
+                },
+              });
+              if (!applied || applied.retrySelection) {
+                throw new Error(`Provider prepare method is unavailable: ${params.authChoice}`);
+              }
+              signal.throwIfAborted();
+              session.lockCancellation();
+              await setupShared.writeWizardConfigFile(applied.config, {
+                allowConfigSizeDrop: false,
+                baseSnapshot: snapshot,
+                ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+                migrationBaseConfig: baseConfig,
+              });
+              if (applied.agentModelOverride) {
+                session.setPreparedModelRef(applied.agentModelOverride);
+              }
             });
-            if (!applied || applied.retrySelection) {
-              throw new Error(`Provider prepare method is unavailable: ${params.authChoice}`);
-            }
-            signal.throwIfAborted();
-            session.lockCancellation();
-            await setupShared.writeWizardConfigFile(applied.config, {
-              allowConfigSizeDrop: false,
-              baseSnapshot: snapshot,
-              ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
-              migrationBaseConfig: baseConfig,
-            });
-            if (applied.agentModelOverride) {
-              session.setPreparedModelRef(applied.agentModelOverride);
-            }
-          }),
-        );
-      },
-      { timeoutMs: PROVIDER_PREPARE_SESSION_TIMEOUT_MS },
+          },
+          { timeoutMs: PROVIDER_PREPARE_SESSION_TIMEOUT_MS },
+        ),
     );
     context.wizardSessions.set(sessionId, session);
     respond(true, { sessionId, done: false, status: "running" }, undefined);
@@ -499,14 +508,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         });
       });
     } catch (error) {
-      if (!(error instanceof SystemAgentSetupActivationBusyError)) {
+      if (!(error instanceof SetupAdmissionBusyError)) {
         throw error;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true }),
-      );
+      respondRetryableSetupUnavailable(respond, error.message);
     }
   },
   "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {

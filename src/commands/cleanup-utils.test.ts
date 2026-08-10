@@ -26,6 +26,7 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
 
 import {
   buildCleanupPlan,
+  listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -336,6 +337,20 @@ describe("cleanup path removals", () => {
     } finally {
       cwdSpy.mockRestore();
       await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("listAgentSessionDirs", () => {
+  it("treats a missing agents root as empty but propagates inspection failures", async () => {
+    await expect(listAgentSessionDirs("/tmp/openclaw-missing-state")).resolves.toEqual([]);
+
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
+    try {
+      await expect(listAgentSessionDirs("/tmp/openclaw-unreadable-state")).rejects.toBe(error);
+    } finally {
+      readdir.mockRestore();
     }
   });
 });

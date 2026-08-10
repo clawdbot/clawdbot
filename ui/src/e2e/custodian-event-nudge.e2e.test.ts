@@ -30,6 +30,42 @@ async function settleUi(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it("does not reopen agent chat when a deferred setup reply arrives after exit", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+          deferredMethods: ["openclaw.chat"],
+          methodResponses: {},
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+        expect(response?.status()).toBe(200);
+        await gateway.waitForRequest("openclaw.chat");
+        await page.getByRole("button", { name: "Exit setup" }).click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+        const destination = page.url();
+        const agentListRequests = (await gateway.getRequests("agents.list")).length;
+
+        await gateway.resolveDeferred("openclaw.chat", {
+          sessionId: "late-e2e-custodian",
+          reply: "Your agent is hatching — handing you over now.",
+          action: "open-agent",
+          agentId: "main",
+          agentDraft: "hatch",
+        });
+        await expect.poll(() => page.url()).toBe(destination);
+        expect(new URL(page.url()).searchParams.has("draft")).toBe(false);
+        expect((await gateway.getRequests("agents.list")).length).toBe(agentListRequests);
+      },
+    );
+  });
+
   it("shows one consequential nudge and sends its canonical message", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });

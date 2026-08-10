@@ -103,6 +103,94 @@ describe("CustodianSessionStore", () => {
     await expect(store.send("should not send")).resolves.toBe("rejected");
   });
 
+  it("does not let a late onboarding reply navigate after the destination rotates context", async () => {
+    let resolveReply!: (value: unknown) => void;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReply = resolve;
+          }),
+      )
+      .mockReturnValue(new Promise(() => {}));
+    const { context } = createContext(request);
+    const store = new CustodianSessionStore();
+    store.connect(context, "onboarding");
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    store.exitSetup();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    resolveReply({
+      sessionId: "late-session",
+      reply: "Your agent is ready.",
+      action: "open-agent",
+      agentId: "main",
+      agentDraft: "hatch",
+    });
+    await Promise.resolve();
+
+    expect(context.navigate).toHaveBeenCalledTimes(1);
+    expect(context.navigate).toHaveBeenCalledWith("chat");
+    expect(context.agents.refreshList).not.toHaveBeenCalled();
+    expect(store.messages).toEqual([]);
+  });
+
+  it("does not let a late reply navigate away from channel setup", async () => {
+    let resolveReply!: (value: unknown) => void;
+    const request = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveReply = resolve;
+      }),
+    );
+    const { context } = createContext(request);
+    const store = new CustodianSessionStore();
+    store.connect(context, "onboarding");
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    store.openChannelsFromOnboarding();
+    resolveReply({
+      sessionId: "late-channel-session",
+      reply: "Your agent is ready.",
+      action: "open-agent",
+      agentId: "main",
+      agentDraft: "hatch",
+    });
+    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Your agent is ready."));
+
+    expect(context.navigate).toHaveBeenCalledTimes(1);
+    expect(context.navigate).toHaveBeenCalledWith("channels");
+    expect(context.agents.refreshList).not.toHaveBeenCalled();
+  });
+
+  it("does not let a late reply navigate away from model setup", async () => {
+    let resolveReply!: (value: unknown) => void;
+    const request = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveReply = resolve;
+      }),
+    );
+    const { context } = createContext(request);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+    store.openModelSetup();
+    resolveReply({
+      sessionId: "late-model-setup-session",
+      reply: "Your agent is ready.",
+      action: "open-agent",
+      agentId: "main",
+      agentDraft: "hatch",
+    });
+    await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Your agent is ready."));
+
+    expect(context.navigate).toHaveBeenCalledTimes(1);
+    expect(context.navigate).toHaveBeenCalledWith("model-setup");
+    expect(context.agents.refreshList).not.toHaveBeenCalled();
+  });
+
   it("accepts new event nudges after a conversation variant rotates", async () => {
     const request = vi.fn().mockResolvedValue({
       sessionId: "shared-session",
