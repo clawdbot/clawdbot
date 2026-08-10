@@ -11,7 +11,10 @@ public enum ChatMessageVisibleText {
             return true
         }
         let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return kind == "input_text" || (normalizedRole == "assistant" && kind == "output_text")
+        if kind == "input_text" {
+            return normalizedRole == "user" || normalizedRole == "assistant"
+        }
+        return normalizedRole == "assistant" && kind == "output_text"
     }
 
     static func copyText(in message: OpenClawChatMessage) -> String {

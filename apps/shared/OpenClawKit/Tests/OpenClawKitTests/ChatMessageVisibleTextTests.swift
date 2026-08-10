@@ -113,6 +113,24 @@ struct ChatMessageVisibleTextTests {
         )
     }
 
+    @Test func `responses text visibility follows the chat role contract`() {
+        let cases: [(role: String, type: String, expected: Bool)] = [
+            ("user", "input_text", true),
+            ("assistant", "input_text", true),
+            ("assistant", "output_text", true),
+            ("user", "output_text", false),
+            ("developer", "input_text", false),
+            ("toolResult", "input_text", false),
+        ]
+
+        for entry in cases {
+            #expect(
+                ChatMessageVisibleText.isVisibleContentType(entry.type, role: entry.role)
+                    == entry.expected
+            )
+        }
+    }
+
     @Test func `history decode retains transcript identity and truncation signals`() throws {
         let metadata = try JSONDecoder().decode(
             OpenClawChatMessage.self,
