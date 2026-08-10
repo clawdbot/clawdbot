@@ -79,6 +79,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     renameValue: "Session title",
     workspaceRoot: "/repo/openclaw",
     workspaceLabel: "openclaw",
+    workspaceIcon: null,
     branch: "feature/header",
     branches: [],
     branchSwitchDisabledReason: null,
@@ -474,6 +475,56 @@ describe("chat pane header", () => {
       }),
     );
     expect(props.onBranchSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat pane workspace chip icon", () => {
+  async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
+    const { container } = mount({ workspaceIcon });
+    const element = container.querySelector("openclaw-workspace-icon") as
+      | (HTMLElement & { updateComplete?: Promise<unknown> })
+      | null;
+    await element?.updateComplete;
+    return { container, element };
+  }
+
+  it("keeps the folder glyph when the gateway resolved no project icon", async () => {
+    const { container, element } = await mountChip(null);
+    expect(element).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+  });
+
+  it("keeps the folder glyph while credentials are not ready", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { container, element } = await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authToken: null,
+      authReady: false,
+    });
+    expect(element).not.toBeNull();
+    expect(container.querySelector(".workspace-icon")).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("keeps the folder glyph when the icon route fails", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("workspace icon unavailable"));
+    const { container } = await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authToken: "token",
+      authReady: true,
+    });
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
+    );
+    expect(container.querySelector(".workspace-icon")).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+    fetchSpy.mockRestore();
   });
 });
 

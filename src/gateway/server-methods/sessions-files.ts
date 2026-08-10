@@ -555,6 +555,18 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
   };
 }
 
+/**
+ * Canonical workspace root of a session. Workspace identity surfaces must name
+ * the same directory the file/reveal routes open, so they read it from here
+ * instead of re-deriving the spawned-workspace precedence.
+ */
+export function resolveSessionWorkspaceRoot(params: {
+  sessionKey: string;
+  agentId?: string;
+}): string | undefined {
+  return loadSessionFileRoot(params).root;
+}
+
 function resolveSessionFileCandidates(params: {
   root: string;
   fileRoot: string | undefined;

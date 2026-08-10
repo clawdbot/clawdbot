@@ -250,6 +250,16 @@ openclaw-chat-pane {
   stroke-linejoin: round;
 }
 
+/* Project icons are arbitrary artwork, so they keep their own pixels: matched to
+   the glyph box, contained rather than stretched, never restyled by icon rules. */
+.chat-pane__workspace-chip .workspace-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
 .chat-pane__workspace-menu {
   flex: 0 1 auto;
   min-width: 0;

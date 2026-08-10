@@ -18,6 +18,7 @@ import { renderSessionOwnerChip } from "../../../components/session-owner-chip.t
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/workspace-icon.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -37,6 +38,8 @@ type ChatPaneHeaderProps = {
   renameValue: string;
   workspaceRoot: string | null;
   workspaceLabel: string | null;
+  /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
+  workspaceIcon: { routeUrl: string; authToken: string | null; authReady: boolean } | null;
   branch: string | null;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
@@ -119,6 +122,16 @@ export function resolveChatPaneWorkspace(params: {
       ? pathBasename(root)
       : null;
   return { root, label };
+}
+
+function renderWorkspaceChipIcon(icon: ChatPaneHeaderProps["workspaceIcon"]) {
+  return icon
+    ? html`<openclaw-workspace-icon
+        .routeUrl=${icon.routeUrl}
+        .authToken=${icon.authToken}
+        .authReady=${icon.authReady}
+      ></openclaw-workspace-icon>`
+    : icons.folder;
 }
 
 export function canRevealSessionWorkspace(params: {
@@ -343,7 +356,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                   workspace: props.workspaceLabel,
                 })}
               >
-                ${copied ? icons.check : icons.folder}<span
+                ${copied ? icons.check : renderWorkspaceChipIcon(props.workspaceIcon)}<span
                   >${copied ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span
                 >
               </button>
