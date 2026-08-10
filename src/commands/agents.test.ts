@@ -452,4 +452,20 @@ describe("agents helpers", () => {
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
   });
+
+  it("pruneAgentConfig pins a survivor's workspace before the roster becomes sole", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: "/srv/fleet" },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    const result = pruneAgentConfig(cfg, "ops");
+
+    expect(result.config.agents?.entries).toEqual({
+      research: { workspace: "/srv/fleet/research" },
+    });
+  });
 });

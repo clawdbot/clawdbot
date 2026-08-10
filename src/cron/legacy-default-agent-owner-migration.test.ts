@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,9 +9,11 @@ import {
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { materializeLegacyDefaultCronJobOwners } from "./legacy-default-agent-owner-migration.js";
 import { CronService } from "./service.js";
+import * as cronStoreModule from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { loadCronRows, replaceCronRows } from "./store/row-codec.js";
 import { ensureCronStoreEpochSchema } from "./store/schema.js";
+import type { CronStoreFile } from "./types.js";
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -100,5 +103,52 @@ it("materializes before scheduler startup", async () => {
     expect(cron.getLoadedJobs()?.[0]?.agentId).toBe("ops");
   } finally {
     cron.stop();
+  }
+});
+
+it("owns rows imported from a JSON-only store on first startup load", async () => {
+  const root = tempDirs.make("openclaw-cron-json-startup-");
+  const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+  const storePath = path.join(root, "cron", "jobs.json");
+  const storeKey = cronStoreKey(storePath);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({ version: 1, jobs: [makeCronJob({ id: "json-only" })] }),
+  );
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+
+  const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
+  let imported = false;
+  const loadSpy = vi
+    .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+    .mockImplementation(async (requestedStorePath) => {
+      if (!imported) {
+        imported = true;
+        const legacyStore = JSON.parse(
+          await fs.readFile(requestedStorePath, "utf8"),
+        ) as CronStoreFile;
+        replaceCronRows(openOpenClawStateDatabase({ env }).db, storeKey, legacyStore);
+      }
+      return await realLoad(requestedStorePath);
+    });
+
+  const cron = new CronService({
+    storePath,
+    cronEnabled: true,
+    legacyDefaultAgentId: "ops",
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  try {
+    await cron.start();
+    expect(imported).toBe(true);
+    expect(cron.getLoadedJobs()?.[0]?.agentId).toBe("ops");
+    expect(loadCronRows(openOpenClawStateDatabase({ env }).db, storeKey)[0]?.agent_id).toBe("ops");
+  } finally {
+    cron.stop();
+    loadSpy.mockRestore();
   }
 });

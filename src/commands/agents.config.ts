@@ -15,6 +15,7 @@ import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
+import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace-roster-transition.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -255,10 +256,14 @@ export function pruneAgentConfig(
     bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
     tools: nextTools,
   };
+  const workspacePinnedConfig = pinSurvivorWorkspaceForRosterCollapse(
+    cfg,
+    preliminaryConfig,
+  ).config;
   const transitionPinnedConfig =
     agents.length > 1 && nextAgentsList.length === 1
-      ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, preliminaryConfig)
-      : preliminaryConfig;
+      ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, workspacePinnedConfig)
+      : workspacePinnedConfig;
 
   return {
     config: transitionPinnedConfig,

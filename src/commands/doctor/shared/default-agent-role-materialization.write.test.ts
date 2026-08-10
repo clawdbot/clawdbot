@@ -222,4 +222,43 @@ describe("default role materialization authored writes", () => {
     const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
     expect(persisted.agents?.defaults?.sessionStore?.agentId).toBe("research");
   });
+
+  it("pins the survivor's previous workspace during a generic roster collapse", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-collapse-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: "/srv/fleet" },
+          entries: { ops: {}, research: {} },
+        },
+      }),
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+
+    await io.writeConfigFile(
+      {
+        ...snapshot.config,
+        agents: {
+          ...snapshot.config.agents,
+          ownership: undefined,
+          entries: { research: {} },
+        },
+      },
+      { baseSnapshot: snapshot, allowedAgentRosterRemovals: ["ops"] },
+    );
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.agents?.entries?.research?.workspace).toBe("/srv/fleet/research");
+  });
 });

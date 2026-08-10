@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
+import { pinSurvivorWorkspaceForRosterCollapse } from "./agent-workspace-roster-transition.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -168,6 +169,13 @@ export async function writeConfigFileFromContext(
     };
   }
 
+  const workspaceCollapse = pinSurvivorWorkspaceForRosterCollapse(
+    snapshot.config,
+    nextConfig,
+    deps.env,
+  );
+  nextConfig = workspaceCollapse.config;
+
   const sessionStoreOwnership = prepareSessionStoreOwnershipForWrite({
     currentConfig: snapshot.config,
     currentStore: (snapshot.sourceConfigBeforeMigrations ?? snapshot.config).session?.store,
@@ -211,6 +219,7 @@ export async function writeConfigFileFromContext(
       ? [["bindings"]]
       : []),
     ...ownershipMaterialization.insertedPaths,
+    ...workspaceCollapse.insertedPaths,
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 
