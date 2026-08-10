@@ -14,6 +14,7 @@ import {
   resolveTranscriptsConfig,
 } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
+import { TRANSCRIPT_OWNER_BINDING_VERSION } from "../../transcripts/ownership-metadata.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
@@ -297,7 +298,12 @@ async function importTranscripts(params: {
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
-    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
+    metadata: {
+      // Imports are current writes too; without this marker Doctor could
+      // mistake an intentional local-only import for a historical row.
+      ownerBindingVersion: TRANSCRIPT_OWNER_BINDING_VERSION,
+      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    },
   };
   const transcript = readTranscriptStringParam(params.rawParams, "transcript", {
     required: true,
