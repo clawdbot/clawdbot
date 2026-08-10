@@ -291,11 +291,11 @@ register the single `/openclaw` command; native command mode still requires the
 administrator-managed command entries described below. Relay mode, channel
 lifecycle events, App Home, Agent and Assistant lifecycle events, Slack-native
 approvals, and bindings remain unavailable for an enterprise account. Slack
-action tools remain unavailable except for file uploads and adding or removing
-emoji reactions. Inbound membership, reaction, and pin notifications use the
-listener-owned, workspace-scoped Slack client. Outbound acknowledgment, typing,
-and status reactions are also supported through that client and require
-`reactions:write`.
+action tools are supported for enterprise accounts and remain subject to the
+configured `channels.slack.actions.*` gates and OAuth scopes. Inbound
+membership, reaction, and pin notifications use the listener-owned,
+workspace-scoped Slack client. Outbound acknowledgment, typing, and status
+reactions are also supported through that client and require `reactions:write`.
 
 OpenClaw records Enterprise Grid destinations as
 `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
