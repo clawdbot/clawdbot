@@ -17,6 +17,7 @@ type MergeScenario = {
   checks?: "fail" | "green" | "pending";
   commentEmpty?: boolean;
   commentFailures?: number;
+  convergence?: "blocked" | "ready" | "unknown";
   existingAutoMethod?: "" | "MERGE" | "REBASE" | "SQUASH";
   mergeStateStatus?: string;
   mergeable?: string;
@@ -126,6 +127,13 @@ git() {
   return 0
 }
 node() {
+  if [[ "\${1-}" = */scripts/pr-convergence-audit-cli.mjs ]]; then
+    printf '%s\n' "$OPENCLAW_TEST_CONVERGENCE_JSON"
+    if [ "$OPENCLAW_TEST_CONVERGENCE_DECISION" = "READY" ]; then
+      return 0
+    fi
+    return 1
+  fi
   if [[ "\${1-}" = */scripts/watch-pr-ci.mjs ]]; then
     printf 'watch %s\\n' "$*" >> "$OPENCLAW_TEST_GH_CALLS"
     return 0
@@ -259,6 +267,13 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_COMMENT_BODY: commentBody,
       OPENCLAW_TEST_COMMENT_EMPTY: scenario.commentEmpty ? "true" : "false",
       OPENCLAW_TEST_COMMENT_FAILURES: String(scenario.commentFailures ?? 0),
+      OPENCLAW_TEST_CONVERGENCE_DECISION: (scenario.convergence ?? "ready").toUpperCase(),
+      OPENCLAW_TEST_CONVERGENCE_JSON: JSON.stringify({
+        decision: (scenario.convergence ?? "ready").toUpperCase(),
+        reason: "fixture convergence decision",
+        nextAction:
+          (scenario.convergence ?? "ready") === "ready" ? null : "resolve fixture blocker",
+      }),
       OPENCLAW_TEST_DISABLED_AUTO_META: disabledAutoMeta,
       OPENCLAW_TEST_GH_CALLS: calls,
       OPENCLAW_TEST_LANDED_SHA: landedSha,
@@ -318,6 +333,15 @@ describePosix("scripts/pr merge-run", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("Required checks are still pending.");
     expect(result.stderr).not.toContain("unable to verify the required GitHub checks");
+    expect(result.calls).not.toContain("pr merge");
+  });
+
+  it("does not merge when the exact-head convergence audit is blocked", () => {
+    const result = runMerge({ convergence: "blocked" });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("PR convergence audit: BLOCKED");
+    expect(result.stdout).toContain("Next action: resolve fixture blocker");
     expect(result.calls).not.toContain("pr merge");
   });
 

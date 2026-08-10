@@ -145,10 +145,15 @@ export function createGhPrConvergenceProvider({ readGh = defaultReadGh } = {}) {
       if (!Array.isArray(pages) || pages.some((page) => page == null || typeof page !== "object")) {
         throw new Error("requested reviewers returned an invalid paginated response");
       }
-      const logins = pages.flatMap((page) => [
-        ...(Array.isArray(page.users) ? page.users.map((user) => user?.login) : []),
-        ...(Array.isArray(page.teams) ? page.teams.map((team) => team?.slug) : []),
-      ]);
+      const logins = [];
+      for (const page of pages) {
+        if (Array.isArray(page.users)) {
+          logins.push(...page.users.map((user) => user?.login));
+        }
+        if (Array.isArray(page.teams)) {
+          logins.push(...page.teams.map((team) => team?.slug));
+        }
+      }
       if (logins.some((login) => typeof login !== "string" || !login)) {
         throw new Error("requested reviewers returned an invalid actor identity");
       }
@@ -193,9 +198,7 @@ export function createGhPrConvergenceProvider({ readGh = defaultReadGh } = {}) {
 
 /** @param {{ readGh?: (args: string[]) => string }} [options] */
 export function resolveCurrentGitHubRepo({ readGh = defaultReadGh } = {}) {
-  const repo = String(
-    readGh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]),
-  ).trim();
+  const repo = readGh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
   splitRepo(repo);
   return repo;
 }

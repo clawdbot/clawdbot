@@ -49,13 +49,16 @@ export async function runPrConvergenceAuditCli({
   return result.decision === CONVERGENCE_DECISIONS.READY ? 0 : 1;
 }
 
+/** @param {unknown} error */
+function reportDirectRunFailure(error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 2;
+}
+
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   runPrConvergenceAuditCli()
     .then((status) => {
       process.exitCode = status;
     })
-    .catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 2;
-    });
+    .catch(reportDirectRunFailure);
 }
