@@ -91,7 +91,7 @@ export type EmbeddedAgentSubscribeState = {
       removed: number;
       emittedAdded: number;
       emittedRemoved: number;
-      lastEmittedAtMs: number;
+      lastCheckedAtMs: number;
     }
   >;
   itemActiveIds: Set<string>;

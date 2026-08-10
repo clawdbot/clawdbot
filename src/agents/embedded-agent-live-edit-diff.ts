@@ -12,7 +12,7 @@ type LiveEditDiffProgressState = {
   removed: number;
   emittedAdded: number;
   emittedRemoved: number;
-  lastEmittedAtMs: number;
+  lastCheckedAtMs: number;
 };
 
 type LiveEditDiffProgress = {
@@ -161,10 +161,20 @@ export function updateLiveEditDiffProgress(
     if (stateByToolCallId.size >= LIVE_EDIT_DIFF_MAX_TRACKED_CALLS) {
       return undefined;
     }
-    progress = { added: 0, removed: 0, emittedAdded: 0, emittedRemoved: 0, lastEmittedAtMs: 0 };
+    progress = { added: 0, removed: 0, emittedAdded: 0, emittedRemoved: 0, lastCheckedAtMs: 0 };
     stateByToolCallId.set(toolCallId, progress);
   }
 
+  const now = Date.now();
+  if (
+    progress.lastCheckedAtMs > 0 &&
+    now - progress.lastCheckedAtMs < LIVE_EDIT_DIFF_MIN_INTERVAL_MS
+  ) {
+    return undefined;
+  }
+  // Parsing is the expensive part. Rate-limit it before touching cumulative JSON
+  // so fragmented large arguments cannot create quadratic work on the event path.
+  progress.lastCheckedAtMs = now;
   const counted = countLiveEditDiff(kind, parseStreamingJson(partialJson));
   // Streaming parses are best effort. Never move a visible counter backwards if
   // an incomplete JSON boundary temporarily exposes less of the same arguments.
@@ -173,16 +183,8 @@ export function updateLiveEditDiffProgress(
   if (progress.added === progress.emittedAdded && progress.removed === progress.emittedRemoved) {
     return undefined;
   }
-  const now = Date.now();
-  if (
-    progress.lastEmittedAtMs > 0 &&
-    now - progress.lastEmittedAtMs < LIVE_EDIT_DIFF_MIN_INTERVAL_MS
-  ) {
-    return undefined;
-  }
   progress.emittedAdded = progress.added;
   progress.emittedRemoved = progress.removed;
-  progress.lastEmittedAtMs = now;
   return {
     toolCallId,
     name: normalizeLowercaseStringOrEmpty(name),

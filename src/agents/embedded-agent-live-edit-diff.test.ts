@@ -53,6 +53,7 @@ describe("updateLiveEditDiffProgress", () => {
         }),
       ),
     ).toBeUndefined();
+    expect(state.get("edit-1")).toMatchObject({ added: 0, removed: 1 });
 
     vi.setSystemTime(1_250);
     const second = updateLiveEditDiffProgress(
