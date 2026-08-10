@@ -5,7 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -68,7 +68,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     return sessionKey
       ? {
           routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
-          authToken: resolveControlUiAuthToken({
+          authTokens: resolveControlUiAuthCandidates({
             hello: gateway.snapshot.hello,
             settings: { token: gateway.connection.token },
             password: gateway.connection.password,

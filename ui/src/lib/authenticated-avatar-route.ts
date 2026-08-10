@@ -9,8 +9,8 @@ type AvatarRouteEntry = {
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
-function avatarRouteKey(url: string, authToken: string | null): string {
-  return `${authToken ?? ""}\0${url}`;
+function avatarRouteKey(url: string, authTokens: readonly string[]): string {
+  return `${authTokens.join("")}\0${url}`;
 }
 
 function releaseEntry(key: string, owner: symbol) {
@@ -40,18 +40,27 @@ function releaseEntry(key: string, owner: symbol) {
 async function fetchAvatarRoute(
   key: string,
   url: string,
-  authToken: string | null,
+  authTokens: readonly string[],
   entry: AvatarRouteEntry,
 ) {
   const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
   let blobUrl: string | null = null;
   try {
-    const response = await fetch(url, {
-      ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
-      signal: entry.controller.signal,
-    });
-    if (response.ok) {
-      blobUrl = URL.createObjectURL(await response.blob());
+    // Ordered credential recovery: a saved token can be stale while the session's
+    // password is valid, so a rejected credential falls through to the next one
+    // instead of silently leaving the caller on its fallback forever.
+    for (const authToken of authTokens.length > 0 ? authTokens : [""]) {
+      const response = await fetch(url, {
+        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
+        signal: entry.controller.signal,
+      });
+      if (response.ok) {
+        blobUrl = URL.createObjectURL(await response.blob());
+        break;
+      }
+      if (response.status !== 401 && response.status !== 403) {
+        break;
+      }
     }
   } catch {
     // A missing image leaves the owning view's existing text/mascot fallback visible.
@@ -107,11 +116,12 @@ export class AuthenticatedAvatarRouteLoader {
     }
   }
 
-  resolve(url: string, authToken: string | null): string | null {
+  /** `authTokens` is an ordered candidate list; a rejected credential falls through to the next. */
+  resolve(url: string, authTokens: readonly string[]): string | null {
     if (!url.startsWith("/")) {
       return url;
     }
-    const key = avatarRouteKey(url, authToken);
+    const key = avatarRouteKey(url, authTokens);
     let entry = sharedAvatarRoutes.get(key);
     if (!entry) {
       entry = {
@@ -121,7 +131,7 @@ export class AuthenticatedAvatarRouteLoader {
         releaseTimer: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
-      void fetchAvatarRoute(key, url, authToken, entry);
+      void fetchAvatarRoute(key, url, authTokens, entry);
     }
     if (entry.releaseTimer !== undefined) {
       clearTimeout(entry.releaseTimer);

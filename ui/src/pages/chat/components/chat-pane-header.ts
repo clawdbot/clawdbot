@@ -39,7 +39,7 @@ type ChatPaneHeaderProps = {
   workspaceRoot: string | null;
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
-  workspaceIcon: { routeUrl: string; authToken: string | null; authReady: boolean } | null;
+  workspaceIcon: { routeUrl: string; authTokens: readonly string[]; authReady: boolean } | null;
   branch: string | null;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
@@ -239,7 +239,7 @@ function renderWorkspaceChipIcon(icon: ChatPaneHeaderProps["workspaceIcon"]) {
   return icon
     ? html`<openclaw-workspace-icon
         .routeUrl=${icon.routeUrl}
-        .authToken=${icon.authToken}
+        .authTokens=${icon.authTokens}
         .authReady=${icon.authReady}
       ></openclaw-workspace-icon>`
     : icons.folder;

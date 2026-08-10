@@ -11,12 +11,14 @@ const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   resolveScopes: vi.fn(),
   authorizeScopes: vi.fn(),
-  resolveSessionWorkspaceRoot: vi.fn(),
+  resolveIsOwner: vi.fn(),
+  resolveLocalSessionWorkspaceRoot: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
   resolveOpenAiCompatibleHttpOperatorScopes: (...args: unknown[]) => mocks.resolveScopes(...args),
+  resolveOpenAiCompatibleHttpSenderIsOwner: (...args: unknown[]) => mocks.resolveIsOwner(...args),
 }));
 
 vi.mock("./method-scopes.js", () => ({
@@ -24,13 +26,15 @@ vi.mock("./method-scopes.js", () => ({
 }));
 
 vi.mock("./server-methods/sessions-files.js", () => ({
-  resolveSessionWorkspaceRoot: (...args: unknown[]) => mocks.resolveSessionWorkspaceRoot(...args),
+  resolveLocalSessionWorkspaceRoot: (...args: unknown[]) =>
+    mocks.resolveLocalSessionWorkspaceRoot(...args),
 }));
 
 const {
   clearWorkspaceIconCacheForTest,
   handleWorkspaceIconHttpRequest,
   resolveWorkspaceIcon,
+  SVG_ICON_MAX_BYTES,
   WORKSPACE_ICON_MAX_BYTES,
 } = await import("./workspace-icon-http.js");
 
@@ -112,6 +116,26 @@ describe("resolveWorkspaceIcon", () => {
       files: { "favicon.svg": Buffer.from('<!DOCTYPE svg><svg xmlns="x"></svg>') },
     },
     {
+      label: "an SVG referencing an external resource",
+      files: {
+        "favicon.svg": Buffer.from('<svg xmlns="x"><image href="https://x.test/a.png"/></svg>'),
+      },
+    },
+    {
+      label: "an SVG embedding a script element",
+      files: { "favicon.svg": Buffer.from('<svg xmlns="x"><script>alert(1)</script></svg>') },
+    },
+    {
+      label: "an SVG past the vector cap",
+      files: {
+        "favicon.svg": Buffer.concat([
+          Buffer.from('<svg xmlns="x"><path d="'),
+          Buffer.alloc(SVG_ICON_MAX_BYTES, 0x31),
+          Buffer.from('"/></svg>'),
+        ]),
+      },
+    },
+    {
       label: "an icon past the size cap",
       files: { "favicon.png": Buffer.alloc(WORKSPACE_ICON_MAX_BYTES + 1, 1) },
     },
@@ -178,7 +202,8 @@ describe("handleWorkspaceIconHttpRequest", () => {
     mocks.authorize.mockReset().mockResolvedValue({ ok: true });
     mocks.resolveScopes.mockReset().mockReturnValue(["operator.read"]);
     mocks.authorizeScopes.mockReset().mockReturnValue({ allowed: true });
-    mocks.resolveSessionWorkspaceRoot.mockReset().mockReturnValue(undefined);
+    mocks.resolveIsOwner.mockReset().mockReturnValue(true);
+    mocks.resolveLocalSessionWorkspaceRoot.mockReset().mockReturnValue(undefined);
   });
 
   const iconRoute = (sessionKey: string) =>
@@ -186,10 +211,10 @@ describe("handleWorkspaceIconHttpRequest", () => {
 
   it("serves the session workspace icon with sandboxed asset headers", async () => {
     const root = await makeWorkspace({ "public/favicon.ico": ICO_BYTES });
-    mocks.resolveSessionWorkspaceRoot.mockReturnValue(root);
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
 
     const response = await fetch(iconRoute("agent:main:one"));
-    expect(mocks.resolveSessionWorkspaceRoot).toHaveBeenCalledWith({
+    expect(mocks.resolveLocalSessionWorkspaceRoot).toHaveBeenCalledWith({
       sessionKey: "agent:main:one",
     });
     expect(response.status).toBe(200);
@@ -207,7 +232,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
 
   it("revalidates an unchanged icon without resending its bytes", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-    mocks.resolveSessionWorkspaceRoot.mockReturnValue(root);
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
 
     const first = await fetch(iconRoute("agent:main:one"));
     const etag = first.headers.get("etag");
@@ -223,7 +248,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
 
   it("omits the body but keeps the representation headers on HEAD", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-    mocks.resolveSessionWorkspaceRoot.mockReturnValue(root);
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
 
     const response = await fetch(iconRoute("agent:main:one"), { method: "HEAD" });
     expect(response.status).toBe(200);
@@ -237,7 +262,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
   ] as const;
 
   it.each(absent)("answers an uncacheable 404 for $label", async ({ hasWorkspace }) => {
-    mocks.resolveSessionWorkspaceRoot.mockReturnValue(
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(
       hasWorkspace ? await makeWorkspace({}) : undefined,
     );
     const response = await fetch(iconRoute("agent:main:one"));
@@ -250,7 +275,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it.each(malformed)("claims %s as a 404 instead of falling through", async (pathname) => {
     const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
     expect(response.status).toBe(404);
-    expect(mocks.resolveSessionWorkspaceRoot).not.toHaveBeenCalled();
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 
   it("leaves unrelated paths to later stages", async () => {
@@ -274,7 +299,26 @@ describe("handleWorkspaceIconHttpRequest", () => {
     );
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(401);
-    expect(mocks.resolveSessionWorkspaceRoot).not.toHaveBeenCalled();
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+  });
+
+  it("never reads a workspace for a caller without owner access", async () => {
+    // `sessions.list` hides incognito and non-owner draft sessions per client.
+    // Without that filter here, the read scope alone would let a caller who
+    // knows such a key pull bytes derived from a session it cannot list.
+    mocks.resolveIsOwner.mockReturnValue(false);
+    const response = await fetch(iconRoute("agent:main:hidden"));
+    expect(response.status).toBe(403);
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the glyph for a session whose workspace is on another host", async () => {
+    // resolveLocalSessionWorkspaceRoot withholds the root for exec-node sessions
+    // so the route can never answer with this Gateway's own project icon.
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(undefined);
+    const response = await fetch(iconRoute("agent:main:remote"));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("never reads a workspace for a caller missing the session read scope", async () => {
@@ -282,6 +326,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(403);
     expect(mocks.authorizeScopes).toHaveBeenCalledWith("sessions.list", ["operator.read"]);
-    expect(mocks.resolveSessionWorkspaceRoot).not.toHaveBeenCalled();
+    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
   });
 });

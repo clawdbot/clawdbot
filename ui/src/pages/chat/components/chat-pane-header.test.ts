@@ -528,7 +528,7 @@ describe("chat pane workspace chip icon", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { container, element } = await mountChip({
       routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authToken: null,
+      authTokens: [],
       authReady: false,
     });
     expect(element).not.toBeNull();
@@ -544,7 +544,7 @@ describe("chat pane workspace chip icon", () => {
       .mockRejectedValue(new Error("workspace icon unavailable"));
     const { container } = await mountChip({
       routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authToken: "token",
+      authTokens: ["token"],
       authReady: true,
     });
     await Promise.resolve();
@@ -555,6 +555,33 @@ describe("chat pane workspace chip icon", () => {
     expect(container.querySelector(".workspace-icon")).toBeNull();
     expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
     fetchSpy.mockRestore();
+  });
+
+  it("retries the next credential when a stale token is rejected", async () => {
+    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        blob: async () => png,
+      } as unknown as Response);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:workspace-icon");
+
+    await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authTokens: ["stale-token", "session-password"],
+      authReady: true,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
+      headers: { Authorization: "Bearer session-password" },
+    });
+    vi.restoreAllMocks();
   });
 });
 

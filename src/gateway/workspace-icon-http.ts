@@ -16,11 +16,12 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
+import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -51,6 +52,8 @@ const WORKSPACE_ICON_RELATIVE_PATHS = [
 
 /** Icons are small by construction; anything larger is not a favicon. */
 export const WORKSPACE_ICON_MAX_BYTES = 512 * 1024;
+/** Vector icons are markup the renderer must parse, so they get a tighter cap. */
+export const SVG_ICON_MAX_BYTES = 64 * 1024;
 const WORKSPACE_ICON_CACHE_MAX_ENTRIES = 32;
 const SVG_MIME_TYPE = "image/svg+xml";
 const ICO_MIME_TYPE = "image/x-icon";
@@ -80,11 +83,25 @@ export function clearWorkspaceIconCacheForTest(): void {
   workspaceIconCache = new Map();
 }
 
+/**
+ * Bounds an SVG icon before it can reach a browser. `<img>` runs no script, so
+ * this is about render cost and outbound references rather than execution: a
+ * doctype or entity can expand, an external reference can make the renderer
+ * fetch, and unbounded markup can stall a decode. Favicons are tiny, so a much
+ * lower cap than the raster limit still accepts every realistic one while
+ * leaving no room for a decode bomb.
+ */
 function isRenderableSvg(body: Buffer): boolean {
+  if (body.byteLength > SVG_ICON_MAX_BYTES) {
+    return false;
+  }
   const text = body.toString("utf8");
   return (
     !text.includes("\0") &&
     !/<!doctype|<!entity/iu.test(text) &&
+    !/<\s*(?:script|foreignObject|image|use|iframe)\b/iu.test(text) &&
+    // Only self-contained artwork: no fetches, no cross-document references.
+    !/\b(?:href|xlink:href|src)\s*=/iu.test(text) &&
     /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?:\s|>)/iu.test(text)
   );
 }
@@ -234,8 +251,6 @@ export async function handleWorkspaceIconHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  // The icon says strictly less about a session than the workspace path already
-  // carried by its `sessions.list` row, so it rides that method's scope.
   const scopeAuth = authorizeOperatorScopesForMethod(
     "sessions.list",
     resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth),
@@ -244,9 +259,21 @@ export async function handleWorkspaceIconHttpRequest(
     sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;
   }
+  // The read scope alone is not the session's visibility decision: `sessions.list`
+  // additionally hides incognito and non-owner draft sessions per client
+  // (createSessionListEntryFilter). This route has no Gateway client to run that
+  // filter against, so it takes the same owner gate the managed-media route uses
+  // for session-scoped bytes — the identity for which that filter is a no-op.
+  if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
+    sendJson(res, 403, {
+      ok: false,
+      error: { message: "owner access required", type: "forbidden" },
+    });
+    return true;
+  }
 
   const workspaceRoot = parsed.sessionKey
-    ? (await getSessionsFilesModule()).resolveSessionWorkspaceRoot({
+    ? (await getSessionsFilesModule()).resolveLocalSessionWorkspaceRoot({
         sessionKey: parsed.sessionKey,
       })
     : undefined;

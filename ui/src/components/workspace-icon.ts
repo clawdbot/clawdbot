@@ -19,7 +19,8 @@ export function workspaceIconRouteUrl(basePath: string, sessionKey: string): str
  */
 class WorkspaceIcon extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) routeUrl: string | null = null;
-  @property({ attribute: false }) authToken: string | null = null;
+  /** Ordered credential candidates; a stale saved token falls through to the session password. */
+  @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
@@ -43,7 +44,7 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
     const routeUrl = this.routeUrl;
     const blobUrl =
       routeUrl && this.authReady && this.undecodableRouteUrl !== routeUrl
-        ? this.loader.resolve(routeUrl, this.authToken)
+        ? this.loader.resolve(routeUrl, this.authTokens)
         : null;
     if (!blobUrl) {
       return icons.folder;
