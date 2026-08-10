@@ -22,6 +22,7 @@ import {
   createMediaGenerateTaskStatusActions,
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
+import { hasGenerationToolAvailability } from "./media-tool-shared.js";
 
 type ImageGenerateActionResult = MediaGenerateActionResult;
 
@@ -88,7 +89,16 @@ export function createImageGenerateListActionResult(params: {
   authStore?: AuthProfileStore;
 }): ImageGenerateActionResult {
   const providers = listRuntimeImageGenerationProviders({ config: params.cfg });
-  return createMediaGenerateProviderListActionResult({
+  // Shared readiness owner for list/status callers that do not go through factory plan prep.
+  const generationAvailable = hasGenerationToolAvailability({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+    providers,
+    providerKey: "imageGenerationProviders",
+  });
+  const listed = createMediaGenerateProviderListActionResult({
     kind: "image_generation",
     providers,
     emptyText: "No image-generation providers are registered.",
@@ -100,6 +110,13 @@ export function createImageGenerateListActionResult(params: {
     summarizeCapabilities: summarizeImageGenerationCapabilities,
     formatAuthHint: formatImageGenerationAuthHint,
   });
+  return {
+    ...listed,
+    details: {
+      ...listed.details,
+      generationAvailable,
+    },
+  };
 }
 
 const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({

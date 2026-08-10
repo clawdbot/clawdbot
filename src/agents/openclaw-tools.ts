@@ -30,7 +30,6 @@ import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import {
-  hasGenerationToolAvailability,
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
   resolveOptionalMediaToolFactoryPlan,
@@ -99,7 +98,6 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 const mediaGenerationYieldLog = createSubsystemLogger("agents/tools/media-generation-yield");
 
 export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
-export { hasGenerationToolAvailability };
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;

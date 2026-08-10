@@ -19,10 +19,7 @@ import {
   hasSnapshotProviderEnvAvailability,
   loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
-import {
-  hasGenerationToolAvailability,
-  isCapabilityProviderConfigured,
-} from "./tools/media-tool-shared.js";
+import { isCapabilityProviderConfigured } from "./tools/media-tool-shared.js";
 
 /**
  * Plans optional media-tool factory registration from config, policy, capabilities, and auth.
@@ -453,5 +450,3 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
         })),
   };
 }
-
-export { hasGenerationToolAvailability };
