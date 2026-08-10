@@ -772,26 +772,15 @@ extension GatewayProcessManager {
             guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
             while Date() >= deadline {
                 guard deadline < finalProbeDeadline else { break readinessLoop }
-                if responsiveStartupProgressObserved {
-                    guard !Task.isCancelled,
-                          self.isCurrentGatewayStart(startGeneration),
-                          self.launchAgentReadinessRevision == context.readinessRevision
-                    else { return }
-                } else if freshInstallGraceAuthorized {
-                    // Repeating launchd status at every boundary would expand the wall-clock budget.
-                    // Generation/revision guard intermediate windows; success and final repair re-check ownership.
-                    guard self.isCurrentFreshInstallReadiness(
-                        context: context,
-                        startGeneration: startGeneration)
-                    else { return }
-                } else {
-                    guard let reusablePID = await self.currentInstallReusableLaunchdPID(
-                        context: context,
-                        startGeneration: startGeneration)
-                    else { break readinessLoop }
-                    readinessPID = reusablePID
-                    freshInstallGraceAuthorized = true
-                }
+                let extensionAuthorization = await self.authorizeReadinessExtension(
+                    context: context,
+                    startGeneration: startGeneration,
+                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
+                    freshInstallGraceAuthorized: freshInstallGraceAuthorized,
+                    readinessPID: readinessPID)
+                guard extensionAuthorization.allowed else { break readinessLoop }
+                readinessPID = extensionAuthorization.readinessPID
+                freshInstallGraceAuthorized = true
                 deadline = min(
                     deadline.addingTimeInterval(readinessWindow),
                     finalProbeDeadline)
@@ -850,6 +839,27 @@ extension GatewayProcessManager {
                 startGeneration: startGeneration,
                 expectedReadinessRevision: context.readinessRevision)
         }
+    }
+
+    private func authorizeReadinessExtension(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64,
+        responsiveStartupProgressObserved: Bool,
+        freshInstallGraceAuthorized: Bool,
+        readinessPID: Int32?) async -> (allowed: Bool, readinessPID: Int32?)
+    {
+        if responsiveStartupProgressObserved || freshInstallGraceAuthorized {
+            // One live response or verified launchd owner authorizes the bounded migration window;
+            // repeating launchd status at every boundary would expand the wall-clock budget.
+            let isCurrent = !Task.isCancelled &&
+                self.isCurrentGatewayStart(startGeneration) &&
+                self.launchAgentReadinessRevision == context.readinessRevision
+            return (isCurrent, readinessPID)
+        }
+        let reusablePID = await self.currentInstallReusableLaunchdPID(
+            context: context,
+            startGeneration: startGeneration)
+        return (reusablePID != nil, reusablePID)
     }
 
     private func currentInstallReusableLaunchdPID(

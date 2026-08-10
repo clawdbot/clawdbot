@@ -278,11 +278,22 @@ public enum DeviceIdentityStore {
         profile: GatewayDeviceIdentityProfile = .primary) throws -> DeviceIdentity
     {
         let stateDirURL = DeviceIdentityPaths.stateDirURL()
-        return try DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: self.databaseURL(stateDirURL: stateDirURL),
-            destinationStateDirURL: stateDirURL,
-            profile: profile,
-            legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
+        do {
+            return try DeviceIdentitySQLiteStore.loadOrCreate(
+                databaseURL: self.databaseURL(stateDirURL: stateDirURL),
+                destinationStateDirURL: stateDirURL,
+                profile: profile,
+                legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
+        } catch {
+            throw NSError(
+                domain: "ai.openclaw.device-identity-store",
+                code: 2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not access the persisted device identity: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ])
+        }
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {

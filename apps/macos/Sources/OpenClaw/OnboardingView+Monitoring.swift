@@ -121,7 +121,7 @@ extension OnboardingView {
         else { return }
         cliInstalled = true
         cliStatusKnown = true
-        cliStatus = "OpenClaw Gateway is ready."
+        cliStatus = nil
     }
 
     func finishExistingCLIActivation() async {
