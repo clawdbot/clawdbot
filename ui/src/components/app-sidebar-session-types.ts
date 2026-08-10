@@ -145,7 +145,7 @@ export type SidebarSessionGroupMenuState = {
   y: number;
 };
 
-export type SidebarSessionSortMode = "created" | "updated";
+export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
@@ -318,9 +318,10 @@ export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
+  { mode: "people", labelKey: "sessionsView.people" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

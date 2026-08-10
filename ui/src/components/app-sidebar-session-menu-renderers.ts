@@ -229,6 +229,7 @@ export function renderSidebarSessionSortMenu(params: {
   trigger: HTMLElement | null;
   grouping: SidebarSessionsGrouping;
   sortMode: SidebarSessionSortMode;
+  peopleSortAvailable: boolean;
   statusFilter: SidebarSessionStatusFilter;
   showCron: boolean;
   creators: readonly SessionCreatorOption[];
@@ -291,7 +292,9 @@ export function renderSidebarSessionSortMenu(params: {
           )}
           <div class="session-menu__separator" role="separator"></div>
           <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
-          ${SIDEBAR_SESSION_SORT_OPTIONS.map((option) =>
+          ${SIDEBAR_SESSION_SORT_OPTIONS.filter(
+            (option) => option.mode !== "people" || params.peopleSortAvailable,
+          ).map((option) =>
             renderSidebarMenuRadioItem({
               value: `sort:${option.mode}`,
               checked: params.sortMode === option.mode,

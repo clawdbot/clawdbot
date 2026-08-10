@@ -41,6 +41,7 @@ import {
   SIDEBAR_SESSION_NO_ATTENTION,
   SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
+  type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
@@ -52,6 +53,41 @@ import {
 } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
+
+export function compareSidebarSessionRowsByMode(input: {
+  a: SessionRow;
+  b: SessionRow;
+  sortMode: SidebarSessionSortMode;
+  creators: SessionsListResult["creators"];
+  createdOrder: ReadonlyMap<string, number>;
+}): number {
+  const { a, b } = input;
+  if (input.sortMode === "people") {
+    const creators = input.creators ?? [];
+    const idA = a.createdActor?.id?.trim() ?? "";
+    const idB = b.createdActor?.id?.trim() ?? "";
+    if (idA !== idB) {
+      const creatorA = creators.find((candidate) => candidate.id === idA);
+      const creatorB = creators.find((candidate) => candidate.id === idB);
+      const byKnown = Number(Boolean(creatorB)) - Number(Boolean(creatorA));
+      if (byKnown !== 0) {
+        return byKnown;
+      }
+      const labelA = creatorA?.label?.trim() || a.createdActor?.label?.trim() || idA;
+      const labelB = creatorB?.label?.trim() || b.createdActor?.label?.trim() || idB;
+      const byCreator = labelA.localeCompare(labelB) || idA.localeCompare(idB);
+      if (byCreator !== 0) {
+        return byCreator;
+      }
+    }
+  }
+  const byTime =
+    input.sortMode === "updated"
+      ? compareSessionRowsByUpdatedAt(a, b)
+      : (input.createdOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+        (input.createdOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER);
+  return byTime || a.key.localeCompare(b.key);
+}
 
 function isSidebarDraftOwnedBySelf(
   row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
@@ -347,6 +383,37 @@ export function latestVisibleAgentSessionRow(input: {
     archivedFilter: "active",
   });
   return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
+}
+
+export function resolveSidebarAgentResumeKey(
+  latest: SessionRow | null,
+  agentId: string,
+  mainKey: string,
+): string {
+  return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
+}
+
+export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
+  if (latest?.hasActiveRun) {
+    return t("agentChip.working");
+  }
+  return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");
+}
+
+export function collectKnownSidebarSessionCatalogIds(input: {
+  loadedCatalogIds: readonly string[];
+  hasLoaded: boolean;
+  sectionOrder: readonly string[];
+}): string[] {
+  if (input.hasLoaded) {
+    return [...input.loadedCatalogIds];
+  }
+  // Until the first authoritative list completes, progressive rows are only
+  // a partial view. Preserve stored slots so an unrelated drag cannot erase them.
+  const storedCatalogIds = input.sectionOrder.flatMap((sectionId) =>
+    sectionId.startsWith("catalog:") ? [sectionId.slice("catalog:".length)] : [],
+  );
+  return [...new Set([...input.loadedCatalogIds, ...storedCatalogIds])];
 }
 
 export function resolveSidebarMainSessionKey(input: {
