@@ -132,14 +132,6 @@
     ]
   },
   {
-    "name": "clearRuntimeAuthProfileStoreSnapshots",
-    "files": [
-      "src/agents/auth-profiles/runtime-snapshots.ts",
-      "src/agents/auth-profiles/store.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "clearSecretsRuntimeSnapshot",
     "files": [
       "src/secrets/runtime-state.ts",
@@ -163,38 +155,10 @@
     "sdk": true
   },
   {
-    "name": "compactEmbeddedAgentSessionDirect",
-    "files": [
-      "src/agents/embedded-agent-runner/compact.runtime.ts",
-      "src/agents/embedded-agent-runner/compact.ts"
-    ]
-  },
-  {
     "name": "containsConfigIncludeDirective",
     "files": [
       "src/config/io.read-helpers.ts",
       "src/plugins/install-persistence.ts"
-    ]
-  },
-  {
-    "name": "countActiveDescendantRuns",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
-    "name": "countPendingDescendantRuns",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-announce-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
-    "name": "createCompactionDiagId",
-    "files": [
-      "src/agents/embedded-agent-runner/compaction-diagnostics.ts",
-      "src/agents/embedded-agent-runner/run/helpers.ts"
     ]
   },
   {
@@ -217,13 +181,6 @@
     "files": [
       "src/plugins/loader-shared.ts",
       "src/plugins/logger.ts"
-    ]
-  },
-  {
-    "name": "createSessionId",
-    "files": [
-      "src/agents/sessions/session-manager-id.ts",
-      "src/agents/tools/transcripts-tool-runtime.ts"
     ]
   },
   {
@@ -311,14 +268,6 @@
       "src/commands/doctor/shared/legacy-config-record-shared.ts",
       "src/config/legacy.shared.ts"
     ]
-  },
-  {
-    "name": "extractAssistantText",
-    "files": [
-      "src/agents/embedded-agent-utils.ts",
-      "src/agents/tools/chat-history-text.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "extractAssistantVisibleText",
@@ -420,13 +369,6 @@
     ]
   },
   {
-    "name": "getLatestSubagentRunByChildSessionKey",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
     "name": "getReplyFromConfig",
     "files": [
       "src/auto-reply/reply/get-reply.ts",
@@ -447,14 +389,6 @@
     "files": [
       "src/secrets/runtime-shared.ts",
       "src/tts/tts-settings.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "hasUsableOAuthCredential",
-    "files": [
-      "src/agents/auth-profiles/credential-state.ts",
-      "src/agents/auth-profiles/oauth-shared.ts"
     ],
     "sdk": true
   },
@@ -568,13 +502,6 @@
     ]
   },
   {
-    "name": "listDescendantRunsForRequester",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
     "name": "listManagedPluginNpmRoots",
     "files": [
       "src/commands/doctor-plugin-host-links.ts",
@@ -596,13 +523,6 @@
       "src/plugin-sdk/session-store-runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "listSubagentRunsForController",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-read.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
   },
   {
     "name": "loadBundledPluginPublicSurface",
@@ -752,13 +672,6 @@
     "files": [
       "src/config/sessions/types.ts",
       "src/infra/state-migrations.session-store.ts"
-    ]
-  },
-  {
-    "name": "normalizeContainerPath",
-    "files": [
-      "src/agents/sandbox/path-utils.ts",
-      "src/agents/sandbox/remote-fs-bridge-paths.ts"
     ]
   },
   {
@@ -949,14 +862,6 @@
     "sdk": true
   },
   {
-    "name": "readStringParam",
-    "files": [
-      "src/agents/tools/common.ts",
-      "src/agents/tools/transcripts-tool-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "recordHookInstall",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -994,21 +899,6 @@
     "sdk": true
   },
   {
-    "name": "replaceRuntimeAuthProfileStoreSnapshots",
-    "files": [
-      "src/agents/auth-profiles/runtime-snapshots.ts",
-      "src/agents/auth-profiles/store.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "replaceSubagentRunAfterSteer",
-    "files": [
-      "src/agents/subagents/registry/subagent-registry-runtime.ts",
-      "src/agents/subagents/registry/subagent-registry.ts"
-    ]
-  },
-  {
     "name": "reportClawHubPluginInstallTelemetry",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -1036,13 +926,6 @@
       "src/plugin-sdk/gateway-runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "resolveAllowlistModelKey",
-    "files": [
-      "src/agents/model-selection-shared.ts",
-      "src/agents/model-selection.ts"
-    ]
   },
   {
     "name": "resolveApiKeyForProvider",
@@ -1073,13 +956,6 @@
       "src/plugin-sdk/command-status.runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "resolveEffectiveOAuthCredential",
-    "files": [
-      "src/agents/auth-profiles/effective-oauth.ts",
-      "src/agents/auth-profiles/oauth-manager.ts"
-    ]
   },
   {
     "name": "resolveEffectivePluginActivationState",
@@ -1136,13 +1012,6 @@
     "files": [
       "src/agents/tools/nodes-utils.ts",
       "src/cli/nodes-cli/rpc.ts"
-    ]
-  },
-  {
-    "name": "resolveNodeClaudePlacement",
-    "files": [
-      "src/agents/cli-runner/execute-node-claude.ts",
-      "src/agents/cli-runner/prepare-claude.ts"
     ]
   },
   {
@@ -1352,14 +1221,6 @@
     "files": [
       "src/agents/embedded-agent-runner/compact.hooks.harness.ts",
       "src/hooks/internal-hooks.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "truncateText",
-    "files": [
-      "src/agents/harness/native-hook-relay-utils.ts",
-      "src/agents/tools/web-fetch-utils.ts"
     ],
     "sdk": true
   },
