@@ -280,13 +280,35 @@ openclaw-custodian-page {
   font-size: 14px;
 }
 
-.custodian__wizard-actions {
-  display: flex;
-  justify-content: flex-start;
+.custodian__wizard-step .btn {
+  min-height: 44px;
+}
+
+.custodian__wizard-step .btn:disabled:hover {
+  border-color: var(--border);
+  background: var(--bg-elevated);
+  box-shadow: none;
+}
+
+.custodian__wizard-step .btn.primary:disabled:hover {
+  border-color: var(--accent);
+  background: var(--primary);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
+.custodian__wizard-step .custodian__wizard-cancel:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.custodian__wizard-cancel:not(:disabled) {
+  color: var(--text);
 }
 
 .custodian__wizard-cancel {
-  min-height: 44px;
+  margin-right: auto;
 }
 
 .custodian__thinking {

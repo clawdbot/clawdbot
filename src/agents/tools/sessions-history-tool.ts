@@ -3,8 +3,6 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -123,48 +121,23 @@ function sanitizeHistoryContentBlock(block: unknown): {
   const entry = { ...(block as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
-  const type = typeof entry.type === "string" ? entry.type : "";
   if (typeof entry.text === "string") {
     const res = truncateHistoryText(entry.text);
     entry.text = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   }
-  if (type === "thinking") {
-    if (typeof entry.thinking === "string") {
-      const res = truncateHistoryText(entry.thinking);
-      entry.thinking = res.text;
-      truncated ||= res.truncated;
-      redacted ||= res.redacted;
-    }
-    // The encrypted signature can be extremely large and is not useful for history recall.
-    if ("thinkingSignature" in entry) {
-      delete entry.thinkingSignature;
-      truncated = true;
-    }
-    if ("openclawReasoningReplay" in entry) {
-      delete entry.openclawReasoningReplay;
-      truncated = true;
-    }
+  if (entry.type === "thinking" && typeof entry.thinking === "string") {
+    const res = truncateHistoryText(entry.thinking);
+    entry.thinking = res.text;
+    truncated ||= res.truncated;
+    redacted ||= res.redacted;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateHistoryText(entry.partialJson);
     entry.partialJson = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
-  }
-  if (type === "image") {
-    const data = readStringValue(entry.data);
-    const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
-    const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
-    if ("data" in entry) {
-      delete entry.data;
-      truncated = true;
-    }
-    entry.omitted = true;
-    if (bytes !== undefined) {
-      entry.bytes = bytes;
-    }
   }
   return { block: entry, truncated, redacted };
 }
@@ -180,10 +153,6 @@ function sanitizeHistoryMessage(message: unknown): {
   const entry = { ...(message as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
-  if ("providerReplay" in entry) {
-    delete entry.providerReplay;
-    redacted = true;
-  }
   // Tool result details often contain very large nested payloads.
   if ("details" in entry) {
     delete entry.details;

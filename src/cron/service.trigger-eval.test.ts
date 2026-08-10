@@ -3,7 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";

@@ -50,6 +50,7 @@ import { truncateCloseReason } from "../close-reason.js";
 import { incrementPresenceVersion } from "../health-state.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import type {
@@ -115,7 +116,7 @@ export async function attachAuthenticatedGatewayConnect(
     maxProtocol,
     usesLegacyNodeProtocol,
     role,
-    scopes,
+    scopes: deviceScopes,
     device,
     devicePublicKey,
     deviceToken,
@@ -186,6 +187,23 @@ export async function attachAuthenticatedGatewayConnect(
     authResult.tailscaleIdentity &&
     classifyTailscaleLogin(authResult.tailscaleIdentity.login).kind === "provider",
   );
+  // Device pairing owns persistent access. Verified identity grants only shape
+  // this connection, after device-less self-declared scopes have been cleared.
+  const effectiveScopes = resolveEffectiveConnectionScopes({
+    role,
+    deviceScopes,
+    verifiedIdentity: authenticatedUserId,
+    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+    upgradeReq: context.handler.upgradeReq,
+  });
+  const scopes = effectiveScopes.scopes;
+  state.scopes = scopes;
+  connectParams.scopes = scopes;
+  if (authenticatedUserId && effectiveScopes.addedIdentityScopes.length > 0) {
+    logGateway.warn(
+      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${effectiveScopes.addedIdentityScopes.join(",")} conn=${connId}`,
+    );
+  }
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();

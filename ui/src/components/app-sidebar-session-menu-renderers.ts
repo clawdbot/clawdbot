@@ -324,6 +324,9 @@ export function renderSidebarSessionSortMenu(params: {
             .checked=${params.showCron}
           >
             <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
+            <span slot="details" class="session-menu__check" aria-hidden="true"
+              >${params.showCron ? icons.check : nothing}</span
+            >
           </wa-dropdown-item>
         </wa-dropdown>
       </openclaw-menu-surface>

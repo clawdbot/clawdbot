@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -319,6 +320,9 @@ suite.define(() => {
   });
 
   it("renders rich wizard controls and sends typed answers", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(uiProofArtifactDir, { recursive: true });
+    }
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -328,6 +332,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          featureCapabilities: [GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL],
           featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
           methodResponses: {
             "openclaw.chat": {
@@ -349,9 +354,76 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}custodian`);
+        await page.addStyleTag({
+          content: ".custodian__wizard-step * { transition: none !important; }",
+        });
         await page.getByLabel("Twitch").waitFor();
         expect(await page.locator("openclaw-option-card").count()).toBe(0);
         expect(await page.locator(".agent-chat__composer-shell").count()).toBe(0);
+
+        const twitchOption = page.locator(".wizard-step__option", { hasText: "Twitch" });
+        const continueButton = page.getByRole("button", { name: "Continue" });
+        const cancelButton = page.getByRole("button", { name: "Cancel" });
+        const readInteractionStyle = (element: Element) => {
+          const style = getComputedStyle(element);
+          return {
+            backgroundColor: style.backgroundColor,
+            borderColor: style.borderColor,
+            cursor: style.cursor,
+          };
+        };
+
+        const optionRestingStyle = await twitchOption.evaluate(readInteractionStyle);
+        await twitchOption.hover();
+        const optionHoverStyle = await twitchOption.evaluate(readInteractionStyle);
+        expect(optionRestingStyle.cursor).toBe("pointer");
+        expect(optionHoverStyle.borderColor).not.toBe(optionRestingStyle.borderColor);
+
+        const disabledContinueStyle = await continueButton.evaluate(readInteractionStyle);
+        await continueButton.hover();
+        expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
+        expect(disabledContinueStyle.cursor).toBe("not-allowed");
+        expect(await cancelButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+          "pointer",
+        );
+        expect(
+          await Promise.all(
+            [continueButton, cancelButton].map((button) =>
+              button.evaluate((element) => element.getBoundingClientRect().height),
+            ),
+          ),
+        ).toEqual([44, 44]);
+        for (const viewport of [
+          { width: 390, height: 844, name: "phone" },
+          { width: 768, height: 1024, name: "tablet" },
+          { width: 1440, height: 900, name: "desktop" },
+        ]) {
+          await page.setViewportSize(viewport);
+          await settleUi(page);
+          const [continueBox, cancelBox] = await Promise.all([
+            continueButton.boundingBox(),
+            cancelButton.boundingBox(),
+          ]);
+          expect(cancelBox).not.toBeNull();
+          expect(continueBox).not.toBeNull();
+          expect(cancelBox!.x).toBeLessThan(continueBox!.x);
+          expect(
+            Math.abs(cancelBox!.y - continueBox!.y),
+            JSON.stringify({ viewport, cancelBox, continueBox }),
+          ).toBeLessThan(1);
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+            ),
+          ).toBe(true);
+          if (captureUiProofEnabled) {
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(uiProofArtifactDir, `05-rich-wizard-actions-${viewport.name}.png`),
+            });
+          }
+        }
 
         await gateway.setMethodResponse("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
@@ -370,6 +442,9 @@ suite.define(() => {
           },
         });
         await page.getByLabel("Twitch").check();
+        expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+          "pointer",
+        );
         await page.getByRole("button", { name: "Continue" }).click();
         await page.getByLabel("Announcements").waitFor();
 
@@ -401,11 +476,70 @@ suite.define(() => {
 
         await gateway.setMethodResponse("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
-          reply: "Setup complete.",
+          reply: "Name this connection.",
           action: "none",
+          wizardInputPending: true,
+          step: {
+            id: "label",
+            type: "text",
+            message: "Connection name",
+          },
         });
         await secretInput.fill("fake-client-secret");
         await page.getByRole("button", { name: "Submit" }).click();
+        const labelInput = page.getByRole("textbox", { name: "Connection name" });
+        await labelInput.waitFor();
+
+        await gateway.deferNext("openclaw.chat");
+        await labelInput.fill("Twitch ops");
+        await page.getByRole("button", { name: "Submit" }).click();
+        await expect
+          .poll(async () => (await labelInput.count()) === 0 || (await labelInput.isDisabled()))
+          .toBe(true);
+        if ((await labelInput.count()) > 0) {
+          expect(await labelInput.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+            "not-allowed",
+          );
+        } else {
+          expect(
+            await page
+              .locator(".custodian__structured-response", { hasText: "Twitch ops" })
+              .count(),
+          ).toBe(1);
+        }
+
+        await gateway.resolveDeferred("openclaw.chat", {
+          sessionId: "e2e-rich-wizard",
+          reply: "Confirm setup.",
+          action: "none",
+          wizardInputPending: true,
+          step: {
+            id: "confirm",
+            type: "confirm",
+            message: "Connect Twitch now?",
+          },
+        });
+        const noButton = page.getByRole("button", { name: "No" });
+        const yesButton = page.getByRole("button", { name: "Yes" });
+        await noButton.waitFor();
+
+        await gateway.deferNext("openclaw.chat");
+        await yesButton.click();
+        await expect.poll(() => noButton.isDisabled()).toBe(true);
+        await expect.poll(() => yesButton.isDisabled()).toBe(true);
+        await expect.poll(() => cancelButton.isDisabled()).toBe(true);
+        for (const button of [noButton, yesButton, cancelButton]) {
+          const restingStyle = await button.evaluate(readInteractionStyle);
+          await button.hover();
+          expect(await button.evaluate(readInteractionStyle)).toEqual(restingStyle);
+          expect(restingStyle.cursor).toBe("not-allowed");
+        }
+
+        await gateway.resolveDeferred("openclaw.chat", {
+          sessionId: "e2e-rich-wizard",
+          reply: "Setup complete.",
+          action: "none",
+        });
         await page.getByText("Setup complete.").waitFor();
 
         const requests = await gateway.getRequests("openclaw.chat");
@@ -419,6 +553,12 @@ suite.define(() => {
           }),
           expect.objectContaining({
             wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+          }),
+          expect.objectContaining({
+            wizardAnswer: { stepId: "label", value: "Twitch ops" },
+          }),
+          expect.objectContaining({
+            wizardAnswer: { stepId: "confirm", value: true },
           }),
         ]);
         expect(
