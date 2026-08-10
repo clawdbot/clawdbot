@@ -9,7 +9,6 @@ import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { clearPluginCommands } from "./command-registry-state.js";
-import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRegistrationContext, requireActivePluginRegistry } from "./runtime.js";
 import {

@@ -54,7 +54,7 @@ export function isPluginCommandExecutionActiveHere(registry: PluginRegistry): bo
 
 export async function withPluginCommandExecution<T>(
   registry: PluginRegistry,
-  run: () => Promise<T>,
+  run: () => T | Promise<T>,
 ): Promise<{ admitted: true; value: T } | { admitted: false }> {
   if (!beginPluginCommandExecution(registry)) {
     return { admitted: false };
