@@ -1,95 +1,38 @@
 /**
  * Redacts diagnostic payloads before persistence. It removes credential-like
- * fields, masks embedded auth strings, and replaces image/base64 data with
+ * fields, masks embedded auth strings, and replaces media/base64 data with
  * size and digest metadata.
  */
 import crypto from "node:crypto";
+import {
+  diagnosticBinaryView,
+  diagnosticMediaBytes,
+  isCredentialFieldName,
+  isDiagnosticMediaPayload,
+  redactDiagnosticText,
+} from "@openclaw/ai/internal/shared";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-const REDACTED_IMAGE_DATA = "<redacted>";
+const REDACTED_MEDIA_DATA = "<redacted>";
 
-const NON_CREDENTIAL_FIELD_NAMES = new Set([
-  "passwordfile",
-  "tokenbudget",
-  "tokencount",
-  "tokenfield",
-  "tokenlimit",
-  "tokens",
-]);
-
-const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
-const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
-const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
-
-function normalizeFieldName(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value.replaceAll(/[^a-z0-9]/gi, ""));
-}
-
-function isCredentialFieldName(key: string): boolean {
-  const normalized = normalizeFieldName(key);
-  if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
-    return false;
-  }
-  if (normalized === "authorization" || normalized === "proxyauthorization") {
-    return true;
-  }
-  return (
-    normalized.endsWith("apikey") ||
-    normalized.endsWith("password") ||
-    normalized.endsWith("passwd") ||
-    normalized.endsWith("passphrase") ||
-    normalized.endsWith("secret") ||
-    normalized.endsWith("secretkey") ||
-    normalized.endsWith("token")
-  );
-}
-
-function redactSensitivePayloadString(value: string): string {
-  return value
-    .replace(AUTHORIZATION_VALUE_RE, "$1 <redacted>")
-    .replace(JWT_VALUE_RE, "<redacted-jwt>")
-    .replace(COOKIE_PAIR_RE, "$1=<redacted>");
-}
-
-function hasSensitiveNameValuePair(record: Record<string, unknown>): boolean {
-  const rawName = typeof record.name === "string" ? record.name : record.key;
-  return typeof rawName === "string" && isCredentialFieldName(rawName);
-}
-
-function hasImageMime(record: Record<string, unknown>): boolean {
-  const candidates = [
-    normalizeLowercaseStringOrEmpty(record.mimeType),
-    normalizeLowercaseStringOrEmpty(record.media_type),
-    normalizeLowercaseStringOrEmpty(record.mime_type),
-  ];
-  return candidates.some((value) => value.startsWith("image/"));
-}
-
-function shouldRedactImageData(record: Record<string, unknown>): record is Record<string, string> {
-  if (typeof record.data !== "string") {
-    return false;
-  }
-  const type = normalizeLowercaseStringOrEmpty(record.type);
-  return type === "image" || hasImageMime(record);
-}
-
-function digestBase64Payload(data: string): string {
-  return crypto.createHash("sha256").update(data).digest("hex");
-}
-
-function visitDiagnosticPayload(
-  value: unknown,
-  opts?: { omitField?: (key: string) => boolean },
-): unknown {
+/** Removes credentials and inline media bytes from diagnostic payloads before persistence. */
+export function sanitizeDiagnosticPayload(value: unknown): unknown {
   const seen = new WeakSet<object>();
 
-  const visit = (input: unknown): unknown => {
+  const visit = (input: unknown, mediaPayload = false): unknown => {
+    const binary = diagnosticBinaryView(input);
+    if (binary) {
+      return {
+        redacted: REDACTED_MEDIA_DATA,
+        bytes: binary.byteLength,
+        sha256: crypto.createHash("sha256").update(binary).digest("hex"),
+      };
+    }
     if (Array.isArray(input)) {
-      return input.map((entry) => visit(entry));
+      return input.map((entry) => visit(entry, mediaPayload));
     }
     if (typeof input === "string") {
-      return redactSensitivePayloadString(input);
+      return redactDiagnosticText(input);
     }
     if (!input || typeof input !== "object") {
       return input;
@@ -99,37 +42,42 @@ function visitDiagnosticPayload(
     }
     seen.add(input);
 
-    const record = input as Record<string, unknown>;
+    const descriptors = Object.getOwnPropertyDescriptors(input);
     const out: Record<string, unknown> = {};
-    const redactValueField = hasSensitiveNameValuePair(record);
-    for (const [key, val] of Object.entries(record)) {
-      if (opts?.omitField?.(key)) {
+    const rawName =
+      typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
+    const redactValueField = typeof rawName === "string" && isCredentialFieldName(rawName);
+    const redactMedia = mediaPayload || isDiagnosticMediaPayload(descriptors);
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (!descriptor.enumerable || !("value" in descriptor)) {
         continue;
       }
-      out[key] = redactValueField && key === "value" ? "<redacted>" : visit(val);
-    }
-
-    if (shouldRedactImageData(record)) {
-      const imageData = record.data;
-      if (typeof imageData !== "string") {
-        return out;
+      if (key === "providerReplay" || isCredentialFieldName(key)) {
+        continue;
       }
-      out.data = REDACTED_IMAGE_DATA;
-      out.bytes = estimateBase64DecodedBytes(imageData);
-      out.sha256 = digestBase64Payload(imageData);
+      const alwaysPrivateMedia = key === "videoBytes" || key === "b64_json";
+      const privateMediaField =
+        alwaysPrivateMedia || (redactMedia && (key === "data" || key === "blob"));
+      const encoded = privateMediaField
+        ? (diagnosticMediaBytes(descriptor.value) ??
+          (typeof descriptor.value === "string" ? descriptor.value : undefined))
+        : undefined;
+      if (encoded !== undefined) {
+        out[key] = REDACTED_MEDIA_DATA;
+        out.bytes =
+          typeof encoded === "string" ? estimateBase64DecodedBytes(encoded) : encoded.byteLength;
+        out.sha256 = crypto.createHash("sha256").update(encoded).digest("hex");
+        continue;
+      }
+      out[key] =
+        redactValueField && key === "value" ? "<redacted>" : visit(descriptor.value, redactMedia);
     }
     return out;
   };
 
-  return visit(value);
-}
-
-/**
- * Removes credential-like fields and image/base64 payload data from diagnostic
- * objects before persistence.
- */
-export function sanitizeDiagnosticPayload(value: unknown): unknown {
-  return visitDiagnosticPayload(value, {
-    omitField: (key) => key === "providerReplay" || isCredentialFieldName(key),
-  });
+  try {
+    return visit(value);
+  } catch {
+    return "[unreadable diagnostic payload]";
+  }
 }

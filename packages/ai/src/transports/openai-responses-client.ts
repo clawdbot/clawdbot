@@ -7,6 +7,7 @@ import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -61,11 +62,7 @@ import {
 } from "./openai-transport-params.js";
 import { log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
-import {
-  assignTransportErrorDetails,
-  mergeTransportMetadata,
-  transportAbortError,
-} from "./transport-stream-shared.js";
+import { mergeTransportMetadata, transportAbortError } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
 
 function resolveNativeOpenAIResponsesWebSocketMode(
@@ -428,7 +425,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
         );
-        assignTransportErrorDetails(output, error, options?.signal);
+        Object.assign(output, projectProviderError(error, options?.signal));
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       } finally {

@@ -3,6 +3,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  projectProviderError,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "@openclaw/ai/transports";
@@ -12,6 +13,14 @@ import OpenAI from "openai";
 import { describe, expect, it, vi } from "vitest";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+
+function projectFailure(output: { stopReason: string }, error: unknown): void {
+  failTransportStream({
+    stream: { push: () => {}, end: () => {} },
+    output,
+    error,
+  });
+}
 
 describe("transport stream shared helpers", () => {
   it("sanitizes unpaired surrogate code units", () => {
@@ -167,7 +176,7 @@ describe("transport stream shared helpers", () => {
     for (const error of [1n, circular]) {
       const output: { stopReason: string; errorMessage?: string } = { stopReason: "stop" };
 
-      expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+      expect(() => projectFailure(output, error)).not.toThrow();
       expect(output.stopReason).toBe("error");
       expect(output.errorMessage).toBeTruthy();
     }
@@ -181,7 +190,7 @@ describe("transport stream shared helpers", () => {
     const sdkError = new OpenAI.APIConnectionError({ cause: fetchError });
     const output = makeAssistantMessageFixture({ stopReason: "stop", content: [] });
 
-    assignTransportErrorDetails(output, sdkError);
+    projectFailure(output, sdkError);
 
     expect(output.errorCode).toBe("ECONNREFUSED");
     expect(classifyAssistantFailoverReason(output)).toBe("timeout");
@@ -189,7 +198,7 @@ describe("transport stream shared helpers", () => {
 
   it("prefers top-level errorCode over nested cause codes", () => {
     const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
-    assignTransportErrorDetails(output, {
+    projectFailure(output, {
       errorCode: "TOP_LEVEL",
       code: "MIDDLE",
       cause: { code: "CAUSE_CODE", cause: { code: "DEEP_CAUSE_CODE" } },
@@ -202,7 +211,30 @@ describe("transport stream shared helpers", () => {
     error.cause = error;
     const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
 
-    expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+    expect(() => projectFailure(output, error)).not.toThrow();
     expect(output.errorCode).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "provider failure",
+      setup: () => ({ error: Object.assign(new Error("busy"), { status: 503 }) }),
+    },
+    {
+      name: "coded abort",
+      setup: () => {
+        const controller = new AbortController();
+        const error = Object.assign(new Error("restarted"), { code: "OPENCLAW_RESTART_ABORT" });
+        controller.abort(error);
+        return { error, signal: controller.signal };
+      },
+    },
+  ])("keeps the deprecated public wrapper equivalent for $name", ({ setup }) => {
+    const { error, signal } = setup();
+    const output: { stopReason: string } = { stopReason: "stop" };
+
+    assignTransportErrorDetails(output, error, signal);
+
+    expect(output).toEqual(projectProviderError(error, signal));
   });
 });

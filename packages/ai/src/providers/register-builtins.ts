@@ -10,6 +10,7 @@ import type {
   StreamOptions,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 
 type ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = {
   stream: StreamFunction<TApi, TOptions>;
@@ -24,19 +25,28 @@ export const BUILT_IN_API_PROVIDER_SOURCE_ID = "core:built-in";
 function forwardStream(
   target: AssistantMessageEventStream,
   source: AsyncIterable<AssistantMessageEvent>,
+  model: Model,
+  signal?: AbortSignal,
 ): void {
   void (async () => {
-    for await (const event of source) {
-      target.push(event);
+    try {
+      for await (const event of source) {
+        target.push(event);
+      }
+      target.end();
+    } catch (error) {
+      const message = createLazyLoadErrorMessage(model, error, signal);
+      target.push({ type: "error", reason: message.stopReason, error: message });
+      target.end(message);
     }
-    target.end();
   })();
 }
 
 function createLazyLoadErrorMessage<TApi extends Api>(
   model: Model<TApi>,
   error: unknown,
-): AssistantMessage {
+  signal?: AbortSignal,
+): AssistantMessage & ProviderErrorProjection {
   return {
     role: "assistant",
     content: [],
@@ -51,8 +61,7 @@ function createLazyLoadErrorMessage<TApi extends Api>(
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "error",
-    errorMessage: error instanceof Error ? error.message : String(error),
+    ...projectProviderError(error, signal),
     timestamp: Date.now(),
   };
 }
@@ -65,10 +74,12 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TStr
   return (model, context, options) => {
     const outer = new AssistantMessageEventStream();
     load()
-      .then((streams) => forwardStream(outer, select(streams)(model, context, options)))
+      .then((streams) =>
+        forwardStream(outer, select(streams)(model, context, options), model, options?.signal),
+      )
       .catch((error: unknown) => {
-        const message = createLazyLoadErrorMessage(model, error);
-        outer.push({ type: "error", reason: "error", error: message });
+        const message = createLazyLoadErrorMessage(model, error, options?.signal);
+        outer.push({ type: "error", reason: message.stopReason, error: message });
         outer.end(message);
       });
     return outer;

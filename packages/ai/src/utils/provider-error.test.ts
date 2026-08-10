@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { formatProviderError } from "./provider-error.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { projectProviderError } from "./provider-error.js";
 
-describe("formatProviderError", () => {
+const initialHost = getAiTransportHost();
+
+beforeEach(() => configureAiTransportHost({}));
+
+afterAll(() => configureAiTransportHost(initialHost));
+
+describe("projectProviderError", () => {
   it.each([
     {
       name: "JSON body",
@@ -25,27 +32,205 @@ describe("formatProviderError", () => {
       expected: "503 status code (no body)",
     },
   ])("formats an HTTP error with $name", ({ error, expected }) => {
-    expect(formatProviderError(error)).toBe(expected);
+    expect(projectProviderError(error).errorMessage).toBe(expected);
   });
 
   it("preserves an SDK message that already contains the response body", () => {
     const body = '{"error":{"message":"permission denied"}}';
     const error = Object.assign(new Error(body), { status: 403, body });
 
-    expect(formatProviderError(error)).toBe(body);
+    expect(projectProviderError(error).errorMessage).toBe(body);
   });
 
   it("preserves diagnostic fields when serializing a circular error object", () => {
     const error: Record<string, unknown> = { code: "ECONNRESET" };
     error.self = error;
 
-    expect(formatProviderError(error)).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
+    expect(projectProviderError(error).errorMessage).toBe(
+      '{"code":"ECONNRESET","self":"[Circular]"}',
+    );
   });
 
   it("does not split surrogate pairs when truncating response bodies", () => {
     const body = `${"x".repeat(3999)}😀tail`;
     const error = Object.assign(new Error("502 status code (no body)"), { status: 502, body });
 
-    expect(formatProviderError(error)).toBe(`502: ${"x".repeat(3999)}... [truncated]`);
+    expect(projectProviderError(error).errorMessage).toBe(
+      `502: ${"x".repeat(3999)}... [truncated]`,
+    );
+  });
+
+  it.each([
+    {
+      name: "Error.message",
+      error: new Error("failed data:video/mp4;base64,QUJDRA=="),
+      expected: "failed <redacted>",
+    },
+    {
+      name: "string throw",
+      error: "failed data:audio/mpeg;base64,QUJDRA==",
+      expected: "failed <redacted>",
+    },
+    {
+      name: "structured response body",
+      error: Object.assign(new Error("415 status code (no body)"), {
+        status: 415,
+        body: { type: "video", data: "QUJDRA==" },
+      }),
+      expected: '415: {"data":"<redacted>","type":"video"}',
+    },
+  ])("redacts media from $name", ({ error, expected }) => {
+    expect(projectProviderError(error).errorMessage).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "nested videoBytes",
+      body: '{"generatedVideos":[{"video":{"videoBytes":"QUJDRA=="}}]}',
+      leaked: "QUJDRA==",
+    },
+    { name: "bare b64_json", body: '{"b64_json":"QUJDRA=="}', leaked: "QUJDRA==" },
+    {
+      name: "typed video data",
+      body: '{"type":"video","data":"QUJDRA=="}',
+      leaked: "QUJDRA==",
+    },
+    {
+      name: "typed numeric video data",
+      body: '{"type":"video","data":[65,66,67,68]}',
+      leaked: "[65,66,67,68]",
+    },
+  ])("redacts $name from a JSON response-body string", ({ body, leaked }) => {
+    const projected = projectProviderError({ status: 500, body });
+
+    expect(JSON.stringify(projected)).not.toContain(leaked);
+  });
+
+  it("preserves a harmless JSON response-body string byte-for-byte", () => {
+    const body = '{"message": "safe", "nested": [1, 2]}';
+
+    expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+  });
+
+  it("retains readable status and body from a hostile non-Error value", () => {
+    const error = {
+      status: 429,
+      body: "retry after data:image/png;base64,QUJDRA==",
+      get hostile() {
+        throw new Error("getter failed");
+      },
+    };
+
+    expect(projectProviderError(error).errorMessage).toBe("429: retry after <redacted>");
+  });
+
+  it("does not invoke hostile terminal-field accessors without a host", () => {
+    const error = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(error, {
+      safe: { enumerable: true, value: "connection failed" },
+      status: {
+        enumerable: true,
+        get: () => {
+          throw new Error("status getter");
+        },
+      },
+      body: {
+        enumerable: true,
+        get: () => {
+          throw new Error("body getter");
+        },
+      },
+      message: {
+        enumerable: true,
+        get: () => {
+          throw new Error("message getter");
+        },
+      },
+    });
+
+    expect(() => projectProviderError(error)).not.toThrow();
+    expect(projectProviderError(error).errorMessage).toContain("connection failed");
+  });
+
+  it("never throws when a proxy revokes itself after descriptor collection", () => {
+    const revocable = Proxy.revocable([], {
+      ownKeys: Reflect.ownKeys,
+      getOwnPropertyDescriptor(target, key) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (key === "length") {
+          revocable.revoke();
+        }
+        return descriptor;
+      },
+    });
+
+    const projected = projectProviderError(revocable.proxy);
+
+    expect(projected.stopReason).toBe("error");
+    expect(projected.errorMessage).toBe("[Unserializable]");
+    expect(projected.errorMessage.length).toBeLessThanOrEqual(4096);
+  });
+
+  it.each([
+    { name: "Buffer", bytes: Buffer.from([1, 2, 3]) },
+    { name: "Uint8Array", bytes: new Uint8Array([4, 5, 6]) },
+    { name: "ArrayBuffer", bytes: new Uint8Array([7, 8, 9]).buffer },
+  ])("redacts $name media bytes without an installed host", ({ bytes }) => {
+    const error = Object.assign(new Error("502 status code (no body)"), {
+      status: 502,
+      body: { type: "video", data: bytes },
+    });
+
+    const projected = projectProviderError(error);
+    const serialized = JSON.stringify(projected);
+
+    expect(projected.errorMessage).toContain("502:");
+    expect(serialized).toContain("<redacted>");
+    expect(serialized).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
+  });
+
+  it.each([
+    { name: "Buffer", body: Buffer.from([1, 2, 3]) },
+    { name: "Uint8Array", body: new Uint8Array([4, 5, 6]) },
+    { name: "ArrayBuffer", body: new Uint8Array([7, 8, 9]).buffer },
+    {
+      name: "DataView",
+      body: new DataView(new Uint8Array([0, 10, 11, 12, 0]).buffer, 1, 3),
+    },
+  ])("redacts a bare $name response body by value", ({ body }) => {
+    const projected = projectProviderError({ status: 500, body });
+    const summary = '{"bytes":3,"redacted":"<redacted>"}';
+
+    expect(projected.errorMessage).toBe(`500: ${summary}`);
+    expect(projected.errorBody).toBe(summary);
+    expect(JSON.stringify(projected)).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
+  });
+
+  it("redacts credentials from terminal fields without an installed host", () => {
+    const bearer = ["not", "a", "bearer", "credential"].join("-");
+    const apiKey = ["not", "an", "api", "key"].join("-");
+    const jwt = [
+      "eyJub3QiLCJhIjoicmVhbCIsImp3dCI6dHJ1ZX0",
+      "bm90LXJlYWwtc2lnbmF0dXJl",
+      "bm90LXJlYWwtc2lnbmF0dXJl",
+    ].join(".");
+    const cookie = ["not", "a", "session", "cookie", "value"].join("-");
+    const projected = projectProviderError({
+      status: 400,
+      body: {
+        authorization: `Bearer ${bearer}`,
+        apiKey,
+        details: [`Bearer ${bearer}`, jwt, `session=${cookie}`],
+      },
+    });
+    const serialized = JSON.stringify(projected);
+
+    expect(serialized).not.toContain(bearer);
+    expect(serialized).not.toContain(apiKey);
+    expect(serialized).not.toContain(jwt);
+    expect(serialized).not.toContain(cookie);
+    expect(serialized).toContain("Bearer <redacted>");
+    expect(serialized).toContain("<redacted-jwt>");
+    expect(serialized).toContain("session=<redacted>");
   });
 });

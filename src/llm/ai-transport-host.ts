@@ -2,6 +2,7 @@
 // transport helpers run. Direct transport imports need the same wiring as the
 // process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
+import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import {
   buildGuardedModelFetch,
@@ -36,6 +37,7 @@ configureAiTransportHost({
     return swapped.text;
   },
   redactSecrets,
+  redactDiagnosticPayload: redactAgentDiagnosticPayload,
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
