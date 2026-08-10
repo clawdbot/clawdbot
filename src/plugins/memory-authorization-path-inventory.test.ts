@@ -46,6 +46,13 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "memory-cli-search-and-get",
   "memory-cli-sync-and-reindex",
   "memory-doctor-inspection-and-repair",
+  "memory-doctor-agent-schema-repair",
+  "memory-core-doctor-state-migration-registration",
+  "memory-core-doctor-sidecar-state-import",
+  "memory-core-doctor-host-events-state-import",
+  "memory-core-doctor-dreaming-state-import",
+  "memory-core-doctor-qmd-retirement",
+  "memory-core-doctor-vector-index-diagnostic",
   "gateway-memory-search",
   "memory-import",
   "session-backfill-transcript-read",
@@ -71,6 +78,8 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "dreaming-source-recall",
   "dreaming-derived-artifacts",
   "profile-and-short-term-promotion",
+  "short-term-promotion-recall-recording",
+  "short-term-promotion-operator-repair",
   "child-agent-delegation",
   "child-agent-completion-handoff",
   "cron-triggered-run",
@@ -122,6 +131,11 @@ const MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES = [
   "extensions/codex/src/migration/provider.ts",
   "extensions/codex/src/migration/plan.ts",
   "extensions/codex/src/migration/apply.ts",
+  "src/gateway/server-methods/migrations.ts",
+  "src/wizard/setup.migration-import.ts",
+  "src/wizard/setup.migration-finalize.ts",
+  "src/wizard/setup.post-install-migration.ts",
+  "src/plugin-sdk/migration-runtime.ts",
 ] as const;
 
 const MEMORY_MIGRATION_IMPORT_ROOTS = [
@@ -131,6 +145,19 @@ const MEMORY_MIGRATION_IMPORT_ROOTS = [
   "extensions/migrate-claude",
   "extensions/migrate-hermes",
   "extensions/codex/src/migration",
+  "src/gateway/server-methods/migrations.ts",
+  "src/wizard/setup.migration-import.ts",
+  "src/wizard/setup.migration-finalize.ts",
+  "src/wizard/setup.post-install-migration.ts",
+  "src/plugin-sdk/migration-runtime.ts",
+] as const;
+
+const MEMORY_CORE_DOCTOR_STATE_MIGRATION_SURFACES = [
+  "extensions/memory-core/doctor-contract-api.ts",
+  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts",
+  "extensions/memory-core/src/migration/doctor-host-events.ts",
+  "extensions/memory-core/src/migration/doctor-dreaming-state.ts",
+  "extensions/memory-core/src/migration/doctor-vector-index-provider.ts",
 ] as const;
 
 const SESSION_TRANSCRIPT_INGESTION_CALL_NAMES = [
@@ -393,6 +420,111 @@ describe("memory authorization path inventory", () => {
       owner: "operator-memory-host",
       disposition: "blocked-in-enforced-mode",
       surfaces: expect.arrayContaining([...MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES]),
+    });
+  });
+
+  it("records every Memory Core Doctor import and the promotion write owner", () => {
+    const entriesById = new Map(inventory.map((item) => [item.id, item]));
+    const inventoriedSurfaces = new Set(inventory.flatMap((item) => item.surfaces));
+
+    expect(entriesById.get("memory-core-doctor-state-migration-registration")).toMatchObject({
+      direction: "control",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: ["extensions/memory-core/doctor-contract-api.ts"],
+    });
+    for (const [id, surface] of [
+      [
+        "memory-core-doctor-sidecar-state-import",
+        "extensions/memory-core/src/migration/doctor-memory-sidecar.ts",
+      ],
+      [
+        "memory-core-doctor-host-events-state-import",
+        "extensions/memory-core/src/migration/doctor-host-events.ts",
+      ],
+      [
+        "memory-core-doctor-dreaming-state-import",
+        "extensions/memory-core/src/migration/doctor-dreaming-state.ts",
+      ],
+    ] as const) {
+      expect(entriesById.get(id)).toMatchObject({
+        direction: "ingress",
+        owner: "operator-memory-host",
+        disposition: "blocked-in-enforced-mode",
+        surfaces: [surface],
+      });
+    }
+    expect(entriesById.get("profile-and-short-term-promotion")).toMatchObject({
+      direction: "derive",
+      owner: "selected-memory-plugin",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/src/short-term-promotion-apply.ts",
+        "extensions/memory-core/src/short-term-promotion-memory-write.ts",
+      ]),
+    });
+    expect([...inventoriedSurfaces]).toEqual(
+      expect.arrayContaining([...MEMORY_CORE_DOCTOR_STATE_MIGRATION_SURFACES]),
+    );
+    expect(entriesById.get("memory-doctor-agent-schema-repair")).toMatchObject({
+      direction: "control",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "src/flows/doctor-health-contribution-runners.state.ts",
+        "src/commands/doctor-agent-memory-schema.ts",
+      ]),
+    });
+    expect(entriesById.get("memory-core-doctor-qmd-retirement")).toMatchObject({
+      direction: "control",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: ["extensions/memory-core/src/migration/doctor-memory-sidecar.ts"],
+    });
+    expect(entriesById.get("memory-core-doctor-vector-index-diagnostic")).toMatchObject({
+      direction: "egress",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: ["extensions/memory-core/src/migration/doctor-vector-index-provider.ts"],
+    });
+  });
+
+  it("keeps import, recall recording, promotion, and operator repair as separate paths", () => {
+    const entriesById = new Map(inventory.map((item) => [item.id, item]));
+
+    expect(entriesById.get("memory-migration-import")).toMatchObject({
+      direction: "ingress",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "src/gateway/server-methods/migrations.ts",
+        "src/wizard/setup.migration-import.ts",
+        "src/wizard/setup.migration-finalize.ts",
+        "src/wizard/setup.post-install-migration.ts",
+        "src/plugin-sdk/migration-runtime.ts",
+      ]),
+    });
+    expect(entriesById.get("short-term-promotion-recall-recording")).toMatchObject({
+      direction: "derive",
+      owner: "selected-memory-plugin",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/src/tools.ts",
+        "extensions/memory-core/src/cli-index-search.runtime.ts",
+        "extensions/memory-core/src/short-term-promotion-record.ts",
+        "extensions/memory-core/src/short-term-promotion-store.ts",
+      ]),
+    });
+    expect(entriesById.get("short-term-promotion-operator-repair")).toMatchObject({
+      direction: "control",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/src/cli-status.runtime.ts",
+        "src/commands/doctor-memory-search.ts",
+        "src/gateway/server-methods/doctor.ts",
+        "src/gateway/server-methods/doctor.memory-core-runtime.ts",
+      ]),
     });
   });
 
