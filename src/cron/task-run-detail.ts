@@ -12,12 +12,13 @@ import {
 } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
-import { isCronDeliveryStatus, isCronRunStatus } from "./run-log-types.js";
 
 type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
 type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
 type TaskStatus = import("../tasks/task-registry.types.js").TaskStatus;
 type CronRunLogEntry = import("./run-log-types.js").CronRunLogEntry;
+type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
+type CronRunStatus = import("./types.js").CronRunStatus;
 
 const CRON_TASK_DETAIL_KIND = "cron-run";
 const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
@@ -33,6 +34,16 @@ function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
 
 function normalizeTimestamp(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: MAX_DATE_TIMESTAMP_MS });
+}
+
+export function isCronRunStatus(value: unknown): value is CronRunStatus {
+  return value === "ok" || value === "error" || value === "skipped";
+}
+
+export function isCronDeliveryStatus(value: unknown): value is CronDeliveryStatus {
+  return ["delivered", "not-delivered", "unknown", "not-requested"].includes(
+    value as CronDeliveryStatus,
+  );
 }
 
 function normalizeUsage(value: unknown): CronRunLogEntry["usage"] {

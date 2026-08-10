@@ -106,7 +106,7 @@ export function isQueuedCronRunReservationCurrent(
   return state.queuedRunReservationsByJobId.get(jobId)?.identity === identity;
 }
 
-export function restoreQueuedCronRunReservationLastError(
+function restoreQueuedCronRunReservationLastError(
   state: CronServiceState,
   jobId: string,
   identity: object,
@@ -147,7 +147,7 @@ export function clearQueuedCronRunReservationMarker(
   return true;
 }
 
-export type QueuedCronRunReservation = {
+type QueuedCronRunReservation = {
   jobId: string;
   reservationIdentity: object;
 };
