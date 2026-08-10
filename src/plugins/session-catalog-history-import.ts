@@ -1,4 +1,3 @@
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -16,7 +15,8 @@ function importedSessionCatalogMessage(params: {
   item: SessionCatalogTranscriptItem;
   fallbackTimestamp: number;
 }): AgentMessage | undefined {
-  const timestamp = parseDateTimestampMs(params.item.timestamp) ?? params.fallbackTimestamp;
+  const parsedTimestamp = params.item.timestamp ? Date.parse(params.item.timestamp) : Number.NaN;
+  const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : params.fallbackTimestamp;
   const importedText = params.item.text?.trim();
   if (!importedText && params.item.type === "reasoning") {
     return undefined;
