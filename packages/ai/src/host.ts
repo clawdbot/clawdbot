@@ -17,6 +17,8 @@ export interface AiProviderRequestCapabilities {
   allowsAnthropicServiceTier: boolean;
 }
 
+export type AiBeforeFetchDispatch = (params: { url: string; init: RequestInit }) => void;
+
 /** Transport-safe provider policy input kept independent of OpenClaw config types. */
 export interface AiProviderRequestPolicyInput {
   provider?: string;
@@ -114,6 +116,142 @@ type AnthropicInlineContentNormalizer = (
   content: readonly AiInlineContentBlock[],
 ) => Promise<AiInlineContentBlock[]>;
 
+export const AI_MODEL_TRANSPORT_OUTCOMES = ["completed", "failed", "aborted"] as const;
+export const AI_MODEL_TRANSPORT_ATTEMPT_REASONS = [
+  "initial",
+  "retry",
+  "auth_recovery",
+  "payload_recovery",
+  "transport_fallback",
+] as const;
+export const AI_MODEL_TRANSPORT_CONNECTION_REASONS = ["initial", "prewarm", "reconnect"] as const;
+export const AI_MODEL_TRANSPORT_FALLBACK_REASONS = [
+  "unsupported",
+  "connection_failure",
+  "submission_failure",
+  "stream_failure",
+  "policy",
+] as const;
+export const AI_MODEL_ZERO_SUBMISSION_OUTCOMES = ["failed", "aborted"] as const;
+export const AI_MODEL_ZERO_SUBMISSION_REASONS = [
+  "failed_before_submission",
+  "aborted_before_submission",
+] as const;
+
+export type AiModelTransportOutcome = (typeof AI_MODEL_TRANSPORT_OUTCOMES)[number];
+export type AiModelTransportAttemptReason = (typeof AI_MODEL_TRANSPORT_ATTEMPT_REASONS)[number];
+export type AiModelTransportConnectionReason =
+  (typeof AI_MODEL_TRANSPORT_CONNECTION_REASONS)[number];
+export type AiModelTransportFallbackReason = (typeof AI_MODEL_TRANSPORT_FALLBACK_REASONS)[number];
+export type AiModelZeroSubmissionOutcome = (typeof AI_MODEL_ZERO_SUBMISSION_OUTCOMES)[number];
+export type AiModelZeroSubmissionReason = (typeof AI_MODEL_ZERO_SUBMISSION_REASONS)[number];
+export type AiModelFetchProvenance = "dispatch_attested";
+export type AiModelFetchResult = {
+  fetch: typeof fetch;
+  provenance: AiModelFetchProvenance;
+};
+
+export type AiModelFetchOptions = {
+  sanitizeSse?: boolean;
+  /**
+   * Observes every physical fetch hop after network preflight and a normal
+   * fetch invocation return. Observer failures must never alter provider traffic.
+   */
+  observeFetchDispatch?: AiBeforeFetchDispatch;
+  /**
+   * Fires after the underlying fetch invocation returns normally. Synchronous
+   * preflight rejection therefore remains an attested zero-dispatch outcome.
+   */
+  onFetchDispatch?: () => void;
+};
+
+export type AiBlockingModelFetchOptions = AiModelFetchOptions & {
+  /** Blocks every physical fetch hop after network preflight and before dispatch. */
+  beforeFetchDispatch: AiBeforeFetchDispatch;
+};
+
+type AiModelTransportEventBase = {
+  /** Stable identity for de-duplicating one emitted transport fact. */
+  eventId: string;
+  provider: string;
+  model: string;
+  api: string;
+};
+
+type AiModelTransportCallEventBase = AiModelTransportEventBase & {
+  /** Model-call requestId used only for correlation, never session affinity. */
+  callId: string;
+};
+
+/**
+ * Provider transport facts for one model call.
+ *
+ * An attempt is one dispatched provider request. Its ordinal starts at one and
+ * advances within one call; connection setup and run-scoped prewarm never count
+ * as attempts. A transport fallback remains pending until a matching
+ * `transport_fallback` attempt or zero-submission phase consumes it. Retries stay
+ * on the current transport. Zero-submission facts describe one route phase that
+ * ended before the dispatch boundary, including a pending fallback target after
+ * earlier failed attempts. Server-side provider fallback records an in-request
+ * serving model transition without changing the requested provider, model, API,
+ * or active transport.
+ */
+export type AiModelTransportEvent =
+  | (AiModelTransportCallEventBase & {
+      type: "attempt";
+      transport: string;
+      ordinal: number;
+      reason: AiModelTransportAttemptReason;
+      outcome: AiModelTransportOutcome;
+      statusCode?: number;
+      durationMs?: number;
+    })
+  | (AiModelTransportCallEventBase & {
+      type: "connection";
+      transport: string;
+      ordinal: number;
+      reason: Exclude<AiModelTransportConnectionReason, "prewarm">;
+      outcome: AiModelTransportOutcome;
+      statusCode?: number;
+      durationMs?: number;
+    })
+  | (AiModelTransportEventBase & {
+      type: "connection";
+      transport: string;
+      ordinal: number;
+      reason: "prewarm";
+      outcome: AiModelTransportOutcome;
+      statusCode?: number;
+      durationMs?: number;
+    })
+  | (AiModelTransportCallEventBase & {
+      type: "fallback";
+      fromTransport: string;
+      toTransport: string;
+      reason: AiModelTransportFallbackReason;
+    })
+  | (AiModelTransportCallEventBase & {
+      type: "provider_fallback";
+      transport: string;
+      fromModel: string;
+      toModel: string;
+    })
+  | (AiModelTransportCallEventBase & {
+      /** Scoped uncertainty that changes no physical transport count. */
+      type: "coverage";
+      scope: "provider_fallbacks";
+      state: "lower_bound";
+      reason: "terminal_metadata_unavailable";
+      transport: string;
+    })
+  | (AiModelTransportCallEventBase & {
+      type: "submission";
+      transport: string;
+      total: 0;
+      outcome: AiModelZeroSubmissionOutcome;
+      reason: AiModelZeroSubmissionReason;
+    });
+
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
   /**
@@ -123,8 +261,26 @@ export interface AiTransportHost {
   buildModelFetch(
     model: Model,
     timeoutMs?: number,
-    options?: { sanitizeSse?: boolean },
+    options?: AiModelFetchOptions,
   ): typeof fetch | undefined;
+  /**
+   * Builds a policy-guarded fetch and attests that dispatch callbacks run at
+   * their documented boundaries.
+   */
+  buildModelFetchWithDispatchAttestation?(
+    model: Model,
+    timeoutMs: number | undefined,
+    options: AiModelFetchOptions,
+  ): AiModelFetchResult | undefined;
+  /**
+   * Builds a fetch whose blocking callback is guaranteed to run immediately
+   * before every physical dispatch. Missing support must fail closed.
+   */
+  buildModelFetchWithBlockingDispatchGuard?(
+    model: Model,
+    timeoutMs: number | undefined,
+    options: AiBlockingModelFetchOptions,
+  ): AiModelFetchResult | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
   /** Redacts secrets inside structured tool-result payloads. */
@@ -172,6 +328,8 @@ export interface AiTransportHost {
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
   /** Prepares the provider-owned Google simple-completion alias when needed. */
   prepareGoogleSimpleCompletionModel(registry: ApiRegistry, model: Model): Model;
+  /** Emits one provider transport fact to the embedding host's active run collector. */
+  observeModelTransportEvent?(event: AiModelTransportEvent): void;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -211,8 +369,12 @@ function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: S
   return false;
 }
 
-type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineContentBlocks"> & {
+type ActiveAiTransportHost = Omit<
+  AiTransportHost,
+  "normalizeAnthropicInlineContentBlocks" | "observeModelTransportEvent"
+> & {
   normalizeAnthropicInlineContentBlocks: AnthropicInlineContentNormalizer;
+  observeModelTransportEvent: NonNullable<AiTransportHost["observeModelTransportEvent"]>;
 };
 
 const inertAiTransportHost: ActiveAiTransportHost = {
@@ -252,6 +414,7 @@ const inertAiTransportHost: ActiveAiTransportHost = {
     transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
   prepareGoogleSimpleCompletionModel: (_registry, model) => model,
+  observeModelTransportEvent: () => {},
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},
@@ -267,6 +430,8 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
     normalizeAnthropicInlineContentBlocks:
       host.normalizeAnthropicInlineContentBlocks ??
       inertAiTransportHost.normalizeAnthropicInlineContentBlocks,
+    observeModelTransportEvent:
+      host.observeModelTransportEvent ?? inertAiTransportHost.observeModelTransportEvent,
     plugin: { ...inertAiTransportHost.plugin, ...host.plugin },
   };
   const transportHost = activeAiTransportHost;

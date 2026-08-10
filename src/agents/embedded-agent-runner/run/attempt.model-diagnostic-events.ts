@@ -1,3 +1,8 @@
+import type { AiModelTransportOutcome } from "@openclaw/ai";
+import {
+  resolveCachedInputObservation,
+  type CachedInputObservation,
+} from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
@@ -37,6 +42,11 @@ import type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
+import {
+  observeProviderTransportLogicalCallFinalized,
+  observeProviderTransportLogicalCallSettled,
+  observeProviderTransportLogicalCallStarted,
+} from "../../provider-transport-accounting.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
 
@@ -95,9 +105,11 @@ type ModelCallObservationState = {
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
+  cachedInput?: CachedInputObservation;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
   terminalEventEmitted?: boolean;
+  awaitingTerminalResult?: boolean;
   suppressPluginHooks?: boolean;
 };
 
@@ -252,6 +264,7 @@ function observeModelCallUsage(state: ModelCallObservationState, value: unknown)
   const usage = normalizedModelCallUsage(rawUsage);
   if (usage) {
     state.usage = usage;
+    state.cachedInput = resolveCachedInputObservation(rawUsage);
   }
 }
 
@@ -308,6 +321,77 @@ function observeResponseChunk(
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
   }
+}
+
+function modelCallTerminalOutcome(value: unknown): AiModelTransportOutcome | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  try {
+    if (value.type === "done") {
+      if (!isRecord(value.message) || value.reason !== value.message.stopReason) {
+        return undefined;
+      }
+      return value.reason === "stop" || value.reason === "length" || value.reason === "toolUse"
+        ? "completed"
+        : undefined;
+    }
+    if (value.type === "error") {
+      if (!isRecord(value.error) || value.reason !== value.error.stopReason) {
+        return undefined;
+      }
+      return value.reason === "aborted"
+        ? "aborted"
+        : value.reason === "error"
+          ? "failed"
+          : undefined;
+    }
+    return value.stopReason === "aborted"
+      ? "aborted"
+      : value.stopReason === "error"
+        ? "failed"
+        : value.stopReason === "stop" ||
+            value.stopReason === "length" ||
+            value.stopReason === "toolUse"
+          ? "completed"
+          : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function modelCallAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  Object.assign(error, { code: "ABORT_ERR" });
+  return error;
+}
+
+function modelCallTerminalError(value: unknown, outcome: "failed" | "aborted"): Error {
+  let message = outcome === "aborted" ? "Model call aborted" : "Model call failed";
+  try {
+    if (isRecord(value)) {
+      const terminal = value.type === "error" && isRecord(value.error) ? value.error : value;
+      if (typeof terminal.errorMessage === "string" && terminal.errorMessage.trim()) {
+        message = terminal.errorMessage.trim();
+      }
+    }
+  } catch {
+    // Diagnostics must not turn a provider-owned terminal value into a call failure.
+  }
+  return outcome === "aborted" ? modelCallAbortError(message) : new Error(message);
+}
+
+function modelCallEarlyCloseError(): Error {
+  return modelCallAbortError("Model stream closed before a terminal result");
+}
+
+function modelCallIncompleteError(source: "result" | "stream"): Error {
+  return new Error(
+    source === "stream"
+      ? "Model stream ended without a valid terminal result"
+      : "Model call result did not contain a valid terminal outcome",
+  );
 }
 
 function maybeEmitModelCallStreamProgress(
@@ -559,6 +643,14 @@ function emitModelCallStarted(
   modelContent: DiagnosticModelCallContent | undefined,
   suppressPluginHooks: boolean,
 ): void {
+  if (eventBase.api) {
+    observeProviderTransportLogicalCallStarted({
+      callId: eventBase.callId,
+      provider: eventBase.provider,
+      model: eventBase.model,
+      api: eventBase.api,
+    });
+  }
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.started",
@@ -580,6 +672,12 @@ function emitModelCallCompleted(
     return;
   }
   state.terminalEventEmitted = true;
+  observeProviderTransportLogicalCallSettled(
+    eventBase.callId,
+    "completed",
+    state.cachedInput ?? { state: "unknown" },
+  );
+  observeProviderTransportLogicalCallFinalized(eventBase.callId);
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true, state.responseStatus);
@@ -615,6 +713,12 @@ function emitModelCallError(
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   const fields = modelCallErrorFields(err);
+  observeProviderTransportLogicalCallSettled(
+    eventBase.callId,
+    fields.failureKind === "aborted" ? "aborted" : "failed",
+    state.cachedInput ?? { state: "unknown" },
+  );
+  observeProviderTransportLogicalCallFinalized(eventBase.callId);
   const errorStatus = diagnosticHttpStatusCode(err);
   const responseStatus =
     state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
@@ -638,6 +742,24 @@ function emitModelCallError(
       ...fields,
     });
   }
+}
+
+function emitModelCallTerminalValue(
+  value: unknown,
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  state: ModelCallObservationState,
+): boolean {
+  const outcome = modelCallTerminalOutcome(value);
+  if (!outcome) {
+    return false;
+  }
+  if (outcome === "completed") {
+    emitModelCallCompleted(eventBase, startedAt, state);
+  } else {
+    emitModelCallError(eventBase, startedAt, state, modelCallTerminalError(value, outcome));
+  }
+  return true;
 }
 
 function withDiagnosticRequestContext(
@@ -702,8 +824,8 @@ async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<voi
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Early consumer return should not hang diagnostic completion forever; give
-    // provider cleanup a short chance, then emit completion for the observed call.
+    // Early consumer return should not hang diagnostic finalization forever; give
+    // provider cleanup a short chance before the caller emits the abort terminal.
     await Promise.race([
       Promise.resolve(returnResult).catch(() => undefined),
       new Promise<void>((resolve) => {
@@ -729,6 +851,7 @@ async function* observeModelCallIterator<T>(
   eventBase: ModelCallEventBase,
   startedAt: number,
   state: ModelCallObservationState,
+  hasObservedResult: boolean,
 ): AsyncIterable<T> {
   // Tracks whether the underlying iterator terminated on its own (done or threw).
   // This is independent of state.terminalEventEmitted: result() can emit the
@@ -742,23 +865,27 @@ async function* observeModelCallIterator<T>(
         break;
       }
       observeResponseChunk(state, startedAt, next.value);
+      emitModelCallTerminalValue(next.value, eventBase, startedAt, state);
       maybeEmitModelCallStreamProgress(eventBase, state);
       yield next.value;
     }
-    emitModelCallCompleted(eventBase, startedAt, state);
+    if (!state.terminalEventEmitted) {
+      state.awaitingTerminalResult = hasObservedResult;
+      if (!state.awaitingTerminalResult) {
+        emitModelCallError(eventBase, startedAt, state, modelCallIncompleteError("stream"));
+      }
+    }
   } catch (err) {
     iteratorSettled = true;
     emitModelCallError(eventBase, startedAt, state, err);
     throw err;
   } finally {
     if (!iteratorSettled) {
-      // A consumer can stop reading before the provider emits done/error — e.g.
-      // the agent loop returns on the terminal event after awaiting result().
-      // Close the underlying iterator for provider cleanup (idle-timeout abort
-      // listeners, SSE readers) even when result() already emitted the terminal
-      // event; emitModelCallCompleted self-dedupes via state.terminalEventEmitted.
+      // A consumer may stop after resolving result() while the provider iterator
+      // remains open. Release its abort listeners and stream readers; if result()
+      // already emitted a terminal, the emitter self-dedupes.
       await safeReturnIterator(iterator);
-      emitModelCallCompleted(eventBase, startedAt, state);
+      emitModelCallError(eventBase, startedAt, state, modelCallEarlyCloseError());
     }
   }
 }
@@ -769,8 +896,11 @@ function observeModelCallFinalResult<T>(
   startedAt: number,
   state: ModelCallObservationState,
 ): T {
+  state.awaitingTerminalResult = false;
   observeResultMessageContent(state, startedAt, result);
-  emitModelCallCompleted(eventBase, startedAt, state);
+  if (!emitModelCallTerminalValue(result, eventBase, startedAt, state)) {
+    emitModelCallError(eventBase, startedAt, state, modelCallIncompleteError("result"));
+  }
   return result;
 }
 
@@ -791,6 +921,7 @@ function createObservedResultFunction(
         return result.then(
           (resolved) => observeModelCallFinalResult(resolved, eventBase, startedAt, state),
           (err: unknown) => {
+            state.awaitingTerminalResult = false;
             emitModelCallError(eventBase, startedAt, state, err);
             throw err;
           },
@@ -798,6 +929,7 @@ function createObservedResultFunction(
       }
       return observeModelCallFinalResult(result, eventBase, startedAt, state);
     } catch (err) {
+      state.awaitingTerminalResult = false;
       emitModelCallError(eventBase, startedAt, state, err);
       throw err;
     }
@@ -811,9 +943,15 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
   startedAt: number,
   state: ModelCallObservationState,
 ): T {
-  const observedIterator = () =>
-    observeModelCallIterator(createIterator(), eventBase, startedAt, state)[Symbol.asyncIterator]();
   const observedResult = createObservedResultFunction(stream, eventBase, startedAt, state);
+  const observedIterator = () =>
+    observeModelCallIterator(
+      createIterator(),
+      eventBase,
+      startedAt,
+      state,
+      observedResult !== undefined,
+    )[Symbol.asyncIterator]();
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
@@ -857,7 +995,9 @@ function observeModelCallResult(
       state,
     );
   }
-  emitModelCallCompleted(eventBase, startedAt, state);
+  if (!emitModelCallTerminalValue(result, eventBase, startedAt, state)) {
+    emitModelCallError(eventBase, startedAt, state, modelCallIncompleteError("result"));
+  }
   return result;
 }
 

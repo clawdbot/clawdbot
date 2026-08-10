@@ -22,6 +22,10 @@ import type {
   ToolCall,
   Usage,
 } from "../types.js";
+import {
+  bindCachedInputObservation,
+  cachedInputObservationFromRawUsage,
+} from "../usage-observation.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
@@ -285,6 +289,7 @@ export function createResponsesTerminalController(params: {
         ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       };
+      bindCachedInputObservation(output.usage, cachedInputObservationFromRawUsage(response.usage));
     }
     calculateCost(model, output.usage);
     if (options?.applyServiceTierPricing) {

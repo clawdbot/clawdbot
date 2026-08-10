@@ -60,6 +60,23 @@ afterEach(() => {
 });
 
 describe("fetchWithRuntimeDispatcher", () => {
+  it("normalizes synchronous runtime fetch failures as Promise rejections", async () => {
+    const runtimeFetch = vi.fn(() => {
+      throw new Error("runtime fetch invocation failed");
+    });
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      FormData: RuntimeFormData,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    await expect(fetchWithRuntimeDispatcher("https://example.com")).rejects.toThrow(
+      "runtime fetch invocation failed",
+    );
+  });
+
   it("drops symbol metadata from plain header dictionaries before runtime fetch", async () => {
     const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("content-type")).toBe("application/json");

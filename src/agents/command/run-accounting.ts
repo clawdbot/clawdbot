@@ -2,15 +2,23 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { CodeModeRunFinalQuiescence } from "../code-mode-activity.js";
 import { cloneCodeModeStats } from "../code-mode-stats.js";
 import type { EmbeddedRunOpaqueWorkReason } from "../embedded-agent-runner/run/accounting-observers.js";
+import {
+  createProviderTransportAccountingCollector,
+  runOutsideProviderTransportAccountingObserver as exitProviderAccounting,
+  runWithProviderTransportAccountingObserver,
+} from "../provider-transport-accounting.js";
 import type { AgentSubmissionHandle } from "../sessions/agent-session-accounting.js";
 import {
   AGENT_COMMAND_USAGE_BUCKETS,
   boundAccountingIdentity,
+  hasCommandModelEvidence,
   observeEmbeddedAttempt,
   observeModelUsage,
+  runtimeCoverageReasons,
   type MutableCandidateRecord,
   type MutableRunAccounting,
 } from "./run-accounting-observation.js";
+import { reconcileCommandZeroTransport } from "./run-accounting-provider-transport.js";
 import type {
   AgentCommandCandidateRuntime,
   AgentCommandModelCallAccounting,
@@ -27,6 +35,7 @@ const COVERAGE_REASON_ORDER: readonly AgentCommandRunAccountingCoverageReason[] 
   "candidate_details_truncated",
   "candidate_identity_truncated",
   "effective_model_details_truncated",
+  "not_observed",
   "cli_runtime",
   "native_runtime",
   "cloud_runtime",
@@ -47,7 +56,6 @@ const COVERAGE_REASON_ORDER: readonly AgentCommandRunAccountingCoverageReason[] 
   "tool_details_truncated",
   "agent_submission_unsettled",
   "attempt_extraction_only",
-  "not_observed",
   "acp_runtime",
 ];
 const COVERAGE_REASON_RANK = new Map(
@@ -57,18 +65,12 @@ const COVERAGE_REASON_RANK = new Map(
 const snapshots = new WeakMap<object, AgentCommandRunAccountingSnapshot>();
 const activeCommandRunAccounting = new AsyncLocalStorage<RunAccountingAccumulator>();
 
-function cloneRunAccountingSnapshot(
-  snapshot: AgentCommandRunAccountingSnapshot,
-): AgentCommandRunAccountingSnapshot {
-  return structuredClone(snapshot);
-}
-
 export function bindAgentCommandRunAccounting(
   target: unknown,
   snapshot: AgentCommandRunAccountingSnapshot,
 ): void {
   if ((typeof target === "object" && target !== null) || typeof target === "function") {
-    snapshots.set(target, cloneRunAccountingSnapshot(snapshot));
+    snapshots.set(target, structuredClone(snapshot));
   }
 }
 
@@ -77,7 +79,7 @@ export function resolveAgentCommandRunAccounting(
 ): AgentCommandRunAccountingSnapshot | undefined {
   if ((typeof target === "object" && target !== null) || typeof target === "function") {
     const snapshot = snapshots.get(target);
-    return snapshot ? cloneRunAccountingSnapshot(snapshot) : undefined;
+    return snapshot ? structuredClone(snapshot) : undefined;
   }
   return undefined;
 }
@@ -104,7 +106,10 @@ export async function runWithAgentCommandAccounting<T>(
   const accounting = createRunAccountingAccumulator();
   return await activeCommandRunAccounting.run(accounting, async () => {
     try {
-      return await run(accounting);
+      return await runWithProviderTransportAccountingObserver(
+        accounting.providerTransportObserver,
+        () => run(accounting),
+      );
     } catch (error) {
       if ((typeof error === "object" && error !== null) || typeof error === "function") {
         bindAgentCommandRunAccounting(error, accounting.project());
@@ -115,7 +120,7 @@ export async function runWithAgentCommandAccounting<T>(
 }
 
 export async function runOutsideAgentCommandAccounting<T>(run: () => Promise<T>): Promise<T> {
-  return await activeCommandRunAccounting.exit(run);
+  return await activeCommandRunAccounting.exit(() => exitProviderAccounting(run));
 }
 
 function createCoverage(
@@ -132,23 +137,15 @@ function createCoverage(
   };
 }
 
-function runtimeCoverageReasons(
-  runtimes: AgentCommandRunAccountingSnapshot["candidates"]["runtimes"],
-): AgentCommandRunAccountingCoverageReason[] {
-  const reasons: AgentCommandRunAccountingCoverageReason[] = [];
-  if (runtimes.cli > 0) {
-    reasons.push("cli_runtime");
+function extendCoverage(
+  coverage: AgentCommandRunAccountingCoverage,
+  reasons: AgentCommandRunAccountingCoverageReason[],
+): AgentCommandRunAccountingCoverage {
+  if (reasons.length === 0) {
+    return coverage;
   }
-  if (runtimes.native > 0) {
-    reasons.push("native_runtime");
-  }
-  if (runtimes.cloud > 0) {
-    reasons.push("cloud_runtime");
-  }
-  if (runtimes.unknown > 0) {
-    reasons.push("unknown_runtime");
-  }
-  return reasons;
+  const combined = [...("reasons" in coverage ? coverage.reasons : []), ...reasons];
+  return createCoverage(coverage.state === "unavailable" ? "unavailable" : "partial", combined);
 }
 
 function projectObservedCoverage(params: {
@@ -229,6 +226,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
     codeModeLifecycleMissing: 0,
     maxUnresolvedAtExtraction: 0,
     attemptsWithUnresolved: 0,
+    providerTransport: createProviderTransportAccountingCollector(),
   };
 
   const beginAgentSubmission = (): AgentSubmissionHandle => {
@@ -250,6 +248,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
   };
 
   return {
+    providerTransportObserver: state.providerTransport.observer,
     beginAgentSubmission,
     beginModelCall() {
       state.modelWorkRuledOut = false;
@@ -373,6 +372,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
       state.codeModeFinalQuiescence = finalQuiescence;
     },
     project(): AgentCommandRunAccountingSnapshot {
+      const providerTransport = state.providerTransport.project();
       const runtimeReasons = runtimeCoverageReasons(state.candidates.runtimes);
       const opaqueWorkReasons = [...state.opaqueWorkReasons.keys()];
       const opaqueWorkTotal = [...state.opaqueWorkReasons.values()].reduce(
@@ -385,6 +385,10 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
       const auxiliaryHiddenWorkReasons = opaqueWorkReasons.filter(
         (reason) => reason !== "settled_finalization_failed",
       );
+      const providerTransportCoverage = extendCoverage(providerTransport.coverage, [
+        ...runtimeReasons,
+        ...auxiliaryHiddenWorkReasons,
+      ]);
       const candidateCoverageReasons = [
         ...(state.candidates.truncated > 0 ? (["candidate_details_truncated"] as const) : []),
         ...(state.candidateIdentityTruncated ? (["candidate_identity_truncated"] as const) : []),
@@ -423,15 +427,21 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
         state.modelCallInstrumentedCandidates < state.candidates.runtimes.embedded;
       const embeddedAttemptObservationMissing =
         state.embeddedCandidatesObserved < state.candidates.runtimes.embedded;
+      const commandModelEvidenceConflict =
+        state.modelCalls.total === 0 &&
+        state.modelCallInstrumentedCandidates > 0 &&
+        !modelCallInstrumentationMissing &&
+        hasCommandModelEvidence(state);
       const modelCallCoverageReasons = [
         ...runtimeReasons,
         ...(modelCallInstrumentationMissing ? (["not_instrumented"] as const) : []),
         ...(state.modelCalls.completed + state.modelCalls.failed < state.modelCalls.total
           ? (["model_call_unsettled"] as const)
           : []),
+        ...(commandModelEvidenceConflict ? (["attempt_extraction_only"] as const) : []),
         ...auxiliaryHiddenWorkReasons,
       ];
-      const modelCallsCoverage = state.modelWorkRuledOut
+      const baseModelCallsCoverage = state.modelWorkRuledOut
         ? ({ state: "complete" } as const)
         : state.candidates.total === 0 && state.modelCalls.total === 0
           ? createCoverage("unavailable", ["not_observed", ...modelCallCoverageReasons])
@@ -454,17 +464,34 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
         usageCoverageExpected - state.usageObserved,
         0,
       );
-      const wholeRunUsageReasons = [
+      const baseWholeRunUsageReasons = [
         ...runtimeReasons,
         ...(state.candidates.threw > 0 ? (["candidate_failed"] as const) : []),
         ...(modelCallInstrumentationMissing ? (["not_instrumented"] as const) : []),
         ...(modelCallUnsettled ? (["model_call_unsettled"] as const) : []),
+        ...(commandModelEvidenceConflict ? (["attempt_extraction_only"] as const) : []),
       ];
-      const exactZeroModelWork =
-        (state.modelWorkRuledOut || modelCallsCoverage.state === "complete") &&
+      const exactZeroBeforeTransport =
+        (state.modelWorkRuledOut || baseModelCallsCoverage.state === "complete") &&
         state.modelCalls.total === 0 &&
-        wholeRunUsageReasons.length === 0 &&
+        baseWholeRunUsageReasons.length === 0 &&
         opaqueWorkReasons.length === 0;
+      const {
+        zeroTransportConflict,
+        exactZeroModelWork,
+        modelCallsCoverage,
+        providerTransport: effectiveProviderTransport,
+      } = reconcileCommandZeroTransport({
+        exactZeroBeforeTransport,
+        projection: providerTransport,
+        providerCoverage: providerTransportCoverage,
+        modelCallsCoverage: baseModelCallsCoverage,
+        modelCallCoverageReasons,
+      });
+      const wholeRunUsageReasons = [
+        ...baseWholeRunUsageReasons,
+        ...(zeroTransportConflict ? (["transport_event_conflict"] as const) : []),
+      ];
       const usageBuckets = Object.fromEntries(
         AGENT_COMMAND_USAGE_BUCKETS.map((bucket) => {
           const observed = state.usage[bucket].observed;
@@ -494,6 +521,8 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
           ...(state.usagePartial > 0 ? (["partial_usage"] as const) : []),
           ...(modelCallInstrumentationMissing ? (["not_instrumented"] as const) : []),
           ...(modelCallUnsettled ? (["model_call_unsettled"] as const) : []),
+          ...(zeroTransportConflict ? (["transport_event_conflict"] as const) : []),
+          ...(commandModelEvidenceConflict ? (["attempt_extraction_only"] as const) : []),
           ...opaqueWorkReasons,
         ],
       });
@@ -510,6 +539,8 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
           ...(costMissing > 0 && usageMissing > 0 ? (["missing_usage"] as const) : []),
           ...(modelCallInstrumentationMissing ? (["not_instrumented"] as const) : []),
           ...(modelCallUnsettled ? (["model_call_unsettled"] as const) : []),
+          ...(zeroTransportConflict ? (["transport_event_conflict"] as const) : []),
+          ...(commandModelEvidenceConflict ? (["attempt_extraction_only"] as const) : []),
           ...(hasProviderBilledCost && (costMissing > 0 || state.providerBilledCostPartial > 0)
             ? (["partial_provider_billed_cost"] as const)
             : []),
@@ -625,6 +656,9 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
               costUsd: hasProviderBilledCost ? state.providerBilledCostUsd : state.estimatedCostUsd,
             }
           : {}),
+        ...(effectiveProviderTransport.snapshot
+          ? { providerTransport: effectiveProviderTransport.snapshot }
+          : {}),
         commandExecutionDurationMs: Math.max(0, Date.now() - state.startedAtMs),
         coverage: {
           candidates: candidatesCoverage,
@@ -640,6 +674,8 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
                   state.attemptsObserved > state.assistantTurnsObserved
                     ? (["not_observed"] as const)
                     : []),
+                  ...(zeroTransportConflict ? (["transport_event_conflict"] as const) : []),
+                  ...(commandModelEvidenceConflict ? (["attempt_extraction_only"] as const) : []),
                   ...settledFinalizationReasons,
                 ],
               }),
@@ -656,6 +692,8 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
                     : []),
                   ...(embeddedAttemptObservationMissing ? (["not_observed"] as const) : []),
                   ...(state.toolNamesTruncated ? (["tool_details_truncated"] as const) : []),
+                  ...(zeroTransportConflict ? (["transport_event_conflict"] as const) : []),
+                  ...(commandModelEvidenceConflict ? (["attempt_extraction_only"] as const) : []),
                   ...settledFinalizationReasons,
                 ],
               }),
@@ -663,10 +701,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
           agentTime: createCoverage("unavailable", ["not_instrumented"]),
           commandExecutionDuration: { state: "complete" },
           wallLatency: createCoverage("unavailable", ["not_instrumented"]),
-          providerTransport: createCoverage("unavailable", [
-            "not_instrumented",
-            ...auxiliaryHiddenWorkReasons,
-          ]),
+          providerTransport: effectiveProviderTransport.coverage,
         },
         ...(codeMode ? { codeMode } : {}),
       };

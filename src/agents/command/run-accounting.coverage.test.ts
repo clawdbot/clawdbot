@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createCodeModeStats } from "../code-mode-stats.js";
+import type { EmbeddedRunAccountingObservation } from "../embedded-agent-runner/run/accounting-observers.js";
 import {
   bindAgentCommandRunAccounting,
   createRunAccountingAccumulator,
@@ -407,7 +409,7 @@ describe("command run accounting coverage", () => {
     });
     expect(coverage.providerTransport).toEqual({
       state: "unavailable",
-      reasons: ["not_instrumented", reason],
+      reasons: ["not_observed", reason],
     });
   });
 
@@ -432,7 +434,7 @@ describe("command run accounting coverage", () => {
     });
     expect(snapshot.coverage.providerTransport).toEqual({
       state: "unavailable",
-      reasons: ["not_instrumented", "acp_runtime"],
+      reasons: ["not_observed", "acp_runtime"],
     });
   });
 
@@ -471,12 +473,220 @@ describe("command run accounting coverage", () => {
       },
       toolSummary: { calls: 0, tools: [] },
       costUsd: 0,
+      providerTransport: {
+        logicalCalls: { total: 0, totalKind: "exact", outcomeKind: "exact" },
+        attempts: { total: 0, totalKind: "exact" },
+        connections: { total: 0, totalKind: "exact" },
+        fallbacks: { total: 0, totalKind: "exact" },
+        providerFallbacks: { total: 0, totalKind: "exact" },
+        zeroSubmissions: { total: 0, totalKind: "exact" },
+        events: { total: 0, totalKind: "exact" },
+      },
       coverage: {
         agentSubmissions: { state: "complete" },
         modelCalls: { state: "complete" },
         usage: { state: "complete" },
         tools: { state: "complete" },
         cost: { state: "complete" },
+        providerTransport: { state: "complete" },
+      },
+    });
+  });
+
+  it("preserves command-owned model evidence when model-call instrumentation reports zero", () => {
+    const project = (observe: EmbeddedRunAccountingObservation) => {
+      const accounting = createRunAccountingAccumulator();
+      const candidate = accounting.beginCandidate({ provider: "openai", model: "gpt-test" });
+      candidate.selectRuntime("embedded");
+      candidate.markModelCallInstrumentationInstalled();
+      candidate.observeEmbeddedAttempt(observe);
+      candidate.settle("returned");
+      return accounting.project();
+    };
+    const baseObservation: EmbeddedRunAccountingObservation = {
+      provider: "openai",
+      model: "gpt-test",
+      assistantTurns: 0,
+      assistantTurnsObserved: true,
+      toolSummary: { calls: 0, tools: [] },
+      toolsObserved: true,
+      codeModeLifecycleObserved: false,
+    };
+    const codeModeStats = createCodeModeStats();
+    codeModeStats.controlCalls.exec = 1;
+    const snapshots = [
+      project({ ...baseObservation, assistantTurns: 1 }),
+      project({
+        ...baseObservation,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          reasoningTokens: 0,
+          total: 0,
+        },
+      }),
+      project({
+        ...baseObservation,
+        toolSummary: { calls: 1, tools: ["read"] },
+      }),
+      project({
+        ...baseObservation,
+        usage: {
+          providerBilledCost: { totalUsd: 0, coverage: "complete" },
+        },
+      }),
+      project({
+        ...baseObservation,
+        codeModeEngaged: true,
+        codeModeStats,
+      }),
+    ];
+
+    for (const snapshot of snapshots) {
+      expect(snapshot.modelCalls).toEqual({ total: 0, completed: 0, failed: 0 });
+      expect(snapshot.coverage.modelCalls).toEqual({
+        state: "partial",
+        reasons: ["attempt_extraction_only"],
+      });
+      expect(snapshot).not.toHaveProperty("providerTransport");
+      expect(snapshot.coverage.providerTransport).toEqual({
+        state: "unavailable",
+        reasons: ["not_observed"],
+      });
+      for (const metric of ["assistantTurns", "usage", "tools", "cost"] as const) {
+        const coverage = snapshot.coverage[metric];
+        expect(coverage.state).not.toBe("complete");
+        expect("reasons" in coverage ? coverage.reasons : []).toContain("attempt_extraction_only");
+      }
+    }
+
+    expect(snapshots[0]).toHaveProperty("assistantTurns", 1);
+    expect(snapshots[1]).toHaveProperty("usage.total", 0);
+    expect(snapshots[2]).toHaveProperty("toolSummary.calls", 1);
+    expect(snapshots[3]).toHaveProperty("costUsd", 0);
+    expect(snapshots[4]).toHaveProperty("codeMode.stats.controlCalls.exec", 1);
+  });
+
+  it("preserves call-less prewarm evidence when model work is exactly zero", () => {
+    const accounting = createRunAccountingAccumulator();
+    accounting.providerTransportObserver.onTransportEvent({
+      type: "connection",
+      eventId: "prewarm-zero-model-work",
+      provider: "openai",
+      model: "gpt-test",
+      api: "openai-responses",
+      transport: "websocket",
+      ordinal: 1,
+      reason: "prewarm",
+      outcome: "completed",
+    });
+    accounting.markNoModelWork();
+
+    expect(accounting.project()).toMatchObject({
+      providerTransport: {
+        logicalCalls: { total: 0, totalKind: "exact" },
+        attempts: { total: 0, totalKind: "exact" },
+        connections: { total: 1, prewarms: 1, totalKind: "exact" },
+        events: { total: 1, totalKind: "exact" },
+      },
+      coverage: { providerTransport: { state: "complete" } },
+    });
+  });
+
+  it("preserves contradictory transport evidence instead of replacing it with exact zero", () => {
+    const accounting = createRunAccountingAccumulator();
+    accounting.providerTransportObserver.onLogicalCallStarted({
+      callId: "call-zero-model-conflict",
+      provider: "openai",
+      model: "gpt-test",
+      api: "openai-responses",
+    });
+    accounting.providerTransportObserver.onTransportEvent({
+      type: "attempt",
+      eventId: "attempt-zero-model-conflict",
+      callId: "call-zero-model-conflict",
+      provider: "openai",
+      model: "gpt-test",
+      api: "openai-responses",
+      transport: "http",
+      ordinal: 1,
+      reason: "initial",
+      outcome: "completed",
+    });
+    accounting.providerTransportObserver.onLogicalCallSettled(
+      "call-zero-model-conflict",
+      "completed",
+    );
+    accounting.markNoModelWork();
+
+    const snapshot = accounting.project();
+    expect(snapshot).not.toHaveProperty("assistantTurns");
+    expect(snapshot).not.toHaveProperty("usage");
+    expect(snapshot).not.toHaveProperty("toolSummary");
+    expect(snapshot).not.toHaveProperty("costUsd");
+    expect(snapshot).toMatchObject({
+      modelCalls: { total: 0 },
+      providerTransport: {
+        logicalCalls: { total: 1, completed: 1 },
+        attempts: { total: 1 },
+        events: { total: 1 },
+      },
+      coverage: {
+        modelCalls: {
+          state: "partial",
+          reasons: expect.arrayContaining(["transport_event_conflict"]),
+        },
+        usage: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["transport_event_conflict"]),
+        },
+        tools: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["transport_event_conflict"]),
+        },
+        cost: {
+          state: "unavailable",
+          reasons: expect.arrayContaining(["transport_event_conflict"]),
+        },
+        providerTransport: {
+          state: "partial",
+          reasons: expect.arrayContaining(["transport_event_conflict"]),
+        },
+      },
+    });
+  });
+
+  it("does not treat lower-bound zero transport evidence as authoritative no-work", () => {
+    const accounting = createRunAccountingAccumulator();
+    accounting.providerTransportObserver.onObservationFailure("transport_event");
+    accounting.markNoModelWork();
+
+    const snapshot = accounting.project();
+    expect(snapshot).not.toHaveProperty("assistantTurns");
+    expect(snapshot).not.toHaveProperty("usage");
+    expect(snapshot).not.toHaveProperty("toolSummary");
+    expect(snapshot).not.toHaveProperty("costUsd");
+    expect(snapshot).toMatchObject({
+      modelCalls: { total: 0 },
+      providerTransport: {
+        logicalCalls: { total: 0, totalKind: "lower_bound" },
+        attempts: { total: 0, totalKind: "lower_bound" },
+        events: { total: 0, totalKind: "lower_bound" },
+      },
+      coverage: {
+        modelCalls: {
+          state: "partial",
+          reasons: expect.arrayContaining(["transport_event_conflict"]),
+        },
+        providerTransport: {
+          state: "partial",
+          reasons: expect.arrayContaining([
+            "transport_observer_failed",
+            "transport_event_conflict",
+          ]),
+        },
       },
     });
   });

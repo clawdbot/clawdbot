@@ -38,6 +38,7 @@ export type EmbeddedRunOpaqueWorkReason =
 
 type EmbeddedRunAccountingObservers = {
   readonly codeModeActivityOwner?: CodeModeActivityOwner;
+  allocateDiagnosticModelCallId?: () => string;
   onAgentSubmission?: AgentSubmissionObserver;
   onModelCall?: ModelCallObserver;
   onModelCallInstrumentationInstalled?: () => void;
@@ -54,6 +55,7 @@ export function bindEmbeddedRunAccountingObservers<T extends object>(
 ): T {
   if (
     value?.codeModeActivityOwner ||
+    value?.allocateDiagnosticModelCallId ||
     value?.onAgentSubmission ||
     value?.onModelCall ||
     value?.onModelCallInstrumentationInstalled ||
@@ -75,13 +77,22 @@ export function copyEmbeddedRunCallAccountingObservers<T extends object>(
   target: T,
 ): T {
   const sourceObservers = observers.get(source);
+  const allocateDiagnosticModelCallId = sourceObservers?.allocateDiagnosticModelCallId;
   const onAgentSubmission = sourceObservers?.onAgentSubmission;
   const onModelCall = sourceObservers?.onModelCall;
   const onModelCallInstrumentationInstalled = sourceObservers?.onModelCallInstrumentationInstalled;
   return bindEmbeddedRunAccountingObservers(
     target,
-    onAgentSubmission || onModelCall || onModelCallInstrumentationInstalled
-      ? { onAgentSubmission, onModelCall, onModelCallInstrumentationInstalled }
+    allocateDiagnosticModelCallId ||
+      onAgentSubmission ||
+      onModelCall ||
+      onModelCallInstrumentationInstalled
+      ? {
+          allocateDiagnosticModelCallId,
+          onAgentSubmission,
+          onModelCall,
+          onModelCallInstrumentationInstalled,
+        }
       : undefined,
   );
 }

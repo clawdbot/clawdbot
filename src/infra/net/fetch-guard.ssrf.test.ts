@@ -879,14 +879,17 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   it("enforces hostname allowlist policies", async () => {
     const fetchImpl = vi.fn();
+    const onFetchDispatch = vi.fn();
     await expect(
       fetchWithSsrFGuard({
         url: "https://evil.example.org/file.txt",
         fetchImpl,
+        onFetchDispatch,
         policy: { hostnameAllowlist: ["cdn.example.com", "*.assets.example.com"] },
       }),
     ).rejects.toThrow(/allowlist/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(onFetchDispatch).not.toHaveBeenCalled();
   });
 
   it("does not let wildcard allowlists match the apex host", async () => {
@@ -935,12 +938,14 @@ describe("fetchWithSsrFGuard hardening", () => {
       .mockResolvedValueOnce(okResponse("redirected"));
     process.on("unhandledRejection", onUnhandledRejection);
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+    const onFetchDispatch = vi.fn();
 
     try {
       result = await fetchWithSsrFGuard({
         url: "https://api.example.com/start",
         fetchImpl,
         lookupFn: createPublicLookup(),
+        onFetchDispatch,
       });
 
       const reader = result.response.body?.getReader();
@@ -956,6 +961,7 @@ describe("fetchWithSsrFGuard hardening", () => {
         reader.releaseLock();
       }
       expect(cancel).toHaveBeenCalledOnce();
+      expect(onFetchDispatch).toHaveBeenCalledOnce();
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -965,6 +971,204 @@ describe("fetchWithSsrFGuard hardening", () => {
       process.off("unhandledRejection", onUnhandledRejection);
       expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
     }
+  });
+
+  it("runs the blocking pre-fetch hook after preflight for every redirect hop", async () => {
+    const beforeFetchDispatch = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse("redirected"));
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      beforeFetchDispatch,
+    });
+
+    expect(beforeFetchDispatch).toHaveBeenCalledTimes(2);
+    expect(beforeFetchDispatch.mock.calls.map(([call]) => call.url)).toEqual([
+      "https://api.example.com/start",
+      "https://cdn.example.com/asset",
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await result.release();
+  });
+
+  it("observes every physical redirect hop after blocking policy succeeds", async () => {
+    const order: string[] = [];
+    const observeFetchDispatch = vi.fn(({ url }: { url: string }) => {
+      order.push(`observe:${url}`);
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockImplementationOnce(async (url: string) => {
+        order.push(`fetch:${url}`);
+        return redirectResponse("https://cdn.example.com/asset");
+      })
+      .mockImplementationOnce(async (url: string) => {
+        order.push(`fetch:${url}`);
+        return okResponse("redirected");
+      });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      observeFetchDispatch,
+    });
+
+    expect(observeFetchDispatch).toHaveBeenCalledTimes(2);
+    expect(order).toEqual([
+      "fetch:https://api.example.com/start",
+      "observe:https://api.example.com/start",
+      "fetch:https://cdn.example.com/asset",
+      "observe:https://cdn.example.com/asset",
+    ]);
+    await result.release();
+  });
+
+  it("does not run the blocking pre-fetch hook when redirect preflight fails", async () => {
+    const beforeFetchDispatch = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:6379/"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        beforeFetchDispatch,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    expect(beforeFetchDispatch).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("lets the blocking pre-fetch hook reject before network egress", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+    const observeFetchDispatch = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/data",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        observeFetchDispatch,
+        beforeFetchDispatch: () => {
+          throw new Error("policy rejected");
+        },
+      }),
+    ).rejects.toThrow("policy rejected");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(observeFetchDispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not observe a redirect hop rejected during network preflight", async () => {
+    const observeFetchDispatch = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:6379/"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        observeFetchDispatch,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    expect(observeFetchDispatch).toHaveBeenCalledOnce();
+    expect(observeFetchDispatch.mock.calls[0]?.[0].url).toBe("https://public.example/start");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("isolates throwing physical-dispatch observers", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+    const observeFetchDispatch = vi.fn(() => {
+      throw new Error("observer failure");
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/data",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      observeFetchDispatch,
+    });
+
+    expect(observeFetchDispatch).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.response.status).toBe(200);
+    await result.release();
+  });
+
+  it("does not let a throwing dispatch observer block the network fetch", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+    const onFetchDispatch = vi.fn(() => {
+      throw new Error("observer failure");
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/data",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      onFetchDispatch,
+    });
+
+    expect(onFetchDispatch).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.response.status).toBe(200);
+    await result.release();
+  });
+
+  it("does not report dispatch when the fetch invocation throws synchronously", async () => {
+    const fetchImpl = vi.fn(() => {
+      throw new Error("fetch invocation failed");
+    });
+    const observeFetchDispatch = vi.fn();
+    const onFetchDispatch = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/data",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        observeFetchDispatch,
+        onFetchDispatch,
+      }),
+    ).rejects.toThrow("fetch invocation failed");
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(observeFetchDispatch).not.toHaveBeenCalled();
+    expect(onFetchDispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not report runtime-dispatcher sync failures as physical dispatches", async () => {
+    const runtimeFetch = vi.fn(() => {
+      throw new Error("runtime fetch invocation failed");
+    });
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: runtimeFetch,
+    };
+    const observeFetchDispatch = vi.fn();
+    const onFetchDispatch = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/data",
+        lookupFn: createPublicLookup(),
+        observeFetchDispatch,
+        onFetchDispatch,
+      }),
+    ).rejects.toThrow("runtime fetch invocation failed");
+
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+    expect(observeFetchDispatch).not.toHaveBeenCalled();
+    expect(onFetchDispatch).not.toHaveBeenCalled();
   });
 
   it("strips sensitive headers when redirect crosses origins", async () => {

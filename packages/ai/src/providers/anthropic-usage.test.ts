@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Usage } from "../types.js";
+import { resolveCachedInputObservation } from "../usage-observation.js";
 import {
   applyAnthropicMessageDeltaUsage,
   applyAnthropicMessageStartUsage,
@@ -18,6 +19,39 @@ function makeUsage(): Usage {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
+
+describe("Anthropic cached-input authority", () => {
+  it("distinguishes an explicit zero from an omitted cache-read counter", () => {
+    const explicit = makeUsage();
+    applyAnthropicMessageStartUsage(explicit, {
+      input_tokens: 10,
+      output_tokens: 1,
+      cache_read_input_tokens: 0,
+    });
+    expect(resolveCachedInputObservation(explicit)).toEqual({ state: "exact", tokens: 0 });
+
+    const omitted = makeUsage();
+    applyAnthropicMessageStartUsage(omitted, {
+      input_tokens: 10,
+      output_tokens: 1,
+    });
+    expect(resolveCachedInputObservation(omitted)).toEqual({ state: "unknown" });
+  });
+
+  it("promotes a later explicit delta without treating an omitted delta as zero", () => {
+    const usage = makeUsage();
+    applyAnthropicMessageStartUsage(usage, { input_tokens: 10, output_tokens: 0 });
+    applyAnthropicMessageDeltaUsage(usage, { output_tokens: 1 }, undefined);
+    expect(resolveCachedInputObservation(usage)).toEqual({ state: "unknown" });
+
+    applyAnthropicMessageDeltaUsage(
+      usage,
+      { output_tokens: 2, cache_read_input_tokens: 4 },
+      undefined,
+    );
+    expect(resolveCachedInputObservation(usage)).toEqual({ state: "exact", tokens: 4 });
+  });
+});
 
 describe("readAnthropicCacheWriteUsage", () => {
   it("reads independent 5-minute and 1-hour cache-write buckets", () => {

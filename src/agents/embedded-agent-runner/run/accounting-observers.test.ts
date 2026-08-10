@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { wrapStreamFnWithModelCallAccounting } from "./accounting-observers.js";
+import {
+  bindEmbeddedRunAccountingObservers,
+  copyEmbeddedRunCallAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+  wrapStreamFnWithModelCallAccounting,
+} from "./accounting-observers.js";
 
 function assistant(stopReason: AssistantMessage["stopReason"]): AssistantMessage {
   return {
@@ -31,6 +36,33 @@ function streamWithResult(result: AssistantMessage) {
 }
 
 describe("model call accounting", () => {
+  it("copies call identity and accounting observers without attempt-level observers", () => {
+    const source = {};
+    const target = {};
+    const allocateDiagnosticModelCallId = vi.fn(() => "run-1:model:2");
+    const onAgentSubmission = vi.fn();
+    const onModelCall = vi.fn();
+    const onModelCallInstrumentationInstalled = vi.fn();
+    bindEmbeddedRunAccountingObservers(source, {
+      allocateDiagnosticModelCallId,
+      onAgentSubmission,
+      onModelCall,
+      onModelCallInstrumentationInstalled,
+      onAttemptObserved: vi.fn(),
+      onRuntimeSelected: vi.fn(),
+      onOpaqueWork: vi.fn(),
+    });
+
+    copyEmbeddedRunCallAccountingObservers(source, target);
+
+    expect(resolveEmbeddedRunAccountingObservers(target)).toEqual({
+      allocateDiagnosticModelCallId,
+      onAgentSubmission,
+      onModelCall,
+      onModelCallInstrumentationInstalled,
+    });
+  });
+
   it.each([
     ["stop", "completed"],
     ["error", "failed"],
@@ -111,7 +143,7 @@ describe("model call accounting", () => {
     const guarded = () =>
       bypassed ? streamWithResult(assistant("aborted")) : admitted({} as never, {} as never);
 
-    guarded();
+    void guarded();
 
     expect(observer).not.toHaveBeenCalled();
   });

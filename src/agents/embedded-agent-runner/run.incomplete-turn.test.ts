@@ -1038,6 +1038,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const onModelCall = vi.fn(() => ({ settle: modelCallSettle }));
     const onModelCallInstrumentationInstalled = vi.fn();
     const onEmbeddedRunAttemptObserved = vi.fn();
+    let diagnosticModelCallSequence = 0;
+    const allocateDiagnosticModelCallId = vi.fn(
+      () =>
+        `run-tool-use-terminal-continuation:model:${String((diagnosticModelCallSequence += 1))}`,
+    );
+    const diagnosticModelCallIds: string[] = [];
     mockedResolveModelAsync.mockResolvedValue({
       model: {
         provider: "openai",
@@ -1076,7 +1082,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"];
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      if (!attemptParams || typeof attemptParams !== "object") {
+        throw new Error("expected embedded attempt parameters");
+      }
       markUserMessagePersisted(attemptParams);
+      const callId =
+        resolveEmbeddedRunAccountingObservers(attemptParams)?.allocateDiagnosticModelCallId?.();
+      if (callId) {
+        diagnosticModelCallIds.push(callId);
+      }
       return makeAttemptResult({
         assistantTexts: [],
         attemptUsage: { input: 10, output: 2, total: 12 },
@@ -1122,10 +1136,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runAttempt: async (attempt) => await mockedRunEmbeddedAttempt(attempt),
       finalizeSettledTurn: async ({ attempt }) => {
         expect(resolveEmbeddedRunAccountingObservers(attempt)).toEqual({
+          allocateDiagnosticModelCallId,
           onAgentSubmission,
           onModelCall,
           onModelCallInstrumentationInstalled,
         });
+        const callId =
+          resolveEmbeddedRunAccountingObservers(attempt)?.allocateDiagnosticModelCallId?.();
+        if (callId) {
+          diagnosticModelCallIds.push(callId);
+        }
         resolveEmbeddedRunAccountingObservers(attempt)?.onModelCallInstrumentationInstalled?.();
         resolveEmbeddedRunAccountingObservers(attempt)?.onModelCall?.().settle("completed");
         const finalized = await mockedRunEmbeddedAttempt(attempt);
@@ -1153,6 +1173,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       model: "base-model",
     });
     bindEmbeddedRunAccountingObservers(runParams, {
+      allocateDiagnosticModelCallId,
       onAgentSubmission,
       onModelCall,
       onModelCallInstrumentationInstalled,
@@ -1164,6 +1185,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(onModelCallInstrumentationInstalled).toHaveBeenCalledOnce();
     expect(onModelCall).toHaveBeenCalledOnce();
     expect(modelCallSettle).toHaveBeenCalledExactlyOnceWith("completed");
+    expect(diagnosticModelCallIds).toEqual([
+      "run-tool-use-terminal-continuation:model:1",
+      "run-tool-use-terminal-continuation:model:2",
+    ]);
     expect(onEmbeddedRunAttemptObserved).toHaveBeenCalledOnce();
     expect(onEmbeddedRunAttemptObserved).toHaveBeenCalledWith(
       expect.objectContaining({

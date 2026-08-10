@@ -17,7 +17,7 @@ import {
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
-  fetchWithRuntimeDispatcher,
+  invokeRuntimeDispatcherFetch,
   isMockedFetch,
   type DispatcherAwareRequestInit,
 } from "./runtime-fetch.js";
@@ -66,6 +66,21 @@ export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
   init?: RequestInit;
+  /**
+   * Runs for every physical hop after SSRF/DNS preflight and immediately
+   * before the underlying fetch. Failure blocks dispatch.
+   */
+  beforeFetchDispatch?: (params: { url: string; init: RequestInit }) => void;
+  /**
+   * Observes every physical hop after blocking policy succeeds and the fetch
+   * invocation returns normally. Observer failure is isolated from the request.
+   */
+  observeFetchDispatch?: (params: { url: string; init: RequestInit }) => void;
+  /**
+   * Fires once after the first fetch invocation returns normally. Redirect
+   * hops remain one transport attempt.
+   */
+  onFetchDispatch?: () => void;
   capture?:
     | false
     | {
@@ -121,7 +136,7 @@ type GuardedFetchPresetOptions = Omit<
   "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
 >;
 
-const DEFAULT_MAX_REDIRECTS = 3;
+export const DEFAULT_FETCH_GUARD_MAX_REDIRECTS = 3;
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 
 async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -494,7 +509,7 @@ async function fetchWithSsrFGuardInternal(
   const maxRedirects =
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
       ? Math.max(0, Math.floor(params.maxRedirects))
-      : DEFAULT_MAX_REDIRECTS;
+      : DEFAULT_FETCH_GUARD_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
   const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
@@ -518,6 +533,7 @@ async function fetchWithSsrFGuardInternal(
   let currentInit = normalizeRequestInitHeadersForFetch(
     params.init ? { ...params.init } : undefined,
   );
+  let didNotifyFetchDispatch = false;
   const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
   let redirectCount = 0;
 
@@ -654,9 +670,24 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
+      params.beforeFetchDispatch?.({ url: parsedUrl.toString(), init });
+      const responsePromise = shouldUseRuntimeFetch
+        ? invokeRuntimeDispatcherFetch(parsedUrl.toString(), init)
+        : defaultFetch(parsedUrl.toString(), init);
+      try {
+        params.observeFetchDispatch?.({ url: parsedUrl.toString(), init });
+      } catch {
+        // Dispatch observation is diagnostic and must never alter provider traffic.
+      }
+      if (!didNotifyFetchDispatch) {
+        didNotifyFetchDispatch = true;
+        try {
+          params.onFetchDispatch?.();
+        } catch {
+          // Transport accounting is observational and must never block dispatch.
+        }
+      }
+      const response = await responsePromise;
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&
         isAmbientGlobalFetch({

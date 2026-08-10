@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
+import { resolveCachedInputObservation } from "../usage-observation.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -1332,6 +1333,38 @@ describe("processResponsesStream", () => {
       cacheWrite: 3,
       totalTokens: 42,
     });
+    expect(resolveCachedInputObservation(output.usage)).toEqual({
+      state: "exact",
+      tokens: 5,
+    });
+  });
+
+  it("does not treat an omitted Responses cached_tokens field as exact zero", async () => {
+    const output = createResponsesAssistantOutput(gpt56SolModel, gpt56SolModel.api);
+    const stream = new AssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_cache_unknown",
+            status: "completed",
+            usage: {
+              input_tokens: 10,
+              output_tokens: 2,
+              total_tokens: 12,
+            },
+          },
+        },
+      ]),
+      output,
+      stream,
+      gpt56SolModel,
+    );
+
+    expect(output.usage.cacheRead).toBe(0);
+    expect(resolveCachedInputObservation(output.usage)).toEqual({ state: "unknown" });
   });
 
   it("derives totalTokens from the split buckets when the payload omits it", async () => {

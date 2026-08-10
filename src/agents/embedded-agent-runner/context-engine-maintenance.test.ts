@@ -25,6 +25,12 @@ import {
   runWithAgentCommandAccounting,
 } from "../command/run-accounting.js";
 import type { AgentCommandRunAccountingSnapshot } from "../command/run-accounting.types.js";
+import {
+  observeProviderTransportEvent,
+  observeProviderTransportLogicalCallFinalized,
+  observeProviderTransportLogicalCallSettled,
+  observeProviderTransportLogicalCallStarted,
+} from "../provider-transport-accounting.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveSessionLane } from "./lanes.js";
 import {
@@ -851,6 +857,26 @@ describe("runContextEngineMaintenance", () => {
             total: 2,
           },
         });
+        observeProviderTransportLogicalCallStarted({
+          callId: "background-call",
+          provider: "test",
+          model: "background",
+          api: "openai-responses",
+        });
+        observeProviderTransportEvent({
+          type: "attempt",
+          eventId: "background-attempt",
+          callId: "background-call",
+          provider: "test",
+          model: "background",
+          api: "openai-responses",
+          transport: "http",
+          ordinal: 1,
+          reason: "initial",
+          outcome: "completed",
+        });
+        observeProviderTransportLogicalCallSettled("background-call", "completed");
+        observeProviderTransportLogicalCallFinalized("background-call");
         return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
       });
       const backgroundEngine = {
@@ -888,6 +914,7 @@ describe("runContextEngineMaintenance", () => {
 
       expect(maintain).toHaveBeenCalledOnce();
       expect(backgroundModelCallObserved).toBe(false);
+      expect(snapshot?.providerTransport).toBeUndefined();
       expect(snapshot).toMatchObject({
         opaqueWork: {
           total: 1,
@@ -900,6 +927,10 @@ describe("runContextEngineMaintenance", () => {
               "not_observed",
               "deferred_context_engine_maintenance",
             ]),
+          },
+          providerTransport: {
+            state: "unavailable",
+            reasons: ["not_observed", "deferred_context_engine_maintenance"],
           },
         },
       });

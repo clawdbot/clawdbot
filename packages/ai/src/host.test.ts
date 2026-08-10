@@ -1,8 +1,8 @@
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import type { Api, Model, StreamFn } from "@openclaw/llm-core";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createApiRegistry, type ApiRegistry } from "./api-registry.js";
-import type { AiTransformTransportMessages } from "./host.js";
+import type { AiModelTransportEvent, AiTransformTransportMessages } from "./host.js";
 
 const CUSTOM_API = "openclaw-openai-chatgpt-responses-transport";
 
@@ -17,6 +17,16 @@ function registerCustomApi(registry: ApiRegistry, api: Api, _streamFn: StreamFn)
 
 describe("AI transport host configuration", () => {
   let initialHost: import("./host.js").AiTransportHost | undefined;
+
+  it("keeps prewarm call-less and requires callId for fallback events", () => {
+    type PrewarmEvent = Extract<AiModelTransportEvent, { type: "connection"; reason: "prewarm" }>;
+    type FallbackEvent = Extract<AiModelTransportEvent, { type: "fallback" }>;
+    type CoverageEvent = Extract<AiModelTransportEvent, { type: "coverage" }>;
+
+    expectTypeOf<PrewarmEvent>().not.toHaveProperty("callId");
+    expectTypeOf<FallbackEvent>().toHaveProperty("callId").toEqualTypeOf<string>();
+    expectTypeOf<CoverageEvent>().toHaveProperty("callId").toEqualTypeOf<string>();
+  });
 
   afterAll(async () => {
     if (!initialHost) {
@@ -110,5 +120,85 @@ describe("AI transport host configuration", () => {
     configureAiTransportHost({ transformTransportMessages: override });
     expect(getAiTransportHost().transformTransportMessages(messages, model)).toBe(messages);
     expect(override).toHaveBeenCalledOnce();
+  });
+
+  it("forwards transport facts exactly and restores the inert default on reset", async () => {
+    const { configureAiTransportHost, getAiTransportHost } = await import("./host.js");
+    const observer = vi.fn();
+    const events: AiModelTransportEvent[] = [
+      {
+        type: "attempt",
+        eventId: "event-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-test",
+        api: "openai-responses",
+        transport: "native-codex-sse",
+        ordinal: 1,
+        reason: "transport_fallback",
+        outcome: "completed",
+      },
+      {
+        type: "provider_fallback",
+        eventId: "event-2",
+        callId: "call-2",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        api: "anthropic-messages",
+        transport: "sse",
+        fromModel: "claude-fable-5",
+        toModel: "claude-opus-5",
+      },
+      {
+        type: "coverage",
+        eventId: "event-coverage",
+        callId: "call-2",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        api: "anthropic-messages",
+        transport: "sse",
+        scope: "provider_fallbacks",
+        state: "lower_bound",
+        reason: "terminal_metadata_unavailable",
+      },
+      {
+        type: "connection",
+        eventId: "event-3",
+        provider: "openai",
+        model: "gpt-test",
+        api: "openai-responses",
+        transport: "native-codex-websocket",
+        ordinal: 1,
+        reason: "prewarm",
+        outcome: "completed",
+      },
+      {
+        type: "fallback",
+        eventId: "event-4",
+        callId: "call-4",
+        provider: "openai",
+        model: "gpt-test",
+        api: "openai-responses",
+        fromTransport: "native-codex-websocket",
+        toTransport: "native-codex-sse",
+        reason: "stream_failure",
+      },
+    ];
+
+    configureAiTransportHost({ observeModelTransportEvent: observer });
+    for (const event of events) {
+      getAiTransportHost().observeModelTransportEvent(event);
+    }
+    expect(observer.mock.calls.map(([event]) => event)).toEqual(events);
+
+    configureAiTransportHost({});
+    const firstEvent = events[0];
+    if (!firstEvent) {
+      throw new Error("expected transport fixture");
+    }
+    expect(() =>
+      getAiTransportHost().observeModelTransportEvent({ ...firstEvent, eventId: "event-5" }),
+    ).not.toThrow();
+    expect(observer).toHaveBeenCalledTimes(events.length);
   });
 });

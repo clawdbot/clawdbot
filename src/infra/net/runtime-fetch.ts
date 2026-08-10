@@ -89,11 +89,30 @@ export async function fetchWithRuntimeDispatcher(
   input: RequestInfo | URL,
   init?: DispatcherAwareRequestInit,
 ): Promise<Response> {
-  return await fetchWithPreparedRuntimeDispatcher(loadUndiciRuntimeDeps(), input, init);
+  return await invokeRuntimeDispatcherFetch(input, init);
+}
+
+/**
+ * Internal sync-aware invocation boundary for guarded dispatch attestation.
+ * Public runtime-fetch helpers remain Promise-normalized for plugin callers.
+ */
+export function invokeRuntimeDispatcherFetch(
+  input: RequestInfo | URL,
+  init?: DispatcherAwareRequestInit,
+): Promise<Response> {
+  return invokePreparedRuntimeDispatcherFetch(loadUndiciRuntimeDeps(), input, init);
 }
 
 /** Uses one prepared Undici snapshot so reusable fetch wrappers stay stable. */
-export function fetchWithPreparedRuntimeDispatcher(
+export async function fetchWithPreparedRuntimeDispatcher(
+  runtimeDeps: UndiciRuntimeDeps,
+  input: RequestInfo | URL,
+  init?: DispatcherAwareRequestInit,
+): Promise<Response> {
+  return await invokePreparedRuntimeDispatcherFetch(runtimeDeps, input, init);
+}
+
+function invokePreparedRuntimeDispatcherFetch(
   runtimeDeps: UndiciRuntimeDeps,
   input: RequestInfo | URL,
   init?: DispatcherAwareRequestInit,

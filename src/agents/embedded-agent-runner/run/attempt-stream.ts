@@ -328,6 +328,9 @@ export function installEmbeddedAttemptStreamGuards(input: {
     };
   }
   let diagnosticModelCallSeq = 0;
+  const allocateDiagnosticModelCallId =
+    resolveEmbeddedRunAccountingObservers(attempt)?.allocateDiagnosticModelCallId ??
+    (() => `${attempt.runId}:model:${String((diagnosticModelCallSeq += 1))}`);
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
     runId: attempt.runId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
@@ -347,7 +350,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
       : {}),
     trace: input.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    nextCallId: allocateDiagnosticModelCallId,
     onStarted: () => {
       attempt.onExecutionPhase?.({
         phase: "model_call_started",

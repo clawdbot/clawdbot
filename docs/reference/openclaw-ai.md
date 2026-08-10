@@ -46,9 +46,19 @@ A runnable version lives in the repository at `examples/ai-chat`.
   built-in transports. Provider SDK modules load lazily on first use.
 - **Host policy is injected, not bundled.** Request fetch guarding (for
   example SSRF policy), secret redaction of tool-result replay text, OpenAI
-  strict-tool defaults, and diagnostics logging are `AiTransportHost` ports
-  configured with `configureAiTransportHost`. The library defaults are inert;
-  OpenClaw installs its real implementations in its stream facade.
+  strict-tool defaults, diagnostics logging, and typed transport-event
+  observation are `AiTransportHost` ports configured with
+  `configureAiTransportHost`. One attempt means one provider request dispatched
+  through its transport;
+  connection setup and prewarm do not count as attempts. Transport fallback
+  stages a concrete target until a matching attempt or zero-submission phase
+  consumes it. A server-side serving-model fallback is in-stream submission
+  evidence and does not rewrite the requested provider/model/API identity.
+  Scoped coverage can mark only provider-fallback identity lower-bound when
+  terminal metadata is unavailable; dispatched attempt and event totals remain
+  exact. The library default observer is inert; OpenClaw installs its collector
+  in its stream facade. Provider coverage depends on which adapters emit these
+  facts.
 - **One event-stream identity.** `@openclaw/ai/event-stream` is the canonical
   `EventStream` constructor shared by OpenClaw core, agent-core, and external
   consumers.

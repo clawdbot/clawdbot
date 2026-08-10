@@ -1,8 +1,14 @@
 // Installs OpenClaw-owned policy ports before package providers or shared
 // transport helpers run. Direct transport imports need the same wiring as the
 // process-default stream facade.
-import { configureAiTransportHost } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  type AiBlockingModelFetchOptions,
+  type AiModelFetchOptions,
+  type AiModelFetchResult,
+} from "@openclaw/ai";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
+import { observeProviderTransportEvent } from "../agents/provider-transport-accounting.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -23,8 +29,40 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
   return log;
 }
 
+function buildOpenClawModelFetch(
+  model: Parameters<typeof buildGuardedModelFetch>[0],
+  timeoutMs?: number,
+  options?: AiModelFetchOptions,
+): typeof fetch {
+  return buildGuardedModelFetch(model, timeoutMs, options);
+}
+
+function buildOpenClawAttestedModelFetch(
+  model: Parameters<typeof buildGuardedModelFetch>[0],
+  timeoutMs: number | undefined,
+  options: AiModelFetchOptions,
+): AiModelFetchResult {
+  return {
+    fetch: buildGuardedModelFetch(model, timeoutMs, options),
+    provenance: "dispatch_attested",
+  };
+}
+
+function buildOpenClawBlockingModelFetch(
+  model: Parameters<typeof buildGuardedModelFetch>[0],
+  timeoutMs: number | undefined,
+  options: AiBlockingModelFetchOptions,
+): AiModelFetchResult {
+  return {
+    fetch: buildGuardedModelFetch(model, timeoutMs, options),
+    provenance: "dispatch_attested",
+  };
+}
+
 configureAiTransportHost({
-  buildModelFetch: buildGuardedModelFetch,
+  buildModelFetch: buildOpenClawModelFetch,
+  buildModelFetchWithDispatchAttestation: buildOpenClawAttestedModelFetch,
+  buildModelFetchWithBlockingDispatchGuard: buildOpenClawBlockingModelFetch,
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);
     const unknown = swapped.unknown[0];
@@ -40,6 +78,7 @@ configureAiTransportHost({
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
   resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
+  observeModelTransportEvent: observeProviderTransportEvent,
   logDebug: (subsystem, build) => {
     const log = transportLog(subsystem);
     if (!log.isEnabled("debug", "any")) {

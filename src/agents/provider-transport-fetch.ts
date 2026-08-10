@@ -19,6 +19,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
+  type GuardedFetchOptions,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
@@ -68,6 +69,10 @@ const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
+type GuardedModelFetchOptions = {
+  sanitizeSse?: boolean;
+} & Pick<GuardedFetchOptions, "beforeFetchDispatch" | "observeFetchDispatch" | "onFetchDispatch">;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -784,7 +789,7 @@ function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersIn
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
-  options?: { sanitizeSse?: boolean },
+  options?: GuardedModelFetchOptions,
 ): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
@@ -864,6 +869,11 @@ export function buildGuardedModelFetch(
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
       ...(baseSignal ? { signal: baseSignal } : {}),
+      ...(options?.beforeFetchDispatch ? { beforeFetchDispatch: options.beforeFetchDispatch } : {}),
+      ...(options?.observeFetchDispatch
+        ? { observeFetchDispatch: options.observeFetchDispatch }
+        : {}),
+      ...(options?.onFetchDispatch ? { onFetchDispatch: options.onFetchDispatch } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,

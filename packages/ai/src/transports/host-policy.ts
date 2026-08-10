@@ -1,19 +1,130 @@
 import type { Api, Context, Model } from "@openclaw/llm-core";
-import { getAiTransportHost, type AiProviderRequestPolicyInput } from "../host.js";
+import {
+  getAiTransportHost,
+  type AiBeforeFetchDispatch,
+  type AiModelFetchOptions,
+  type AiModelFetchResult,
+  type AiProviderRequestPolicyInput,
+} from "../host.js";
+
+function normalizeLegacyModelFetch(result: unknown): { fetch: typeof fetch } | undefined {
+  return typeof result === "function" ? { fetch: result as typeof fetch } : undefined;
+}
+
+function normalizeAttestedModelFetch(result: typeof fetch | AiModelFetchResult | undefined):
+  | {
+      fetch: typeof fetch;
+      physicalDispatchAttested: true;
+      provenance: "dispatch_attested";
+    }
+  | undefined {
+  if (
+    !result ||
+    typeof result === "function" ||
+    typeof result.fetch !== "function" ||
+    result.provenance !== "dispatch_attested"
+  ) {
+    return undefined;
+  }
+  return {
+    fetch: result.fetch,
+    physicalDispatchAttested: true,
+    provenance: result.provenance,
+  };
+}
+
+type GuardedModelFetchResult = {
+  fetch: typeof fetch;
+  physicalDispatchAttested?: boolean;
+  provenance?: AiModelFetchResult["provenance"];
+};
+
+class AiTransportDispatchGuardUnavailableError extends Error {
+  constructor() {
+    super("blocking model fetch dispatch guard is unavailable");
+    this.name = "AiTransportDispatchGuardUnavailableError";
+  }
+}
+
+class AiTransportDispatchAttestationInvalidError extends Error {
+  constructor() {
+    super("attested model fetch returned an invalid dispatch contract");
+    this.name = "AiTransportDispatchAttestationInvalidError";
+  }
+}
+
+export function buildGuardedModelFetchResult(
+  model: Model,
+  timeoutMs?: number,
+  options?: AiModelFetchOptions & {
+    beforeFetchDispatch?: AiBeforeFetchDispatch;
+  },
+): GuardedModelFetchResult {
+  const host = getAiTransportHost();
+  if (options?.beforeFetchDispatch) {
+    const blockingBuilder = host.buildModelFetchWithBlockingDispatchGuard;
+    const result = normalizeAttestedModelFetch(
+      typeof blockingBuilder === "function"
+        ? blockingBuilder(model, timeoutMs, {
+            ...options,
+            beforeFetchDispatch: options.beforeFetchDispatch,
+          })
+        : undefined,
+    );
+    if (!result) {
+      throw new AiTransportDispatchGuardUnavailableError();
+    }
+    return result;
+  }
+  if (options !== undefined) {
+    const attestedBuilder = host.buildModelFetchWithDispatchAttestation;
+    const attestedResult =
+      typeof attestedBuilder === "function"
+        ? attestedBuilder(model, timeoutMs, options)
+        : undefined;
+    const result = normalizeAttestedModelFetch(attestedResult);
+    if (attestedResult !== undefined && !result) {
+      throw new AiTransportDispatchAttestationInvalidError();
+    }
+    const legacyResult =
+      result ?? normalizeLegacyModelFetch(host.buildModelFetch(model, timeoutMs, options));
+    if (legacyResult) {
+      return legacyResult;
+    }
+    if (options.onFetchDispatch) {
+      return {
+        fetch: async (input, init) => {
+          const dispatched = globalThis.fetch(input, init);
+          try {
+            options.onFetchDispatch?.();
+          } catch {
+            // Accounting is observational and must never alter provider behavior.
+          }
+          return await dispatched;
+        },
+        physicalDispatchAttested: false,
+      };
+    }
+    return { fetch: globalThis.fetch };
+  }
+  if (timeoutMs !== undefined) {
+    return (
+      normalizeLegacyModelFetch(host.buildModelFetch(model, timeoutMs)) ?? {
+        fetch: globalThis.fetch,
+      }
+    );
+  }
+  return normalizeLegacyModelFetch(host.buildModelFetch(model)) ?? { fetch: globalThis.fetch };
+}
 
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
-  options?: { sanitizeSse?: boolean },
+  options?: AiModelFetchOptions & {
+    beforeFetchDispatch?: AiBeforeFetchDispatch;
+  },
 ): typeof fetch {
-  const host = getAiTransportHost();
-  if (options !== undefined) {
-    return host.buildModelFetch(model, timeoutMs, options) ?? globalThis.fetch;
-  }
-  if (timeoutMs !== undefined) {
-    return host.buildModelFetch(model, timeoutMs) ?? globalThis.fetch;
-  }
-  return host.buildModelFetch(model) ?? globalThis.fetch;
+  return buildGuardedModelFetchResult(model, timeoutMs, options).fetch;
 }
 
 export function resolveProviderEndpoint(baseUrl?: string): { endpointClass: string } {

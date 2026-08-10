@@ -231,7 +231,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   let fallbackProvider = provider,
     fallbackModel = model;
   let fallbackExhausted = false,
-    liveSwitchRetries = 0;
+    liveSwitchRetries = 0,
+    modelCallSequence = 0;
   let candidateStarted = false;
   let terminal: EmbeddedAgentRunEntryTerminal;
   let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
@@ -443,6 +444,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               timeoutMs,
               runTimeoutOverrideMs,
               runId,
+              allocateDiagnosticModelCallId: () => `${runId}:model:${++modelCallSequence}`,
               lifecycleGeneration,
               opts:
                 executionAttribution === params.opts.executionAttribution

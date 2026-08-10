@@ -17,6 +17,14 @@ const COMMAND_TIMEOUT_MS = 180_000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const compatibility = {
+  "@openclaw/ai/internal/shared": {
+    values: [
+      "bindCachedInputObservation",
+      "cachedInputObservationFromRawUsage",
+      "resolveCachedInputObservation",
+    ],
+    types: ["CachedInputObservation"],
+  },
   "@openclaw/ai/providers": {
     values: [
       "BUILT_IN_API_PROVIDER_SOURCE_ID",
@@ -255,6 +263,19 @@ function compatibilityTypeSource(): string {
     .join("\n");
 }
 
+function publicBoundaryTypeSource(): string {
+  return `
+// @ts-expect-error Cache observation helpers are OpenClaw-internal.
+export { bindCachedInputObservation } from "@openclaw/ai";
+// @ts-expect-error Cache observation helpers are OpenClaw-internal.
+export { cachedInputObservationFromRawUsage } from "@openclaw/ai";
+// @ts-expect-error Cache observation helpers are OpenClaw-internal.
+export { resolveCachedInputObservation } from "@openclaw/ai";
+// @ts-expect-error Cache observation types are OpenClaw-internal.
+export type { CachedInputObservation } from "@openclaw/ai";
+`;
+}
+
 describe("@openclaw/ai packed package", () => {
   it("installs externally and preserves every published compatibility export", async () => {
     const repoRoot = process.cwd();
@@ -314,12 +335,23 @@ describe("@openclaw/ai packed package", () => {
           throw new Error(specifier + " missing runtime exports: " + missing.join(", "));
         }
       }
+      const publicRoot = await import("@openclaw/ai");
+      const internalOnly = [
+        "bindCachedInputObservation",
+        "cachedInputObservationFromRawUsage",
+        "resolveCachedInputObservation",
+      ];
+      const leaked = internalOnly.filter((name) => name in publicRoot);
+      if (leaked.length > 0) {
+        throw new Error("@openclaw/ai leaked internal runtime exports: " + leaked.join(", "));
+      }
     `;
     await runCommand(process.execPath, createNodeEvalArgs(importScript, { evalFlag: "-e" }), {
       cwd: tempDir,
     });
 
     await fs.writeFile(path.join(tempDir, "compatibility.ts"), compatibilityTypeSource());
+    await fs.writeFile(path.join(tempDir, "public-boundary.ts"), publicBoundaryTypeSource());
     await fs.writeFile(
       path.join(tempDir, "tsconfig.json"),
       JSON.stringify({
@@ -332,7 +364,7 @@ describe("@openclaw/ai packed package", () => {
           target: "ES2023",
           types: ["node"],
         },
-        files: ["compatibility.ts"],
+        files: ["compatibility.ts", "public-boundary.ts"],
       }),
     );
     await runCommand(

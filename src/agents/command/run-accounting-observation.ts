@@ -6,12 +6,14 @@ import type {
   EmbeddedRunOpaqueWorkReason,
 } from "../embedded-agent-runner/run/accounting-observers.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
+import type { createProviderTransportAccountingCollector } from "../provider-transport-accounting.js";
 import {
   NORMALIZED_USAGE_BUCKET_ORDER,
   resolveNormalizedUsageObservedBuckets,
   type NormalizedUsage,
 } from "../usage.js";
 import type {
+  AgentCommandRunAccountingCoverageReason,
   AgentCommandRunAccountingSnapshot,
   AgentCommandRunUsageBucket,
 } from "./run-accounting.types.js";
@@ -76,6 +78,7 @@ export type MutableRunAccounting = {
   maxUnresolvedAtExtraction: number;
   attemptsWithUnresolved: number;
   codeModeFinalQuiescence?: CodeModeRunFinalQuiescence;
+  providerTransport: ReturnType<typeof createProviderTransportAccountingCollector>;
 };
 
 type ModelUsageObservation = Pick<
@@ -93,6 +96,68 @@ export function boundAccountingIdentity(value: string): { value: string; truncat
         truncated: true,
       }
     : { value, truncated: false };
+}
+
+function hasPositiveCodeModeStats(stats: MutableRunAccounting["codeModeStats"]): boolean {
+  if (!stats) {
+    return false;
+  }
+  const hasPositiveCounter = (values: Array<number | undefined>) =>
+    values.some((value) => (value ?? 0) > 0);
+  return (
+    hasPositiveCounter(Object.values(stats.controlCalls)) ||
+    hasPositiveCounter(Object.values(stats.bridgeCalls)) ||
+    hasPositiveCounter(Object.values(stats.bridgeLifecycle)) ||
+    hasPositiveCounter(Object.values(stats.outcomes)) ||
+    Object.values(stats.workerRuns).some(
+      (run) => run !== undefined && (run.count > 0 || run.elapsedMs > 0),
+    ) ||
+    (stats.snapshots !== undefined &&
+      (stats.snapshots.attempted > 0 ||
+        stats.snapshots.produced > 0 ||
+        stats.snapshots.accepted > 0 ||
+        stats.snapshots.rejected > 0 ||
+        stats.snapshots.incomplete > 0 ||
+        stats.snapshots.totalBytes > 0 ||
+        stats.snapshots.maxBytes > 0 ||
+        stats.snapshots.serializationMs > 0 ||
+        hasPositiveCounter(Object.values(stats.snapshots.rejectedByReason ?? {}))))
+  );
+}
+
+export function hasCommandModelEvidence(state: MutableRunAccounting): boolean {
+  return (
+    state.assistantTurns > 0 ||
+    state.usageObserved > 0 ||
+    state.toolSummary.calls > 0 ||
+    state.toolSummary.tools.length > 0 ||
+    (state.toolSummary.failures ?? 0) > 0 ||
+    (state.toolSummary.totalToolTimeMs ?? 0) > 0 ||
+    state.providerBilledCostReports > 0 ||
+    state.estimatedCostObserved > 0 ||
+    state.maxUnresolvedAtExtraction > 0 ||
+    state.attemptsWithUnresolved > 0 ||
+    hasPositiveCodeModeStats(state.codeModeStats)
+  );
+}
+
+export function runtimeCoverageReasons(
+  runtimes: AgentCommandRunAccountingSnapshot["candidates"]["runtimes"],
+): AgentCommandRunAccountingCoverageReason[] {
+  const reasons: AgentCommandRunAccountingCoverageReason[] = [];
+  if (runtimes.cli > 0) {
+    reasons.push("cli_runtime");
+  }
+  if (runtimes.native > 0) {
+    reasons.push("native_runtime");
+  }
+  if (runtimes.cloud > 0) {
+    reasons.push("cloud_runtime");
+  }
+  if (runtimes.unknown > 0) {
+    reasons.push("unknown_runtime");
+  }
+  return reasons;
 }
 
 function hasKnownPricing(cost: ReturnType<typeof resolveModelCostConfig>): boolean {
