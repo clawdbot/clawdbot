@@ -8,7 +8,7 @@ type DesktopSecurityFailureDetail = {
   status?: number;
 };
 
-export type DesktopConnectOptions = {
+type DesktopConnectOptions = {
   background?: string;
   gatewayUrl?: string;
   onConnect?: () => void;

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -20,11 +20,11 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord & {
-  desktopAvailable: boolean;
-  tunnelStatus: WorkerTunnelStatus;
-  error?: string;
-};
+type TestWorkerRecord = WorkerEnvironmentRecord &
+  Pick<
+    WorkerEnvironmentServiceRecord,
+    "desktopAvailable" | "desktopApps" | "tunnelStatus" | "error"
+  >;
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -603,12 +603,12 @@ describe("environment gateway methods", () => {
           );
         }),
       });
-      const [, , error] = await callEnvironmentMethod(
+      const response = await callEnvironmentMethod(
         "worker.desktop.launch",
         { environmentId: "worker-1", app: "browser" },
         { service },
       );
-      expect(error).toEqual({ code: gatewayCode, message });
+      expect(response[2]).toEqual({ code: gatewayCode, message });
     }
   });
 

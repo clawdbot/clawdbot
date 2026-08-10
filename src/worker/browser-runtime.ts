@@ -20,7 +20,7 @@ type BundledBrowserRuntimeSurface = {
   }>;
 };
 
-export type WorkerBrowserToolRuntime = {
+type WorkerBrowserToolRuntime = {
   tool: AnyAgentTool;
   dispose: () => Promise<void>;
 };

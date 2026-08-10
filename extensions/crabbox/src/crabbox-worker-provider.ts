@@ -9,6 +9,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  crabboxCommandError,
+  permanentCrabboxCommandError,
+} from "./crabbox-worker-command-error.js";
 import * as workerDesktop from "./crabbox-worker-desktop-setup.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
@@ -20,22 +24,21 @@ import {
   parseCrabboxProfile,
   resolveCrabboxBinary,
 } from "./crabbox-worker-profile.js";
+import {
+  countCrabboxProvisionSetupPhases,
+  CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
+  CRABBOX_LIFECYCLE_TIMEOUT_MS,
+  CRABBOX_SETUP_TIMEOUT_MS,
+  CRABBOX_WARMUP_TIMEOUT_MS,
+  resolveCrabboxProvisionBaseTimeoutMs,
+  resolveCrabboxProvisionCallTimeoutMs,
+} from "./crabbox-worker-timeouts.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 const CRABBOX_KEY_REF_PROVIDER = "crabbox";
 
-const WARMUP_TIMEOUT_MS = 240_000;
-const LIFECYCLE_TIMEOUT_MS = 60_000;
-const PROVISION_TIMEOUT_MS = 290_000;
-// Crabbox starts its 45-minute desktop/browser bootstrap clock after acquisition.
-// Preserve OpenClaw's existing five-minute acquisition envelope, then leave one
-// lifecycle allowance for post-warmup inspection and cleanup.
-const DESKTOP_WARMUP_TIMEOUT_MS = 50 * 60_000;
-const DESKTOP_PROVISION_TIMEOUT_MS = DESKTOP_WARMUP_TIMEOUT_MS + LIFECYCLE_TIMEOUT_MS;
-// Setup gets its own budget on top of provision so a slow warmup cannot starve it.
-const SETUP_TIMEOUT_MS = 300_000;
 const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_ERROR_DETAIL_CHARS = 512;
@@ -63,22 +66,6 @@ const LEGACY_PROVISION_OPERATION_ID_PATTERN = /^provision:[a-f0-9]{64}$/u;
 type CrabboxCommandRunner = typeof runCommandWithTimeout;
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
-function provisionBaseTimeoutMs(profile: CrabboxProfile): number {
-  return profile.desktop ? DESKTOP_PROVISION_TIMEOUT_MS : PROVISION_TIMEOUT_MS;
-}
-
-function provisionSetupCount(profile: CrabboxProfile): number {
-  return Number(Boolean(profile.desktop)) + Number(Boolean(profile.setup));
-}
-
-function provisionCallTimeoutMs(profile: CrabboxProfile): number {
-  return (
-    provisionBaseTimeoutMs(profile) +
-    provisionSetupCount(profile) * SETUP_TIMEOUT_MS +
-    LIFECYCLE_TIMEOUT_MS
-  );
-}
-
 type LeaseCommandContext = { binary: string; id: string; provider: string };
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   deadline: number;
@@ -98,28 +85,6 @@ type CrabboxWorkerProviderDependencies = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-function commandDetail(result: SpawnResult): string {
-  const raw = (result.stderr || result.stdout).trim();
-  if (!raw) {
-    return "";
-  }
-  const compressed = redactSensitiveText(raw).replace(/\s+/gu, " ");
-  const redacted = truncateUtf16Safe(compressed, MAX_ERROR_DETAIL_CHARS);
-  return redacted ? `: ${redacted}` : "";
-}
-
-function commandError(action: string, result: SpawnResult): Error {
-  if (result.termination !== "exit") {
-    return new Error(`Crabbox ${action} did not exit normally (${result.termination})`);
-  }
-  const exitCode = result.code === null ? "unknown" : String(result.code);
-  return new Error(`Crabbox ${action} failed with exit code ${exitCode}${commandDetail(result)}`);
-}
-
-function permanentCommandError(action: string, result: SpawnResult): WorkerProviderError {
-  return new WorkerProviderError(commandError(action, result).message);
-}
-
 async function assertAwsWorkerHasNoInstanceProfile(params: {
   binary: string;
   runCommand: CrabboxCommandRunner;
@@ -129,10 +94,10 @@ async function assertAwsWorkerHasNoInstanceProfile(params: {
     args: ["config", "show", "--json"],
     binary: params.binary,
     runCommand: params.runCommand,
-    timeoutMs: LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination !== "exit" || result.code !== 0) {
-    throw permanentCommandError("config show", result);
+    throw permanentCrabboxCommandError("config show", result);
   }
   let instanceProfile: unknown;
   try {
@@ -170,7 +135,7 @@ function provisionProfileError(result: SpawnResult): WorkerProviderError | undef
     /\blease_id_conflict\b/u.test(output) &&
     !/\bretry after provider inventory converges\b/iu.test(output)
   ) {
-    return permanentCommandError("warmup", result);
+    return permanentCrabboxCommandError("warmup", result);
   }
   if (result.code !== 2) {
     return undefined;
@@ -293,7 +258,7 @@ async function inspectWithContext(params: {
     ],
     binary: params.context.binary,
     runCommand: params.runCommand,
-    timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
     // A successful but malformed response cannot attest the fixed lease. Command failures and
@@ -314,7 +279,7 @@ async function inspectWithContext(params: {
   if (result.termination === "exit" && authoritativeLeaseAbsence(result, params.id)) {
     return { status: "unknown" };
   }
-  throw commandError("inspect", result);
+  throw crabboxCommandError("inspect", result);
 }
 
 function remainingProvisionTimeout(deadline: number, maximum: number): number {
@@ -335,7 +300,7 @@ async function stopWithContext(params: {
     args: ["stop", "--provider", params.context.provider, "--id", params.context.id],
     binary: params.context.binary,
     runCommand: params.runCommand,
-    timeoutMs: params.timeoutMs ?? LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination === "exit" && result.code === 0) {
     return;
@@ -347,7 +312,7 @@ async function stopWithContext(params: {
   ) {
     return;
   }
-  throw commandError("stop", result);
+  throw crabboxCommandError("stop", result);
 }
 
 const isTerminalState = (state: string) => DESTROYED_STATES.has(state.toLowerCase());
@@ -432,7 +397,7 @@ async function waitForProvisionReady(
       expectedLeaseId: inspect.id,
       id: inspect.id,
       runCommand: params.runCommand,
-      timeoutMs: remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS),
+      timeoutMs: remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS),
     });
     if (replay.status === "unknown") {
       throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
@@ -444,7 +409,7 @@ async function waitForProvisionReady(
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
-      const remaining = remainingProvisionTimeout(params.deadline, LIFECYCLE_TIMEOUT_MS);
+      const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
       await params.sleep(Math.min(READY_POLL_INTERVAL_MS, remaining));
       inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
@@ -493,7 +458,7 @@ async function runProvisionSetup(
       ],
       binary: params.binary,
       runCommand: params.runCommand,
-      timeoutMs: remainingProvisionTimeout(params.deadline, SETUP_TIMEOUT_MS),
+      timeoutMs: remainingProvisionTimeout(params.deadline, CRABBOX_SETUP_TIMEOUT_MS),
     });
   } catch (error) {
     await stopProvisionInspect(params);
@@ -502,7 +467,7 @@ async function runProvisionSetup(
   if (result.termination === "exit" && result.code === 0) {
     return;
   }
-  const error = permanentCommandError("setup", result);
+  const error = permanentCrabboxCommandError("setup", result);
   await stopProvisionInspect(params);
   throw error;
 }
@@ -533,7 +498,7 @@ async function stopProvisionId(params: {
     context: { binary: params.binary, id: params.id, provider: params.provider },
     runCommand: params.runCommand,
     // Cleanup gets its own budget so an exhausted provision deadline cannot leak a lease.
-    timeoutMs: LIFECYCLE_TIMEOUT_MS,
+    timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
 }
 
@@ -626,14 +591,16 @@ export function createCrabboxWorkerProvider(
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
     resolveProvisionTimeoutMs(profile) {
-      return provisionCallTimeoutMs(parseCrabboxProfile(profile));
+      return resolveCrabboxProvisionCallTimeoutMs(parseCrabboxProfile(profile));
     },
     async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
       const parsed = parseCrabboxProfile(profile);
-      const warmupTimeoutMs = parsed.desktop ? DESKTOP_WARMUP_TIMEOUT_MS : WARMUP_TIMEOUT_MS;
-      const deadline = Date.now() + provisionBaseTimeoutMs(parsed);
-      const setupCount = provisionSetupCount(parsed);
-      const setupDeadline = deadline + setupCount * SETUP_TIMEOUT_MS;
+      const warmupTimeoutMs = parsed.desktop
+        ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
+        : CRABBOX_WARMUP_TIMEOUT_MS;
+      const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
+      const setupCount = countCrabboxProvisionSetupPhases(parsed);
+      const setupDeadline = deadline + setupCount * CRABBOX_SETUP_TIMEOUT_MS;
       if (!operationId.trim()) {
         throw new Error("Crabbox provision requires an operation id");
       }
@@ -673,7 +640,7 @@ export function createCrabboxWorkerProvider(
         if (profileError) {
           throw profileError;
         }
-        throw commandError("warmup", warmup);
+        throw crabboxCommandError("warmup", warmup);
       }
       let inspected: InspectCommandResult;
       try {
@@ -682,7 +649,7 @@ export function createCrabboxWorkerProvider(
           expectedLeaseId: leaseId,
           id: leaseId,
           runCommand,
-          timeoutMs: remainingProvisionTimeout(deadline, LIFECYCLE_TIMEOUT_MS),
+          timeoutMs: remainingProvisionTimeout(deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS),
         });
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.

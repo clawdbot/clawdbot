@@ -1,13 +1,13 @@
 import path from "node:path";
 import { WorkerProviderError, type WorkerDesktopEndpoint } from "openclaw/plugin-sdk/plugin-entry";
 
-export const CRABBOX_WORKER_BROWSER_PATH = "/usr/local/bin/openclaw-worker-browser";
-export const CRABBOX_WORKER_TERMINAL_PATH = "/usr/local/bin/openclaw-worker-terminal";
-export const CRABBOX_WORKER_BROWSER_CDP_PORT = 9222;
+const CRABBOX_WORKER_BROWSER_PATH = "/usr/local/bin/openclaw-worker-browser";
+const CRABBOX_WORKER_TERMINAL_PATH = "/usr/local/bin/openclaw-worker-terminal";
+const CRABBOX_WORKER_BROWSER_CDP_PORT = 9222;
 
 const SSH_USER_PATTERN = /^(?:root|[a-z_][a-z0-9_-]{0,31})$/u;
 
-export function resolveCrabboxWorkerHome(sshUser: string): string {
+function resolveCrabboxWorkerHome(sshUser: string): string {
   if (!SSH_USER_PATTERN.test(sshUser)) {
     throw new WorkerProviderError("Crabbox inspect returned an invalid desktop SSH user");
   }
@@ -101,7 +101,7 @@ function heredoc(target: string, marker: string, contents: string[]): string[] {
   return [`cat >"$setup_dir/${target}" <<'${marker}'`, ...contents, marker];
 }
 
-export function buildCrabboxWorkerDesktopSetup(sshUser: string): string {
+function buildCrabboxWorkerDesktopSetup(sshUser: string): string {
   const home = resolveCrabboxWorkerHome(sshUser);
   const browserProfilePath = `${home}/.cache/openclaw/worker-browser`;
   const wallpaperPath = `${home}/.local/share/backgrounds/openclaw-worker.svg`;
