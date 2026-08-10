@@ -408,9 +408,8 @@ describe("openclaw.setup", () => {
       step: { type: "note", title: "Pair GitHub", message: "Open the browser and enter ABCD" },
     });
     await session.answer(first.step.id, null);
-    const terminal = await session.next();
+    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
     await whenAdmittedWizardSessionSettled(session);
-    expect(terminal).toMatchObject({ done: true, status: "done" });
   });
   it("runs the selected provider method in a shared wizard session and commits its config", async () => {
     const preparedConfig: OpenClawConfig = {
@@ -459,13 +458,12 @@ describe("openclaw.setup", () => {
       }),
     );
     await session.answer(note.step.id, null);
-    const terminal = await session.next();
-    await whenAdmittedWizardSessionSettled(session);
-    expect(terminal).toMatchObject({
+    await expect(session.next()).resolves.toMatchObject({
       done: true,
       status: "done",
       preparedModelRef: "ollama/qwen3:0.6b",
     });
+    await whenAdmittedWizardSessionSettled(session);
     expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
       allowConfigSizeDrop: false,
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
