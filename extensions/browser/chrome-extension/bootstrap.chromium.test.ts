@@ -188,13 +188,15 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         delete browserEnv.VITEST;
         delete browserEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
-        const context = await chromium.launchPersistentContext(userDataDir, {
-          channel: "chromium",
-          headless: true,
-          env: browserEnv,
-          ignoreDefaultArgs: ["--disable-extensions"],
-          args: ["--enable-unsafe-extension-debugging"],
-        });
+        const launchChromium = async () =>
+          await chromium.launchPersistentContext(userDataDir, {
+            channel: "chromium",
+            headless: true,
+            env: browserEnv,
+            ignoreDefaultArgs: ["--disable-extensions"],
+            args: ["--enable-unsafe-extension-debugging"],
+          });
+        let context = await launchChromium();
         process.stderr.write("[browser-extension-e2e] chromium launched\n");
         cleanups.push(async () => await context.close());
         const installed = stableChromeExtensionDir(deps);
@@ -221,8 +223,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         const extensionId = await waitForExtensionId(context, installed);
         expect(extensionId).toBe(predictedId);
         process.stderr.write("[browser-extension-e2e] unpacked extension loaded\n");
-        const controlled = await context.newPage();
-        await controlled.goto("data:text/html,<title>OpenClaw E2E</title><p>ready</p>");
+        await context.close();
 
         const status = await installPromise;
         expect(status.manualSetupRequired).toBe(false);
@@ -232,6 +233,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           ),
         ).toBe(true);
         process.stderr.write("[browser-extension-e2e] Secure Preferences identity verified\n");
+        context = await launchChromium();
+        await loadUnpackedExtension(context, installed);
+        expect(await waitForExtensionId(context, installed)).toBe(predictedId);
+        process.stderr.write("[browser-extension-e2e] persisted extension reloaded\n");
+        const controlled = await context.newPage();
+        await controlled.goto("data:text/html,<title>OpenClaw E2E</title><p>ready</p>");
 
         const extensionPage = await context.newPage();
         await extensionPage.goto(`chrome-extension://${extensionId}/options.html`);
