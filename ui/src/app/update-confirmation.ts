@@ -26,7 +26,8 @@ export type ConfirmAndStartUpdateParams = {
   startGatewayUpdate: () => void;
   /**
    * Streams the update lifecycle so the dialog can stay open and report it.
-   * Without it the dialog closes on confirm and the ambient surfaces narrate.
+   * A surface that cannot supply one closes on confirm instead of holding a
+   * dialog it can never update; the ambient surfaces narrate from there.
    */
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };

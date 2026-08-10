@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ApplicationContext } from "./context.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 
 export function navigationSurfaceIsHidden(params: {
   onboarding: boolean;
@@ -20,6 +21,7 @@ export function renderFloatingUpdateCard(params: {
   heldUpdateCampaignId?: string | null;
   updateBusy: boolean;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
+  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;
   canHoldUpdate?: boolean;
   onUpdate: () => void;
@@ -39,6 +41,7 @@ export function renderFloatingUpdateCard(params: {
     .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
     .updateBusy=${params.updateBusy}
     .statusBanner=${params.statusBanner ?? null}
+    .watchUpdateProgress=${params.watchUpdateProgress}
     .canUpdate=${params.canUpdate ?? false}
     .canHoldUpdate=${params.canHoldUpdate ?? false}
     .onUpdate=${params.onUpdate}

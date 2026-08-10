@@ -169,8 +169,6 @@ export async function confirmAndStartUpdateRuntime(
       }
       const watch = params.watchUpdateProgress;
       if (!watch) {
-        // No lifecycle stream on this surface: start the update and let the
-        // ambient surfaces report it rather than freeze an unfed dialog.
         params.startGatewayUpdate();
         finish();
         return;

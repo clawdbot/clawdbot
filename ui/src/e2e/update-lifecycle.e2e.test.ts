@@ -57,7 +57,6 @@ suite.define(() => {
         {
           colorScheme,
           locale: "en-US",
-          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },
@@ -145,7 +144,6 @@ suite.define(() => {
         {
           colorScheme,
           locale: "en-US",
-          recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
           serviceWorkers: "block",
           viewport: { height: 720, width: 1280 },
         },

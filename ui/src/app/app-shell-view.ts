@@ -485,6 +485,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
           updateBusy,
           statusBanner: overlaySnapshot.updateStatusBanner,
+          watchUpdateProgress,
           canUpdate,
           canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
