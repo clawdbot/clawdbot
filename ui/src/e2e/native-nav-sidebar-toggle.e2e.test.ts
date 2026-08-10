@@ -311,6 +311,15 @@ suite.define(() => {
     const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const readFocusLocation = () =>
+      page.evaluate(() => {
+        // Native dialog tab order may hand focus to browser chrome when no document candidate remains.
+        // `document.hasFocus()` distinguishes that from focus on the underlying inert page.
+        if (!document.hasFocus()) {
+          return "browser-chrome";
+        }
+        return document.activeElement?.closest(".shell-nav") ? "navigation" : "page";
+      });
 
     await expect.poll(() => navigation.getAttribute("inert")).toBe("");
     await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
@@ -324,7 +333,16 @@ suite.define(() => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();
+    const afterShowMarker = "data-e2e-after-show";
+    await drawer.evaluate((element, marker) => {
+      element.removeAttribute(marker);
+      element.addEventListener("wa-after-show", () => element.setAttribute(marker, ""), {
+        once: true,
+      });
+    }, afterShowMarker);
     await page.keyboard.press("Enter");
+    await expect.poll(() => drawer.getAttribute(afterShowMarker)).toBe("");
+    await expect.poll(readFocusLocation).toBe("navigation");
 
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
@@ -333,15 +351,10 @@ suite.define(() => {
     await expect.poll(() => dialog.isVisible()).toBe(true);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
-    await expect
-      .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
-      .toBe(true);
 
     for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"] as const) {
       await page.keyboard.press(key);
-      await expect
-        .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
+      await expect.poll(readFocusLocation).not.toBe("page");
     }
 
     expect(

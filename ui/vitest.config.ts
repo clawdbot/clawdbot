@@ -99,7 +99,6 @@ const nodeDrivenBrowserLayoutTests = [
 const mockRegistryUnitTests = [
   ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
   "src/components/mcp-app-view.test.ts",
-  "src/pages/chat/chat-page-attachment-handoff.test.ts",
   "src/pages/chat/chat-page.test.ts",
 ] as const;
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";

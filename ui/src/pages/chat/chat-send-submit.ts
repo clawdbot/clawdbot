@@ -16,7 +16,7 @@ import {
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
-import type { ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
   enqueueChatMessage,
@@ -207,7 +207,7 @@ export async function handleSendChat(
   const userMessage = (messageOverride ?? host.chatMessage).trim();
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+  let expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
   const attachmentsToSend =
     messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
@@ -419,6 +419,14 @@ export async function handleSendChat(
     skillWorkshopRevision,
   );
   await withChatSubmitGuard(host, submitKey, async () => {
+    if (host.chatLoading) {
+      // A terminal event can render before its authoritative leaf arrives.
+      // Reuse the in-flight history request before fencing the follow-up send.
+      if (!(await loadChatHistory(host as unknown as ChatState))) {
+        return;
+      }
+      expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+    }
     if (host.sessionKey !== submittedSessionKey) {
       return;
     }

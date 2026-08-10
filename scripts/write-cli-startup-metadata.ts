@@ -626,7 +626,7 @@ async function spawnText(
   });
 }
 
-export async function renderBundledRootHelpText(
+async function renderBundledRootHelpText(
   _distDirOverride: string = distDir,
   renderContext?: RootHelpRenderContext,
 ): Promise<string> {
@@ -755,7 +755,7 @@ async function renderSourceSubcommandHelpTextRecord(
   ) as PrecomputedSubcommandHelpText;
 }
 
-export async function writeCliStartupMetadata(options?: {
+async function writeCliStartupMetadata(options?: {
   distDir?: string;
   outputPath?: string;
   extensionsDir?: string;
@@ -981,9 +981,8 @@ export const testing = {
   renderSourceRootHelpText,
   signalCliStartupMetadataProcessTree,
   spawnText,
+  writeCliStartupMetadata,
 };
-
-export { testing as __testing };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   await writeCliStartupMetadata();
