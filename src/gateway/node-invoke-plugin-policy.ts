@@ -338,6 +338,10 @@ export async function applyPluginNodeInvokePolicy(params: {
       timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      isDispatchAuthorized: () =>
+        (!callerIdentity ||
+          params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
+        params.isApprovalAuthorityActive?.() !== false,
       onDispatchReady: () => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.

@@ -227,6 +227,8 @@ export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   | "senderIsOwner"
   | "allowModelOverride"
+  | "mainRestartRecoveryOwnerLease"
+  | "mainRestartRecoveryAdmitted"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
   | "onAdmittedRunContext"
@@ -241,5 +243,9 @@ export type AgentCommandIngressOpts = Omit<
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<
     AgentCommandOpts,
-    "executionIdentityAdmission" | "operationalRunInstance" | "onAdmittedRunContext"
+    | "mainRestartRecoveryOwnerLease"
+    | "mainRestartRecoveryAdmitted"
+    | "executionIdentityAdmission"
+    | "operationalRunInstance"
+    | "onAdmittedRunContext"
   >;

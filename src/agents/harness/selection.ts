@@ -486,28 +486,20 @@ export async function runAgentHarnessSettledTurnFinalization(
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
-  const pluginAttempt = withoutInternalHarnessAuthority(
+  const attemptParams = prepareHarnessFinalizationParams(
     {
       ...internalParams,
       operation: "settled-tool-finalization",
     },
     harness,
   );
-  const attemptParams =
-    harness.id === "openclaw"
-      ? pluginAttempt.params
-      : preparePluginHarnessParams(pluginAttempt.params);
-  try {
-    return await runAgentHarnessOperation(harness, params, () =>
-      runWithAgentRingZeroTools([], () =>
-        runAgentHarnessLifecycleFinalization(harness, attemptParams, () =>
-          finalizeSettledTurn({ attempt: attemptParams, settledAttempt }),
-        ),
+  return await runAgentHarnessOperation(harness, params, () =>
+    runWithAgentRingZeroTools([], () =>
+      runAgentHarnessLifecycleFinalization(harness, attemptParams, () =>
+        finalizeSettledTurn({ attempt: attemptParams, settledAttempt }),
       ),
-    );
-  } finally {
-    pluginAttempt.closeHostCapabilities();
-  }
+    ),
+  );
 }
 
 async function runSelectedAgentHarnessAttempt(
@@ -719,6 +711,37 @@ function withoutInternalHarnessAuthority(
   return {
     params: { ...pluginParams, hostCapabilities: host.capabilities },
     closeHostCapabilities: host.close,
+  };
+}
+
+function prepareHarnessFinalizationParams(
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  harness: AgentHarness,
+): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
+  import("./types.js").AgentHarnessAttemptParamsV2
+> {
+  const {
+    hostCapabilities: _hostCapabilities,
+    systemAgentTool: _systemAgentTool,
+    ...withoutCapabilities
+  } = params;
+  if (harness.id === "openclaw") {
+    return withoutCapabilities;
+  }
+  const {
+    admittedRunContext: _admittedRunContext,
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    trajectoryRecorder: _trajectoryRecorder,
+    ...pluginParams
+  } = withoutCapabilities;
+  const boundary = "plugin harness finalization handoff";
+  return {
+    ...pluginParams,
+    model: unwrapModelHeaderSentinelsForProviderEgress(pluginParams.model, boundary),
+    resolvedApiKey: pluginParams.resolvedApiKey
+      ? unwrapSecretSentinelsForProviderEgress(pluginParams.resolvedApiKey, boundary)
+      : pluginParams.resolvedApiKey,
   };
 }
 

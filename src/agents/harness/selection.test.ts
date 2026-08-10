@@ -492,6 +492,7 @@ describe("runAgentHarnessAttempt", () => {
       async ({ attempt, settledAttempt: _settledAttempt }) => {
         hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
         expect(attempt.operation).toBe("settled-tool-finalization");
+        expect(attempt).not.toHaveProperty("hostCapabilities");
         return {
           assistant: createFinalAssistant(),
         };

@@ -6,7 +6,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
-  bindToolSurface: (tools: AnyAgentTool[]) => AnyAgentTool[];
+  bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
   /** Runs policy with host-fixed HookContext; callers provide only the native action tuple. */
   runBeforeToolCall: (
     request: Omit<

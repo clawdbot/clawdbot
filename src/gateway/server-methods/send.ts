@@ -536,6 +536,7 @@ async function withMessageOperationRoute<
       accountId: string | undefined;
       idem: string;
       dedupeKey: string;
+      authorize: () => boolean;
     },
   ) => Promise<InflightResult>;
 }): Promise<void> {
@@ -634,6 +635,7 @@ async function withMessageOperationRoute<
         accountId: accountRoute.accountId,
         idem: inflight.idem,
         dedupeKey: inflight.dedupeKey,
+        authorize: params.authorize ?? (() => true),
       })
       .finally(() => {
         refreshMessageOperationRouteBinding({
@@ -843,6 +845,20 @@ function createGatewayInflightUnavailableFailure(params: {
   });
 }
 
+function createGatewayInflightAuthorityFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  channel: string;
+}): InflightResult {
+  return createGatewayInflightResult({
+    ...params,
+    result: {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+    },
+  });
+}
+
 async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
@@ -961,7 +977,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, dedupeKey, authorize }) => {
         try {
           const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
           const agentId =
@@ -1035,6 +1051,12 @@ export const sendHandlers: GatewayRequestHandlers = {
             });
           }
           const terminalDeliveryReceipt = terminalDeliveryStart;
+          // Attachment and receipt preparation can outlive the admitted run.
+          // Close the receipt and stop before the provider-owned action boundary.
+          if (!authorize()) {
+            await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const gatewayClientScopes = client?.connect?.scopes ?? [];
           const handled = await dispatchChannelMessageAction({
             channel,
@@ -1177,7 +1199,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
           const resolvedTarget = resolveGatewayOutboundTarget({
             channel,
@@ -1310,6 +1332,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionKey: outboundSessionKey,
             conversationType: outboundRoute?.chatType,
           });
+          // Target, attachment, route, and session preparation may all yield.
+          // The durable provider handoff is the final authority commit point.
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const send = await sendDurableMessageBatch({
             cfg,
             channel,
@@ -1435,7 +1462,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey, outbound, sendPoll }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize, outbound, sendPoll }) => {
         const poll = {
           question: request.question,
           options: request.options,
@@ -1457,6 +1484,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           const normalized = outbound.pollMaxOptions
             ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
             : normalizePollInput(poll);
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const result = await sendPoll({
             cfg,
             to: resolvedTarget.to,

@@ -1057,6 +1057,7 @@ async function createCodexSideToolBridge(input: {
   // context-compaction lifecycle needed to expire screenshot coordinates.
   const exposedTools = input.params.hostCapabilities.bindToolSurface(
     tools.filter((tool) => tool.name !== "web_search" && tool.name !== "computer"),
+    { cwd: input.cwd },
   );
   const hookChannelFields = buildAgentHookContextChannelFields({
     sessionKey: input.params.sessionKey,

@@ -134,6 +134,8 @@ export function sanitizePublicAgentCommandIngressOpts(
 ): AgentCommandGatewayIngressOpts {
   return {
     ...opts,
+    mainRestartRecoveryOwnerLease: undefined,
+    mainRestartRecoveryAdmitted: undefined,
     executionIdentityAdmission: undefined,
     operationalRunInstance: undefined,
     onAdmittedRunContext: undefined,

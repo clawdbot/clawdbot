@@ -110,11 +110,14 @@ export type AgentHarnessAttemptParamsV2 = AgentHarnessAttemptParamsBase & {
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
+export type AgentHarnessSettledTurnFinalizationAttemptParams<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = Omit<TAttemptParams, "hostCapabilities"> & { hostCapabilities?: never };
 type AgentHarnessSettledTurnFinalizationParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
   /** Fully prepared attempt context for the isolated finalization operation. */
-  attempt: TAttemptParams;
+  attempt: AgentHarnessSettledTurnFinalizationAttemptParams<TAttemptParams>;
   /** Settled result whose completed tool transcript needs a final visible answer. */
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };

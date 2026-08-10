@@ -549,6 +549,12 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
+          isDispatchAuthorized: () =>
+            resolveNodeInvokeRuntimeAuthorityError({
+              context,
+              client,
+              approvalAuthority: forwardedParams.approvalAuthority,
+            }) === undefined,
           onDispatchReady: () => {
             nodeCommandDispatched = true;
           },

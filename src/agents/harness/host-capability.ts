@@ -198,12 +198,21 @@ export function createAgentHarnessHostCapabilities(params: {
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
-    bindToolSurface: (tools) => {
+    bindToolSurface: (tools, options) => {
       assertActive();
+      const bindingCwd =
+        options?.cwd !== undefined
+          ? normalizeNativeOperationCwd(options.cwd, hookContext.cwd)
+          : undefined;
+      // Native harnesses may execute a bound surface from a narrower cwd than
+      // the agent workspace. Hooks must authorize the same absolute path.
+      const bindingHookContext = bindingCwd
+        ? Object.freeze({ ...hookContext, cwd: bindingCwd })
+        : hookContext;
       return (
         tools
           .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
-          .map((tool) => rewrapToolWithBeforeToolCallHook(tool, hookContext))
+          .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
           .map((tool) =>
             callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
           )

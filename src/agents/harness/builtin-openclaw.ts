@@ -9,13 +9,18 @@ import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
-import type { AgentHarnessAttemptParamsV2, AgentHarnessV2 } from "./types.js";
+import type {
+  AgentHarnessAttemptParamsV2,
+  AgentHarnessSettledTurnFinalizationAttemptParams,
+  AgentHarnessV2,
+} from "./types.js";
 
 function buildRestrictedFinalizationAttempt(
-  attempt: AgentHarnessAttemptParamsV2,
+  attempt: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
 ): EmbeddedRunAttemptParams {
-  const internalAttempt = attempt as AgentHarnessAttemptParamsV2 &
-    Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
+  const internalAttempt =
+    attempt as AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> &
+      Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
   return {
     admittedRunContext: internalAttempt.admittedRunContext,
     sessionId: attempt.sessionId,

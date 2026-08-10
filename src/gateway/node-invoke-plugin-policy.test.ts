@@ -273,6 +273,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: DEMO_PARAMS,
       timeoutMs: undefined,
       idempotencyKey: undefined,
+      isDispatchAuthorized: expect.any(Function),
       onDispatchReady: expect.any(Function),
     });
   });

@@ -2290,6 +2290,9 @@ describe("runCodexAppServerSideQuestion", () => {
       ),
     ).resolves.toEqual({ text: "Bound answer." });
     expect(bindToolSurface).toHaveBeenCalledTimes(1);
+    expect(bindToolSurface).toHaveBeenCalledWith(expect.any(Array), {
+      cwd: expect.any(String),
+    });
     active = false;
     const copiedExecute = retainedExecute;
     await expect(copiedExecute?.()).rejects.toThrow("no longer active");

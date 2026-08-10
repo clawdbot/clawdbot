@@ -176,6 +176,21 @@ describe("agent harness host capability", () => {
     );
   });
 
+  it("binds hooks to the native harness cwd instead of the agent workspace", async () => {
+    const { attempt } = await admittedAttempt("run-native-cwd", {
+      cwd: "/tmp/agent-workspace",
+    });
+    const { tool } = testTool();
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+
+    host.capabilities.bindToolSurface([tool], { cwd: "/tmp/codex-binding" });
+
+    expect(mockRewrap).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ cwd: "/tmp/codex-binding" }),
+    );
+  });
+
   it("derives a bounded native action cwd without accepting forged host authority", async () => {
     const { attempt } = await admittedAttempt("run-native");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });

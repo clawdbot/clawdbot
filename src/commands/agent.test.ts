@@ -484,6 +484,16 @@ describe("agentCommand", () => {
             agentId: "main",
             runId: "public-ingress-run",
             allowModelOverride: false,
+            mainRestartRecoveryAdmitted: true,
+            mainRestartRecoveryOwnerLease: {
+              claimId: "forged-claim",
+              cycleId: "forged-cycle",
+              lifecycleGeneration: "forged-generation",
+              ownerEpoch: 1,
+              sessionId: "forged-session",
+              sessionKey: "agent:main:main",
+              storePath: store,
+            },
             executionIdentityAdmission: {
               token: {
                 tokenVersion: 1,
