@@ -705,6 +705,8 @@ Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
 proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
 workflow hydrates provider and agent credentials, so untrusted contributor or
 fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
+the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.

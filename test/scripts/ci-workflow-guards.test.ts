@@ -4320,28 +4320,48 @@ NODE
     }
   });
 
-  it("prepares all Testbox checkouts from one maintained owner", () => {
+  it("prepares Testbox checkouts with one maintained owner and scoped history", () => {
     const workflowPaths = [
-      ".github/workflows/ci-check-testbox.yml",
-      ".github/workflows/ci-check-arm-testbox.yml",
-      ".github/workflows/ci-build-artifacts-testbox.yml",
-    ];
+      [
+        ".github/workflows/ci-check-testbox.yml",
+        "1",
+        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+      ],
+      [
+        ".github/workflows/ci-check-arm-testbox.yml",
+        "0",
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+      ],
+      [
+        ".github/workflows/ci-build-artifacts-testbox.yml",
+        "0",
+        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+      ],
+    ] as const;
 
-    for (const workflowPath of workflowPaths) {
+    for (const [workflowPath, dispatchFetchDepth, baseRef] of workflowPaths) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
       const checkoutStep = job.steps.find((step) => step.name === "Checkout");
       const prepareStep = job.steps.find((step) => step.name === "Prepare Testbox shell");
 
       expect(checkoutStep?.uses, workflowPath).toBe(CHECKOUT_V6);
-      expect(checkoutStep?.with, workflowPath).toEqual({
-        "fetch-depth": "${{ github.event_name == 'pull_request' && '2' || '0' }}",
-        "persist-credentials": false,
-      });
+      expect(checkoutStep?.with?.["persist-credentials"], workflowPath).toBe(false);
+      for (const [eventName, expectedDepth] of [
+        ["pull_request", "2"],
+        ["workflow_dispatch", dispatchFetchDepth],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(checkoutStep?.with?.["fetch-depth"], {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${workflowPath} ${eventName}`,
+        ).toBe(expectedDepth);
+      }
       expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
-      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
-      );
+      expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(baseRef);
       const ensureBaseStep = job.steps.find(
         (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
       );
