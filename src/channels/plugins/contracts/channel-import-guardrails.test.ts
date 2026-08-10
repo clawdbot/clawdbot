@@ -422,6 +422,7 @@ function collectCoreSourceFiles(): string[] {
       normalizedFullPath.includes(".test-utils.") ||
       normalizedFullPath.includes(".test-harness.") ||
       normalizedFullPath.includes(".test-helpers.") ||
+      normalizedFullPath.includes(".test-support.") ||
       entryName.endsWith("-test-helpers.ts") ||
       entryName === "test-manager-helpers.ts" ||
       normalizedFullPath.includes(".mock-harness.") ||

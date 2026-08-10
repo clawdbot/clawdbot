@@ -8,7 +8,7 @@ import {
   MEMORY_AUTHORIZATION_PATH_DISPOSITIONS,
   MEMORY_AUTHORIZATION_PATH_INVENTORY,
   type MemoryAuthorizationPathInventoryEntry,
-} from "./memory-authorization-path-inventory.js";
+} from "./memory-authorization-path-inventory.test-support.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 

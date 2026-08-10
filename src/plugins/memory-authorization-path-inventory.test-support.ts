@@ -1,4 +1,4 @@
-/** Phase-0 inventory of every known path that can ingest, expose, or derive memory. */
+/** Test-only Phase-0 inventory of every known path that can ingest, expose, or derive memory. */
 export const MEMORY_AUTHORIZATION_PATH_DISPOSITIONS = [
   "authorized",
   "blocked-in-enforced-mode",

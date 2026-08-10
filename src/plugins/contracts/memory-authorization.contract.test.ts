@@ -268,28 +268,28 @@ describe("memory authorization SDK contract", () => {
         runtime.readAuthorized({ context: deriveContext, plan, handle }),
       );
 
-      // @ts-expect-error retrieve only permits broker-internal candidate selection.
       void runtime.searchAuthorized({
+        // @ts-expect-error retrieve only permits broker-internal candidate selection.
         context: retrieveContext,
-        plan: retrievePlan,
+        plan: derivePlan,
         query: "query",
         limit: 1,
       });
       // @ts-expect-error retrieve only permits broker-internal candidate selection.
       void runtime.readAuthorized({ context: retrieveContext, plan: retrievePlan, handle });
-      // @ts-expect-error the context and plan must name the same content operation.
       void runtime.searchAuthorized({
-        context: readContext,
-        plan: derivePlan,
+        context: deriveContext,
+        // @ts-expect-error the context and plan must name the same content operation.
+        plan: readPlan,
         query: "query",
         limit: 1,
       });
 
       const retrievePlanFromAuthorize = runtime.authorize(retrieveContext);
       void retrievePlanFromAuthorize.then((plan) => {
-        // @ts-expect-error retrieve only permits broker-internal candidate selection.
         return runtime.searchAuthorized({
-          context: retrieveContext,
+          context: deriveContext,
+          // @ts-expect-error retrieve only permits broker-internal candidate selection.
           plan,
           query: "query",
           limit: 1,
@@ -344,10 +344,10 @@ describe("memory authorization SDK contract", () => {
       );
       void runtime.statusAuthorized({ context: statusContext, plan: statusPlan });
 
-      // @ts-expect-error retrieve may select candidates only inside the broker.
       void runtime.writeAuthorized({
+        // @ts-expect-error retrieve may select candidates only inside the broker.
         context: retrieveContext,
-        plan: retrievePlan,
+        plan: appendPlan,
         mutation: appendMutation,
       });
       // @ts-expect-error the mutation kind must match the context and plan operation.
@@ -356,18 +356,18 @@ describe("memory authorization SDK contract", () => {
         plan: appendPlan,
         mutation: importMutation,
       });
-      // @ts-expect-error retrieve may not invoke an import action.
       void runtime.importAuthorized({
+        // @ts-expect-error retrieve may not invoke an import action.
         context: retrieveContext,
-        plan: retrievePlan,
+        plan: importPlan,
         mutation: importMutation,
       });
       // @ts-expect-error retrieve may not invoke a sync action.
       void runtime.syncAuthorized({ context: retrieveContext, plan: retrievePlan });
-      // @ts-expect-error retrieve may not produce a content-bearing export payload.
       void runtime.exportAuthorized({
+        // @ts-expect-error retrieve may not produce a content-bearing export payload.
         context: retrieveContext,
-        plan: retrievePlan,
+        plan: exportPlan,
         handles: [handle],
       });
       // @ts-expect-error retrieve may not invoke a status action.
