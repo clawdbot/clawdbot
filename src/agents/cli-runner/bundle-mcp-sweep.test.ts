@@ -326,6 +326,38 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     expect(result.removed).toEqual([doomed]); // and the removal still happens after it
   });
 
+  it("cancels the removal when the sidecar aborts during the settle (real AbortController + real timer)", async () => {
+    const doomed = await createDir(root, "aborted", { owner: { pid: 4242 } });
+    const controller = new AbortController();
+    // No `sleep` override: the real timer must be cut short by the real signal.
+    setTimeout(() => controller.abort(), 60);
+    const startedAt = Date.now();
+    const result = await sweep(root, {
+      settleMs: 30_000, // would hang the test if the abort were not honoured
+      signal: controller.signal,
+      isPidAlive: () => false,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(5_000); // wait was cut short
+    expect(result.removed).toEqual([]); // and nothing was deleted after cancellation
+    expect(result.kept).toContain(doomed);
+    await expect(fs.stat(doomed)).resolves.toBeDefined();
+  });
+
+  it("removes nothing when the signal is already aborted before the settle", async () => {
+    const doomed = await createDir(root, "pre-aborted", { owner: { pid: 4242 } });
+    const sleep = vi.fn(async () => {});
+    const result = await sweep(root, {
+      settleMs: 5_000,
+      signal: AbortSignal.abort(),
+      sleep,
+      isPidAlive: () => false,
+    });
+    expect(sleep).not.toHaveBeenCalled(); // no point waiting on an aborted run
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toContain(doomed);
+    await expect(fs.stat(doomed)).resolves.toBeDefined();
+  });
+
   it("does not settle when there is nothing to remove", async () => {
     await createDir(root, "live-owner"); // owner alive → no candidates
     const sleep = vi.fn(async () => {});

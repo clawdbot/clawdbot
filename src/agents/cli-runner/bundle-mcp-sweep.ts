@@ -67,15 +67,28 @@ const PROCESS_SCAN_TIMEOUT_MS = 10_000;
  */
 const POST_VERDICT_SETTLE_MS = 5_000;
 
-function defaultSleep(ms: number): Promise<void> {
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
     // Deliberately NOT unref'd. An unref'd timer does not hold the event loop,
     // so a runtime with nothing else pending exits before it fires and the
     // sweep's promise never settles (Node exits 13, "Unfinished Top-Level
-    // Await" — observed on a real host). The cost of keeping it ref'd is that a
-    // shutdown landing inside the settle waits it out; correctness of the sweep
-    // is worth more than shaving seconds off an already-graceful stop.
-    setTimeout(resolve, ms);
+    // Await" — observed on a real host). Holding the loop is safe here because
+    // the sidecar's abort signal cuts the wait short on close: a shutdown
+    // landing inside the settle resolves immediately (and the caller then
+    // returns without deleting) instead of waiting the interval out.
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -376,7 +389,13 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   /** Override the post-verdict settle delay in ms (tests pass 0). */
   settleMs?: number;
   /** Override the delay implementation (tests). */
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * The sidecar's abort signal. Cuts the settle short on gateway close and
+   * stops the sweep before any removal — a cleanup must never outlive the
+   * cancellation that asked it to stop.
+   */
+  signal?: AbortSignal;
   log?: { warn: (msg: string) => void };
 }): Promise<{ removed: string[]; kept: string[] }> {
   const tmpRoot = params?.tmpRoot ?? os.tmpdir();
@@ -466,8 +485,15 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   // turns the re-scan below from a narrowing heuristic into a decisive check
   // (see POST_VERDICT_SETTLE_MS).
   const settleMs = params?.settleMs ?? POST_VERDICT_SETTLE_MS;
-  if (settleMs > 0) {
-    await (params?.sleep ?? defaultSleep)(settleMs);
+  if (settleMs > 0 && !params?.signal?.aborted) {
+    await (params?.sleep ?? defaultSleep)(settleMs, params?.signal);
+  }
+
+  // A close that arrived before or during the settle cancels the sweep: keep
+  // every candidate and remove nothing. Deleting after cancellation began would
+  // let this cleanup outlive the gateway generation that scheduled it.
+  if (params?.signal?.aborted) {
+    return { removed, kept: [...kept, ...candidates] };
   }
 
   // Phase 2 — re-scan argv immediately before removing. After the settle above,
