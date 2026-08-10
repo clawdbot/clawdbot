@@ -49,7 +49,7 @@ const failoverClassificationCorpus = [
   ...legacyBillingBCases,
   ...legacyProviderMatcherCases,
 ];
-import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 function classifyReplyRequest(signal: FailoverSignal) {
   return resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
@@ -107,16 +107,16 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     });
   });
 
-  it("uses rate-limit retry semantics but overloaded user copy", () => {
+  it("renders rate-limit copy from the classified reason", () => {
     const message = "429 Too Many Requests: model overloaded";
 
-    // BUG(refactor-02): retry classification and user-copy precedence are inverted.
+    // FIXED(refactor-02): user copy follows the canonical failover reason.
     expect(classifyFailoverSignal({ message })).toEqual({
       kind: "reason",
       reason: "rate_limit",
     });
-    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
     );
   });
 

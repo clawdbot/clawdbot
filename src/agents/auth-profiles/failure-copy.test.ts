@@ -13,7 +13,9 @@ vi.mock("../provider-auth-recovery-hint.js", () => ({
 }));
 
 import type { FailoverReason } from "../failover/signal.js";
-import { formatAuthProfileFailureMessage } from "./failure-copy.js";
+import { renderAuthProfileFailoverCopy } from "../failover/user-copy.js";
+
+const formatAuthProfileFailureMessage = renderAuthProfileFailoverCopy;
 
 const PROVIDER = "openai-codex";
 
@@ -32,7 +34,7 @@ const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
   "format",
 ];
 
-describe("formatAuthProfileFailureMessage", () => {
+describe("renderAuthProfileFailoverCopy", () => {
   describe("recovery-hint dispatch", () => {
     it("includes the login command for reasons the user can act on", () => {
       for (const reason of REASONS_WITH_RECOVERY) {
