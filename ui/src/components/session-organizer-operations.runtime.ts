@@ -54,9 +54,15 @@ export async function patchSession(
     return "stale";
   }
   const agentId = sessionRowAgentId(session, scope);
+  // Identity captured with the row: the Gateway refuses the patch when the stored
+  // entry no longer carries it, so a mutation the operator started before a
+  // replacement cannot land on the successor.
+  const identifiedPatch = session.sessionId
+    ? { ...patch, expectedSessionId: session.sessionId }
+    : patch;
   const requestParams = {
     key: session.key,
-    ...patch,
+    ...identifiedPatch,
     agentId,
   };
   if (
@@ -65,7 +71,7 @@ export async function patchSession(
     return "failed";
   }
   try {
-    const patched = await scope.sessions.patch(session.key, patch, {
+    const patched = await scope.sessions.patch(session.key, identifiedPatch, {
       agentId,
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
@@ -399,24 +405,20 @@ export async function createSessionGroup(
   if (remembered !== "completed") {
     return remembered;
   }
-  // The dialog no longer blocks, so a captured row can be deleted while the
-  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
-  // every target against the current list, as the Sessions-page path does.
-  const targets = sessions.flatMap((session) => {
-    const current = host.findSidebarSessionByKey(session.key);
-    return current ? [current] : [];
-  });
-  if (targets.length === 1) {
-    return patchSession(host, targets[0]!, { category: name }, scope);
+  // The rows carry the identity captured when the operator acted, so a session
+  // replaced while the catalog write was in flight is rejected by the Gateway
+  // instead of being recreated here. The sidebar's own list is a bounded
+  // projection and cannot decide that on its own.
+  if (sessions.length === 1) {
+    return patchSession(host, sessions[0]!, { category: name }, scope);
   }
-  if (targets.length > 1) {
-    return patchSessions(host, targets, { category: name }, scope);
+  if (sessions.length > 1) {
+    return patchSessions(host, sessions, { category: name }, scope);
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // Nothing left to file: either a header-created group that starts empty, or
-  // every captured row disappeared. Re-render so the section shows up.
+  // Header-created groups start empty; re-render so the section shows up.
   host.requestUpdate();
   return "completed";
 }

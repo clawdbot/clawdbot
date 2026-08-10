@@ -17,6 +17,7 @@ import {
 vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
 
 const SESSION_KEY = "agent:main:move-me";
+const SESSION_ID = "session-move-me";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -38,7 +39,7 @@ async function mountGroupsPage(groupsPut: () => Promise<SessionGroupMutationResu
   });
   const page = await createRenderedPage(createContext(mutableGateway.gateway, sessions), {
     count: 1,
-    sessions: [{ key: SESSION_KEY, archived: false }],
+    sessions: [{ key: SESSION_KEY, sessionId: SESSION_ID, archived: false }],
   } as SessionsListResult);
   // The dialog itself is covered by input-dialog.test.ts; here it only stands in
   // for the operator submitting a name. A recorded message is what keeps the real
@@ -64,7 +65,7 @@ describe("sessions page new group", () => {
     );
     expect(sessions.patch).toHaveBeenCalledWith(
       SESSION_KEY,
-      { category: "Client work" },
+      { category: "Client work", expectedSessionId: SESSION_ID },
       expect.anything(),
     );
   });
@@ -142,7 +143,7 @@ describe("sessions page new group", () => {
     // The replacement connection reloads the list before the operator retries.
     page.result = {
       count: 1,
-      sessions: [{ key: SESSION_KEY, archived: false }],
+      sessions: [{ key: SESSION_KEY, sessionId: SESSION_ID, archived: false }],
     } as SessionsListResult;
     await page.requestNewCategory(SESSION_KEY);
 
@@ -150,12 +151,12 @@ describe("sessions page new group", () => {
     expect(sessions.patch).toHaveBeenCalledOnce();
     expect(sessions.patch).toHaveBeenCalledWith(
       SESSION_KEY,
-      { category: "Client work" },
+      { category: "Client work", expectedSessionId: SESSION_ID },
       expect.anything(),
     );
   });
 
-  it("skips the assignment when the row disappeared during the catalog write", async () => {
+  it("carries the captured session identity into the delayed assignment", async () => {
     let landCatalogWrite!: () => void;
     const pending = new Promise<SessionGroupMutationResult>((resolve) => {
       landCatalogWrite = () => resolve("completed");
@@ -165,14 +166,19 @@ describe("sessions page new group", () => {
     const created = page.requestNewCategory(SESSION_KEY);
     await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
 
-    // The session was deleted while the catalog write was in flight; patching
-    // its key now would recreate the entry the operator just removed.
+    // An ordinary refresh pages the row out of this filtered view while the
+    // catalog write is in flight. The session still exists, so the assignment
+    // must still go out — carrying the identity captured when the dialog opened,
+    // which is what lets the Gateway refuse a genuinely replaced target.
     page.result = { count: 0, sessions: [] } as unknown as SessionsListResult;
     landCatalogWrite();
     await created;
 
-    expect(sessions.patch).not.toHaveBeenCalled();
-    // The group itself landed, so this closes rather than asking for a retry.
+    expect(sessions.patch).toHaveBeenCalledWith(
+      SESSION_KEY,
+      { category: "Client work", expectedSessionId: SESSION_ID },
+      expect.anything(),
+    );
     expect(submitMessages).toEqual([null]);
   });
 

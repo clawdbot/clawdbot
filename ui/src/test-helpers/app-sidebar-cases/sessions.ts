@@ -436,7 +436,7 @@ describe("AppSidebar session mutation feedback", () => {
     );
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,
-      { archived: true },
+      { archived: true, expectedSessionId: `session-${archivedRow.key}` },
       { agentId: "main" },
     );
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
@@ -446,13 +446,13 @@ describe("AppSidebar session mutation feedback", () => {
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       archivedRow.key,
-      { archived: false },
+      { archived: false, expectedSessionId: `session-${archivedRow.key}` },
       { agentId: "main", deferListRefresh: true },
     );
     expect(harness.patch).toHaveBeenNthCalledWith(
       3,
       archivedRow.key,
-      { pinned: true },
+      { pinned: true, expectedSessionId: `session-${archivedRow.key}` },
       { agentId: "main", deferListRefresh: true },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
