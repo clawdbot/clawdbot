@@ -99,6 +99,36 @@ describe("projectProviderError", () => {
       }),
       expected: '415: {"data":{"bytes":4,"redacted":"<redacted>"},"type":"video"}',
     },
+    {
+      name: "prefixed JSON message",
+      error: new Error('Error: {"b64_json":"QUJDRA=="}'),
+      expected: 'Error: {"b64_json":"<redacted>"}',
+    },
+    {
+      name: "credential in a JSON message prefix",
+      error: new Error('Provider token=abcdefghijklmnop : {"b64_json":"QUJDRA=="}'),
+      expected: 'Provider token=<redacted> : {"b64_json":"<redacted>"}',
+    },
+    {
+      name: "bracketed provider prefix",
+      error: new Error('Error [provider]: {"b64_json":"QUJDRA=="}'),
+      expected: 'Error [provider]: {"b64_json":"<redacted>"}',
+    },
+    {
+      name: "provider prefix without a delimiter",
+      error: new Error('Error [provider] {"b64_json":"QUJDRA=="}'),
+      expected: 'Error [provider] {"b64_json":"<redacted>"}',
+    },
+    {
+      name: "multiline provider prefix",
+      error: new Error('Error from\nprovider: {"b64_json":"QUJDRA=="}'),
+      expected: 'Error from\nprovider: {"b64_json":"<redacted>"}',
+    },
+    {
+      name: "long provider prefix",
+      error: new Error(`${"x".repeat(129)}: {"b64_json":"QUJDRA=="}`),
+      expected: `${"x".repeat(129)}: {"b64_json":"<redacted>"}`,
+    },
   ])("redacts media from $name", ({ error, expected }) => {
     expect(projectProviderError(error).errorMessage).toBe(expected);
   });
@@ -253,6 +283,7 @@ describe("projectProviderError", () => {
     "[ERROR] provider unavailable",
     "[GoogleGenerativeAI Error]: provider unavailable",
     "[429] rate limited: retry later",
+    "Error: [GoogleGenerativeAI Error]: provider unavailable",
   ])("preserves plain bracketed diagnostic text", (body) => {
     expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
   });

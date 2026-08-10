@@ -196,6 +196,16 @@ describe("sanitizeDiagnosticPayload", () => {
       leaked: MEDIA_DATA,
     },
     {
+      name: "prefixed image data",
+      value: 'Error: {"b64_json":"QUJDRA=="}',
+      leaked: MEDIA_DATA,
+    },
+    {
+      name: "prefixed video data",
+      value: 'Provider failed: {"type":"video","data":"QUJDRA=="}',
+      leaked: MEDIA_DATA,
+    },
+    {
       name: "typed numeric video data",
       value: '{"type":"video","data":[65,66,67,68]}',
       leaked: "[65,66,67,68]",

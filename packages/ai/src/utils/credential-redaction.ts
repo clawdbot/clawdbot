@@ -36,6 +36,7 @@ const MEDIA_DATA_URL_RE =
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
 const MAX_DIAGNOSTIC_DEPTH = 8;
 const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z0-9][A-Za-z0-9 _.-]*\][^{}[\]",]*$/u;
+const PREFIXED_DIAGNOSTIC_JSON_RE = /^(?!\s*[[{])(.*?)(\{.*|\[\s*[{"\d\]tfn-].*)$/su;
 
 function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
@@ -224,16 +225,18 @@ export function projectDiagnosticValue(
 /** Redacts bounded structured JSON while preserving harmless diagnostic text byte-for-byte. */
 export function redactDiagnosticText(value: string): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
-  if (!/^\s*[[{]/u.test(value) || PLAIN_BRACKETED_TEXT_RE.test(value)) {
+  const prefixed = text.match(PREFIXED_DIAGNOSTIC_JSON_RE);
+  const json = prefixed?.[2] ?? value;
+  if ((!prefixed && !/^\s*[[{]/u.test(value)) || PLAIN_BRACKETED_TEXT_RE.test(json)) {
     return text;
   }
-  if (value.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
+  if (json.length > MAX_DIAGNOSTIC_JSON_LENGTH) {
     return "[Oversized diagnostic JSON redacted]";
   }
   try {
     const state = { changed: false };
-    const projected = projectDiagnosticValue(JSON.parse(value), {}, new WeakSet(), 0, false, state);
-    return state.changed ? stableStringify(projected) : text;
+    const projected = projectDiagnosticValue(JSON.parse(json), {}, new WeakSet(), 0, false, state);
+    return state.changed ? `${prefixed?.[1] ?? ""}${stableStringify(projected)}` : text;
   } catch {
     return "[Malformed diagnostic JSON redacted]";
   }
