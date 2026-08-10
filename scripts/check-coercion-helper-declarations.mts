@@ -12,9 +12,15 @@ import { toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
 const BANNED_HELPER_NAMES = new Set([
   "asRecord",
+  "asString",
   "isRecord",
+  "normalizeString",
   "optionalString",
+  "readBoolean",
+  "readNumber",
+  "readOptionalString",
   "readString",
+  "timestampMs",
   "toError",
 ]);
 const SCAN_ROOTS = [
@@ -38,9 +44,15 @@ const GENERATED_BROWSER_RUNTIME_PATHS = new Set([
 
 export type BannedCoercionHelperName =
   | "asRecord"
+  | "asString"
   | "isRecord"
+  | "normalizeString"
   | "optionalString"
+  | "readBoolean"
+  | "readNumber"
+  | "readOptionalString"
   | "readString"
+  | "timestampMs"
   | "toError";
 
 export type CoercionHelperDeclaration = {

@@ -18,6 +18,12 @@ describe("coercion helper declaration AST guard", () => {
       "let toError = function (value: unknown) { return value; };",
       "var optionalString = async (value: unknown) => value;",
       "const readString = (((value: unknown) => String(value)) satisfies ((value: unknown) => string));",
+      "function readNumber(record: Record<string, unknown>, key: string) { return record[key]; }",
+      "const timestampMs = (value: unknown) => Number(value);",
+      "function readBoolean() {}",
+      "function readOptionalString() {}",
+      "function normalizeString() {}",
+      "const asString = (value: unknown) => String(value);",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -27,6 +33,12 @@ describe("coercion helper declaration AST guard", () => {
       { file: "src/example.ts", kind: "variable", line: 6, name: "toError" },
       { file: "src/example.ts", kind: "variable", line: 7, name: "optionalString" },
       { file: "src/example.ts", kind: "variable", line: 8, name: "readString" },
+      { file: "src/example.ts", kind: "function", line: 9, name: "readNumber" },
+      { file: "src/example.ts", kind: "variable", line: 10, name: "timestampMs" },
+      { file: "src/example.ts", kind: "function", line: 11, name: "readBoolean" },
+      { file: "src/example.ts", kind: "function", line: 12, name: "readOptionalString" },
+      { file: "src/example.ts", kind: "function", line: 13, name: "normalizeString" },
+      { file: "src/example.ts", kind: "variable", line: 14, name: "asString" },
     ]);
   });
 

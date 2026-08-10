@@ -17,7 +17,7 @@ function readScheduleTime(record: Record<string, unknown>, key: string): number 
   return coerceFiniteScheduleNumber(record[key]);
 }
 
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+function readScheduleInteger(record: Record<string, unknown>, key: string): number | undefined {
   const parsed = parseStrictFiniteNumber(record[key]);
   return asSafeIntegerInRange(parsed, {
     min: Number.MIN_SAFE_INTEGER,
@@ -95,8 +95,8 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>):
       cwd: normalizeOptionalString(schedule.cwd),
       mode: mode === "line" || mode === "match" ? mode : undefined,
       match: typeof schedule.match === "string" ? schedule.match : undefined,
-      batchMs: readNumber(schedule, "batchMs"),
-      maxBatchBytes: readNumber(schedule, "maxBatchBytes"),
+      batchMs: readScheduleInteger(schedule, "batchMs"),
+      maxBatchBytes: readScheduleInteger(schedule, "maxBatchBytes"),
     };
   }
   return undefined;
