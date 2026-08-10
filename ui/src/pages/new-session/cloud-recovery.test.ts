@@ -152,21 +152,29 @@ describe("cloud session recovery", () => {
     ]);
   });
 
-  it("preserves source bytes on destination collision and write failure", () => {
+  it("preserves source bytes on destination collision, write failure, and clear failure", () => {
     const newScope = "gateway-principal";
     const sourceRaw = ` ${JSON.stringify(recovery)}\n`;
     const sourceKey = exactKey(recovery.sessionKey);
+    const destination = {
+      ...recovery,
+      messageId: "message-destination",
+      message: "keep the destination task",
+      recoveryScope: newScope,
+    };
     const destinationKey = cloudSessionRecoveryExactStorageKey(
       recovery.gatewayUrl,
       newScope,
       recovery.sessionKey,
     );
     sessionStorage.setItem(sourceKey, sourceRaw);
-    sessionStorage.setItem(destinationKey, "destination collision");
+    expect(writeCloudSessionRecovery(destination)).toBe(true);
 
     migrateCloudSessionRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, newScope);
     expect(sessionStorage.getItem(sourceKey)).toBe(sourceRaw);
-    expect(sessionStorage.getItem(destinationKey)).toBe("destination collision");
+    expect(readCloudSessionRecovery(recovery.gatewayUrl, newScope, recovery.sessionKey)).toEqual(
+      destination,
+    );
 
     sessionStorage.removeItem(destinationKey);
     const storage = sessionStorage;
@@ -187,6 +195,26 @@ describe("cloud session recovery", () => {
     migrateCloudSessionRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, newScope);
     expect(storage.getItem(sourceKey)).toBe(sourceRaw);
     expect(storage.getItem(destinationKey)).toBeNull();
+
+    vi.stubGlobal("sessionStorage", {
+      get length() {
+        return storage.length;
+      },
+      getItem: storage.getItem.bind(storage),
+      key: storage.key.bind(storage),
+      removeItem: vi.fn((key: string) => {
+        if (key !== sourceKey) {
+          storage.removeItem(key);
+        }
+      }),
+      setItem: storage.setItem.bind(storage),
+    });
+    migrateCloudSessionRecoveryScope(recovery.gatewayUrl, recovery.recoveryScope, newScope);
+    expect(storage.getItem(sourceKey)).toBe(sourceRaw);
+    expect(readCloudSessionRecovery(recovery.gatewayUrl, newScope, recovery.sessionKey)).toEqual({
+      ...recovery,
+      recoveryScope: newScope,
+    });
   });
 
   it("removes only hostile v2 rows while preserving valid siblings", () => {

@@ -157,12 +157,17 @@ function readOwnedCloudSessionRecovery(
   }
 }
 
+type LegacyCloudSessionRecovery = {
+  raw: string;
+  recovery: CloudSessionRecovery;
+};
+
 function readLegacyCloudSessionRecovery(
   storage: Storage,
   key: string,
   gatewayUrl: string,
   recoveryScope: string,
-): CloudSessionRecovery | null {
+): LegacyCloudSessionRecovery | null {
   try {
     const raw = storage.getItem(key);
     if (!raw) {
@@ -179,7 +184,7 @@ function readLegacyCloudSessionRecovery(
       removeCloudSessionRecoveryRow(storage, key);
       return null;
     }
-    return recovery;
+    return { raw, recovery };
   } catch {
     return null;
   }
@@ -188,6 +193,7 @@ function readLegacyCloudSessionRecovery(
 function relocateCloudSessionRecoveryRow(
   storage: Storage,
   sourceKey: string,
+  sourceRaw: string,
   recovery: CloudSessionRecovery,
 ): CloudSessionRecovery | null {
   const key = cloudSessionRecoveryExactStorageKey(
@@ -197,6 +203,11 @@ function relocateCloudSessionRecoveryRow(
   );
   const serialized = JSON.stringify(recovery);
   try {
+    // Relocate instead of copying so a full store needs no duplicate capacity.
+    storage.removeItem(sourceKey);
+    if (storage.getItem(sourceKey) !== null) {
+      return null;
+    }
     storage.setItem(key, serialized);
     const relocated = readOwnedCloudSessionRecovery(
       storage,
@@ -205,21 +216,27 @@ function relocateCloudSessionRecoveryRow(
       recovery.recoveryScope,
       recovery.sessionKey,
     );
-    if (relocated && removeCloudSessionRecoveryRow(storage, sourceKey)) {
+    if (relocated) {
       return relocated;
     }
   } catch {
-    // The source stays authoritative so a later attempt can retry.
+    // The original bytes are restored below so a later attempt can retry.
   }
   removeCloudSessionRecoveryRow(storage, key);
+  try {
+    storage.setItem(sourceKey, sourceRaw);
+  } catch {
+    // Fail closed if even the original bytes no longer fit.
+  }
   return null;
 }
 
 function relocateLegacyCloudSessionRecovery(
   storage: Storage,
   legacyKey: string,
-  recovery: CloudSessionRecovery,
+  legacy: LegacyCloudSessionRecovery,
 ): CloudSessionRecovery | null {
+  const recovery = legacy.recovery;
   const key = cloudSessionRecoveryExactStorageKey(
     recovery.gatewayUrl,
     recovery.recoveryScope,
@@ -236,7 +253,7 @@ function relocateLegacyCloudSessionRecovery(
     removeCloudSessionRecoveryRow(storage, legacyKey);
     return existing;
   }
-  return relocateCloudSessionRecoveryRow(storage, legacyKey, recovery);
+  return relocateCloudSessionRecoveryRow(storage, legacyKey, legacy.raw, recovery);
 }
 
 export function listCloudSessionRecoveries(
@@ -291,31 +308,14 @@ export function migrateCloudSessionRecoveryScope(
   sourceScope: string,
   destinationScope: string,
 ): void {
-  if (!gatewayUrl || !sourceScope || !destinationScope || sourceScope === destinationScope) {
+  if (sourceScope === destinationScope) {
     return;
   }
-  try {
-    const storage = globalThis.sessionStorage;
-    if (!storage) {
-      return;
+  for (const recovery of listCloudSessionRecoveries(gatewayUrl, sourceScope)) {
+    const destination = { ...recovery, recoveryScope: destinationScope };
+    if (writeCloudSessionRecoveryIfAvailable(destination)) {
+      clearCloudSessionRecovery(gatewayUrl, sourceScope, recovery.sessionKey);
     }
-    for (const recovery of listCloudSessionRecoveries(gatewayUrl, sourceScope)) {
-      const sessionKey = recovery.sessionKey;
-      const sourceKey = cloudSessionRecoveryExactStorageKey(gatewayUrl, sourceScope, sessionKey);
-      const destinationKey = cloudSessionRecoveryExactStorageKey(
-        gatewayUrl,
-        destinationScope,
-        sessionKey,
-      );
-      if (storage.getItem(destinationKey) === null) {
-        relocateCloudSessionRecoveryRow(storage, sourceKey, {
-          ...recovery,
-          recoveryScope: destinationScope,
-        });
-      }
-    }
-  } catch {
-    // Recovery remains under the credential-proven source scope for a later handshake.
   }
 }
 
@@ -343,14 +343,14 @@ export function readCloudSessionRecovery(
     if (recovery) {
       const legacyKey = cloudSessionRecoveryLegacyStorageKey(gatewayUrl, recoveryScope);
       const legacy = readLegacyCloudSessionRecovery(storage, legacyKey, gatewayUrl, recoveryScope);
-      if (legacy?.sessionKey === sessionKey) {
+      if (legacy?.recovery.sessionKey === sessionKey) {
         removeCloudSessionRecoveryRow(storage, legacyKey);
       }
       return recovery;
     }
     const legacyKey = cloudSessionRecoveryLegacyStorageKey(gatewayUrl, recoveryScope);
     const legacy = readLegacyCloudSessionRecovery(storage, legacyKey, gatewayUrl, recoveryScope);
-    if (!legacy || legacy.sessionKey !== sessionKey) {
+    if (!legacy || legacy.recovery.sessionKey !== sessionKey) {
       return null;
     }
     return relocateLegacyCloudSessionRecovery(storage, legacyKey, legacy);
@@ -446,7 +446,7 @@ export function promoteCloudSessionRecovery(
       }
       return removeCloudSessionRecoveryRow(storage, previousKey);
     }
-    return Boolean(relocateCloudSessionRecoveryRow(storage, previousKey, recovery));
+    return Boolean(relocateCloudSessionRecoveryRow(storage, previousKey, previousRaw, recovery));
   } catch {
     return false;
   }
