@@ -47,7 +47,7 @@ import {
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
 } from "./subagent-session-reconciliation.js";
-import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
+import { terminateAcceptedCollectorRun } from "./subagents/spawn/subagent-spawn-cleanup.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");

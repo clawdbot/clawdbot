@@ -8,7 +8,7 @@ import {
   testing as registryTesting,
 } from "../subagent-registry.test-helpers.js";
 import "../subagent-registry.mocks.shared.js";
-import { testing as spawnTesting } from "../subagent-spawn.test-support.js";
+import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-support.js";
 import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
