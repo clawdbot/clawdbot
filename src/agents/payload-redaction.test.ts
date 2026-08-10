@@ -22,13 +22,17 @@ describe("sanitizeDiagnosticPayload", () => {
           { mimeType: "video/mp4", blob: MEDIA_DATA },
           { type: "image", source: { data: MEDIA_DATA } },
           { type: "video", data: MEDIA_BYTES },
+          { type: "video_frame", data: MEDIA_DATA },
         ],
         wrappers: [
           { audio: { data: MEDIA_DATA } },
           { video: { blob: MEDIA_DATA } },
+          { video_frame: { data: MEDIA_DATA } },
+          { videoFrame: { data: MEDIA_DATA } },
+          { inputVideoFrame: { data: MEDIA_DATA } },
           { output_audio: { data: MEDIA_DATA } },
         ],
-        ordinary: { audioCodec: { data: MEDIA_BYTES }, data: MEDIA_BYTES, blob: MEDIA_DATA },
+        ordinary: { audioCodec: { data: [...MEDIA_BYTES] }, data: MEDIA_BYTES, blob: MEDIA_DATA },
       }),
     ).toEqual({
       media: [
@@ -36,13 +40,17 @@ describe("sanitizeDiagnosticPayload", () => {
         { mimeType: "video/mp4", blob: "<redacted>", ...MEDIA_SUMMARY },
         { type: "image", source: { data: "<redacted>", ...MEDIA_SUMMARY } },
         { type: "video", data: "<redacted>", ...BYTE_MEDIA_SUMMARY },
+        { type: "video_frame", data: "<redacted>", ...MEDIA_SUMMARY },
       ],
       wrappers: [
         { audio: { data: "<redacted>", ...MEDIA_SUMMARY } },
         { video: { blob: "<redacted>", ...MEDIA_SUMMARY } },
+        { video_frame: { data: "<redacted>", ...MEDIA_SUMMARY } },
+        { videoFrame: { data: "<redacted>", ...MEDIA_SUMMARY } },
+        { inputVideoFrame: { data: "<redacted>", ...MEDIA_SUMMARY } },
         { output_audio: { data: "<redacted>", ...MEDIA_SUMMARY } },
       ],
-      ordinary: { audioCodec: { data: MEDIA_BYTES }, data: MEDIA_BYTES, blob: MEDIA_DATA },
+      ordinary: { audioCodec: { data: [...MEDIA_BYTES] }, data: MEDIA_BYTES, blob: MEDIA_DATA },
     });
   });
 
@@ -61,6 +69,51 @@ describe("sanitizeDiagnosticPayload", () => {
       audioCodec: MEDIA_DATA,
       ...summary,
     });
+  });
+
+  it.each([
+    ["imageBytes", true],
+    ["imageBase64", true],
+    ["audioData", true],
+    ["audioDelta", true],
+    ["videoData", true],
+    ["videoUrl", true],
+    ["inputImage", true],
+    ["outputVideo", true],
+    ["video_bytes_base64", true],
+    ["imageDataBase64", true],
+    ["video_frame", true],
+    ["videoFrame", true],
+    ["outputVideoFrames", true],
+    ["audioCodec", false],
+  ])("classifies normalized media field %s", (key, redacted) => {
+    const value = `media-value-for-${key}`;
+    const serialized = JSON.stringify(sanitizeDiagnosticPayload({ [key]: value }));
+
+    expect(serialized.includes(value)).toBe(!redacted);
+  });
+
+  it.each([
+    ["bytes", MEDIA_BYTES],
+    ["buffer", MEDIA_DATA],
+  ])("redacts contextual media payload field %s", (key, value) => {
+    expect(JSON.stringify(sanitizeDiagnosticPayload({ audio: { [key]: value } }))).not.toContain(
+      JSON.stringify(value),
+    );
+  });
+
+  it.each([
+    ["privateKey", false],
+    ["signingKey", false],
+    ["secretAccessKey", false],
+    ["AWS_SECRET_ACCESS_KEY", false],
+    ["publicKey", true],
+    ["accessKeyId", true],
+  ])("classifies normalized credential field %s", (key, preserved) => {
+    const value = `credential-value-for-${key}`;
+    const serialized = JSON.stringify(sanitizeDiagnosticPayload({ [key]: value }));
+
+    expect(serialized.includes(value)).toBe(preserved);
   });
 
   it("redacts embedded and folded media data URLs without dropping surrounding text", () => {

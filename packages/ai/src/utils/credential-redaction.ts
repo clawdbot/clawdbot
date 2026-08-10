@@ -1,6 +1,5 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { stableStringify } from "@openclaw/normalization-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "passwordfile",
@@ -10,6 +9,15 @@ const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "tokenlimit",
   "tokens",
 ]);
+const CREDENTIAL_FIELD_SUFFIX_RE =
+  /(?:apikey|passphrase|passwd|password|privatekey|secret|secret(?:access)?key|signingkey|token)$/u;
+const MEDIA_PAYLOAD_SUFFIXES = "base64|blob|buffer|bytes|data|delta|frames?|url";
+const MEDIA_FIELD_NAME_RE = new RegExp(
+  `^(?:input|output)?(?:audio|image|video)(?:${MEDIA_PAYLOAD_SUFFIXES})*$`,
+  "u",
+);
+const MEDIA_PAYLOAD_SUFFIX_RE = new RegExp(`^(?:${MEDIA_PAYLOAD_SUFFIXES})$`, "u");
+const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/iu;
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
@@ -18,23 +26,20 @@ const MEDIA_DATA_URL_RE =
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
 const MAX_DIAGNOSTIC_DEPTH = 8;
 const PLAIN_BRACKETED_TEXT_RE = /^\s*\[[A-Za-z][A-Za-z0-9 _-]*\](?:\s+[^{}[\]":,]*)?\s*$/u;
-const DIAGNOSTIC_MEDIA_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/iu;
+
+function normalizeDiagnosticFieldName(value: string): string {
+  return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+}
 
 export function isCredentialFieldName(key: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(key.replaceAll(/[^a-z0-9]/gi, ""));
+  const normalized = normalizeDiagnosticFieldName(key);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
   return (
     normalized === "authorization" ||
     normalized === "proxyauthorization" ||
-    normalized.endsWith("apikey") ||
-    normalized.endsWith("password") ||
-    normalized.endsWith("passwd") ||
-    normalized.endsWith("passphrase") ||
-    normalized.endsWith("secret") ||
-    normalized.endsWith("secretkey") ||
-    normalized.endsWith("token")
+    CREDENTIAL_FIELD_SUFFIX_RE.test(normalized)
   );
 }
 
@@ -44,8 +49,6 @@ export function redactCredentialText(value: string): string {
     .replace(JWT_VALUE_RE, "<redacted-jwt>")
     .replace(COOKIE_PAIR_RE, "$1=<redacted>");
 }
-
-type ProjectionState = { changed: boolean };
 
 export function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | undefined {
   return value instanceof ArrayBuffer
@@ -62,7 +65,8 @@ export function diagnosticBytes(value: unknown, numericArrays = false): Uint8Arr
 export function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
   const type = descriptors.type?.value;
   return (
-    (typeof type === "string" && DIAGNOSTIC_MEDIA_NAME_RE.test(type)) ||
+    (typeof type === "string" &&
+      /^(?:input|output)?(?:audio|image|video)/u.test(normalizeDiagnosticFieldName(type))) ||
     ["mimeType", "mime_type", "mediaType", "media_type", "contentType", "content_type"].some(
       (key) => {
         const mime = descriptors[key]?.value;
@@ -72,35 +76,59 @@ export function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): bo
   );
 }
 
-export function extractDiagnosticMediaField(key: string, value: unknown, parentMedia: boolean) {
-  const mediaName = DIAGNOSTIC_MEDIA_NAME_RE.test(key);
-  const alwaysPrivate = key === "videoBytes" || key === "b64_json";
-  const contextual = parentMedia && (key === "data" || key === "blob");
-  if (!alwaysPrivate && !mediaName && !contextual) {
-    return parentMedia ? false : undefined;
+export type DiagnosticMediaField =
+  | { kind: "context" }
+  | {
+      kind: "redacted";
+      bytes?: number;
+      source?: string | Uint8Array;
+    };
+export type DiagnosticProjectionPolicy = {
+  omitField?: (key: string) => boolean;
+  propertyScope?: "enumerable" | "error";
+  projectBinary?: (binary: Uint8Array) => unknown;
+  projectMedia?: (
+    key: string,
+    media: Extract<DiagnosticMediaField, { kind: "redacted" }>,
+  ) => Record<string, unknown>;
+};
+
+export function extractDiagnosticMediaField(
+  key: string,
+  value: unknown,
+  parentMedia: boolean,
+): DiagnosticMediaField | undefined {
+  const normalized = normalizeDiagnosticFieldName(key);
+  const privateField = normalized === "b64json";
+  const mediaField = MEDIA_FIELD_NAME_RE.test(normalized) || MEDIA_WRAPPER_NAME_RE.test(key);
+  const contextualPayload = parentMedia && MEDIA_PAYLOAD_SUFFIX_RE.test(normalized);
+  if (!privateField && !mediaField && !contextualPayload) {
+    return parentMedia ? { kind: "context" } : undefined;
+  }
+  if (normalized.endsWith("url")) {
+    return { kind: "redacted" };
   }
   const encoded = diagnosticBytes(value, true) ?? (typeof value === "string" ? value : undefined);
   if (encoded === undefined) {
-    return alwaysPrivate;
+    return { kind: privateField ? "redacted" : "context" };
   }
   const bytes =
     typeof encoded === "string" ? estimateBase64DecodedBytes(encoded) : encoded.byteLength;
-  return [{ redacted: "<redacted>", bytes }, encoded] as const;
+  return { kind: "redacted", bytes, source: encoded };
 }
 
 export function projectDiagnosticValue(
   value: unknown,
+  policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
   depth = 0,
   mediaPayload = false,
-  state: ProjectionState = { changed: false },
+  state = { changed: false },
 ): unknown {
   try {
     if (typeof value === "string") {
       const projected = redactDiagnosticText(value);
-      if (projected !== value) {
-        state.changed = true;
-      }
+      state.changed ||= projected !== value;
       return projected;
     }
     if (!value || typeof value !== "object") {
@@ -109,7 +137,12 @@ export function projectDiagnosticValue(
     const binary = diagnosticBytes(value);
     if (binary) {
       state.changed = true;
-      return { redacted: "<redacted>", bytes: binary.byteLength };
+      return (
+        policy.projectBinary?.(binary) ?? {
+          redacted: "<redacted>",
+          bytes: binary.byteLength,
+        }
+      );
     }
     if (seen.has(value)) {
       return "[Circular]";
@@ -129,7 +162,9 @@ export function projectDiagnosticValue(
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (
         !("value" in descriptor) ||
-        (!descriptor.enumerable && !["cause", "message", "name", "stack"].includes(key)) ||
+        (!descriptor.enumerable &&
+          (policy.propertyScope === "enumerable" ||
+            !["cause", "message", "name", "stack"].includes(key))) ||
         key === "length"
       ) {
         continue;
@@ -139,7 +174,7 @@ export function projectDiagnosticValue(
         break;
       }
       const child = descriptor.value;
-      if (isCredentialFieldName(key)) {
+      if (policy.omitField?.(key) || isCredentialFieldName(key)) {
         state.changed = true;
         continue;
       }
@@ -149,12 +184,15 @@ export function projectDiagnosticValue(
         continue;
       }
       const media = extractDiagnosticMediaField(key, child, redactMedia);
-      if (media) {
-        out[key] = media === true ? "<redacted>" : media[0];
+      if (media?.kind === "redacted") {
+        const redacted =
+          media.bytes === undefined ? "<redacted>" : { redacted: "<redacted>", bytes: media.bytes };
+        Object.assign(out, policy.projectMedia?.(key, media) ?? { [key]: redacted });
         state.changed = true;
         continue;
       }
-      out[key] = projectDiagnosticValue(child, seen, depth + 1, media === false, state);
+      const childMedia = media?.kind === "context";
+      out[key] = projectDiagnosticValue(child, policy, seen, depth + 1, childMedia, state);
     }
     return out;
   } catch {
@@ -173,8 +211,8 @@ export function redactDiagnosticText(value: string): string {
     return "[Oversized diagnostic JSON redacted]";
   }
   try {
-    const state: ProjectionState = { changed: false };
-    const projected = projectDiagnosticValue(JSON.parse(value), new WeakSet(), 0, false, state);
+    const state = { changed: false };
+    const projected = projectDiagnosticValue(JSON.parse(value), {}, new WeakSet(), 0, false, state);
     return state.changed ? stableStringify(projected) : text;
   } catch {
     return "[Malformed diagnostic JSON redacted]";

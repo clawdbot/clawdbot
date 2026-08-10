@@ -5,73 +5,33 @@
  */
 import crypto from "node:crypto";
 import {
-  diagnosticBytes,
-  extractDiagnosticMediaField,
-  isCredentialFieldName,
-  isDiagnosticMediaPayload,
-  redactDiagnosticText,
+  projectDiagnosticValue,
+  type DiagnosticProjectionPolicy,
 } from "@openclaw/ai/internal/shared";
 
 const REDACTED_MEDIA_DATA = "<redacted>";
 
+function mediaDigest(source: string | Uint8Array): string {
+  return crypto.createHash("sha256").update(source).digest("hex");
+}
+
+const CORE_DIAGNOSTIC_PROJECTION = {
+  omitField: (key) => key === "providerReplay",
+  propertyScope: "enumerable",
+  projectBinary: (binary) => ({
+    redacted: REDACTED_MEDIA_DATA,
+    bytes: binary.byteLength,
+    sha256: mediaDigest(binary),
+  }),
+  projectMedia: (key, media) => ({
+    [key]: REDACTED_MEDIA_DATA,
+    ...(media.source === undefined
+      ? {}
+      : { bytes: media.bytes, sha256: mediaDigest(media.source) }),
+  }),
+} satisfies DiagnosticProjectionPolicy;
+
 /** Removes credentials and inline media bytes from diagnostic payloads before persistence. */
 export function sanitizeDiagnosticPayload(value: unknown): unknown {
-  const seen = new WeakSet<object>();
-
-  const visit = (input: unknown, mediaPayload = false): unknown => {
-    const binary = diagnosticBytes(input);
-    if (binary) {
-      return {
-        redacted: REDACTED_MEDIA_DATA,
-        bytes: binary.byteLength,
-        sha256: crypto.createHash("sha256").update(binary).digest("hex"),
-      };
-    }
-    if (Array.isArray(input)) {
-      return input.map((entry) => visit(entry, mediaPayload));
-    }
-    if (typeof input === "string") {
-      return redactDiagnosticText(input);
-    }
-    if (!input || typeof input !== "object") {
-      return input;
-    }
-    if (seen.has(input)) {
-      return "[Circular]";
-    }
-    seen.add(input);
-
-    const descriptors = Object.getOwnPropertyDescriptors(input);
-    const out: Record<string, unknown> = {};
-    const rawName =
-      typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
-    const redactValue = typeof rawName === "string" && isCredentialFieldName(rawName);
-    const redactMedia = mediaPayload || isDiagnosticMediaPayload(descriptors);
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (!descriptor.enumerable || !("value" in descriptor)) {
-        continue;
-      }
-      if (key === "providerReplay" || isCredentialFieldName(key)) {
-        continue;
-      }
-      const child = descriptor.value;
-      const media = extractDiagnosticMediaField(key, child, redactMedia);
-      if (media) {
-        out[key] = media === true ? REDACTED_MEDIA_DATA : media[0].redacted;
-        if (media !== true) {
-          out.bytes = media[0].bytes;
-          out.sha256 = crypto.createHash("sha256").update(media[1]).digest("hex");
-        }
-        continue;
-      }
-      out[key] = redactValue && key === "value" ? "<redacted>" : visit(child, media === false);
-    }
-    return out;
-  };
-
-  try {
-    return visit(value);
-  } catch {
-    return "[unreadable diagnostic payload]";
-  }
+  return projectDiagnosticValue(value, CORE_DIAGNOSTIC_PROJECTION);
 }

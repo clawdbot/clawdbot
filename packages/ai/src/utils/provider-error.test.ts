@@ -51,6 +51,14 @@ describe("projectProviderError", () => {
     );
   });
 
+  it("bounds repeated aliases without expanding the shared graph", () => {
+    const shared = { detail: "safe" };
+
+    expect(projectProviderError({ first: shared, second: shared }).errorMessage).toBe(
+      '{"first":{"detail":"safe"},"second":"[Circular]"}',
+    );
+  });
+
   it("does not split surrogate pairs when truncating response bodies", () => {
     const body = `${"x".repeat(3999)}😀tail`;
     const error = Object.assign(new Error("502 status code (no body)"), { status: 502, body });
@@ -94,6 +102,30 @@ describe("projectProviderError", () => {
   });
 
   it.each([
+    ["imageBytes", true],
+    ["imageBase64", true],
+    ["audioData", true],
+    ["audioDelta", true],
+    ["videoData", true],
+    ["videoUrl", true],
+    ["inputImage", true],
+    ["outputVideo", true],
+    ["video_bytes_base64", true],
+    ["imageDataBase64", true],
+    ["video_frame", true],
+    ["videoFrame", true],
+    ["outputVideoFrames", true],
+    ["audioCodec", false],
+  ])("classifies normalized media field %s", (key, redacted) => {
+    const value = `media-value-for-${key}`;
+    const serialized = JSON.stringify(
+      projectProviderError({ status: 500, body: { [key]: value } }),
+    );
+
+    expect(serialized.includes(value)).toBe(!redacted);
+  });
+
+  it.each([
     {
       name: "nested videoBytes",
       body: '{"generatedVideos":[{"video":{"videoBytes":"QUJDRA=="}}]}',
@@ -113,8 +145,33 @@ describe("projectProviderError", () => {
     { name: "audio wrapper data", body: '{"audio":{"data":"QUJDRA=="}}', leaked: "QUJDRA==" },
     { name: "video wrapper blob", body: '{"video":{"blob":"QUJDRA=="}}', leaked: "QUJDRA==" },
     {
+      name: "video frame wrapper data",
+      body: '{"video_frame":{"data":"QUJDRA=="}}',
+      leaked: "QUJDRA==",
+    },
+    {
+      name: "camel-case video frame wrapper data",
+      body: '{"videoFrame":{"data":"QUJDRA=="}}',
+      leaked: "QUJDRA==",
+    },
+    {
+      name: "camel-case input video frame wrapper data",
+      body: '{"inputVideoFrame":{"data":"QUJDRA=="}}',
+      leaked: "QUJDRA==",
+    },
+    {
       name: "output audio wrapper data",
       body: '{"output_audio":{"data":"QUJDRA=="}}',
+      leaked: "QUJDRA==",
+    },
+    {
+      name: "audio wrapper bytes",
+      body: '{"audio":{"bytes":[65,66,67,68]}}',
+      leaked: "[65,66,67,68]",
+    },
+    {
+      name: "video wrapper buffer",
+      body: '{"video":{"buffer":"QUJDRA=="}}',
       leaked: "QUJDRA==",
     },
     {
@@ -132,6 +189,21 @@ describe("projectProviderError", () => {
     const body = '{"message": "safe", "nested": [1, 2]}';
 
     expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+  });
+
+  it.each([
+    {
+      name: "duplicate credential value",
+      body: '{"name":"password","value":"actual-secret","value":"<redacted>"}',
+      expected: '{"name":"password","value":"<redacted>"}',
+    },
+    {
+      name: "value-equal duplicate media marker",
+      body: '{"videoUrl":"https://media.invalid/actual-secret","videoUrl":"<redacted>"}',
+      expected: '{"videoUrl":"<redacted>"}',
+    },
+  ])("canonicalizes sensitive JSON with $name", ({ body, expected }) => {
+    expect(projectProviderError({ status: 500, body }).errorBody).toBe(expected);
   });
 
   it("preserves plain bracketed diagnostic text", () => {
@@ -270,5 +342,21 @@ describe("projectProviderError", () => {
     expect(serialized).toContain("Bearer <redacted>");
     expect(serialized).toContain("<redacted-jwt>");
     expect(serialized).toContain("session=<redacted>");
+  });
+
+  it.each([
+    ["privateKey", false],
+    ["signingKey", false],
+    ["secretAccessKey", false],
+    ["AWS_SECRET_ACCESS_KEY", false],
+    ["publicKey", true],
+    ["accessKeyId", true],
+  ])("classifies normalized credential field %s", (key, preserved) => {
+    const value = `credential-value-for-${key}`;
+    const serialized = JSON.stringify(
+      projectProviderError({ status: 400, body: { [key]: value } }),
+    );
+
+    expect(serialized.includes(value)).toBe(preserved);
   });
 });
