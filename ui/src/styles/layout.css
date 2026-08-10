@@ -2637,6 +2637,28 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   text-align: left;
 }
 
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
+   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
+   that margin as the icon column instead of stacking into a ~17px gutter. */
+wa-dropdown-item.session-menu__item {
+  gap: 0;
+}
+
+/* The icon slot wrapper is a block-level flex item, so its inline child sits on
+   the row's text baseline ~2px above the label's optical centre. */
+wa-dropdown-item.session-menu__item::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+/* Web Awesome insets the submenu chevron 1em at its own font size, landing it
+   inside the shortcut column and heavier than the hints. Share their rail. */
+wa-dropdown-item.session-menu__item::part(submenu-icon) {
+  inset-inline-end: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .session-menu__item:hover:not(:disabled),
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
@@ -2700,12 +2722,15 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
 }
 
+/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
+   .chat-question-panel__option kbd), fixed-width so letters and digits share
+   one rail beside the labels. */
 .session-menu__shortcut {
   flex: 0 0 auto;
+  min-width: 12px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 550;
-  letter-spacing: 0.04em;
+  font: 11px/1 var(--mono);
+  text-align: center;
 }
 
 .session-menu__info {
@@ -2715,7 +2740,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .session-menu__separator {
-  margin: 6px 4px;
+  margin: 4px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
