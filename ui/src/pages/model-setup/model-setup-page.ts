@@ -17,8 +17,8 @@ import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
 import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
+import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
 import {
   findPreparedModelCandidate,
   type ModelSetupPrepareOption,
@@ -102,11 +102,11 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
-  private readonly iconMisses = new Set<string>();
-  private readonly iconRequests = new Map<
-    string,
-    { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
-  >();
+  private readonly iconLoader = new ModelSetupIconLoader(
+    () => this.context,
+    (iconUrl) => this.currentIconUrls().has(iconUrl),
+    (urls) => (this.iconUrls = urls),
+  );
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -240,7 +240,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     void this.detectTask.run([null, null]);
     void this.activationTask.run([null, null]);
     void this.verifyTask.run([null]);
-    this.resetIcons();
+    this.iconLoader.reset();
     void this.wizard.cancel();
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -264,7 +264,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   override updated() {
     this.synchronizeGateway(this.context.gateway.snapshot);
-    this.reconcileIcons();
+    this.iconLoader.reconcile(this.currentIconUrls());
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
@@ -300,7 +300,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     void this.activationTask.run([null, null]);
     this.verifyState = { phase: "idle" };
     void this.verifyTask.run([null]);
-    this.resetIcons();
+    this.iconLoader.reset();
     this.pendingPrepareOption = null;
     void this.wizard.cancel();
     this.pageState = { phase: "loading" };
@@ -349,122 +349,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         ...(result.recommendedInstalls ?? []),
       ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
-  }
-
-  private reconcileIcons(): void {
-    const eligible = this.currentIconUrls();
-    const nextUrls = { ...this.iconUrls };
-    let changed = false;
-    for (const [iconUrl, blobUrl] of Object.entries(nextUrls)) {
-      if (!eligible.has(iconUrl)) {
-        URL.revokeObjectURL(blobUrl);
-        delete nextUrls[iconUrl];
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.iconUrls = nextUrls;
-    }
-    for (const [iconUrl, request] of this.iconRequests) {
-      if (!eligible.has(iconUrl)) {
-        clearTimeout(request.timeout);
-        request.controller.abort();
-        this.iconRequests.delete(iconUrl);
-      }
-    }
-    for (const iconUrl of this.iconMisses) {
-      if (!eligible.has(iconUrl)) {
-        this.iconMisses.delete(iconUrl);
-      }
-    }
-    for (const iconUrl of eligible) {
-      if (
-        !this.iconUrls[iconUrl] &&
-        !this.iconMisses.has(iconUrl) &&
-        !this.iconRequests.has(iconUrl)
-      ) {
-        this.fetchIcon(iconUrl);
-      }
-    }
-  }
-
-  private fetchIcon(iconUrl: string): void {
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException("catalog icon fetch timed out", "TimeoutError")),
-      10_000,
-    );
-    const request = { controller, timeout };
-    this.iconRequests.set(iconUrl, request);
-    void fetchCatalogIconBlobUrl({
-      iconUrl,
-      basePath: this.context.basePath,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: this.context.gateway.snapshot.hello,
-        settings: { token: this.context.gateway.connection.token },
-        password: this.context.gateway.connection.password,
-      },
-      signal: controller.signal,
-    })
-      .then((blobUrl) => {
-        if (
-          this.iconRequests.get(iconUrl) !== request ||
-          this.context.gateway.snapshot.phase !== "connected" ||
-          !this.currentIconUrls().has(iconUrl)
-        ) {
-          if (blobUrl) {
-            URL.revokeObjectURL(blobUrl);
-          }
-          return;
-        }
-        if (blobUrl) {
-          this.iconUrls = { ...this.iconUrls, [iconUrl]: blobUrl };
-        } else {
-          this.iconMisses.add(iconUrl);
-        }
-      })
-      .catch(() => {
-        if (this.iconRequests.get(iconUrl) === request) {
-          this.iconMisses.add(iconUrl);
-        }
-      })
-      .finally(() => {
-        clearTimeout(timeout);
-        if (this.iconRequests.get(iconUrl) === request) {
-          this.iconRequests.delete(iconUrl);
-        }
-      });
-  }
-
-  private invalidateIcon(iconUrl: string): void {
-    const request = this.iconRequests.get(iconUrl);
-    if (request) {
-      clearTimeout(request.timeout);
-      request.controller.abort();
-      this.iconRequests.delete(iconUrl);
-    }
-    const blobUrl = this.iconUrls[iconUrl];
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    const next = { ...this.iconUrls };
-    delete next[iconUrl];
-    this.iconUrls = next;
-    this.iconMisses.add(iconUrl);
-  }
-
-  private resetIcons(): void {
-    for (const request of this.iconRequests.values()) {
-      clearTimeout(request.timeout);
-      request.controller.abort();
-    }
-    for (const blobUrl of Object.values(this.iconUrls)) {
-      URL.revokeObjectURL(blobUrl);
-    }
-    this.iconRequests.clear();
-    this.iconMisses.clear();
-    this.iconUrls = {};
   }
 
   private async detect(): Promise<SystemAgentSetupDetectResult | null> {
@@ -744,7 +628,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       },
       onManualConnect: () => this.connectManual(),
       onMoreSignInToggle: (open) => (this.moreSignInOpen = open),
-      onIconError: (iconUrl) => this.invalidateIcon(iconUrl),
+      onIconError: (iconUrl) => this.iconLoader.invalidate(iconUrl),
       onOpenChat: () => {
         if (this.routeData?.firstRun) {
           this.context.navigate("custodian", { search: "?onboarding=1" });

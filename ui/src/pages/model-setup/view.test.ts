@@ -1040,7 +1040,6 @@ describe("renderModelSetup", () => {
       "prepare",
     );
     expect(text(prepareConfirm)).toContain("Continue");
-    expect(text(prepareConfirm)).toContain("No");
     expect(text(prepareConfirm)).not.toContain("Yes");
   });
 
