@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireModelCircuit,
+  acquireModelCircuitLastRouteProbe,
   modelCircuitInternals,
   releaseModelCircuitAttempt,
 } from "./model-fallback-circuit.js";
@@ -43,6 +44,7 @@ function recordFailures(count: number, startAt = 1_000): void {
 
 afterEach(() => {
   modelCircuitInternals.modelCircuitStates.clear();
+  modelCircuitInternals.setHostSaturationProbeForTests();
 });
 
 describe("model fallback circuit", () => {
@@ -132,6 +134,63 @@ describe("model fallback circuit", () => {
     expect(modelCircuitInternals.modelCircuitStates.size).toBe(
       modelCircuitInternals.MAX_TRACKED_ROUTES,
     );
+  });
+
+  it("grants a last-route probe while open and closes on success", () => {
+    recordFailures(modelCircuitInternals.FAILURE_THRESHOLD);
+    expect(acquireAt(2_000).type).toBe("open");
+
+    const probe = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: 2_000 });
+    expect(probe.wasHalfOpen).toBe(true);
+    expect(recordModelCircuitSuccess(probe)).toBe(true);
+    expect(acquireAt(2_001).type).toBe("attempt");
+  });
+
+  it("re-opens with backoff when a last-route probe fails", () => {
+    recordFailures(modelCircuitInternals.FAILURE_THRESHOLD);
+    const probe = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: 2_000 });
+
+    const opened = recordModelCircuitFailure(probe, "overloaded", 2_000);
+
+    expect(opened?.openMs).toBe(modelCircuitInternals.INITIAL_OPEN_MS * 2);
+  });
+
+  it("last-route probe on a closed circuit is a plain attempt", () => {
+    const probe = acquireModelCircuitLastRouteProbe({ ...ROUTE, now: 1_000 });
+    expect(probe.wasHalfOpen).toBe(false);
+  });
+
+  it("ignores timeout failures while the host event loop is saturated", () => {
+    modelCircuitInternals.setHostSaturationProbeForTests(() => true);
+
+    for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD * 2; index += 1) {
+      const now = 1_000 + index;
+      expect(recordModelCircuitFailure(requireAttempt(now), "timeout", now)).toBeNull();
+    }
+
+    expect(acquireAt(2_000).type).toBe("attempt");
+    expect(modelCircuitInternals.modelCircuitStates.size).toBe(0);
+  });
+
+  it("still counts non-timeout failures while the host event loop is saturated", () => {
+    modelCircuitInternals.setHostSaturationProbeForTests(() => true);
+
+    recordFailures(modelCircuitInternals.FAILURE_THRESHOLD);
+
+    expect(acquireAt(2_000).type).toBe("open");
+  });
+
+  it("releases a half-open lease without penalty for a saturated-host timeout", () => {
+    recordFailures(modelCircuitInternals.FAILURE_THRESHOLD);
+    const trialAt = 1_000 + modelCircuitInternals.INITIAL_OPEN_MS + 10;
+    const trial = requireAttempt(trialAt);
+    modelCircuitInternals.setHostSaturationProbeForTests(() => true);
+
+    expect(recordModelCircuitFailure(trial, "timeout", trialAt)).toBeNull();
+
+    // The lease is released so the next acquire can run the recovery probe.
+    const next = requireAttempt(trialAt + 1);
+    expect(next.wasHalfOpen).toBe(true);
   });
 
   it("does not evict an in-flight recovery probe at capacity", () => {

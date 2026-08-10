@@ -1,4 +1,5 @@
 /** Bounds repeated transient failures for one provider/model fallback route. */
+import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -12,6 +13,9 @@ const INITIAL_OPEN_MS = 2 * 60_000;
 const MAX_OPEN_MS = 15 * 60_000;
 const STATE_TTL_MS = 24 * 60 * 60_000;
 const MAX_TRACKED_ROUTES = 256;
+const HOST_SATURATION_ELU = 0.9;
+const HOST_SATURATION_SAMPLE_MS = 5_000;
+const SUPPRESSION_LOG_INTERVAL_MS = 30_000;
 
 const CIRCUIT_FAILURE_REASONS = new Set<FailoverReason>([
   "rate_limit",
@@ -41,6 +45,51 @@ type ModelCircuitGate =
 
 const log = createSubsystemLogger("model-fallback");
 const modelCircuitStates = new Map<string, ModelCircuitState>();
+
+// While the local event loop is saturated, in-flight provider calls get
+// classified as timeouts regardless of provider health (observed in
+// production: every configured route "timed out" within 100ms of each other
+// while the providers were returning HTTP 200 in 2-12s). Counting those
+// self-inflicted timeouts opens circuits for healthy routes, so they are
+// excluded while a rolling event-loop-utilization sample is at or above the
+// threshold. Real provider faults (overloaded, rate_limit, server_error)
+// still count on a saturated host.
+type EluSample = {
+  at: number;
+  snapshot: ReturnType<typeof performance.eventLoopUtilization>;
+  recent: number;
+};
+let eluSample: EluSample | undefined;
+
+function defaultHostSaturationProbe(now: number): boolean {
+  try {
+    if (typeof performance.eventLoopUtilization !== "function") {
+      return false;
+    }
+    if (!eluSample) {
+      eluSample = { at: now, snapshot: performance.eventLoopUtilization(), recent: 0 };
+      return false;
+    }
+    if (now - eluSample.at >= HOST_SATURATION_SAMPLE_MS) {
+      const recent = performance.eventLoopUtilization(eluSample.snapshot).utilization;
+      eluSample = { at: now, snapshot: performance.eventLoopUtilization(), recent };
+    }
+    return eluSample.recent >= HOST_SATURATION_ELU;
+  } catch {
+    return false;
+  }
+}
+
+let hostSaturationProbe: (now: number) => boolean = defaultHostSaturationProbe;
+let lastSuppressionLogAt = 0;
+
+function shouldLogSuppression(now: number): boolean {
+  if (now - lastSuppressionLogAt < SUPPRESSION_LOG_INTERVAL_MS) {
+    return false;
+  }
+  lastSuppressionLogAt = now;
+  return true;
+}
 
 function circuitKey(provider: string, model: string, agentDir?: string): string {
   return JSON.stringify([normalizeOptionalString(agentDir) ?? "", modelKey(provider, model)]);
@@ -114,6 +163,32 @@ export function acquireModelCircuit(params: {
   return { type: "attempt", attempt: { key, wasHalfOpen: true } };
 }
 
+/**
+ * Last-runnable-route probe: grants an attempt even when the circuit is open.
+ * Used only when every remaining fallback candidate is blocked before
+ * transport (auth skip-cache, cooldown, TLS) — skipping would guarantee a
+ * failed turn with zero attempts, which is strictly worse than probing the
+ * degraded route. The attempt carries half-open semantics so a success closes
+ * the circuit and a failure re-opens it with backoff. A concurrent recovery
+ * probe may exist; that is acceptable for the same reason.
+ */
+export function acquireModelCircuitLastRouteProbe(params: {
+  provider: string;
+  model: string;
+  agentDir?: string;
+  now?: number;
+}): ModelCircuitAttempt {
+  const now = params.now ?? Date.now();
+  const key = circuitKey(params.provider, params.model, params.agentDir);
+  const state = modelCircuitStates.get(key);
+  if (!state || state.openUntil <= now) {
+    return { key, wasHalfOpen: false };
+  }
+  state.halfOpenInFlight = true;
+  state.lastTouchedAt = now;
+  return { key, wasHalfOpen: true };
+}
+
 export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt | undefined): boolean {
   const state = attempt?.wasHalfOpen ? modelCircuitStates.get(attempt.key) : undefined;
   if (!state) {
@@ -173,6 +248,16 @@ function recordModelCircuitFailure(
     return clearIneligibleHalfOpen(attempt);
   }
 
+  if (reason === "timeout" && hostSaturationProbe(now)) {
+    // Self-inflicted timeout on a saturated host: release any recovery lease
+    // without penalty and do not count the failure.
+    releaseModelCircuitAttempt(attempt);
+    if (shouldLogSuppression(now)) {
+      log.warn("Model circuit ignored timeout failure: host event loop saturated");
+    }
+    return null;
+  }
+
   if (!reserveStateCapacity(attempt.key, now)) {
     return null;
   }
@@ -218,6 +303,12 @@ export function recordCandidateCircuitFailure(params: {
   }
 }
 
+/** @internal – test-only override for the host-saturation probe. */
+function setHostSaturationProbeForTests(probe?: (now: number) => boolean): void {
+  hostSaturationProbe = probe ?? defaultHostSaturationProbe;
+  lastSuppressionLogAt = 0;
+}
+
 /** @internal – exposed for focused state-machine tests only. */
 export const modelCircuitInternals = {
   modelCircuitStates,
@@ -227,8 +318,10 @@ export const modelCircuitInternals = {
   MAX_OPEN_MS,
   STATE_TTL_MS,
   MAX_TRACKED_ROUTES,
+  HOST_SATURATION_ELU,
   circuitKey,
   pruneCircuitStates,
   recordModelCircuitSuccess,
   recordModelCircuitFailure,
+  setHostSaturationProbeForTests,
 } as const;

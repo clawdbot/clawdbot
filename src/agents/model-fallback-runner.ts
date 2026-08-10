@@ -61,7 +61,6 @@ import {
 } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import {
-  acquireModelCircuit,
   type ModelCircuitAttempt,
   recordCandidateCircuitFailure,
   recordCandidateCircuitSuccess,
@@ -77,6 +76,7 @@ import {
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
+import { gateModelCircuitForCandidate } from "./model-fallback-route-eligibility.js";
 import type { FallbackAttempt, ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
@@ -234,6 +234,19 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
+  const circuitGateContext = {
+    candidates,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    sessionId: params.sessionId,
+    requestedCandidate,
+    hasFallbackCandidates,
+    tlsFailedProviders,
+    cooldownProbeUsedProviders,
+    authRuntime,
+    authStore,
+  };
+  const circuitSkipMeta = { status: 503, code: "model_circuit_open" } as const;
   const runAttribution = { sessionId: params.sessionId, lane: params.lane };
   const runObs = {
     runId: params.runId,
@@ -450,19 +463,12 @@ async function runWithModelFallbackInternal<T>(
 
     let modelCircuitAttempt: ModelCircuitAttempt | undefined;
     if (hasRemainingCandidate) {
-      const circuitGate = acquireModelCircuit({
-        ...candidateRef,
-        agentDir: params.agentDir,
-      });
-      if (circuitGate.type === "open") {
-        pushAttempt(circuitGate.error, circuitGate.reason, {
-          status: 503,
-          code: "model_circuit_open",
-        });
+      const circuitGate = gateModelCircuitForCandidate({ ...circuitGateContext, currentIndex: i });
+      if (circuitGate.type === "skip") {
+        pushAttempt(circuitGate.error, circuitGate.reason, circuitSkipMeta);
         await observeCandidateDecision("skip_candidate", {
+          ...circuitSkipMeta,
           reason: circuitGate.reason,
-          status: 503,
-          code: "model_circuit_open",
           error: circuitGate.error,
         });
         continue;
