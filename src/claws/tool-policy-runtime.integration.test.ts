@@ -204,9 +204,12 @@ describe("Claw tool policy consent provenance", () => {
       agentId: "worker",
       config,
     });
-    const policies = resolveConversationToolPolicies({ capabilityProfile });
+    const policies = resolveConversationToolPolicies({
+      capabilityProfile,
+      additionalPolicyAllow: ["message", "tool_search"],
+    });
     const filtered = applyToolPolicyPipeline({
-      tools: [{ name: "read" }, { name: "exec" }],
+      tools: [{ name: "read" }, { name: "exec" }, { name: "message" }, { name: "tool_search" }],
       toolMeta: () => undefined,
       warn: () => {},
       steps: buildConversationToolPolicyPipelineSteps({
