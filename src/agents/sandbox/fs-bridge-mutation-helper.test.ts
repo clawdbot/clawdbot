@@ -538,6 +538,30 @@ describe("sandbox pinned mutation helper", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("rejects FIFO reads without blocking", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-fifo-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const fifoPath = path.join(workspace, "live.pipe");
+      await fs.mkdir(workspace, { recursive: true });
+      expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
+
+      const result = spawnSync(
+        "python3",
+        ["-c", SANDBOX_PINNED_MUTATION_PYTHON, "read", workspace, "", "live.pipe"],
+        {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+          timeout: 1_000,
+          killSignal: "SIGKILL",
+        },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/only regular files are allowed/i);
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves stdin payload bytes when the pinned write plan runs through sh",
     async () => {
