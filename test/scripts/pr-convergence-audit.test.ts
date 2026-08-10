@@ -424,6 +424,7 @@ describe("pr-convergence-audit", () => {
           url: `${prUrl}#pullrequestreview-1`,
           author: "maintainer",
           createdAt: "2026-07-26T09:00:00Z",
+          effectiveAt: "2026-07-26T09:00:00Z",
           body: "Looks good.",
           reviewState: "APPROVED",
           reviewedSha: headSha,
@@ -477,6 +478,7 @@ describe("pr-convergence-audit", () => {
           url: `${prUrl}#pullrequestreview-2`,
           author: "reviewer",
           createdAt: "2026-07-26T09:00:00Z",
+          effectiveAt: "2026-07-26T09:00:00Z",
           body: "Review recorded.",
           reviewState: state,
           reviewedSha,
@@ -685,6 +687,66 @@ describe("pr-convergence-audit", () => {
       ),
     ).toBe(true);
     expect(result.nextAction).toMatch(/fresh exact-head/i);
+  });
+
+  it("accepts a trusted exact-head pass that is newer than the re-review request", async () => {
+    const { provider } = createProvider({
+      formalReviews: [],
+      issueComments: [
+        {
+          id: 9802,
+          html_url: `${prUrl}#issuecomment-9802`,
+          created_at: "2026-07-26T10:00:00Z",
+          author_association: "MEMBER",
+          user: { login: "maintainer", type: "User" },
+          body: [
+            "@clawsweeper re-review",
+            `<!-- clawsweeper-verdict:note item=${pr} sha=${headSha} -->`,
+          ].join("\n"),
+        },
+        clawsweeperComment({
+          id: 9803,
+          body: `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`,
+          createdAt: "2026-07-26T09:00:00Z",
+          updatedAt: "2026-07-26T10:00:01Z",
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.READY);
+    expect(result.findingCounts.re_review_request).toBe(1);
+  });
+
+  it("fails closed when a pass and re-review request have equal timestamps", async () => {
+    const requestAt = "2026-07-26T10:00:00Z";
+    const { provider } = createProvider({
+      formalReviews: [],
+      issueComments: [
+        {
+          id: 9804,
+          html_url: `${prUrl}#issuecomment-9804`,
+          created_at: requestAt,
+          author_association: "MEMBER",
+          user: { login: "maintainer", type: "User" },
+          body: [
+            "@clawsweeper re-review",
+            `<!-- clawsweeper-verdict:note item=${pr} sha=${headSha} -->`,
+          ].join("\n"),
+        },
+        clawsweeperComment({
+          id: 9805,
+          body: `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`,
+          updatedAt: requestAt,
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toContain("exact-head re-review");
   });
 
   it("returns UNKNOWN for a stale re-review request instead of silently ignoring it", async () => {

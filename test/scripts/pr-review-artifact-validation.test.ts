@@ -215,7 +215,7 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
         `pr_meta_json() { printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}'; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         "git() { :; }",
-        `node() { printf '%s\\n' '{"decision":"READY","reason":"fixture convergence decision","nextAction":null}'; }`,
+        "node() { :; }",
         `gh_plain() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *) return 0;; esac; }`,
         "merge_verify 42",
       ].join("\n"),

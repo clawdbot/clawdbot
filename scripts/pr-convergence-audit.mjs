@@ -11,6 +11,7 @@
  * @property {string} url
  * @property {string} author
  * @property {string} createdAt
+ * @property {string | null} effectiveAt
  * @property {string} body
  * @property {string | null} reviewState
  * @property {string | null} reviewedSha
@@ -29,6 +30,7 @@
  * @property {string} sourceId
  * @property {string} sourceUrl
  * @property {string | null} reviewedSha
+ * @property {string | null} effectiveAt
  */
 
 /**
@@ -229,34 +231,43 @@ function normalizeNullableTimestamp(value) {
   return Number.isFinite(Date.parse(timestamp)) ? timestamp : "";
 }
 
-function hasClawSweeperPass({ pullRequest, comments, newerThan = null }) {
+function latestClawSweeperPassAt({ pullRequest, comments, newerThan = null }) {
   const pullNumber = String(pullRequest?.number ?? "");
   const headSha = normalizeSha(pullRequest?.head?.sha);
   const newerThanMs = newerThan == null ? null : Date.parse(newerThan);
   if (!pullNumber || !headSha || (newerThan !== null && !Number.isFinite(newerThanMs))) {
-    return false;
+    return null;
   }
 
-  return comments.some((comment) => {
+  let latestPassAt = null;
+  let latestPassMs = Number.NEGATIVE_INFINITY;
+  for (const comment of comments) {
     if (!isTrustedClawSweeperActor(comment)) {
-      return false;
+      continue;
     }
-    if (newerThanMs !== null) {
-      const verdictTimestampMs = Date.parse(comment?.updated_at ?? comment?.created_at ?? "");
-      // GitHub timestamps are second-granularity. Equality cannot prove whether the
-      // body edit or verdict update happened first, so fail closed and re-review.
-      if (!Number.isFinite(verdictTimestampMs) || verdictTimestampMs <= newerThanMs) {
-        return false;
-      }
+    const verdictTimestamp = normalizeNullableTimestamp(comment?.updated_at ?? comment?.created_at);
+    const verdictTimestampMs = Date.parse(verdictTimestamp ?? "");
+    // GitHub timestamps are second-granularity. Equality cannot prove whether the
+    // earlier event or verdict update happened first, so fail closed and re-review.
+    if (
+      !Number.isFinite(verdictTimestampMs) ||
+      (newerThanMs !== null && verdictTimestampMs <= newerThanMs)
+    ) {
+      continue;
     }
     const markers =
       String(comment?.body ?? "").match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
-    return markers.some(
+    const matchesExactHead = markers.some(
       (marker) =>
         extractMarkerField(marker, "item") === pullNumber &&
         normalizeSha(extractMarkerField(marker, "sha")) === headSha,
     );
-  });
+    if (matchesExactHead && verdictTimestampMs > latestPassMs) {
+      latestPassAt = verdictTimestamp;
+      latestPassMs = verdictTimestampMs;
+    }
+  }
+  return latestPassAt;
 }
 
 function normalizeFormalReview(review, repo, pr) {
@@ -270,6 +281,7 @@ function normalizeFormalReview(review, repo, pr) {
       `https://github.com/${repo}/pull/${pr}#pullrequestreview-${id}`,
     author: String(review?.user?.login ?? ""),
     createdAt: String(review?.submitted_at ?? review?.created_at ?? ""),
+    effectiveAt: normalizeNullableTimestamp(review?.submitted_at ?? review?.created_at),
     body: String(review?.body ?? ""),
     reviewState: String(review?.state ?? "").toUpperCase() || null,
     reviewedSha: commitId,
@@ -287,6 +299,7 @@ function normalizeInlineReviewComment(comment, repo, pr) {
       String(comment?.html_url ?? "") || `https://github.com/${repo}/pull/${pr}#discussion_r${id}`,
     author: String(comment?.user?.login ?? ""),
     createdAt: String(comment?.created_at ?? ""),
+    effectiveAt: normalizeNullableTimestamp(comment?.updated_at ?? comment?.created_at),
     body: String(comment?.body ?? ""),
     reviewState: null,
     reviewedSha: commitId,
@@ -310,6 +323,7 @@ export function normalizeIssueComment(comment, repo, pr) {
       `https://github.com/${repo}/issues/${pr}#issuecomment-${id}`,
     author: String(comment?.user?.login ?? ""),
     createdAt: String(comment?.created_at ?? ""),
+    effectiveAt: normalizeNullableTimestamp(comment?.updated_at ?? comment?.created_at),
     body: String(comment?.body ?? ""),
     reviewState: null,
     reviewedSha,
@@ -385,6 +399,7 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
       sourceId: item.id,
       sourceUrl: item.url,
       reviewedSha,
+      effectiveAt: item.effectiveAt ?? null,
     });
   }
 
@@ -400,6 +415,7 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
       sourceId: item.id,
       sourceUrl: item.url,
       reviewedSha,
+      effectiveAt: item.effectiveAt ?? null,
     });
   }
 
@@ -430,6 +446,7 @@ export function extractFindingsFromEvidenceItem(item, headSha) {
       sourceId: item.id,
       sourceUrl: item.url,
       reviewedSha,
+      effectiveAt: item.effectiveAt ?? null,
     });
   }
 
@@ -504,6 +521,7 @@ function requiredChecksSatisfied(checkRuns, headSha, requiredCheckPolicy) {
  * @param {boolean} params.prContentStable
  * @param {boolean} params.hasExactHeadClawSweeperPass
  * @param {boolean} params.hasFreshExactHeadClawSweeperPass
+ * @param {string | null} [params.latestExactHeadClawSweeperPassAt]
  */
 export function decidePrConvergence({
   evidence,
@@ -512,6 +530,7 @@ export function decidePrConvergence({
   prContentStable,
   hasExactHeadClawSweeperPass,
   hasFreshExactHeadClawSweeperPass,
+  latestExactHeadClawSweeperPassAt = null,
 }) {
   const headSha = evidence.headSha;
   const incompleteSurfaces = Object.entries(evidence.surfaceCoverage)
@@ -573,7 +592,16 @@ export function decidePrConvergence({
   const exactHeadReReviewFindings = findings.filter(
     (finding) => finding.kind === "re_review_request" && finding.currentHead,
   );
-  if (exactHeadReReviewFindings.length > 0) {
+  const latestExactHeadPassMs = Date.parse(latestExactHeadClawSweeperPassAt ?? "");
+  const requestIsSuperseded = (finding) => {
+    const requestMs = Date.parse(finding.effectiveAt ?? "");
+    return (
+      Number.isFinite(latestExactHeadPassMs) &&
+      Number.isFinite(requestMs) &&
+      latestExactHeadPassMs > requestMs
+    );
+  };
+  if (exactHeadReReviewFindings.some((finding) => !requestIsSuperseded(finding))) {
     return {
       decision: CONVERGENCE_DECISIONS.UNKNOWN,
       reason:
@@ -586,10 +614,13 @@ export function decidePrConvergence({
   const staleReReviewFindings = findings.filter(
     (finding) => finding.kind === "re_review_request" && !finding.currentHead,
   );
-  if (staleReReviewFindings.length > 0) {
+  const unresolvedStaleReReviewFindings = staleReReviewFindings.filter(
+    (finding) => !requestIsSuperseded(finding),
+  );
+  if (unresolvedStaleReReviewFindings.length > 0) {
     return {
       decision: CONVERGENCE_DECISIONS.UNKNOWN,
-      reason: `Stale re-review requests remain for older heads (${staleReReviewFindings
+      reason: `Stale re-review requests remain for older heads (${unresolvedStaleReReviewFindings
         .map((finding) => finding.reviewedSha ?? "unknown")
         .join(", ")}).`,
       nextAction:
@@ -598,7 +629,7 @@ export function decidePrConvergence({
   }
 
   const staleBlockingFindings = findings.filter(
-    (finding) => finding.blocking && !finding.currentHead,
+    (finding) => finding.kind !== "re_review_request" && finding.blocking && !finding.currentHead,
   );
   if (staleBlockingFindings.length > 0) {
     return {
@@ -611,7 +642,7 @@ export function decidePrConvergence({
   }
 
   const currentHeadBlockingFindings = findings.filter(
-    (finding) => finding.blocking && finding.currentHead,
+    (finding) => finding.kind !== "re_review_request" && finding.blocking && finding.currentHead,
   );
   if (currentHeadBlockingFindings.length > 0) {
     return {
@@ -893,11 +924,13 @@ export async function auditPrConvergence({ repo, pr, provider }) {
     pullRequest: { number: pr, head: { sha: evidence.headSha } },
     comments: issueCommentsResult.items ?? [],
   };
-  const hasExactHeadClawSweeperPass = hasClawSweeperPass(passIdentity);
-  const hasFreshExactHeadClawSweeperPass = hasClawSweeperPass({
-    ...passIdentity,
-    newerThan: evidence.prLastEditedAt,
-  });
+  const latestExactHeadClawSweeperPassAt = latestClawSweeperPassAt(passIdentity);
+  const hasExactHeadClawSweeperPass = latestExactHeadClawSweeperPassAt !== null;
+  const hasFreshExactHeadClawSweeperPass =
+    latestClawSweeperPassAt({
+      ...passIdentity,
+      newerThan: evidence.prLastEditedAt,
+    }) !== null;
 
   const decision = decidePrConvergence({
     evidence,
@@ -906,6 +939,7 @@ export async function auditPrConvergence({ repo, pr, provider }) {
     prContentStable,
     hasExactHeadClawSweeperPass,
     hasFreshExactHeadClawSweeperPass,
+    latestExactHeadClawSweeperPassAt,
   });
 
   return {

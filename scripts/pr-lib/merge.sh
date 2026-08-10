@@ -33,44 +33,6 @@ auto_merge_unavailable_error() {
     "$log_file"
 }
 
-verify_pr_convergence() {
-  local pr="$1"
-  local audit_file=".local/merge-convergence-audit.json"
-  local audit_status=0
-
-  mkdir -p .local
-  if node "$script_parent_dir/pr-convergence-audit-cli.mjs" "$pr" >"$audit_file"; then
-    audit_status=0
-  else
-    audit_status=$?
-  fi
-
-  if ! jq -e '
-    type == "object" and
-    (.decision == "READY" or .decision == "BLOCKED" or .decision == "UNKNOWN") and
-    (.reason | type == "string")
-  ' "$audit_file" >/dev/null 2>&1; then
-    echo "Merge verify failed: convergence audit did not return valid evidence." >&2
-    return 1
-  fi
-
-  local decision
-  local reason
-  local next_action
-  decision=$(jq -r .decision "$audit_file")
-  reason=$(jq -r .reason "$audit_file")
-  next_action=$(jq -r '.nextAction // empty' "$audit_file")
-  echo "PR convergence audit: $decision — $reason"
-
-  if [ "$audit_status" -ne 0 ] || [ "$decision" != "READY" ]; then
-    if [ -n "$next_action" ]; then
-      echo "Next action: $next_action"
-    fi
-    echo "Merge verify failed: exact-head PR convergence is not READY." >&2
-    return 1
-  fi
-}
-
 mainline_drift_requires_sync() {
   local mainline_base="$1"
   local prepared_head_sha="$2"
@@ -229,8 +191,6 @@ merge_verify() {
     echo "Required checks are still pending."
     exit 1
   fi
-
-  verify_pr_convergence "$pr"
 
   git fetch origin main
   git fetch origin "pull/$pr/head:pr-$pr" --force

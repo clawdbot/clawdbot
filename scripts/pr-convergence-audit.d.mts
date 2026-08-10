@@ -12,6 +12,7 @@ export type NormalizedEvidenceItem = {
   url: string;
   author: string;
   createdAt: string;
+  effectiveAt: string | null;
   body: string;
   reviewState: string | null;
   reviewedSha: string | null;
@@ -29,6 +30,7 @@ export type NormalizedFinding = {
   sourceId: string;
   sourceUrl: string;
   reviewedSha: string | null;
+  effectiveAt: string | null;
 };
 
 export type NormalizedCheckRun = {
@@ -136,6 +138,7 @@ export function decidePrConvergence(params: {
   prContentStable: boolean;
   hasExactHeadClawSweeperPass: boolean;
   hasFreshExactHeadClawSweeperPass: boolean;
+  latestExactHeadClawSweeperPassAt?: string | null;
 }): {
   decision: ConvergenceDecision;
   reason: string;

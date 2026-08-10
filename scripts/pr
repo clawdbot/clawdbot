@@ -50,9 +50,6 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
-  scripts/pr-convergence-audit.mjs
-  scripts/pr-convergence-audit-cli.mjs
-  scripts/pr-convergence-provider.mjs
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
 )

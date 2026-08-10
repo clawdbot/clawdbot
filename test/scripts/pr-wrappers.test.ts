@@ -74,18 +74,6 @@ function makeMismatchedWrapperRepo() {
   writeFileSync(join(canonical, "scripts", "pr"), readScript("scripts/pr"));
   cpSync("scripts/watch-pr-ci.mjs", join(canonical, "scripts", "watch-pr-ci.mjs"));
   cpSync("scripts/watch-pr-ci.mts", join(canonical, "scripts", "watch-pr-ci.mts"));
-  cpSync(
-    "scripts/pr-convergence-audit.mjs",
-    join(canonical, "scripts", "pr-convergence-audit.mjs"),
-  );
-  cpSync(
-    "scripts/pr-convergence-audit-cli.mjs",
-    join(canonical, "scripts", "pr-convergence-audit-cli.mjs"),
-  );
-  cpSync(
-    "scripts/pr-convergence-provider.mjs",
-    join(canonical, "scripts", "pr-convergence-provider.mjs"),
-  );
   cpSync("scripts/lib/plain-gh.mjs", join(canonical, "scripts", "lib", "plain-gh.mjs"));
   cpSync("scripts/lib/direct-run.mjs", join(canonical, "scripts", "lib", "direct-run.mjs"));
   cpSync("scripts/lib/tsx-cli-shim.mjs", join(canonical, "scripts", "lib", "tsx-cli-shim.mjs"));
@@ -195,9 +183,6 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("scripts/lib/tsx-cli-shim.mjs");
     expect(script).toContain("scripts/lib/plain-gh.mjs");
     expect(script).toContain("scripts/lib/direct-run.mjs");
-    expect(script).toContain("scripts/pr-convergence-audit.mjs");
-    expect(script).toContain("scripts/pr-convergence-audit-cli.mjs");
-    expect(script).toContain("scripts/pr-convergence-provider.mjs");
     expect(script).toContain("scripts/pr review-init <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr ci-dispatch <PR>");
@@ -226,11 +211,6 @@ describe("scripts/pr wrappers", () => {
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
     expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
     expect(merge).toContain('gh_plain pr merge "$pr"');
-    expect(merge).toContain('node "$script_parent_dir/pr-convergence-audit-cli.mjs" "$pr"');
-    expect(merge).toContain('verify_pr_convergence "$pr"');
-    expect(merge.indexOf('  verify_pr_convergence "$pr"')).toBeLessThan(
-      merge.indexOf('  echo "merge-verify passed for PR #$pr"'),
-    );
     expect(merge).toContain('"repos/{owner}/{repo}/issues/$pr/comments"');
     expect(merge).toContain("--jq '.html_url // empty'");
     expect(merge).toContain("gh_plain api -X DELETE");
@@ -399,9 +379,6 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mts"), "// canonical\n");
-    writeFileSync(join(repo, "scripts", "pr-convergence-audit.mjs"), "// canonical\n");
-    writeFileSync(join(repo, "scripts", "pr-convergence-audit-cli.mjs"), "// canonical\n");
-    writeFileSync(join(repo, "scripts", "pr-convergence-provider.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
     chmodSync(join(repo, "scripts", "pr"), 0o755);
 
@@ -477,9 +454,6 @@ describe("scripts/pr wrappers", () => {
     writeFileSync(join(repo, "scripts", "lib", "tsx-cli-shim.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "watch-pr-ci.mts"), "// canonical\n");
-    writeFileSync(join(repo, "scripts", "pr-convergence-audit.mjs"), "// canonical\n");
-    writeFileSync(join(repo, "scripts", "pr-convergence-audit-cli.mjs"), "// canonical\n");
-    writeFileSync(join(repo, "scripts", "pr-convergence-provider.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
     chmodSync(join(repo, "scripts", "pr"), 0o755);
 

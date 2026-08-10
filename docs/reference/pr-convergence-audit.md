@@ -13,6 +13,10 @@ deterministic exact-head PR convergence audit. The audit collects GitHub review
 evidence, ties findings to their source surface, and returns exactly one
 decision: `READY`, `BLOCKED`, or `UNKNOWN`.
 
+These decisions describe the audit's evidence bundle only. They are supporting
+signals for maintainers, not landing authorization and not a replacement for
+the canonical review artifacts, required checks, or maintainer approval.
+
 The audit is read-only. It does not request reviews, post comments, merge PRs,
 or write to GitHub.
 
@@ -92,8 +96,9 @@ Fail closed to `UNKNOWN` when evidence is incomplete or unsafe to trust:
 Stale blocking bot comments must produce `UNKNOWN` with a refresh or re-review
 next action. They must never be silently dismissed.
 
-Exact-head or stale re-review requests also fail closed to `UNKNOWN` until fresh
-exact-head review evidence is available.
+Exact-head or stale re-review requests also fail closed to `UNKNOWN` until a
+trusted exact-head pass is strictly newer than every request. Equal or invalid
+timestamps remain `UNKNOWN` because GitHub timestamps cannot prove ordering.
 
 Formal review state alone can never produce `READY`.
 
@@ -110,26 +115,29 @@ Use `READY` only when all of the following are true:
 
 An empty formal `reviews[]` result is never enough for `READY` by itself.
 
-## Required triggers
+## Recommended use
 
-Run the convergence audit read-only at these points:
+Run the audit manually when its normalized evidence would help a maintainer,
+especially immediately before merge verification:
 
-1. after PR creation
-2. after every push to the PR branch
-3. after every PR-body edit
-4. immediately before merge
+```bash
+node scripts/pr-convergence-audit-cli.mjs <PR> --repo openclaw/openclaw
+```
+
+The repository does not automatically run this pilot after PR creation, branch
+pushes, or body edits. The audit also does not gate `scripts/pr merge-verify` or
+`scripts/pr merge-run`; those canonical landing paths retain their existing
+authority.
 
 ## Implementation
 
 - audit logic: `scripts/pr-convergence-audit.mjs`
 - live provider: `scripts/pr-convergence-provider.mjs`
-- landing CLI: `scripts/pr-convergence-audit-cli.mjs`
+- advisory CLI: `scripts/pr-convergence-audit-cli.mjs`
 - deterministic tests: `test/scripts/pr-convergence-audit.test.ts`
 
-The canonical `scripts/pr merge-verify` and `scripts/pr merge-run` landing paths
-invoke the audit automatically and fail closed unless it returns `READY`.
-The live CLI uses the read-only GitHub provider; deterministic tests use injected
-fixtures and do not call GitHub.
+The live CLI uses the read-only GitHub provider; deterministic tests use
+injected fixtures and do not call GitHub.
 
 ## Related
 
