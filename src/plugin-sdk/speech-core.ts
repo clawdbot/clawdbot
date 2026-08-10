@@ -46,10 +46,11 @@ export {
 export { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
 export type { TtsConfigResolutionContext } from "../tts/tts-config.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
+// SDK compatibility: preserve the public `asObject` export name.
+export { asOptionalRecord as asObject } from "@openclaw/normalization-core/record-coerce";
 export {
   asBoolean,
   asFiniteNumber,
-  asObject,
   assertOkOrThrowProviderError,
   createProviderHttpError,
   extractProviderErrorDetail,
