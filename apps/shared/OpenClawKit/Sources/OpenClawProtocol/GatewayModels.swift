@@ -18245,6 +18245,48 @@ public struct DeviceTokenRevokeParams: Codable, Sendable {
     }
 }
 
+public struct ScopeUpgradeRequest: Codable, Sendable {
+    public let scopes: [String]
+
+    public init(
+        scopes: [String])
+    {
+        self.scopes = scopes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scopes
+    }
+}
+
+public struct ScopeUpgradeWait: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct ScopeUpgradeRegistration: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
 public struct DevicePairRequestedEvent: Codable, Sendable {
     public let requestid: String
     public let deviceid: String
