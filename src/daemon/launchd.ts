@@ -45,7 +45,7 @@ import {
   isSystemLaunchDaemonOwnershipError,
 } from "./launchd-system.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -167,7 +167,7 @@ function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -816,6 +816,36 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   return info;
 }
 
+export function parseLaunchAgentEnabled(output: string, label: string): boolean {
+  const labelPrefix = `"${label}"`;
+  for (const line of output.split("\n")) {
+    const entry = line.trim();
+    if (!entry.startsWith(labelPrefix)) {
+      continue;
+    }
+    const state = entry.slice(labelPrefix.length).trim();
+    if (state === "=> enabled") {
+      return true;
+    }
+    if (state === "=> disabled") {
+      return false;
+    }
+    throw new Error(`launchctl print-disabled returned an unrecognized state for ${label}`);
+  }
+  // No persisted override means launchd uses the plist's normal enabled state.
+  return true;
+}
+
+export async function isLaunchAgentEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel(args.env);
+  const res = await execLaunchctl(["print-disabled", domain]);
+  if (res.code !== 0) {
+    throw new Error(`launchctl print-disabled failed: ${formatLaunchctlResultDetail(res)}`);
+  }
+  return parseLaunchAgentEnabled(res.stdout || res.stderr || "", label);
+}
+
 export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
@@ -995,7 +1025,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
@@ -1308,7 +1338,7 @@ async function writeLaunchAgentPlist({
   await ensureSecureDirectory(logDir);
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = toPosixPath(resolveDaemonHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);

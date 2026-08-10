@@ -17,7 +17,7 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 
 const acpCoreProtectedSources = [
   path.join(repoRoot, "src", "acp"),
-  path.join(repoRoot, "src", "agents", "acp-spawn.ts"),
+  path.join(repoRoot, "src", "agents", "subagents", "spawn", "acp-spawn.ts"),
   path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
   path.join(repoRoot, "src", "infra", "outbound", "conversation-id.ts"),
 ];

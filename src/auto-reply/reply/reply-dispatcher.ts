@@ -467,12 +467,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       await options.deliver(deliverPayload, info);
       return "delivered";
     } catch (error) {
+      const outcome =
+        deliveryStarted && !isRetryableNoSendFailure(error)
+          ? "failed-deliver"
+          : "failed-before-deliver";
       try {
         await options.onError?.(error, info);
       } catch {}
-      return deliveryStarted && !isRetryableNoSendFailure(error)
-        ? "failed-deliver"
-        : "failed-before-deliver";
+      return outcome;
     }
   };
 

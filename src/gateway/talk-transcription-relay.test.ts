@@ -13,7 +13,6 @@ import {
   rememberUnifiedTalkSession,
 } from "./talk-session-registry.js";
 import {
-  cancelTalkTranscriptionRelayTurn,
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
@@ -774,49 +773,5 @@ describe("talk transcription gateway relay", () => {
       }),
     ).toThrow("Transcription relay session expiry is outside the supported Date range");
     expect(provider.createSession).not.toHaveBeenCalled();
-  });
-
-  it("cancels an active transcription turn and closes the provider session", async () => {
-    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const sttSession = createSttSessionMock(async () => {
-      sttRequest?.onSpeechStart?.();
-    });
-    const { events, session } = await createStartedRelaySession(sttSession, {}, (req) => {
-      sttRequest = req;
-    });
-    sttSession.close.mockImplementationOnce(() => {
-      sttRequest?.onTranscript?.("cancelled provider transcript");
-    });
-
-    cancelTalkTranscriptionRelayTurn({
-      transcriptionSessionId: session.transcriptionSessionId,
-      connId: "conn-1",
-      reason: "barge-in",
-    });
-
-    expect(sttSession.close).toHaveBeenCalledOnce();
-    const cancelledPayload = findPayloadByTalkEventType(events, "turn.cancelled");
-    expectRecordFields(cancelledPayload, "cancelled payload", {
-      transcriptionSessionId: session.transcriptionSessionId,
-    });
-    expectTalkEventFields(cancelledPayload, {
-      type: "turn.cancelled",
-      turnId: "turn-1",
-      payload: { reason: "barge-in" },
-      final: true,
-    });
-
-    const closePayload = findPayloadByType(events, "close");
-    expectRecordFields(closePayload, "close payload", {
-      transcriptionSessionId: session.transcriptionSessionId,
-      type: "close",
-      reason: "completed",
-    });
-    expect(
-      events.some(
-        (event) =>
-          isRecord(event.payload) && event.payload.text === "cancelled provider transcript",
-      ),
-    ).toBe(false);
   });
 });

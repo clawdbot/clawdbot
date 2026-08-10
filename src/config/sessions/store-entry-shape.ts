@@ -39,6 +39,7 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
   const {
+    icon: _retiredIcon,
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     pendingFinalDeliveryCreatedAt,
@@ -143,10 +144,30 @@ function normalizePendingFinalDelivery(
     return undefined;
   }
   const intentId = normalizeOptionalString(value.intentId);
+  const deliveries: NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"] = Array.isArray(
+    value.deliveries,
+  )
+    ? value.deliveries.flatMap((delivery) => {
+        if (!isRecord(delivery)) {
+          return [];
+        }
+        const id = normalizeOptionalString(delivery.id);
+        const state = delivery.state;
+        return id &&
+          (state === "prepared" ||
+            state === "queued" ||
+            state === "delivered" ||
+            state === "suppressed" ||
+            state === "unknown")
+          ? [{ id, state }]
+          : [];
+      })
+    : undefined;
   const base = {
     createdAt,
     ...(isRecord(value.context) ? { context: value.context } : {}),
     ...(intentId ? { intentId } : {}),
+    ...(deliveries ? { deliveries } : {}),
   };
   if (value.kind === "transport-only") {
     return { kind: "transport-only", ...base };

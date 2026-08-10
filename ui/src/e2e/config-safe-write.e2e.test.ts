@@ -132,12 +132,13 @@ suite.define(() => {
         const labsLink = page.locator('.settings-sidebar__item[href="/settings/labs"]');
         await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
         const codeModeRow = settingsRow(page, "Code Mode");
-        await codeModeRow.getByRole("switch", { name: "Code Mode", exact: true }).waitFor();
+        const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
+        await codeModeSwitch.waitFor();
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Enabled");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
-        await codeModeRow.getByRole("button", { name: "Reset to default" }).click();
+        await codeModeRow.locator("wa-switch").click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
         expect(patchParams.sessionKey).toBe("main");

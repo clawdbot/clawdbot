@@ -8,7 +8,6 @@ import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.j
 import { runAgentStep } from "./agent-step.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
-import { testing } from "./sessions-send-tool.a2a.test-support.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -67,9 +66,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       text: "Test announce reply",
       fingerprint: "test-announce-reply",
     });
-    testing.setDepsForTest({
-      callGateway,
-    });
   });
 
   function requireGatewayCall(method: string): CallGatewayOptions {
@@ -81,7 +77,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   }
 
   afterEach(() => {
-    testing.setDepsForTest();
     vi.restoreAllMocks();
   });
 

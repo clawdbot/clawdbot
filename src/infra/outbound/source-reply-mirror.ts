@@ -43,6 +43,28 @@ type SourceReplyTranscriptMirrorParams = {
   replyToIsExplicit?: boolean;
 };
 
+export type TerminalSourceReplyDeliveryStart =
+  | TerminalSourceReplyDeliveryReceipt
+  | {
+      outcome: "already_delivered" | "delivery_ambiguous";
+      result: { status: string; delivered: false; message: string };
+    }
+  | undefined;
+
+function buildTerminalSourceReplyNoSendResult(outcome: "already_delivered" | "delivery_ambiguous") {
+  return {
+    outcome,
+    result: {
+      status: outcome,
+      delivered: false as const,
+      message:
+        outcome === "already_delivered"
+          ? "The completed reply was already delivered. Do not retry it."
+          : "The completed reply may already have been delivered. Do not retry it.",
+    },
+  };
+}
+
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
   sessionKey: string;
 };
@@ -220,7 +242,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
 /** Arms the fail-closed state before a terminal source reply can reach a provider. */
 export async function beginTerminalSourceReplyDelivery(
   params: SourceReplyTranscriptMirrorParams,
-): Promise<TerminalSourceReplyDeliveryReceipt | undefined> {
+): Promise<TerminalSourceReplyDeliveryStart> {
   const receipt = resolveTerminalSourceReplyDeliveryReceipt(params);
   if (!receipt) {
     return undefined;
@@ -229,11 +251,11 @@ export async function beginTerminalSourceReplyDelivery(
   if (result === "not-applicable") {
     return undefined;
   }
-  if (result === "blocked") {
-    throw new Error("terminal source reply already has a durable delivery outcome");
+  if (result === "already-delivered") {
+    return buildTerminalSourceReplyNoSendResult("already_delivered");
   }
-  if (result === "stale") {
-    throw new Error("terminal source reply lost restart recovery ownership");
+  if (result === "delivery-ambiguous" || result === "stale") {
+    return buildTerminalSourceReplyNoSendResult("delivery_ambiguous");
   }
   return receipt;
 }

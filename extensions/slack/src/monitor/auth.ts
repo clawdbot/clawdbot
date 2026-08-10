@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { collectSlackCursorPages } from "../cursor-pages.js";
+import { parseSlackTarget } from "../target-parsing.js";
 import {
   allowListMatches,
   normalizeAllowList,
@@ -184,7 +185,7 @@ function buildBaseAllowFrom(ctx: SlackMonitorContext): string[] {
 
 export async function resolveSlackEffectiveAllowFrom(
   ctx: SlackMonitorContext,
-  options?: { includePairingStore?: boolean },
+  options?: { includePairingStore?: boolean; eventScope?: SlackEventScope },
 ) {
   const base = buildBaseAllowFrom(ctx);
   if (options?.includePairingStore !== true) {
@@ -201,7 +202,22 @@ export async function resolveSlackEffectiveAllowFrom(
   } catch {
     storeAllowFrom = [];
   }
-  return normalizeAllowListLower([...base, ...storeAllowFrom]);
+  if (ctx.installationIdentity.kind !== "enterprise") {
+    return normalizeAllowListLower([...base, ...storeAllowFrom]);
+  }
+  const teamId = options.eventScope?.teamId.toLowerCase();
+  if (!teamId) {
+    return base;
+  }
+  const workspaceAllowFrom = storeAllowFrom.flatMap((entry) => {
+    try {
+      const target = parseSlackTarget(entry);
+      return target?.kind === "user" && target.teamId?.toLowerCase() === teamId ? [target.id] : [];
+    } catch {
+      return [];
+    }
+  });
+  return normalizeAllowListLower([...base, ...workspaceAllowFrom]);
 }
 
 async function fetchSlackChannelMemberIds(
@@ -578,6 +594,7 @@ export async function authorizeSlackSystemEventSender(params: {
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
     includePairingStore: ingressChannelType === "im",
+    eventScope: params.eventScope,
   });
   const channelConfig = channelId
     ? resolveSlackChannelConfig({

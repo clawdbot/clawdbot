@@ -563,6 +563,25 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
+  it("keeps the terminal document route outside the application router", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    window.history.replaceState({}, "", "/terminal");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const routerStart = vi.spyOn(runtime.router, "start");
+
+    try {
+      await runtime.start();
+
+      expect(window.location.pathname).toBe("/terminal");
+      expect(routerStart).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
+      window.history.replaceState({}, "", previousUrl);
+      saveSettings(previousSettings);
+    }
+  });
+
   it("keeps the latest navigation requested before router start", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;

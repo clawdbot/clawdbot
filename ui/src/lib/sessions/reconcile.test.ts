@@ -83,23 +83,6 @@ test("sessions.changed preserves the creator facet when ownership is unchanged",
 });
 
 describe("reconcileSessionChanged", () => {
-  it("drops a cleared icon from the merged row", () => {
-    const key = "agent:main:main";
-    const result = buildResult([
-      { key, kind: "global", updatedAt: 1, sessionId: "s1", icon: "name:spark" },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "global",
-      updatedAt: 2,
-      sessionId: "s1",
-      icon: null,
-    });
-    expect(next.applied).toBe(true);
-    expect(next.row?.icon).toBeUndefined();
-  });
-
   it("drops a cleared category from the merged row", () => {
     const key = "agent:main:discord:channel:1";
     const result = buildResult([

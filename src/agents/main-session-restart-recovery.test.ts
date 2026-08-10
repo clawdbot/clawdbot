@@ -26,6 +26,9 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { moveDeliveryQueueEntryToFailed } from "../infra/delivery-queue-sqlite.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-media-staging.js";
+import { ackDelivery, enqueueDeliveryOnce } from "../infra/outbound/delivery-queue-storage.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -262,6 +265,8 @@ function makePendingFinalDelivery(
     kind: "replayable",
     text,
     createdAt: Date.now(),
+    intentId: "intent-prepared-default",
+    deliveries: [{ id: "delivery-prepared-default", state: "prepared" }],
     ...overrides,
   };
 }
@@ -1825,64 +1830,289 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
-  it("resumes marked sessions with a durable pending final delivery payload (Phase 2)", async () => {
+  it.each([
+    ["missing", undefined],
+    ["empty", []],
+  ] as const)(
+    "fails closed when pending final delivery identities are %s",
+    async (_, deliveries) => {
+      const sessionsDir = await makeSessionsDir();
+      const pendingPayload = "The final answer is 42.";
+      await writeMainSession({
+        sessionsDir,
+        restartRecoveryForceSafeTools: true,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: pendingPayload,
+          createdAt: Date.now() - 5_000,
+          ...(deliveries ? { deliveries: [...deliveries] } : {}),
+          context: {
+            channel: "discord",
+            to: "discord:dm:final",
+            accountId: "main",
+          },
+        },
+        restartRecoveryBeforeAgentReplyState: "handled-reply",
+        restartRecoveryDeliveryRunId: "discord-message-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoverySourceIngress: "channel",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:stale",
+          accountId: "old",
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "calculate the answer" },
+        { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
+        { role: "toolResult", content: "42" },
+      ]);
+
+      await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, {});
+      expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(sendRecoveryNotice).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("ask for any missing remainder") }),
+      );
+    },
+  );
+
+  it("retries a prepared pending final only when no queue owner exists", async () => {
     const sessionsDir = await makeSessionsDir();
-    const pendingPayload = "The final answer is 42.";
     await writeMainSession({
       sessionsDir,
-      restartRecoveryForceSafeTools: true,
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: pendingPayload,
-        createdAt: Date.now() - 5_000,
-        context: {
-          channel: "discord",
-          to: "discord:dm:final",
-          accountId: "main",
-        },
-      },
-      restartRecoveryBeforeAgentReplyState: "handled-reply",
-      restartRecoveryDeliveryRunId: "discord-message-1",
-      restartRecoveryDeliverySourceRunId: "discord-message-1",
-      restartRecoverySourceIngress: "channel",
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:stale",
-        accountId: "old",
-      },
+      pendingFinalDelivery: makePendingFinalDelivery("The prepared final answer.", {
+        intentId: "intent-prepared",
+        deliveries: [{ id: "delivery-prepared", state: "prepared" }],
+      }),
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "calculate the answer" },
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-      { role: "toolResult", content: "42" },
+      { role: "user", content: "finish the answer" },
     ]);
 
-    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 }, {});
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      trigger: "user",
-    });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: "discord",
-      to: "discord:dm:final",
-      accountId: "main",
-      forceRestartSafeTools: true,
-    });
-    expect(gatewayParams().message).toContain(pendingPayload);
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
 
-    const beforeStoreRead = Date.now();
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    const entry = store["agent:main:main"];
-    expect(entry?.abortedLastRun).toBe(false);
-    expect(entry?.pendingFinalDelivery).toMatchObject({
-      kind: "replayable",
-      text: pendingPayload,
-    });
-    expect(entry?.restartRecoveryForceSafeTools).toBe(true);
-    expect(entry?.pendingFinalDelivery?.createdAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams().message).toContain("The prepared final answer.");
   });
+
+  it("quietly completes a pending final whose deliveries are terminal", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: makePendingFinalDelivery("Already delivered.", {
+        intentId: "intent-delivered",
+        deliveries: [
+          { id: "delivery-delivered", state: "delivered" },
+          { id: "delivery-suppressed", state: "suppressed" },
+        ],
+      }),
+    });
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+    });
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.pendingFinalDelivery,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [
+      { id: "delivery-already-delivered", state: "delivered" as const },
+      { id: "delivery-still-pending", state: "queued" as const },
+    ],
+    [
+      { id: "delivery-still-pending", state: "queued" as const },
+      { id: "delivery-already-delivered", state: "delivered" as const },
+    ],
+  ])("defers mixed deliveries while any exact queue owner is pending", async (...deliveries) => {
+    try {
+      await enqueueDeliveryOnce(
+        {
+          channel: "discord",
+          to: "discord:dm:123",
+          payloads: [{ text: "Pending sibling." }],
+          queuePolicy: "required",
+          completionRetention: "permanent",
+        },
+        "delivery-still-pending",
+        tmpDir,
+      );
+      const sessionsDir = await makeSessionsDir();
+      await writeMainSession({
+        sessionsDir,
+        pendingFinalDelivery: makePendingFinalDelivery("Partially delivered answer.", {
+          context: discordDeliveryContext,
+          intentId: "intent-mixed-pending",
+          deliveries,
+        }),
+      });
+
+      await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it("completes terminal deliveries despite a residual pending queue row", async () => {
+    try {
+      await enqueueDeliveryOnce(
+        {
+          channel: "discord",
+          to: "discord:dm:123",
+          payloads: [{ text: "Already delivered." }],
+          queuePolicy: "required",
+          completionRetention: "permanent",
+        },
+        "delivery-terminal-with-row",
+        tmpDir,
+      );
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await writeMainSession({
+        sessionsDir,
+        pendingFinalDelivery: makePendingFinalDelivery("Already delivered.", {
+          intentId: "intent-terminal-with-row",
+          deliveries: [{ id: "delivery-terminal-with-row", state: "delivered" }],
+        }),
+      });
+
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.status).toBe("done");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it("fails closed for an unqueued media-only final", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: Date.now(),
+        intentId: "intent-media-only",
+        deliveries: [{ id: "delivery-media-only", state: "prepared" }],
+        context: discordDeliveryContext,
+      },
+    });
+
+    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendRecoveryNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("ask for any missing remainder") }),
+    );
+  });
+
+  it("fails visibly instead of replaying part of an unqueued text and media final", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: Date.now(),
+        context: discordDeliveryContext,
+        intentId: "intent-text-media",
+        deliveries: [
+          { id: "delivery-text", state: "prepared" },
+          { id: "delivery-media", state: "prepared" },
+        ],
+      },
+    });
+
+    await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+  });
+
+  it.each(["delivered", "unknown"] as const)(
+    "fails closed when a %s delivery is mixed with prepared work",
+    async (state) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeMainSession({
+        sessionsDir,
+        pendingFinalDelivery: makePendingFinalDelivery("Do not regenerate this aggregate.", {
+          context: discordDeliveryContext,
+          intentId: `intent-mixed-${state}`,
+          deliveries: [
+            { id: `delivery-${state}`, state },
+            { id: "delivery-still-prepared", state: "prepared" },
+          ],
+        }),
+      });
+
+      await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+      expect(sendRecoveryNotice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("ask for any missing remainder"),
+        }),
+      );
+      expect(sendRecoveryNotice.mock.calls[0]?.[0].text).not.toContain("send that last request");
+    },
+  );
+
+  it.each(["pending", "failed", "completed"] as const)(
+    "does not regenerate a prepared pending final while its exact queue owner is %s",
+    async (ownerStatus) => {
+      const deliveryId = `delivery-owner-${ownerStatus}`;
+      try {
+        await enqueueDeliveryOnce(
+          {
+            channel: "discord",
+            to: "discord:dm:123",
+            payloads: [{ text: "Queue owns this final." }],
+            queuePolicy: "required",
+            completionRetention: "permanent",
+          },
+          deliveryId,
+          tmpDir,
+        );
+        if (ownerStatus === "failed") {
+          moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir);
+        } else if (ownerStatus === "completed") {
+          await ackDelivery(deliveryId, tmpDir);
+        }
+        const sessionsDir = await makeSessionsDir();
+        await writeMainSession({
+          sessionsDir,
+          pendingFinalDelivery: makePendingFinalDelivery("Queue owns this final.", {
+            context: discordDeliveryContext,
+            intentId: `intent-owner-${ownerStatus}`,
+            deliveries: [{ id: deliveryId, state: "prepared" }],
+          }),
+        });
+
+        await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
+
+        expect(callGateway).not.toHaveBeenCalled();
+        if (ownerStatus === "pending") {
+          expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        } else {
+          expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+        }
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
 
   it("keeps a hook-owned pending final behind the unsafe-hook gate after claim cleanup", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -1956,11 +2186,9 @@ describe("main-session-restart-recovery", () => {
     ].join("\n");
     await writeMainSession({
       sessionsDir,
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: pendingPayload,
+      pendingFinalDelivery: makePendingFinalDelivery(pendingPayload, {
         createdAt: Date.now() - 5_000,
-      },
+      }),
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "calculate the answer" },

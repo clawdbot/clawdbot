@@ -138,6 +138,7 @@ export function createCodexUserInputBridge(params: {
             intro: "Codex needs input:",
           }).catch((error: unknown) => {
             embeddedAgentLog.warn("failed to deliver secret codex user input prompt", { error });
+            resolveSecretIfCurrent(current, emptyUserInputResponse());
           });
         });
       }

@@ -177,7 +177,7 @@ export function registerDnsCli(program: Command) {
       );
       defaultRuntime.writeJson({
         gateway: { bind: "auto" },
-        discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
+        discovery: { wideArea: { domain: wideAreaDomain } },
       });
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));

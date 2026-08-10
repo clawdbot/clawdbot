@@ -112,6 +112,13 @@ vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache,
 }));
 
+const withPluginLifecycleLease = vi.hoisted(() =>
+  vi.fn(async (_options: unknown, run: () => Promise<unknown>) => await run()),
+);
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease,
+}));
+
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
 vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
@@ -308,6 +315,7 @@ describe("ensureOnboardingPluginInstalled", () => {
 
       expect(progress).toHaveBeenCalledWith("正在安装 Demo Plugin 插件...");
       expect(note).toHaveBeenCalledWith("无法启用 Demo Plugin：blocked by allowlist。", "插件安装");
+      expect(withPluginLifecycleLease).toHaveBeenCalledOnce();
     } finally {
       if (previousLocale === undefined) {
         delete process.env.OPENCLAW_LOCALE;
@@ -873,12 +881,45 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(result.status).toBe("installed");
   });
 
-  it("returns a timed out status and notes the retry path when npm install hangs", async () => {
+  it("cancels a timed out npm install before returning and releasing its lease", async () => {
     const note = vi.fn(async () => {});
     const stop = vi.fn();
+    let installSignal: AbortSignal | undefined;
+    let releaseCleanup = () => {};
+    let leaseActive = false;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let observeAbort = () => {};
+    const abortObserved = new Promise<void>((resolve) => {
+      observeAbort = resolve;
+    });
+    withPluginLifecycleLease.mockImplementationOnce(async (_options, run) => {
+      leaseActive = true;
+      try {
+        return await run();
+      } finally {
+        leaseActive = false;
+      }
+    });
+    installPluginFromNpmSpec.mockImplementationOnce(async (params: { signal?: AbortSignal }) => {
+      installSignal = params.signal;
+      await new Promise<void>((resolve) => {
+        params.signal?.addEventListener(
+          "abort",
+          () => {
+            observeAbort();
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      await cleanupGate;
+      return { ok: false, error: "installer canceled" };
+    });
     withTimeout.mockRejectedValue(new Error("timeout"));
 
-    const result = await ensureOnboardingPluginInstalled({
+    const pendingResult = ensureOnboardingPluginInstalled({
       cfg: {},
       entry: {
         pluginId: "demo-plugin",
@@ -897,7 +938,20 @@ describe("ensureOnboardingPluginInstalled", () => {
         error: vi.fn(),
       } as never,
     });
+    let returned = false;
+    void pendingResult.then(() => {
+      returned = true;
+    });
 
+    await abortObserved;
+    expect(installSignal?.aborted).toBe(true);
+    expect(leaseActive).toBe(true);
+    expect(returned).toBe(false);
+
+    releaseCleanup();
+    const result = await pendingResult;
+
+    expect(leaseActive).toBe(false);
     expect(result).toEqual({
       cfg: {},
       installed: false,

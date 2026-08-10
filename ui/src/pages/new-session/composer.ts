@@ -221,7 +221,6 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
-          ${renderChatAttachmentMenu(attachmentProps)}
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref(options.textareaController.ref)}
@@ -247,13 +246,14 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
+            ${renderChatAttachmentMenu(attachmentProps)}
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
             ${options.draftAvailable
               ? renderVisibilityPill({
                   mode: "draft",
-                  icon: "👻",
+                  icon: icons.pencil,
                   label: t("newSession.draft"),
                   description: t("newSession.draftDescription"),
                   options,
@@ -261,7 +261,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               : nothing}
             ${renderVisibilityPill({
               mode: "incognito",
-              icon: icons.lock,
+              icon: icons.eyeOff,
               label: t("newSession.incognito"),
               description: t("newSession.incognitoDescription"),
               disabledReason: options.incognitoDisabledReason,

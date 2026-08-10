@@ -247,6 +247,15 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  state.runAgentAttemptMock.mockReset();
+  state.loadManifestModelCatalogMock.mockReset();
+  state.normalizeProviderModelIdWithRuntimeMock.mockReset();
+  state.runCliTurnCompactionLifecycleMock.mockReset();
+  state.deliverAgentCommandResultMock.mockReset();
+  state.emitAgentEventMock.mockReset();
+  state.persistCliTurnTranscriptMock.mockReset();
+  state.appendExactAssistantMessageMock.mockReset();
+  state.persistSessionEntryMock.mockReset();
   state.loadManifestModelCatalogMock.mockReturnValue([]);
   state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
   state.runCliTurnCompactionLifecycleMock.mockImplementation(
@@ -474,11 +483,24 @@ describe("assistant transcript repair", () => {
     );
     await agentCommand({ message: "user one", sessionId, sessionKey, cwd: state.workspaceDir });
 
-    state.persistSessionEntryMock.mockRejectedValueOnce(new Error("simulated cleanup failure"));
+    let cleanupFailureInjected = false;
+    state.persistSessionEntryMock.mockImplementation(async (...args) => {
+      const [params] = args;
+      if (
+        !cleanupFailureInjected &&
+        params.initialEntry.pendingTranscriptRepair?.length &&
+        params.entry.pendingTranscriptRepair === undefined
+      ) {
+        cleanupFailureInjected = true;
+        throw new Error("simulated cleanup failure");
+      }
+      return state.persistSessionEntryReal?.(...args);
+    });
     state.runAgentAttemptMock.mockResolvedValueOnce(
       makeResult({ sessionId, text: "assistant two", runner: "cli" }),
     );
     await agentCommand({ message: "user two", sessionId, sessionKey, cwd: state.workspaceDir });
+    expect(cleanupFailureInjected).toBe(true);
     expect(findStoredSessionEntry(sessionKey)?.pendingTranscriptRepair).toHaveLength(1);
 
     state.runAgentAttemptMock.mockResolvedValueOnce(

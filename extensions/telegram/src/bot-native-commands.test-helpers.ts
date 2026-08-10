@@ -1,7 +1,11 @@
 // Telegram helper module supports bot native commands helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  TelegramAccountConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
@@ -32,6 +36,7 @@ type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
   handlers: Record<string, (ctx: unknown) => Promise<void>>;
   sendMessage: AnyAsyncMock;
+  dispatchReplyWithBufferedBlockDispatcher: typeof replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
   setMyCommands: AnyAsyncMock;
   log: AnyMock;
   bot: RegisterTelegramNativeCommandsParams["bot"];
@@ -155,9 +160,11 @@ export function createNativeCommandsHarness(params?: {
   readChannelAllowFromStore?: AnyAsyncMock;
   useAccessGroups?: boolean;
   nativeEnabled?: boolean;
-  groupConfig?: Record<string, unknown>;
+  groupConfig?: TelegramGroupConfig;
+  topicConfig?: TelegramTopicConfig;
   resolveGroupPolicy?: () => ChannelGroupPolicy;
 }): NativeCommandHarness {
+  replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
   const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
@@ -212,8 +219,8 @@ export function createNativeCommandsHarness(params?: {
           allowed: true,
         }) as ChannelGroupPolicy),
     resolveTelegramGroupConfig: () => ({
-      groupConfig: params?.groupConfig as undefined,
-      topicConfig: undefined,
+      groupConfig: params?.groupConfig,
+      topicConfig: params?.topicConfig,
     }),
     shouldSkipUpdate: () => false,
     opts: {
@@ -224,7 +231,16 @@ export function createNativeCommandsHarness(params?: {
     },
   });
 
-  return { handlers, sendMessage, setMyCommands, log, bot, readChannelAllowFromStore };
+  return {
+    handlers,
+    sendMessage,
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    setMyCommands,
+    log,
+    bot,
+    readChannelAllowFromStore,
+  };
 }
 
 export function createTelegramDmCommandContext(params?: { senderId?: number; username?: string }) {

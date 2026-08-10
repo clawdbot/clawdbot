@@ -45,6 +45,12 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
   };
 });
 
+const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
+  const { preflightWorkerWorkspace } =
+    await import("./worker-environments/workspace-sync-preflight.js");
+  return preflightWorkerWorkspace;
+});
+
 class WorkerDispatchTargetChangedError extends Error {
   readonly code = "invalid_state";
 }
@@ -125,7 +131,8 @@ export function coordinateWorkerPlacementDispatch(
     }
   };
   return {
-    dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
+    dispatch: async (request, onTransition) =>
+      await runPlacementOperation(() => service.dispatch(request, onTransition)),
     forceDestroyEnvironment: (environmentId, onCleanupError) =>
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
@@ -264,6 +271,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
               );
             }
+            const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
+            await preflightWorkerWorkspace({ localPath: worktree.path });
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({

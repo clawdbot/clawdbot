@@ -936,7 +936,7 @@ describe("gateway-status command", () => {
         config: {
           ...createSecretRefGatewayConfig({ gatewayMode: "remote" }),
           discovery: {
-            wideArea: { enabled: true },
+            wideArea: { domain: "openclaw.internal" },
           },
         },
         issues: [],

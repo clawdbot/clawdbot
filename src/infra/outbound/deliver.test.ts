@@ -96,6 +96,7 @@ const queueMocks = vi.hoisted(() => ({
 }));
 const completionMocks = vi.hoisted(() => ({
   completeDurableDelivery: vi.fn(),
+  markDurableDeliveryQueued: vi.fn(async () => ({ state: "queued" as const })),
   rejectDurableDelivery: vi.fn(),
   suppressDurableDelivery: vi.fn(),
 }));
@@ -207,6 +208,7 @@ vi.mock("./delivery-queue.js", () => ({
 }));
 vi.mock("./delivery-completion.js", () => ({
   completeDurableDelivery: completionMocks.completeDurableDelivery,
+  markDurableDeliveryQueued: completionMocks.markDurableDeliveryQueued,
   rejectDurableDelivery: completionMocks.rejectDurableDelivery,
   suppressDurableDelivery: completionMocks.suppressDurableDelivery,
 }));
@@ -521,6 +523,7 @@ describe("deliverOutboundPayloads", () => {
       },
     );
     completionMocks.completeDurableDelivery.mockClear();
+    completionMocks.markDurableDeliveryQueued.mockClear();
     completionMocks.rejectDurableDelivery.mockClear();
     completionMocks.suppressDurableDelivery.mockClear();
     queueMocks.ackDelivery.mockClear();
@@ -834,7 +837,7 @@ describe("deliverOutboundPayloads", () => {
     });
     const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
       order.push("send");
-      await ctx.onPlatformSendDispatch?.();
+      expect(ctx.onPlatformSendDispatch).toBeUndefined();
       return {
         messageId: "message-adapter-1",
         receipt: createMessageReceiptFromOutboundResults({
@@ -885,8 +888,8 @@ describe("deliverOutboundPayloads", () => {
     expect(order).toEqual([
       "queue",
       "before",
-      "send",
       "dispatch",
+      "send",
       "after:pending-1:message-adapter-1",
       "mark-unknown",
       "complete",
@@ -930,6 +933,26 @@ describe("deliverOutboundPayloads", () => {
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
+  });
+
+  it("does not claim platform custody when message adapter preflight fails", async () => {
+    const messageSendText = vi.fn();
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true } },
+      send: {
+        lifecycle: {
+          beforeSendAttempt: () => {
+            throw new Error("preflight rejected");
+          },
+        },
+        text: messageSendText,
+      },
+    });
+
+    await expect(deliverMatrix({ queuePolicy: "required" })).rejects.toThrow("preflight rejected");
+    expect(queueMocks.markDeliveryPlatformSendDispatched).not.toHaveBeenCalled();
+    expect(messageSendText).not.toHaveBeenCalled();
   });
 
   it("does not cross platform I/O when a stable queue intent already exists", async () => {
@@ -1063,6 +1086,7 @@ describe("deliverOutboundPayloads", () => {
     expect(completionMocks.completeDurableDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ operationId: "operation-chunked" }),
       expect.objectContaining({ messageId: "chunk-2" }),
+      undefined,
     );
   });
 
@@ -1153,8 +1177,7 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),
     );
-    const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
-      await ctx.onPlatformSendDispatch?.();
+    const messageSendText = vi.fn(async () => {
       return {
         messageId: "message-adapter-1",
         receipt: createMessageReceiptFromOutboundResults({
@@ -1174,7 +1197,7 @@ describe("deliverOutboundPayloads", () => {
         queuePolicy: "best_effort",
       }),
     ).rejects.toThrow("dispatch state unavailable");
-    expect(messageSendText).toHaveBeenCalledOnce();
+    expect(messageSendText).not.toHaveBeenCalled();
     expect(logMocks.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("continuing best-effort send: dispatch state unavailable"),
     );
@@ -2169,6 +2192,7 @@ describe("deliverOutboundPayloads", () => {
     expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ operationId: "operation-rejected" }),
       "atomic message limit",
+      undefined,
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
@@ -2206,6 +2230,7 @@ describe("deliverOutboundPayloads", () => {
     expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ operationId: "operation-empty-rejection" }),
       "Platform rejected the message before dispatch",
+      undefined,
     );
   });
 

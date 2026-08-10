@@ -55,24 +55,6 @@ const outboundSessionRuntimeLoader = createLazyImportLoader(
 const transcriptRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/transcript.runtime.js"),
 );
-async function loadDeliveryOutboundRuntime(): Promise<
-  typeof import("./delivery-outbound.runtime.js")
-> {
-  return await deliveryOutboundRuntimeLoader.load();
-}
-
-async function loadOutboundSessionRuntime(): Promise<
-  typeof import("../../infra/outbound/outbound-session.js")
-> {
-  return await outboundSessionRuntimeLoader.load();
-}
-
-async function loadTranscriptRuntime(): Promise<
-  typeof import("../../config/sessions/transcript.runtime.js")
-> {
-  return await transcriptRuntimeLoader.load();
-}
-
 export function shouldQueueCronAwareness(params: {
   job: CronJob;
   delivery: SuccessfulDeliveryTarget;
@@ -191,7 +173,7 @@ export async function queueCronAwarenessSystemEvent(params: {
   targetText?: string;
 }): Promise<void> {
   try {
-    const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
+    const { enqueueSystemEvent } = await deliveryOutboundRuntimeLoader.load();
     const mainSessionKey = resolveCronAwarenessMainSessionKey({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -344,7 +326,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 }): Promise<string> {
   try {
     const { resolveOutboundSessionRoute, ensureOutboundSessionEntry } =
-      await loadOutboundSessionRuntime();
+      await outboundSessionRuntimeLoader.load();
     const route = await resolveOutboundSessionRoute({
       cfg: params.cfg,
       channel: params.delivery.channel,
@@ -534,7 +516,7 @@ async function appendDirectCronDeliveryTranscriptMirror(params: {
     return;
   }
   try {
-    const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+    const { appendAssistantMessageToSessionTranscript } = await transcriptRuntimeLoader.load();
     const result = await appendAssistantMessageToSessionTranscript(params.mirror);
     if (!result.ok) {
       await logCronDeliveryWarn(

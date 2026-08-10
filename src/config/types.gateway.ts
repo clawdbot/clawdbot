@@ -1,4 +1,5 @@
 // Defines gateway runtime and networking configuration types.
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
 
 /** Gateway bind-address policy for local server startup. */
@@ -225,6 +226,8 @@ export type GatewayAuthConfig = {
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Operator scopes granted to verified trusted-proxy or Tailscale identities. */
+  identityScopes?: Record<string, OperatorScope[]>;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**

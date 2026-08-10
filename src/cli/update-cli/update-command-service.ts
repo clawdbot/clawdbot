@@ -464,7 +464,36 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
-  if (!serviceState.running) {
+  if (serviceMatchesMutationRoot === false) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.muted(
+          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
+        ),
+      );
+    }
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      // Keep checking additional git mutation roots for this active supervisor.
+      running: true,
+      ...serviceOwnership,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
+  // need the handoff marker to distinguish that transition from operator-stopped state.
+  const launchAgentMayRespawn =
+    process.platform === "darwin" &&
+    serviceState.loaded &&
+    (await service.isEnabled?.({ env: serviceState.env })) === true;
+  const handoffSupervisorMayRespawn =
+    process.platform !== "darwin" && process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1";
+  const supervisorMayRespawn =
+    serviceState.loaded && (launchAgentMayRespawn || handoffSupervisorMayRespawn);
+  if (!serviceState.running && !supervisorMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
       serviceEnv: serviceState.env,
@@ -489,24 +518,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       running: true,
       ...serviceOwnership,
       blockMessage,
-      serviceEnv: serviceState.env,
-    };
-  }
-
-  if (serviceMatchesMutationRoot === false) {
-    if (!params.jsonMode) {
-      defaultRuntime.log(
-        theme.muted(
-          `Managed gateway service points at a different OpenClaw root; leaving it running during this ${params.updateInstallKind} update.`,
-        ),
-      );
-    }
-    return {
-      stopped: false,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      ...serviceOwnership,
       serviceEnv: serviceState.env,
     };
   }
@@ -554,7 +565,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     stopped: true,
     inspected: true,
     runtimeInspected: true,
-    running: true,
+    running: serviceState.running,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
     serviceDefinitionEnv: serviceState.command?.environment,

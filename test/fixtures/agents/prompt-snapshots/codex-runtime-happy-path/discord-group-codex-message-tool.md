@@ -132,6 +132,12 @@
 
 ```json
 {
+  "additionalContext": {
+    "openclaw_current_sender": {
+      "kind": "untrusted",
+      "value": "{\"sender\":{\"id\":\"424242\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+    }
+  },
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "collaborationMode": {
@@ -221,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62876,
-    "roughTokens": 15719
+    "chars": 65442,
+    "roughTokens": 16361
   },
   "openClawDeveloperInstructions": {
     "chars": 4519,
@@ -233,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7226
   },
   "totalWithDynamicToolsJson": {
-    "chars": 91780,
-    "roughTokens": 22945
+    "chars": 94346,
+    "roughTokens": 23587
   },
   "userInputText": {
     "chars": 1300,

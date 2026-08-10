@@ -1382,7 +1382,7 @@ describe("openclaw agent database", () => {
       label: "Rich label",
       display_name: "Rich display",
       category: "work",
-      icon: "hammer",
+      icon: null,
       pinned_at: 12,
       archived_at: 13,
       last_read_at: 14,

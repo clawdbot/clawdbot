@@ -9,7 +9,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -66,6 +66,10 @@ type PendingFinalDeliveryState = {
   createdAt: number;
   context?: DeliveryContext;
   intentId?: string;
+  deliveries?: Array<{
+    id: string;
+    state: "prepared" | "queued" | "delivered" | "suppressed" | "unknown";
+  }>;
 } & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
 /**
@@ -344,8 +348,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
-    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
-    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */

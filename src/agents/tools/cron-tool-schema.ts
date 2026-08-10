@@ -1,4 +1,5 @@
 /** Model-facing schema and input validation for the cron tool. */
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Type, type TSchema } from "typebox";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
@@ -100,9 +101,13 @@ function createCronScheduleSchema(): TSchema {
       {
         kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule kind" }),
         at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
-        everyMs: optionalPositiveIntegerSchema({ description: "Interval ms (kind=every)" }),
+        everyMs: optionalPositiveIntegerSchema({
+          description: "Interval ms (kind=every)",
+          maximum: MAX_DATE_TIMESTAMP_MS,
+        }),
         anchorMs: optionalNonNegativeIntegerSchema({
           description: "Start anchor ms (kind=every)",
+          maximum: MAX_DATE_TIMESTAMP_MS,
         }),
         expr: Type.Optional(
           Type.String({
@@ -116,7 +121,10 @@ function createCronScheduleSchema(): TSchema {
               'IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example "Asia/Shanghai".',
           }),
         ),
-        staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
+        staggerMs: optionalNonNegativeIntegerSchema({
+          description: "Jitter ms (kind=cron)",
+          maximum: MAX_DATE_TIMESTAMP_MS,
+        }),
         command: Type.Optional(
           Type.Array(Type.String({ minLength: 1 }), {
             minItems: 1,
@@ -198,6 +206,19 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
     },
     { additionalProperties: true },
   );
+  const completionDestinationObject = Type.Object(
+    {
+      mode: Type.Literal("webhook"),
+      to: Type.String({
+        minLength: 1,
+        description: "Completion webhook target; only valid with delivery.mode=announce",
+      }),
+    },
+    {
+      additionalProperties: true,
+      description: "Additional completion webhook; requires delivery.mode=announce",
+    },
+  );
 
   return Type.Optional(
     Type.Object(
@@ -224,6 +245,14 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
               }),
             )
           : Type.Optional(failureDestinationObject),
+        completionDestination: params.nullableClears
+          ? Type.Optional(
+              Type.Union([completionDestinationObject, Type.Null()], {
+                description:
+                  "Completion webhook destination; requires delivery.mode=announce; null clears.",
+              }),
+            )
+          : Type.Optional(completionDestinationObject),
       },
       { additionalProperties: true },
     ),

@@ -35,7 +35,6 @@ import {
 } from "./delivery-dispatch-awareness.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
-  cleanupDirectCronSession,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
   isCompletedDirectCronDelivery,
   isStaleCronDelivery,
@@ -70,23 +69,7 @@ const deliveryOutboundRuntimeLoader = createLazyImportLoader(
 const subagentFollowupRuntimeLoader = createLazyImportLoader(
   () => import("./subagent-followup.runtime.js"),
 );
-async function loadDeliveryOutboundRuntime(): Promise<
-  typeof import("./delivery-outbound.runtime.js")
-> {
-  return await deliveryOutboundRuntimeLoader.load();
-}
-
-async function loadSubagentFollowupRuntime(): Promise<
-  typeof import("./subagent-followup.runtime.js")
-> {
-  return await subagentFollowupRuntimeLoader.load();
-}
-
-export {
-  cleanupDirectCronSession,
-  queueCronMessageToolDeliveryAwareness,
-  resolveCronDeliveryBestEffort,
-};
+export { queueCronMessageToolDeliveryAwareness, resolveCronDeliveryBestEffort };
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
@@ -201,7 +184,7 @@ export async function dispatchCronDelivery(
       createOutboundSendDeps,
       resolveAgentOutboundIdentity,
       sendDurableMessageBatch,
-    } = await loadDeliveryOutboundRuntime();
+    } = await deliveryOutboundRuntimeLoader.load();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     try {
       const summaryFallbackText = resolveDirectCronSummaryFallbackText({
@@ -590,7 +573,7 @@ export async function dispatchCronDelivery(
     const needsSubagentFollowupRuntime =
       shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
     const subagentFollowupRuntime = needsSubagentFollowupRuntime
-      ? await loadSubagentFollowupRuntime()
+      ? await subagentFollowupRuntimeLoader.load()
       : undefined;
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
@@ -712,7 +695,7 @@ export async function dispatchCronDelivery(
       // inherited shared-bucket target was refused). We never send here, so a
       // deleteAfterRun cron must still retire its session/transcript before
       // returning — otherwise the one-shot session leaks. Safe no-op for
-      // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
+      // Cleanup is a no-op for non-deleteAfterRun or non-cron sessions.
       await cleanupDirectCronSessionIfNeeded();
       if (!params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));

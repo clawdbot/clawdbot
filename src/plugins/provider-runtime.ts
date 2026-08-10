@@ -761,23 +761,7 @@ export function listProviderUsagePluginDescriptors(params: {
   return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-export function matchesProviderContextOverflowWithPlugin(params: {
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderFailoverErrorContext;
-}): boolean {
-  const plugins = resolveProviderPluginsForScopedHook(params);
-  for (const plugin of plugins) {
-    if (plugin.matchesContextOverflowError?.(params.context)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function classifyProviderFailoverReasonWithPlugin(params: {
+export function classifyProviderFailoverSignalWithPlugin(params: {
   provider?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -786,6 +770,9 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
 }) {
   const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
+    if (plugin.matchesContextOverflowError?.(params.context)) {
+      return "context_overflow";
+    }
     const reason = plugin.classifyFailoverReason?.(params.context);
     if (reason) {
       return reason;

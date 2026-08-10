@@ -40,10 +40,6 @@ import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
 
-async function loadCronExecutorRuntime() {
-  return await cronExecutorRuntimeLoader.load();
-}
-
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
 }
@@ -211,7 +207,7 @@ export async function runCronIsolatedAgentTurn(params: {
         bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
       }
     }
-    const { executeCronRun } = await loadCronExecutorRuntime();
+    const { executeCronRun } = await cronExecutorRuntimeLoader.load();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
       cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,

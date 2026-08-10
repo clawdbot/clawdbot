@@ -71,6 +71,12 @@ export async function main(argv = process.argv.slice(2)) {
           args: ["check:deprecated-api-usage"],
         }
       : null,
+    !args.includeArchitecture
+      ? {
+          name: "wrapper shadowing guard",
+          args: ["check:wrapper-shadowing"],
+        }
+      : null,
     { name: "temp path guard", args: ["check:temp-path-guardrails"] },
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },

@@ -1,17 +1,17 @@
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
+import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 /** Shared contracts for the prepared attempt execution phases. */
 import type {
   createEmbeddedAttemptExternalAbortController,
   EmbeddedAttemptAbortStatePort,
-} from "./attempt-abort.js";
-import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
-import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+} from "./attempt-finalize.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import type { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
-import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 

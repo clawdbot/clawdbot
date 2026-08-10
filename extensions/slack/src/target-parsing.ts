@@ -61,11 +61,12 @@ export function formatSlackTarget(params: {
   teamId?: string;
   kind: SlackTargetKind;
   id: string;
+  explicitKind?: boolean;
 }): string {
   const teamId = params.teamId?.trim();
   const id = params.id.trim();
   if (!teamId) {
-    return id;
+    return params.explicitKind ? `${params.kind}:${id}` : id;
   }
   const idPattern = params.kind === "user" ? /^[UW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
   if (!/^T[A-Z0-9]+$/i.test(teamId) || !idPattern.test(id)) {
