@@ -8,7 +8,7 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
-import { isTextyDocumentAttachment } from "./chat-message-attachments.ts";
+import { isTextyDocumentAttachment } from "./chat-message-document-preview.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
