@@ -472,7 +472,7 @@ export async function resolveOpencodeZenStarterModel(params: {
   preferredModelRef: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
-}): Promise<string> {
+}): Promise<string | undefined> {
   const liveModelIds = await fetchLiveProviderModelIds({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
@@ -483,15 +483,7 @@ export async function resolveOpencodeZenStarterModel(params: {
     auditContext: "opencode-zen-onboarding-model-discovery",
   });
   const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
-  const advertisedModelIds = new Set(liveModelIds);
-  const selectedModel =
-    OPENCODE_ZEN_MODELS.find(
-      (model) => model.id === preferredModelId && advertisedModelIds.has(model.id),
-    ) ?? OPENCODE_ZEN_MODELS.find((model) => advertisedModelIds.has(model.id));
-  if (!selectedModel) {
-    throw new Error("OpenCode Zen did not return a supported model for this API key.");
-  }
-  return `${PROVIDER_ID}/${selectedModel.id}`;
+  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
 function readLiveModelId(row: unknown): string | undefined {

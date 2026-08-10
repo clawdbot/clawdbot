@@ -61,7 +61,20 @@ describe("createProviderApiKeyAuthMethod", () => {
     expect(config?.agents?.defaults?.model).toEqual({ primary: "example/enabled-model" });
   });
 
-  it("falls back to the static model when key-scoped discovery fails", async () => {
+  it.each([
+    {
+      name: "falls back to the static model when discovery fails",
+      resolveDefaultModel: async () => {
+        throw new Error("catalog unavailable");
+      },
+      expected: { primary: "example/static-model" },
+    },
+    {
+      name: "leaves the model unset when discovery finds no safe default",
+      resolveDefaultModel: async () => undefined,
+      expected: undefined,
+    },
+  ])("$name", async ({ resolveDefaultModel, expected }) => {
     const method = createProviderApiKeyAuthMethod({
       providerId: "example",
       methodId: "api-key",
@@ -71,9 +84,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       envVar: "EXAMPLE_API_KEY",
       promptMessage: "Example API key",
       defaultModel: "example/static-model",
-      resolveDefaultModel: async () => {
-        throw new Error("catalog unavailable");
-      },
+      resolveDefaultModel,
     });
 
     const config = await method.runNonInteractive?.({
@@ -86,7 +97,7 @@ describe("createProviderApiKeyAuthMethod", () => {
       toApiKeyCredential: vi.fn(() => null),
     });
 
-    expect(config?.agents?.defaults?.model).toEqual({ primary: "example/static-model" });
+    expect(config?.agents?.defaults?.model).toEqual(expected);
   });
 
   it("returns a key-scoped default model during interactive auth", async () => {

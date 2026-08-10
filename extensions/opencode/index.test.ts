@@ -798,9 +798,14 @@ describe("opencode provider plugin", () => {
     expect(secondCached.models.map((model) => model.id)).toEqual(["gpt-5.6-luna"]);
   });
 
-  it("selects an advertised key-scoped onboarding model when the preferred model is unavailable", async () => {
+  it.each([
+    [["claude-opus-5"], "opencode/claude-opus-5"],
+    [["gpt-5.6-sol"], undefined],
+  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
     const fetchGuard = vi.fn(async () => ({
-      response: new Response(JSON.stringify({ data: [{ id: "gpt-5.6-sol", object: "model" }] })),
+      response: new Response(
+        JSON.stringify({ data: modelIds.map((id) => ({ id, object: "model" })) }),
+      ),
       finalUrl: "https://opencode.ai/zen/v1/models",
       release: vi.fn(async () => undefined),
     }));
@@ -811,7 +816,7 @@ describe("opencode provider plugin", () => {
         preferredModelRef: "opencode/claude-opus-5",
         fetchGuard,
       }),
-    ).resolves.toBe("opencode/gpt-5.6-sol");
+    ).resolves.toBe(expected);
   });
 
   it.each([

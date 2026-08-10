@@ -73,8 +73,11 @@ async function resolveDefaultModel(
   params: ProviderApiKeyAuthMethodOptions,
   context: { apiKey: string; config: OpenClawConfig; signal?: AbortSignal },
 ): Promise<string | undefined> {
+  if (!params.resolveDefaultModel) {
+    return params.defaultModel;
+  }
   try {
-    return (await params.resolveDefaultModel?.(context)) ?? params.defaultModel;
+    return await params.resolveDefaultModel(context);
   } catch {
     // Key-scoped discovery improves the first-run default, but an advisory
     // catalog outage must not discard credentials or block onboarding.

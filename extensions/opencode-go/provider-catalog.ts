@@ -217,7 +217,7 @@ export async function resolveOpencodeGoStarterModel(params: {
   preferredModelRef: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
-}): Promise<string> {
+}): Promise<string | undefined> {
   const liveModelIds = await fetchLiveProviderModelIds({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_GO_MODELS_ENDPOINT,
@@ -228,15 +228,7 @@ export async function resolveOpencodeGoStarterModel(params: {
     auditContext: "opencode-go-onboarding-model-discovery",
   });
   const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
-  const advertisedModelIds = new Set(liveModelIds);
-  const selectedModel =
-    OPENCODE_GO_MODELS.find(
-      (model) => model.id === preferredModelId && advertisedModelIds.has(model.id),
-    ) ?? OPENCODE_GO_MODELS.find((model) => advertisedModelIds.has(model.id));
-  if (!selectedModel) {
-    throw new Error("OpenCode Go did not return a supported model for this API key.");
-  }
-  return `${PROVIDER_ID}/${selectedModel.id}`;
+  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
 export async function buildOpencodeGoLiveProviderConfig(

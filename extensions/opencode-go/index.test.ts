@@ -488,9 +488,14 @@ describe("opencode-go provider plugin", () => {
     expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
   });
 
-  it("selects an enabled key-scoped onboarding model when the preferred model is unavailable", async () => {
+  it.each([
+    [["deepseek-v4-pro"], "opencode-go/deepseek-v4-pro"],
+    [["glm-5.1"], undefined],
+  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
     const fetchGuard = vi.fn(async () => ({
-      response: new Response(JSON.stringify({ data: [{ id: "glm-5.1", object: "model" }] })),
+      response: new Response(
+        JSON.stringify({ data: modelIds.map((id) => ({ id, object: "model" })) }),
+      ),
       finalUrl: "https://opencode.ai/zen/go/v1/models",
       release: vi.fn(async () => undefined),
     }));
@@ -501,7 +506,7 @@ describe("opencode-go provider plugin", () => {
         preferredModelRef: "opencode-go/deepseek-v4-pro",
         fetchGuard,
       }),
-    ).resolves.toBe("opencode-go/glm-5.1");
+    ).resolves.toBe(expected);
   });
 
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
