@@ -444,6 +444,11 @@ describe("tasks gateway handlers", () => {
       progressSummary:
         "Bundling output\nOpenClaw runtime context (internal): Keep internal details private.",
     });
+    emitAgentEvent({
+      runId: "run-sanitized",
+      stream: "assistant",
+      data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
+    });
     markTaskTerminalById({
       taskId: task.taskId,
       status: "failed",
@@ -458,6 +463,7 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Compile artifact");
     expect(payload?.task?.terminalSummary).toBe("Failed after build");
     expect(payload?.task?.error).toBe("Tool failed");
+    expect(payload?.task).not.toHaveProperty("lastActivity");
     expect(payload?.task?.prompt).toBe("Compile artifact");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
   });
@@ -617,9 +623,8 @@ describe("tasks gateway handlers", () => {
     const listed = await runTaskHandler("tasks.list", {});
     const listedPrimary = listed.payload?.tasks?.find((task) => task.id === primary.taskId);
 
-    expect(primaryGet.payload?.task?.lastActivity).toBe(
-      `Updating files ${"x".repeat(220)}`.slice(0, 200),
-    );
+    expect(primaryGet.payload?.task?.lastActivity).toMatch(/^Updating files x+…$/);
+    expect(String(primaryGet.payload?.task?.lastActivity).length).toBeLessThanOrEqual(200);
     expect(primaryGet.payload?.task?.diffStat).toEqual({ files: 3, added: 7, removed: 3 });
     expect(primaryGet.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
     expect(secondaryGet.payload?.task?.lastActivity).toBe("Thinking-only progress");
