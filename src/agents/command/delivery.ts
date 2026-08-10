@@ -554,6 +554,7 @@ export async function deliverAgentCommandResult(
     resolveSessionAgentId({
       sessionKey: effectiveSessionKey,
       config: cfg,
+      agentId: opts.agentId,
     }) ??
     resolveDefaultAgentId(cfg);
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, deliveryAgentId);

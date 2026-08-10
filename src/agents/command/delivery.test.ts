@@ -491,6 +491,32 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(latestOutboundDeliveryArgs().identity).toBeUndefined();
   });
 
+  it("honors an explicit agent id when resolving outbound identity without an outbound session", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResultForTest({
+      cfg: {
+        agents: {
+          list: [
+            { id: "default", identity: { name: "Default Bot" } },
+            { id: "explicit", identity: { name: "Explicit Agent", emoji: ":wave:" } },
+          ],
+        },
+      } as OpenClawConfig,
+      opts: {
+        message: "go",
+        agentId: "explicit",
+        replyTo: "#general",
+      },
+      payloads: [{ text: "final answer" }],
+    });
+
+    expect(latestOutboundDeliveryArgs().identity).toEqual({
+      name: "Explicit Agent",
+      emoji: ":wave:",
+    });
+  });
+
   it("renders response prefix templates with the selected runtime model", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
