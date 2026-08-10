@@ -14,11 +14,11 @@ const CREDENTIAL_FIELD_SUFFIX_RE =
 const MEDIA_PAYLOAD_SUFFIXES =
   "base64|blob|buffer|bytes|data|delta|frames?|output|result|(?:file|media|source)?(?:uri|url)";
 const MEDIA_FIELD_NAME_RE = new RegExp(
-  `^(?:input|output)?(?:audio|image|video)(?:${MEDIA_PAYLOAD_SUFFIXES})*$`,
+  `^(?:input|output)?(?:audio|image|video)s?(?:${MEDIA_PAYLOAD_SUFFIXES})*$`,
   "u",
 );
 const MEDIA_PAYLOAD_SUFFIX_RE = new RegExp(`^(?:${MEDIA_PAYLOAD_SUFFIXES})$`, "u");
-const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)(?:_|$)/iu;
+const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)s?(?:_|$)/iu;
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_HEADER_RE = /\b((?:set-)?cookie\s*:\s*)([^\r\n]+)/giu;

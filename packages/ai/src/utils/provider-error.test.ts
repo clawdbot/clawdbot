@@ -213,6 +213,11 @@ describe("projectProviderError", () => {
       leaked: "QUJDRA==",
     },
     {
+      name: "plural video container URL",
+      body: '{"videos":[{"url":"https://media.invalid/private/path-token"}]}',
+      leaked: "https://media.invalid/private/path-token",
+    },
+    {
       name: "array following a JSON literal",
       body: '[true,{"b64_json":"QUJDRA=="}]',
       leaked: "QUJDRA==",

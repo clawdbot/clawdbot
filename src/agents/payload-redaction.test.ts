@@ -26,6 +26,7 @@ describe("sanitizeDiagnosticPayload", () => {
           { type: "image_generation_call", result: MEDIA_DATA },
         ],
         wrappers: [
+          { videos: [{ url: "https://media.invalid/private/path-token" }] },
           { audio: { data: MEDIA_DATA } },
           { video: { blob: MEDIA_DATA } },
           { video_frame: { data: MEDIA_DATA } },
@@ -45,6 +46,7 @@ describe("sanitizeDiagnosticPayload", () => {
         { type: "image_generation_call", result: "<redacted>", ...MEDIA_SUMMARY },
       ],
       wrappers: [
+        { videos: "<redacted>" },
         { audio: { data: "<redacted>", ...MEDIA_SUMMARY } },
         { video: { blob: "<redacted>", ...MEDIA_SUMMARY } },
         { video_frame: { data: "<redacted>", ...MEDIA_SUMMARY } },
