@@ -84,7 +84,9 @@ function normalizeSlackRouteBindingPeer(peer: SlackRouteBindingPeer): SlackRoute
   if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind)) {
     return peer;
   }
-  const normalizedId = target.teamId ? target.normalized : target.id;
+  const normalizedId = target.teamId
+    ? `team:${target.teamId}:${target.kind}:${target.id}`
+    : target.id;
   return normalizedId === peer.id ? peer : { ...peer, id: normalizedId };
 }
 
