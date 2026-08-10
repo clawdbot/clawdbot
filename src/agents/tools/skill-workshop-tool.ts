@@ -44,6 +44,7 @@ import {
 } from "./common.js";
 import {
   executeSkillCollectionReconcile,
+  executeSkillCollectionRestore,
   SKILL_COLLECTION_ACTION_DESCRIPTION,
   skillCollectionPlanSchema,
 } from "./skill-workshop-tool-collection.js";
@@ -60,6 +61,7 @@ import {
   readProposalForInspect,
   readProposalStatusParam,
   readSupportFilesParam,
+  skillWorkshopAgentEventActor,
 } from "./skill-workshop-tool-helpers.js";
 import {
   formatProposalInspect,
@@ -80,6 +82,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "reject",
   "quarantine",
   "reconcile",
+  "restore_collection",
 ] as const;
 function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
   return [
@@ -102,13 +105,6 @@ const SKILL_PROPOSAL_STATUSES = [
   "quarantined",
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
-
-function skillWorkshopAgentEventActor(agentId?: string) {
-  return {
-    type: "agent" as const,
-    ...(agentId ? { id: agentId } : {}),
-  };
-}
 
 function requireProposalContent(content: string | undefined): string {
   if (content === undefined) {
@@ -137,7 +133,7 @@ function buildSkillWorkshopToolSchema(
             ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
             : collectionOnly
               ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; reconcile = atomically clean the writable skill collection; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; reconcile = atomically clean the writable skill collection; restore_collection = restore the collection backup retained by the last reconcile; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
         },
       ),
       proposal_id: Type.Optional(
@@ -315,6 +311,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("this Skill Workshop review is already completing or complete");
       }
 
+      if (action === "restore_collection") {
+        return await executeSkillCollectionRestore(options);
+      }
+
       if (action === "read") {
         if (options.proposalOnly === true && options.updateProposals !== true) {
           throw new ToolInputError("this Skill Workshop session cannot read live skills");
@@ -324,6 +324,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
+        if (
+          options.collectionReconcile &&
+          !options.collectionReconcile.approvedSkillNames?.has(skill.skillKey)
+        ) {
+          throw new ToolInputError(`skill is outside this collection review: ${skill.skillKey}`);
+        }
         const readMaxChars = options.collectionReconcile
           ? workshopConfig.maxSkillBytes
           : SKILL_WORKSHOP_READ_MAX_CHARS;

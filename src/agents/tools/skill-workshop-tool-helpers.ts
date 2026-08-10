@@ -11,6 +11,10 @@ import type {
 } from "../../skills/workshop/types.js";
 import { readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
 
+export function skillWorkshopAgentEventActor(agentId?: string) {
+  return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
+}
+
 export function proposalReviewPhase(
   completion: SkillWorkshopProposalReviewCompletion,
 ): "open" | "completing" | "completed" {

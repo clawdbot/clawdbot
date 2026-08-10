@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   MAX_RECONCILED_SKILLS,
   reconcileSkillCollection,
+  restoreLatestSkillCollectionBackup,
   type SkillCollectionPlanEntry,
   type SkillCollectionReconcileContext,
 } from "../../skills/workshop/collection-reconcile.js";
@@ -48,6 +49,7 @@ export async function executeSkillCollectionReconcile(params: {
     readSkillHashes: params.readSkillHashes,
     config: params.config,
     agentId: params.agentId,
+    agentIds: params.context?.agentIds,
     env: params.env,
   });
   if (params.context) {
@@ -58,6 +60,22 @@ export async function executeSkillCollectionReconcile(params: {
       {
         type: "text" as const,
         text: `Reconciled the skill collection: kept ${result.kept.length}, wrote ${result.written.length}, dropped ${result.dropped.length}. Backup ${result.backupId}.`,
+      },
+    ],
+    details: result,
+  };
+}
+
+export async function executeSkillCollectionRestore(params: {
+  workspaceDir: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const result = await restoreLatestSkillCollectionBackup(params);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
       },
     ],
     details: result,

@@ -122,6 +122,12 @@ describe("skill collection review", () => {
         env: params.skillWorkshopProposalEnv,
         collectionReconcile: params.skillWorkshopCollectionReconcile,
       });
+      await expect(
+        tool.execute("read-disabled", { action: "read", skill_name: "disabled" }),
+      ).rejects.toThrow("outside this collection review");
+      await expect(
+        tool.execute("read-filtered", { action: "read", skill_name: "agent-filtered" }),
+      ).rejects.toThrow("outside this collection review");
       await tool.execute("read", { action: "read", skill_name: "enabled" });
       await tool.execute("reconcile", {
         action: "reconcile",
@@ -179,6 +185,51 @@ describe("skill collection review", () => {
     await runScheduledSkillCollectionReviews({ config, env: testState.env });
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("reviews the union of disjoint agent filters in a shared workspace", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-shared-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "alpha", description: "Alpha procedure" },
+      { name: "beta", description: "Beta procedure" },
+    ]);
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      expect(params.prompt).toContain("alpha");
+      expect(params.prompt).toContain("beta");
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await tool.execute("read-alpha", { action: "read", skill_name: "alpha" });
+      await tool.execute("read-beta", { action: "read", skill_name: "beta" });
+      await tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [
+          { action: "keep", name: "alpha" },
+          { action: "keep", name: "beta" },
+        ],
+      });
+      return {};
+    });
+
+    await runScheduledSkillCollectionReviews({
+      config: {
+        agents: {
+          list: [
+            { id: "alpha-agent", default: true, workspace: workspaceDir, skills: ["alpha"] },
+            { id: "beta-agent", workspace: workspaceDir, skills: ["beta"] },
+          ],
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      },
+      env: testState.env,
+    });
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(1);
   });
 
   it("admits and reports each workspace independently", async () => {

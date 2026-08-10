@@ -55,12 +55,14 @@ export function startSkillCollectionMaintenance(options: {
 
 export async function runSkillCollectionReview(params: {
   agentId: string;
+  agentIds?: readonly string[];
   config: OpenClawConfig;
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionReconcileResult | null> {
   const skills = listWritableSkillCollection(params.workspaceDir, {
     agentId: params.agentId,
+    agentIds: params.agentIds,
     config: params.config,
   });
   if (skills.length === 0) {
@@ -82,7 +84,10 @@ export async function runSkillCollectionReview(params: {
   const model = resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
   const sessionId = randomUUID();
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
-  const collectionReconcile: SkillCollectionReconcileContext = {};
+  const collectionReconcile: SkillCollectionReconcileContext = {
+    agentIds: [...(params.agentIds ?? [params.agentId])],
+    approvedSkillNames: new Set(skills.map((skill) => skill.name)),
+  };
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
     sessionId,
@@ -129,26 +134,28 @@ export async function runScheduledSkillCollectionReviews(params: {
   if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
     return;
   }
-  const reviewedWorkspaces = new Set<string>();
+  const workspaceAgents = new Map<string, string[]>();
+  for (const agentId of listAgentIds(params.config)) {
+    const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, params.env);
+    const agentIds = workspaceAgents.get(workspaceDir) ?? [];
+    agentIds.push(agentId);
+    workspaceAgents.set(workspaceDir, agentIds);
+  }
   const nowMs = Date.now();
   const reportError =
     params.onError ??
     ((error: unknown, workspaceDir: string) => {
       log.warn(`skill collection review failed for ${workspaceDir}: ${String(error)}`);
     });
-  for (const agentId of listAgentIds(params.config)) {
-    const workspaceDir = resolveAgentWorkspaceDir(params.config, agentId, params.env);
-    if (reviewedWorkspaces.has(workspaceDir)) {
-      continue;
-    }
-    reviewedWorkspaces.add(workspaceDir);
+  for (const [workspaceDir, agentIds] of workspaceAgents) {
+    const agentId = agentIds[0]!;
     const stateOptions = params.env ? { env: params.env } : {};
     if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
       continue;
     }
     try {
       await runWithGatewayIndependentRootWorkAdmission(async () => {
-        await runSkillCollectionReview({ ...params, agentId, workspaceDir });
+        await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
         recordSkillCollectionReviewSuccess(workspaceDir, Date.now(), stateOptions);
       });
     } catch (error) {

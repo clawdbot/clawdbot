@@ -40,7 +40,7 @@ describe("skill_workshop tool", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "duplicate", description: "Duplicate procedure" },
     ]);
-    const collectionReconcile = {};
+    const collectionReconcile = { approvedSkillNames: new Set(["duplicate"]) };
     const tool = createSkillWorkshopTool({
       workspaceDir,
       env: testState.env,
@@ -58,6 +58,13 @@ describe("skill_workshop tool", () => {
       result: { kept: [], written: [], dropped: [{ name: "duplicate", reason: "redundant" }] },
     });
     await expect(fs.access(path.join(workspaceDir, "skills", "duplicate"))).rejects.toThrow();
+
+    const foregroundTool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
+    const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
+    expect(restored.details).toMatchObject({ restored: ["duplicate"], removed: [] });
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "duplicate", "SKILL.md"), "utf8"),
+    ).resolves.toContain("Duplicate procedure");
   });
 
   it("bounds total collection text returned to the reviewer", async () => {
@@ -72,7 +79,7 @@ describe("skill_workshop tool", () => {
     const tool = createSkillWorkshopTool({
       workspaceDir,
       config: { skills: { workshop: { maxSkillBytes: 300_000 } } },
-      collectionReconcile: {},
+      collectionReconcile: { approvedSkillNames: new Set(["oversized"]) },
     });
 
     await expect(tool.execute("read", { action: "read", skill_name: "oversized" })).rejects.toThrow(
