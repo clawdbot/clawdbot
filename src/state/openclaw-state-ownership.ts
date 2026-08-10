@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
@@ -114,7 +115,26 @@ export function inspectOpenClawStateOwnershipFromDatabase(
   return parseExternalOwnership(row.value_json, databasePath);
 }
 
-/** Inspect one resolved state database path without mutating a quiescent SQLite family. */
+function hasLiveWal(databasePath: string): boolean {
+  return existsSync(`${databasePath}-wal`);
+}
+
+function inspectOpenClawStateOwnershipAtLocation(
+  databasePath: string,
+  location = databasePath,
+): OpenClawExternalStateOwnership | null {
+  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  try {
+    database.exec(
+      `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
+    );
+    return inspectOpenClawStateOwnershipFromDatabase(database, databasePath);
+  } finally {
+    database.close();
+  }
+}
+
+/** Inspect one resolved state database path without joining the writable lifecycle. */
 export function inspectOpenClawStateOwnershipAtPath(
   databasePath: string,
 ): OpenClawExternalStateOwnership | null {
@@ -122,18 +142,21 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  // WAL readers need the live sidecars. Rollback-journal recovery stays with the
-  // writable lifecycle after this ownership fence, so it remains immutable here.
-  const hasLiveWal = ["-shm", "-wal"].some((suffix) => existsSync(`${resolvedPath}${suffix}`));
-  const location = hasLiveWal ? resolvedPath : resolveImmutableSqliteFileUri(resolvedPath);
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
+  if (hasLiveWal(resolvedPath)) {
+    return inspectOpenClawStateOwnershipAtLocation(resolvedPath);
+  }
   try {
-    database.exec(
-      `${hasLiveWal ? `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; ` : ""}PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
+    return inspectOpenClawStateOwnershipAtLocation(
+      resolvedPath,
+      resolveImmutableSqliteFileUri(resolvedPath),
     );
-    return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
-  } finally {
-    database.close();
+  } catch (error) {
+    // External claims checkpoint before returning, so the main file is authoritative.
+    // If a WAL appeared during this open, retry with SQLite's normal WAL-aware reader.
+    if (!isSqliteCorruptionError(error) || !hasLiveWal(resolvedPath)) {
+      throw error;
+    }
+    return inspectOpenClawStateOwnershipAtLocation(resolvedPath);
   }
 }
 
