@@ -16,6 +16,14 @@ async function initializeRepository(root: string): Promise<string> {
   await execFileAsync("git", ["init", "-b", "main", repo]);
   await execFileAsync("git", ["-C", repo, "config", "user.name", "OpenClaw Tests"]);
   await execFileAsync("git", ["-C", repo, "config", "user.email", "tests@openclaw.invalid"]);
+  await execFileAsync("git", [
+    "-C",
+    repo,
+    "remote",
+    "add",
+    "origin",
+    "https://github.com/openclaw/openclaw.git",
+  ]);
   await fs.writeFile(path.join(repo, "README.md"), "registered\n");
   await execFileAsync("git", ["-C", repo, "add", "README.md"]);
   await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
@@ -26,23 +34,26 @@ async function invokeProjectMethod(
   method: keyof typeof projectsHandlers,
   params: Record<string, unknown>,
   cfg = {},
+  scopes: string[] = ["operator.write"],
 ) {
-  let result: {
-    ok: boolean;
-    payload?: unknown;
-    error?: { code?: string; message?: string };
-  } | null = null;
+  const capture: {
+    result: {
+      ok: boolean;
+      payload?: unknown;
+      error?: { code?: string; message?: string };
+    } | null;
+  } = { result: null };
   await projectsHandlers[method]!({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {
-      result = { ok, payload, error };
+      capture.result = { ok, payload, error };
     },
     context: { getRuntimeConfig: () => cfg as OpenClawConfig } as never,
-    client: null,
+    client: { connect: { scopes } } as never,
     isWebchatConnect: () => false,
   });
-  return result;
+  return capture.result;
 }
 
 test("projects.list merges synthesized workspaces with stored rows deterministically", async () => {
@@ -65,6 +76,50 @@ test("projects.list merges synthesized workspaces with stored rows deterministic
         projects: [
           { id: "workspace:main", displayName: "alpha", source: "workspace" },
           { id: "beta", displayName: "Beta", source: "registered" },
+        ],
+      },
+    });
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("projects.list exposes checkout details only at write scope", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const repo = await initializeRepository(state.root);
+    await registerProjectRegistry({ path: repo, name: "Registered" });
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/workspace/alpha" }],
+      },
+    };
+
+    const readResult = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
+    if (!readResult) {
+      throw new Error("projects.list did not respond");
+    }
+    const readProjects = (readResult.payload as { projects: Record<string, unknown>[] }).projects;
+    expect(readProjects).toEqual([
+      { id: "workspace:main", displayName: "alpha", source: "workspace", agentId: "main" },
+      { id: "registered", displayName: "Registered", source: "registered" },
+    ]);
+    for (const project of readProjects) {
+      expect(project).not.toHaveProperty("repoRoot");
+      expect(project).not.toHaveProperty("originUrl");
+    }
+
+    const writeResult = await invokeProjectMethod("projects.list", {}, cfg, ["operator.write"]);
+    expect(writeResult).toMatchObject({
+      ok: true,
+      payload: {
+        projects: [
+          { id: "workspace:main", repoRoot: "/workspace/alpha" },
+          {
+            id: "registered",
+            repoRoot: repo,
+            originUrl: "https://github.com/openclaw/openclaw.git",
+          },
         ],
       },
     });

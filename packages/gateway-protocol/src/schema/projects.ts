@@ -10,8 +10,18 @@ const StoredProjectIdSchema = Type.String({
 export const ProjectRecordSchema = closedObject({
   id: NonEmptyString,
   displayName: NonEmptyString,
-  repoRoot: NonEmptyString,
-  originUrl: Type.Optional(NonEmptyString),
+  repoRoot: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Repository checkout root; included only for callers holding operator.write.",
+    }),
+  ),
+  originUrl: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Repository origin URL; included only for callers holding operator.write.",
+    }),
+  ),
   source: Type.String({ enum: ["workspace", "registered", "cloned"] }),
   agentId: Type.Optional(NonEmptyString),
 });

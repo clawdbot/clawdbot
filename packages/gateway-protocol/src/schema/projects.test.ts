@@ -24,7 +24,6 @@ describe("project protocol schemas", () => {
       Value.Check(ProjectRecordSchema, {
         id: "workspace:main",
         displayName: "openclaw",
-        repoRoot: "/workspace/openclaw",
         source: "workspace",
         agentId: "main",
       }),

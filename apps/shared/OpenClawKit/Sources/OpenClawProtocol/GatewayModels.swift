@@ -2993,7 +2993,7 @@ public struct WakeParams: Codable, Sendable {
 public struct ProjectRecord: Codable, Sendable {
     public let id: String
     public let displayname: String
-    public let reporoot: String
+    public let reporoot: String?
     public let originurl: String?
     public let source: String
     public let agentid: String?
@@ -3001,7 +3001,7 @@ public struct ProjectRecord: Codable, Sendable {
     public init(
         id: String,
         displayname: String,
-        reporoot: String,
+        reporoot: String? = nil,
         originurl: String? = nil,
         source: String,
         agentid: String? = nil)
@@ -3061,7 +3061,7 @@ public struct ProjectsRegisterParams: Codable, Sendable {
 public struct ProjectsRegisterResult: Codable, Sendable {
     public let id: String
     public let displayname: String
-    public let reporoot: String
+    public let reporoot: String?
     public let originurl: String?
     public let source: String
     public let agentid: String?
@@ -3069,7 +3069,7 @@ public struct ProjectsRegisterResult: Codable, Sendable {
     public init(
         id: String,
         displayname: String,
-        reporoot: String,
+        reporoot: String? = nil,
         originurl: String? = nil,
         source: String,
         agentid: String? = nil)
