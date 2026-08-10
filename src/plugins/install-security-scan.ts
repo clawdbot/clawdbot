@@ -40,13 +40,6 @@ export type SkillInstallSpecMetadata = {
   targetDir?: string;
 };
 
-/** Package executable metadata used to scope dependency and entrypoint scans. */
-type PackageExecutableScanMetadata = {
-  runtimeExtensions?: readonly string[];
-  runtimeSetupEntry?: string;
-  setupEntry?: string;
-};
-
 /** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
@@ -77,7 +70,6 @@ export async function scanPackageInstallSource(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
-    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -98,7 +90,6 @@ export async function scanInstalledPackageDependencyTree(params: {
   additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";

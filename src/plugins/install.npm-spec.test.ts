@@ -1507,7 +1507,6 @@ describe("installPluginFromNpmSpec", () => {
       omitInstalledIntegrity: true,
       npmRoot,
       expectedDependencySpec: "1.0.0",
-      hoistedDependency: { name: "plain-crypto-js", version: "1.0.0" },
     };
     mockNpmViewAndInstallMany([
       fixture,
@@ -1522,6 +1521,7 @@ describe("installPluginFromNpmSpec", () => {
       throw new Error("expected npm mock implementation");
     }
     let managedInstallAttempts = 0;
+    const outsideDependencyDir = suiteTempRootTracker.makeTempDir();
     runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
       if (
         isManagedNpmInstallCommand(argv) &&
@@ -1533,7 +1533,19 @@ describe("installPluginFromNpmSpec", () => {
           fixture.omitInstalledIntegrity = false;
         }
       }
-      return await delegate(argv, options);
+      const commandResult = await delegate(argv, options);
+      if (
+        managedInstallAttempts === 2 &&
+        isManagedNpmInstallCommand(argv) &&
+        options?.cwd === npmProjectRoot
+      ) {
+        fs.symlinkSync(
+          outsideDependencyDir,
+          path.join(npmProjectRoot, "node_modules", "outside-dependency"),
+          "junction",
+        );
+      }
+      return commandResult;
     });
     let mutatedPeerAfterQuarantine = false;
     const addPeerAfterQuarantine = () => {
@@ -1568,7 +1580,8 @@ describe("installPluginFromNpmSpec", () => {
     if (result.ok) {
       return;
     }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+    expect(result.error).toContain("installed dependency scan found package outside install root");
     expect(managedInstallAttempts).toBe(2);
     expect(mutatedPeerAfterQuarantine).toBe(true);
     const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
@@ -2011,7 +2024,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("blocks npm installs with denied hoisted transitive dependencies", async () => {
+  it("allows npm installs with formerly denied hoisted transitive dependencies", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -2030,14 +2043,7 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error.replaceAll("\\", "/")).toContain(
-        "node_modules/plain-crypto-js/package.json",
-      );
-    }
+    expect(result.ok).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
