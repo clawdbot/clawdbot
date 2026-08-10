@@ -9,8 +9,11 @@ import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doc
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   hasAgentScopeColumn,
+  hasMemoryScopeColumn,
   memoryAgentPredicate,
+  memoryScopePredicate,
   MEMORY_AGENT_ID_COLUMN,
+  MEMORY_SCOPE_COLUMN,
   MEMORY_TABLE_NAME,
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
@@ -282,6 +285,72 @@ export function createMemoryLanceDbStateMigrations(
           return {
             changes: [
               `Deleted ${contaminatedIds.length} Memory LanceDB ${contaminatedIds.length === 1 ? "row" : "rows"} contaminated with legacy envelope metadata`,
+            ],
+            warnings: [],
+          };
+        } finally {
+          opened.table?.close();
+          opened.connection?.close();
+        }
+      },
+    },
+    {
+      id: "memory-lancedb-scope-column",
+      label: "Memory LanceDB scope partitioning",
+      // Adding the scope column mutates a persisted table's schema; gate it
+      // behind explicit `doctor --fix` so startup auto-migration never alters
+      // existing stores without operator intent (the store refuses to open a
+      // scope-less table and points at Doctor instead).
+      doctorOnly: true,
+      async detectLegacyState(params: StateMigrationParams) {
+        const opened = await openMemoryTable({ ...params, pluginRoot });
+        try {
+          if (!opened.table) {
+            return null;
+          }
+          // Detect independently of the agent-scope entry: doctor collects
+          // every plan before applying any, so a released table missing both
+          // columns must surface both plans in one pass (agentId is added
+          // first by array order).
+          if (hasMemoryScopeColumn(await opened.table.schema())) {
+            return null;
+          }
+          const count = await opened.table.countRows();
+          return {
+            preview: [
+              `- Memory LanceDB: add the scope column at ${opened.dbPath} (${count} existing ${count === 1 ? "row stays" : "rows stay"} global)`,
+            ],
+          };
+        } finally {
+          opened.table?.close();
+          opened.connection?.close();
+        }
+      },
+      async migrateLegacyState(params: StateMigrationParams) {
+        const opened = await openMemoryTable({ ...params, pluginRoot });
+        try {
+          if (!opened.table) {
+            return { changes: [], warnings: [] };
+          }
+          if (hasMemoryScopeColumn(await opened.table.schema())) {
+            return { changes: [], warnings: [] };
+          }
+          const rowCount = await opened.table.countRows();
+          await opened.table.addColumns([
+            {
+              name: MEMORY_SCOPE_COLUMN,
+              valueSql: "''",
+            },
+          ]);
+          if (
+            !hasMemoryScopeColumn(await opened.table.schema()) ||
+            (await opened.table.countRows(memoryScopePredicate(""))) !== rowCount
+          ) {
+            throw new Error("LanceDB scope-column migration verification failed");
+          }
+          return {
+            changes: [
+              `Added the Memory LanceDB scope column; ${rowCount} existing ${rowCount === 1 ? "row stays" : "rows stay"} global`,
             ],
             warnings: [],
           };

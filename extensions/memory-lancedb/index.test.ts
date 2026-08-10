@@ -244,7 +244,7 @@ function materializeRegisteredTool(
 }
 
 function createAgentScopedSchemaMock() {
-  return vi.fn(async () => ({ fields: [{ name: "agentId" }] }));
+  return vi.fn(async () => ({ fields: [{ name: "agentId" }, { name: "scope" }] }));
 }
 
 function createAgentScopedVectorQuery(limit: ReturnType<typeof vi.fn>) {
@@ -3642,6 +3642,12 @@ describe("memory plugin e2e", () => {
             vectorSearch,
             countRows: vi.fn(async () => 1),
             delete: deleteRows,
+            // getScopeById path (memoryId fence): query().where().limit(1)
+            // .toArray() resolves the row's scope ("" here — no scope field),
+            // so the fence passes and the delete receipts stay authoritative.
+            query: vi.fn(() => ({
+              where: vi.fn(() => ({ limit: vi.fn(() => ({ toArray })) })),
+            })),
           })),
         })),
       }),
@@ -4682,6 +4688,745 @@ describe("memory plugin e2e", () => {
     expect(
       escapeMemoryForPrompt("Photo [media attached: media://inbound/abc123.jpg] was attached"),
     ).toBe("Photo [media attached: media://inbound/abc123.jpg] was attached");
+  });
+
+  // ---- Scope partitioning regressions ------------------------------------
+  // A scope-filter-aware LanceDB query mock: rows are prefiltered by the
+  // .where() predicate BEFORE the top-K limit, mirroring how LanceDB applies
+  // metadata predicates ahead of vector ranking. Rows carry a `scope` field
+  // ("" = global); the predicate carries `scope = '<slug>'` for a scoped
+  // search and `scope = '' OR scope IS NULL` for a global-only search.
+  function matchesScopeFilter(row: Record<string, unknown>, filter?: string): boolean {
+    if (!filter) {
+      return true;
+    }
+    const rowScope = typeof row.scope === "string" ? row.scope : "";
+    if (rowScope !== "") {
+      return filter.includes(`scope = '${rowScope}'`);
+    }
+    return filter.includes("scope = '' OR scope IS NULL");
+  }
+
+  function createScopeFilteredQuery(rows: Array<Record<string, unknown>>, seenFilters: string[]) {
+    const buildQuery = (filter?: string): Record<string, unknown> => ({
+      where: (f: string) => {
+        seenFilters.push(f);
+        return buildQuery(f);
+      },
+      limit: (n: number) => ({
+        toArray: async () =>
+          rows
+            .filter((row) => matchesScopeFilter(row, filter))
+            .slice(0, n)
+            .map((row) => Object.assign({}, row, { _distance: 0 })),
+      }),
+    });
+    return buildQuery;
+  }
+
+  function scopedRow(
+    id: string,
+    text: string,
+    scope: string,
+    vector: number[] = [0.1],
+  ): Record<string, unknown> {
+    return {
+      id,
+      text,
+      category: "fact",
+      vector,
+      importance: 0.8,
+      createdAt: 0,
+      scope,
+    };
+  }
+
+  function findRegisteredTool(registerTool: ReturnType<typeof vi.fn>, name: string) {
+    const tool = registerTool.mock.calls
+      .map(([toolOrFactory]) => materializeRegisteredTool(toolOrFactory))
+      .find((candidate) => candidate?.name === name);
+    if (!tool) {
+      throw new Error(`expected ${name} tool registration`);
+    }
+    return tool;
+  }
+
+  test("memory_store captures the [SCOPE:<slug>] tag and strips it from the stored text", async () => {
+    // Regression: the scope-tag slug regex must accept hyphens and
+    // underscores ("demo-shop_eu"), an untagged store must stay global
+    // (scope = ""), and the [SCOPE:...] tag must be stripped from both the
+    // embedded input and the persisted text, so the vector reflects the fact
+    // (not the synthetic prefix) and the tag is never echoed back on recall.
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const storeTool = findRegisteredTool(registerTool, "memory_store");
+
+        // Hyphen + underscore slug must be captured verbatim (the regression).
+        const tagged = await storeTool.execute("test-call-scope-hyphen", {
+          text: "[SCOPE:demo-shop_eu] go-live is late December",
+          importance: "0.8",
+          category: "fact",
+        });
+        expect(tagged.details?.action).toBe("created");
+        expect(add).toHaveBeenCalledTimes(1);
+        expect(firstAddedMemory(add).scope).toBe("demo-shop_eu");
+        // The routing tag is stripped from the persisted text and the embedded
+        // input; the vector reflects the fact, not the synthetic prefix.
+        expect(firstAddedMemory(add).text).toBe("go-live is late December");
+        expect(embeddingsCreate).toHaveBeenNthCalledWith(1, {
+          model: "text-embedding-3-small",
+          input: "go-live is late December",
+        });
+
+        // An untagged store stays global (scope = "").
+        add.mockClear();
+        const untagged = await storeTool.execute("test-call-scope-none", {
+          text: "The user prefers concise replies",
+          importance: "0.7",
+          category: "preference",
+        });
+        expect(untagged.details?.action).toBe("created");
+        expect(add).toHaveBeenCalledTimes(1);
+        expect(firstAddedMemory(add).scope).toBe("");
+        expect(firstAddedMemory(add).text).toBe("The user prefers concise replies");
+      },
+    });
+  });
+
+  test("memory_store rejects invalid scope keys and tag-only payloads instead of storing them", async () => {
+    // A punctuated key (for example a raw channel/room id) must be rejected,
+    // not silently stored global — that would leak an intended-scoped memory
+    // into the global partition. A tag with no fact after it (or only
+    // whitespace) must likewise be rejected, or the control tag itself would
+    // be embedded and persisted as a memory.
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const storeTool = findRegisteredTool(registerTool, "memory_store");
+
+        const invalidKey = await storeTool.execute("test-call-invalid-key", {
+          text: "[SCOPE:!ops:example.org] the deployment is at risk",
+          category: "fact",
+        });
+        expect(invalidKey.details?.action).toBe("rejected");
+        expect(invalidKey.details?.reason).toBe("invalid_scope_key");
+
+        const tagOnly = await storeTool.execute("test-call-tag-only", {
+          text: "[SCOPE:alpha]",
+          category: "fact",
+        });
+        expect(tagOnly.details?.action).toBe("rejected");
+        expect(tagOnly.details?.reason).toBe("empty_scoped_text");
+
+        const whitespaceOnly = await storeTool.execute("test-call-tag-whitespace", {
+          text: "[SCOPE:alpha]   ",
+          category: "fact",
+        });
+        expect(whitespaceOnly.details?.action).toBe("rejected");
+        expect(whitespaceOnly.details?.reason).toBe("empty_scoped_text");
+
+        expect(add).not.toHaveBeenCalled();
+        expect(embeddingsCreate).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("dedup is scope-aware: the same fact survives under different scopes", async () => {
+    // Regression: findCleanDuplicateMemory must scope duplicate detection to
+    // the row's scope. A scope-blind dedup would wrongly reject the same fact
+    // stored under [SCOPE:beta] after [SCOPE:alpha], so it could never be
+    // recalled scoped to beta. Same-scope and global-vs-global writes must
+    // still dedup.
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [];
+    const add = vi.fn(async (batch: Array<Record<string, unknown>>) => {
+      rows.push(expectDefined(batch[0], "dedup add batch row"));
+    });
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery(rows, seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => rows.length),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const storeTool = findRegisteredTool(registerTool, "memory_store");
+
+        const fact = "the release deadline is Friday";
+
+        // 1. First scope: nothing to match yet -> stored.
+        const alpha = await storeTool.execute("call-alpha", {
+          text: `[SCOPE:alpha] ${fact}`,
+          category: "fact",
+        });
+        expect(alpha.details?.action).toBe("created");
+
+        // 2. Same fact, DIFFERENT scope: the alpha row is an exact vector match
+        //    but a different scope -> NOT a duplicate -> stored.
+        const beta = await storeTool.execute("call-beta", {
+          text: `[SCOPE:beta] ${fact}`,
+          category: "fact",
+        });
+        expect(beta.details?.action).toBe("created");
+        expect(rows.map((row) => row.scope)).toEqual(["alpha", "beta"]);
+
+        // 3. Same fact, SAME scope -> still deduped (must not break legit dedup).
+        const alphaAgain = await storeTool.execute("call-alpha-2", {
+          text: `[SCOPE:alpha] ${fact}`,
+          category: "fact",
+        });
+        expect(alphaAgain.details?.action).toBe("already_present");
+        expect(rows).toHaveLength(2);
+
+        // 4. Untagged/global writes still dedup against other global rows.
+        const global1 = await storeTool.execute("call-global-1", { text: fact, category: "fact" });
+        expect(global1.details?.action).toBe("created");
+        expect(rows.at(-1)?.scope).toBe("");
+        const global2 = await storeTool.execute("call-global-2", { text: fact, category: "fact" });
+        expect(global2.details?.action).toBe("already_present");
+        expect(rows).toHaveLength(3);
+      },
+    });
+  });
+
+  test("dedup prefilters by scope so a same-scope duplicate is not pushed out by other scopes", async () => {
+    // Regression: findCleanDuplicateMemory prefilters by scope via .where()
+    // BEFORE the top-K limit. Otherwise, when many other-scope rows share a
+    // near-identical vector, the same-scope duplicate can fall outside the top
+    // DUPLICATE_SEARCH_LIMIT neighbors and a duplicate write is wrongly
+    // accepted. Here the alpha duplicate is seeded LAST, behind 6 global rows
+    // (> the limit of 5) with the same vector: only a scope prefilter
+    // surfaces it.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const fact = "the deadline is Friday";
+    const rows: Array<Record<string, unknown>> = [
+      ...Array.from({ length: 6 }, (_unused, i) => scopedRow(`global-${i}`, fact, "")),
+      scopedRow("alpha-dup", fact, "alpha"),
+    ];
+    const add = vi.fn(async () => undefined);
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery(rows, seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => rows.length),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const storeTool = findRegisteredTool(registerTool, "memory_store");
+
+        const result = await storeTool.execute("call-alpha-dup", {
+          text: `[SCOPE:alpha] ${fact}`,
+          category: "fact",
+        });
+        expect(result.details?.action).toBe("already_present");
+        expect(add).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("scoped memory_recall prioritizes the requested scope over many strong global matches", async () => {
+    // Regression: a scoped memory_recall must give the requested scope its own
+    // retrieval budget and return its matches first. A single ANN query over
+    // (scope OR global) with a shared top-K would let the scope's one row fall
+    // outside the candidate window once enough strong global neighbors exist,
+    // so a scoped recall would silently miss rows from the very scope the
+    // caller asked for. Here 20 global rows (> the overfetch of limit + 10 =
+    // 15) share the query vector and the sole alpha row is seeded LAST: only a
+    // separate scoped pass surfaces it.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [
+      ...Array.from({ length: 20 }, (_unused, i) =>
+        scopedRow(`global-${i}`, "a global memory", ""),
+      ),
+      scopedRow("alpha-1", "an alpha-only memory", "alpha"),
+    ];
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery(rows, seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add: vi.fn(async () => undefined),
+          countRows: vi.fn(async () => rows.length),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const recallTool = findRegisteredTool(registerTool, "memory_recall");
+
+        const scoped = await recallTool.execute("call-scoped", {
+          query: "what is happening in alpha",
+          scope: "alpha",
+        });
+        expect(scoped.details?.count).toBe(5);
+        const memories = scoped.details?.memories as Array<{ id: string }>;
+        // The requested scope's row comes FIRST, before global fillers.
+        expect(memories[0]?.id).toBe("alpha-1");
+
+        // An unscoped recall over the same data returns global rows only.
+        const unscoped = await recallTool.execute("call-unscoped", {
+          query: "what is happening in alpha",
+        });
+        const unscopedMemories = unscoped.details?.memories as Array<{ id: string }>;
+        expect(unscopedMemories.every((memory) => memory.id.startsWith("global-"))).toBe(true);
+
+        // A non-slug scope key is rejected rather than canonicalized.
+        const invalid = await recallTool.execute("call-invalid", {
+          query: "anything",
+          scope: "!ops:example.org",
+        });
+        expect(invalid.details?.count).toBe(0);
+        expect(invalid.content?.[0]?.text).toContain("Invalid scope");
+      },
+    });
+  });
+
+  test("memory_forget query deletes only within the requested scope, global-only when unscoped", async () => {
+    // A scoped forget is restricted to that exact scope and an unscoped forget
+    // is global-only: a delete must never nominate or remove a partitioned row
+    // that belongs to another scope.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const globalRow = scopedRow("11111111-1111-4111-8111-111111111111", "the global fact", "");
+    const alphaRow = scopedRow("22222222-2222-4222-8222-222222222222", "the alpha fact", "alpha");
+    const rows = [globalRow, alphaRow];
+    const deletePredicates: string[] = [];
+    const tableDelete = vi.fn(async (predicate: string) => {
+      deletePredicates.push(predicate);
+      return { numDeletedRows: 1 };
+    });
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery(rows, seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add: vi.fn(async () => undefined),
+          countRows: vi.fn(async () => 1),
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const forgetTool = findRegisteredTool(registerTool, "memory_forget");
+
+        // Unscoped: only the global row is nominated (single match > 0.9 ->
+        // auto-delete); the alpha row is untouchable from an unscoped call.
+        const unscoped = await forgetTool.execute("call-forget-global", {
+          query: "the fact",
+        });
+        expect(unscoped.details?.action).toBe("deleted");
+        expect(unscoped.details?.id).toBe(globalRow.id);
+
+        // Scoped: only the alpha row is nominated and deleted.
+        const scoped = await forgetTool.execute("call-forget-alpha", {
+          query: "the fact",
+          scope: "alpha",
+        });
+        expect(scoped.details?.action).toBe("deleted");
+        expect(scoped.details?.id).toBe(alphaRow.id);
+
+        // A non-slug scope key is rejected before any search or delete.
+        const invalid = await forgetTool.execute("call-forget-invalid", {
+          query: "the fact",
+          scope: "not a slug",
+        });
+        expect(invalid.details?.action).toBe("rejected");
+        expect(invalid.details?.reason).toBe("invalid_scope_key");
+      },
+    });
+  });
+
+  test("memory_forget by memoryId is fenced to the row's scope", async () => {
+    // A known id from another partition must not bypass scope isolation: a
+    // scoped row can only be forgotten from within its scope, and an unscoped
+    // forget may only remove global rows.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const alphaId = "33333333-3333-4333-8333-333333333333";
+    const alphaRow = scopedRow(alphaId, "the alpha fact", "alpha");
+    const tableDelete = vi.fn(async () => ({ numDeletedRows: 1 }));
+    // getScopeById path: table.query().where(...).limit(1).toArray().
+    const query = vi.fn(() => ({
+      where: vi.fn(() => ({
+        limit: vi.fn(() => ({
+          toArray: vi.fn(async () => [alphaRow]),
+        })),
+      })),
+    }));
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add: vi.fn(async () => undefined),
+          countRows: vi.fn(async () => 1),
+          delete: tableDelete,
+          query,
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const registerTool = vi.fn();
+        registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { registerTool }));
+        const forgetTool = findRegisteredTool(registerTool, "memory_forget");
+
+        // Unscoped forget of a scoped row: blocked, nothing deleted.
+        const unscoped = await forgetTool.execute("call-id-unscoped", { memoryId: alphaId });
+        expect(unscoped.details?.action).toBe("blocked");
+        expect(unscoped.details?.reason).toBe("scope_mismatch");
+        expect(tableDelete).not.toHaveBeenCalled();
+
+        // Wrong scope: still blocked.
+        const wrongScope = await forgetTool.execute("call-id-wrong-scope", {
+          memoryId: alphaId,
+          scope: "beta",
+        });
+        expect(wrongScope.details?.action).toBe("blocked");
+        expect(tableDelete).not.toHaveBeenCalled();
+
+        // Matching scope: the delete goes through.
+        const matching = await forgetTool.execute("call-id-matching", {
+          memoryId: alphaId,
+          scope: "alpha",
+        });
+        expect(matching.details?.action).toBe("deleted");
+        expect(tableDelete).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("auto-capture parses the scope tag before eligibility and stores the stripped text", async () => {
+    // End-to-end agent_end path: the [SCOPE:...] tag is parsed and stripped
+    // BEFORE the capture heuristics (so the routing prefix never changes
+    // eligibility), an invalid key is skipped rather than stored globally, a
+    // tag-only payload is skipped, and the stored row carries the scope with
+    // the stripped text. Also proves sanitizeForMemoryCapture preserves the
+    // leading [SCOPE:...] tag.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery([], seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const on = vi.fn();
+        registerTestPlugin(
+          memoryPlugin,
+          createMemoryPluginApi(getDbPath(), {
+            pluginConfig: {
+              embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+              dbPath: getDbPath(),
+              autoCapture: true,
+              autoRecall: false,
+            },
+            on,
+          }),
+        );
+        const agentEnd = expectDefined(hookHandler(on, "agent_end"), "agent_end handler");
+
+        await agentEnd(
+          {
+            success: true,
+            messages: [
+              { role: "user", content: "[SCOPE:acme-support] I prefer concise replies" },
+              { role: "user", content: "[SCOPE:!ops:example.org] I prefer verbose replies" },
+              { role: "user", content: "[SCOPE:acme-support]   " },
+            ],
+          },
+          { agentId: "main", sessionKey: "session-1" },
+        );
+
+        // Only the valid tagged message is captured; the invalid key and the
+        // tag-only payload are skipped entirely.
+        expect(add).toHaveBeenCalledTimes(1);
+        expect(firstAddedMemory(add).scope).toBe("acme-support");
+        expect(firstAddedMemory(add).text).toBe("I prefer concise replies");
+        // The embedding sees the stripped text, not the tag.
+        expect(embeddingsCreate).toHaveBeenCalledTimes(1);
+        expect(embeddingsCreate).toHaveBeenNthCalledWith(1, {
+          model: "text-embedding-3-small",
+          input: "I prefer concise replies",
+        });
+      },
+    });
+  });
+
+  test("auto-capture on a pre-scope table skips the scoped capture and keeps the batch going", async () => {
+    // Regression (legacy mode): a scoped store on a pre-scope table throws a
+    // Doctor-directed refusal. Auto-capture must record and skip it per
+    // message — not abort the batch — so later global captures still land and
+    // the cursor advances past the tagged message instead of retrying it on
+    // every agent_end.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery([], seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          // Pre-scope schema: agentId only, no scope column.
+          schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const on = vi.fn();
+        const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+        registerTestPlugin(
+          memoryPlugin,
+          createMemoryPluginApi(getDbPath(), {
+            pluginConfig: {
+              embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+              dbPath: getDbPath(),
+              autoCapture: true,
+              autoRecall: false,
+            },
+            on,
+            logger,
+          }),
+        );
+        const agentEnd = expectDefined(hookHandler(on, "agent_end"), "agent_end handler");
+
+        const event = {
+          success: true,
+          messages: [
+            { role: "user", content: "[SCOPE:acme-support] I prefer concise replies" },
+            { role: "user", content: "remember that the deploy day is Friday" },
+          ],
+        };
+        await agentEnd(event, { agentId: "main", sessionKey: "session-legacy" });
+
+        // The scoped capture is refused by the pre-scope table and skipped;
+        // the later global capture in the same batch still lands, in the
+        // pre-scope row shape (no scope field at all).
+        expect(add).toHaveBeenCalledTimes(1);
+        const storedRow = firstAddedMemory(add);
+        expect(storedRow.text).toBe("remember that the deploy day is Friday");
+        expect("scope" in storedRow).toBe(false);
+        expect(
+          logger.warn.mock.calls.some((call) =>
+            String(call[0]).includes("skipped a scoped auto-capture"),
+          ),
+        ).toBe(true);
+
+        // The cursor advanced past the refused message: replaying the same
+        // session does not retry it.
+        await agentEnd(event, { agentId: "main", sessionKey: "session-legacy" });
+        expect(add).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("auto-recall injects only global memories", async () => {
+    // The before_prompt_build hook has no active-scope signal, so it must
+    // search with the global-only predicate: a scoped memory is never
+    // auto-injected into an unrelated turn.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows = [
+      scopedRow("global-1", "the user prefers dark mode", ""),
+      scopedRow("alpha-1", "an alpha-scoped secret", "alpha"),
+    ];
+    const seenFilters: string[] = [];
+    const buildQuery = createScopeFilteredQuery(rows, seenFilters);
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add: vi.fn(async () => undefined),
+          countRows: vi.fn(async () => rows.length),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async () => {
+        const on = vi.fn();
+        registerTestPlugin(
+          memoryPlugin,
+          createMemoryPluginApi(getDbPath(), {
+            pluginConfig: {
+              embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+              dbPath: getDbPath(),
+              autoCapture: false,
+              autoRecall: true,
+            },
+            on,
+          }),
+        );
+        const beforePrompt = expectDefined(
+          hookHandler(on, "before_prompt_build"),
+          "before_prompt_build handler",
+        );
+
+        const result = (await beforePrompt(
+          { prompt: "what are the user's preferences" },
+          { agentId: "main" },
+        )) as { prependContext?: string } | undefined;
+
+        // Only the global row is injected; the scoped row never appears.
+        expect(result?.prependContext).toContain("the user prefers dark mode");
+        expect(result?.prependContext).not.toContain("an alpha-scoped secret");
+        // The search predicate itself was global-only.
+        expect(seenFilters.length).toBeGreaterThan(0);
+        expect(seenFilters.every((filter) => filter.includes("scope = '' OR scope IS NULL"))).toBe(
+          true,
+        );
+      },
+    });
   });
 });
 

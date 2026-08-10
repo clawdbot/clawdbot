@@ -36,16 +36,27 @@ import {
   type AutoCaptureCursor,
   cleanMemorySearchResults,
   detectCategory,
+  extractCapturableScopedText,
   extractLatestUserText,
   extractUserTextContent,
+  fenceScopedDelete,
   findCleanDuplicateMemory,
+  FORGET_SCOPE_PARAM_DESCRIPTION,
   formatRecalledMemoryForModel,
   formatRelevantMemoriesContext,
+  incognitoStoreRejection,
   looksLikePromptInjection,
+  memoryDeleteFailureResult,
+  memoryStoreTooLongResult,
   messageFingerprint,
   normalizeRecallQuery,
+  promptInjectionStoreRejection,
+  RECALL_SCOPE_PARAM_DESCRIPTION,
   resolveAutoCaptureStartIndex,
-  shouldCapture,
+  resolveScopedStoreText,
+  resolveScopeParam,
+  searchWithScopePriority,
+  storeCapturedMemory,
 } from "./memory-policy.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
@@ -81,22 +92,6 @@ export {
   normalizeRecallQuery,
   shouldCapture,
 } from "./memory-policy.js";
-
-function memoryDeleteFailureResult(id: string) {
-  const error = `Memory ${id} was not deleted because it was not found.`;
-  return {
-    content: [{ type: "text" as const, text: error }],
-    details: { action: "not_found", status: "error", error, id },
-  };
-}
-
-function memoryStoreTooLongResult(maxChars: number) {
-  const text = `Memory was not stored because it exceeds the configured ${maxChars}-character limit. Shorten it and retry.`;
-  return {
-    content: [{ type: "text" as const, text }],
-    details: { action: "rejected", maxChars, reason: "text_too_long", status: "blocked" },
-  };
-}
 
 export default definePluginEntry({
   id: "memory-lancedb",
@@ -245,6 +240,7 @@ export default definePluginEntry({
           parameters: Type.Object({
             query: Type.String({ description: "Search query" }),
             limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
+            scope: Type.Optional(Type.String({ description: RECALL_SCOPE_PARAM_DESCRIPTION })),
           }),
           async execute(_toolCallId, params) {
             // Tool definitions outlive hot config reloads; revalidate before memory I/O.
@@ -252,6 +248,11 @@ export default definePluginEntry({
             const rawParams = params as Record<string, unknown>;
             const query = rawParams.query as string;
             const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
+            const scopeArg = resolveScopeParam(rawParams.scope, { count: 0 });
+            if ("rejection" in scopeArg) {
+              return scopeArg.rejection;
+            }
+            const scope = scopeArg.scope;
 
             const currentCfg = resolveCurrentHookConfig();
             const recallMaxChars = currentCfg.recallMaxChars;
@@ -277,13 +278,12 @@ export default definePluginEntry({
                     throw new MemoryRecallEmbeddingError(error);
                   }
                   recallPhase = "search";
-                  return await db.search(
-                    agentId,
-                    vector,
-                    limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA,
-                    0.1,
-                    { timeoutMs: Math.max(0, deadlineAtMs - Date.now()) },
-                  );
+                  // Scope retrieval policy (global-only when unscoped, scoped
+                  // pass first otherwise) lives in memory-policy.ts.
+                  const overfetch = limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA;
+                  return await searchWithScopePriority(db, agentId, vector, overfetch, scope, {
+                    timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
+                  });
                 },
               });
             } catch (error) {
@@ -362,7 +362,7 @@ export default definePluginEntry({
           name: "memory_store",
           label: "Memory Store",
           description:
-            "Save important information in long-term memory. Text over the configured capture limit is rejected. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
+            "Save important information in long-term memory. Text over the configured capture limit is rejected. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall. Prefix the text with [SCOPE:<slug>] to partition a memory to a scope (slug = [A-Za-z0-9_-]+); an invalid scope tag is rejected.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
             importance: optionalFiniteNumberSchema({
@@ -376,21 +376,9 @@ export default definePluginEntry({
             assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
             const currentCfg = resolveCurrentHookConfig();
             if (isIncognitoSessionKey(ctx.sessionKey)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Memory was not stored because this is an incognito session.",
-                  },
-                ],
-                details: {
-                  action: "rejected",
-                  reason: "incognito_session",
-                  status: "blocked",
-                },
-              };
+              return incognitoStoreRejection();
             }
-            const { text, category = "other" } = params as {
+            const { text: rawText, category = "other" } = params as {
               text: string;
               category?: MemoryEntry["category"];
             };
@@ -400,30 +388,28 @@ export default definePluginEntry({
                 max: 1,
               }) ?? 0.7;
 
+            if (looksLikePromptInjection(rawText)) {
+              return promptInjectionStoreRejection();
+            }
+
+            // The [SCOPE:...] tag is a routing prefix, not part of the fact:
+            // resolveScopedStoreText validates and strips it (or rejects the
+            // payload) so the embedding reflects the content, never the
+            // synthetic prefix. The capture limit applies to the stored text,
+            // so the tag never pushes an otherwise-valid fact over it.
+            const parsed = resolveScopedStoreText(rawText);
+            if ("rejection" in parsed) {
+              return parsed.rejection;
+            }
+            const { scope, text } = parsed;
             const captureMaxChars = currentCfg.captureMaxChars;
             if (text.length > captureMaxChars) {
               return memoryStoreTooLongResult(captureMaxChars);
             }
 
-            if (looksLikePromptInjection(text)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Memory was not stored because it looks like prompt instructions rather than a durable user fact, preference, or decision.",
-                  },
-                ],
-                details: {
-                  action: "rejected",
-                  reason: "prompt_injection_detected",
-                  status: "blocked",
-                },
-              };
-            }
-
             const vector = await embeddings.embed(agentId, text, currentCfg.embedding);
 
-            const existing = await findCleanDuplicateMemory(db, agentId, vector, text);
+            const existing = await findCleanDuplicateMemory(db, agentId, vector, scope, text);
             if (existing) {
               return {
                 content: [
@@ -445,6 +431,7 @@ export default definePluginEntry({
               vector,
               importance,
               category,
+              scope,
             });
 
             return {
@@ -473,14 +460,28 @@ export default definePluginEntry({
           parameters: Type.Object({
             query: Type.Optional(Type.String({ description: "Search to find memory" })),
             memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
+            scope: Type.Optional(Type.String({ description: FORGET_SCOPE_PARAM_DESCRIPTION })),
           }),
           async execute(_toolCallId, params) {
             assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
-            const { query, memoryId } = params as { query?: string; memoryId?: string };
+            type ForgetParams = { query?: string; memoryId?: string; scope?: string };
+            const { query, memoryId, scope: scopeParam } = params as ForgetParams;
+
+            const scopeArg = resolveScopeParam(scopeParam);
+            if ("rejection" in scopeArg) {
+              return scopeArg.rejection;
+            }
+            const { scope, scopeProvided } = scopeArg;
 
             if (memoryId) {
-              const deleted = await db.delete(agentId, memoryId);
-              if (!deleted) {
+              // Scope fence: a scoped row can only be forgotten from within its
+              // scope; an unscoped forget (no scope arg) may only remove global
+              // rows. Prevents deleting another partition's row via a known id.
+              const fence = await fenceScopedDelete(db, agentId, memoryId, scope, scopeProvided);
+              if ("rejection" in fence) {
+                return fence.rejection;
+              }
+              if (!fence.deleted) {
                 return memoryDeleteFailureResult(memoryId);
               }
               return {
@@ -497,7 +498,11 @@ export default definePluginEntry({
                 normalizeRecallQuery(query, recallMaxChars),
                 currentCfg.embedding,
               );
-              const results = await db.search(agentId, vector, 5, 0.7);
+              // A scoped forget is restricted to that exact scope: a delete
+              // must never reach global or other scopes. An unscoped forget is
+              // global-only for the same reason — it must never nominate or
+              // delete a partitioned row that belongs to another scope.
+              const results = await db.search(agentId, vector, 5, 0.7, undefined, scope);
 
               if (results.length === 0) {
                 return {
@@ -608,9 +613,19 @@ export default definePluginEntry({
             recallPhase = "search";
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
-              timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
-            });
+            // The before-prompt hook has no active-scope signal, so it injects
+            // only global/untagged memories. Partitioned rows are never
+            // auto-recalled into an unrelated session; scope-aware
+            // auto-injection is left for a later change that can derive the
+            // active scope here.
+            return await db.search(
+              agentId,
+              vector,
+              DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT,
+              0.3,
+              { timeoutMs: Math.max(0, deadlineAtMs - Date.now()) },
+              "",
+            );
           },
         });
         if (recall.status === "timeout") {
@@ -685,37 +700,44 @@ export default definePluginEntry({
 
           try {
             for (const text of extractUserTextContent(message)) {
-              // Sanitize envelope metadata before checking and storing
+              // Sanitize envelope metadata before checking and storing, then
+              // strip the [SCOPE:...] tag ahead of the capture heuristics
+              // (tag-independent eligibility; invalid keys skipped, never
+              // stored globally — see extractCapturableScopedText).
               const sanitized = sanitizeForMemoryCapture(text);
-              if (
-                !sanitized ||
-                !shouldCapture(sanitized, {
-                  customTriggers: currentCfg.customTriggers,
-                  maxChars: currentCfg.captureMaxChars,
-                })
-              ) {
+              const capturable = extractCapturableScopedText(sanitized ?? "", {
+                customTriggers: currentCfg.customTriggers,
+                maxChars: currentCfg.captureMaxChars,
+              });
+              if (!capturable) {
                 continue;
               }
               capturableSeen++;
               if (capturableSeen > 3) {
                 continue;
               }
+              const category = detectCategory(capturable.text);
+              const vector = await embeddings.embed(agentId, capturable.text, currentCfg.embedding);
 
-              const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(agentId, sanitized, currentCfg.embedding);
-
-              const existing = await findCleanDuplicateMemory(db, agentId, vector);
+              const existing = await findCleanDuplicateMemory(
+                db,
+                agentId,
+                vector,
+                capturable.scope,
+              );
               if (existing) {
                 continue;
               }
 
-              await db.store(agentId, {
-                text: sanitized,
-                vector,
-                importance: 0.7,
-                category,
-              });
-              stored++;
+              // false = scoped capture refused on a pre-scope table (expected,
+              // Doctor-directed): record the skip and keep walking the batch.
+              if (await storeCapturedMemory(db, agentId, vector, capturable, category)) {
+                stored++;
+              } else {
+                api.logger.warn(
+                  "memory-lancedb: skipped a scoped auto-capture on a pre-scope table (doctor --fix enables partitions)",
+                );
+              }
             }
             messageProcessed = true;
           } finally {
