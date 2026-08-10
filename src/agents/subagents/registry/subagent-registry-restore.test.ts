@@ -60,7 +60,9 @@ describe("createSubagentRegistryRestorer", () => {
     restorer.restoreOnce();
 
     expect(runs.get(run.runId)).toBe(run);
-    expect(persist).not.toHaveBeenCalled();
+    // Current restore policy arms terminal delete-mode retention before the
+    // sweeper takes over the deferred cleanup owner.
+    expect(persist).toHaveBeenCalledOnce();
     expect(ensureListener).toHaveBeenCalledOnce();
     expect(startSweeper).toHaveBeenCalledOnce();
   });
