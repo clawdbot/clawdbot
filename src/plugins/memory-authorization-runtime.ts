@@ -1,4 +1,8 @@
 import {
+  runMemoryAuthorizationConformanceSuite,
+  type MemoryAuthorizationConformanceAdapter,
+} from "../memory-host-sdk/host/authorization-conformance.js";
+import {
   MEMORY_AUTHORIZATION_CAPABILITY_NAMES,
   isMemoryAuthorizationCapabilities,
   listMissingMemoryAuthorizationCapabilities,
@@ -18,6 +22,20 @@ const AUTHORIZED_MEMORY_RUNTIME_METHODS = [
 ] as const satisfies readonly (keyof AuthorizedMemoryRuntime)[];
 
 type AuthorizedMemoryRuntimeMethodName = (typeof AUTHORIZED_MEMORY_RUNTIME_METHODS)[number];
+
+const AUTHORIZED_MEMORY_READ_METHODS = ["authorize", "searchAuthorized", "readAuthorized"] as const;
+const AUTHORIZED_MEMORY_READ_CAPABILITIES = [
+  "scopedCandidates",
+  "exactReadByAuthorizedHandle",
+] as const satisfies readonly MemoryAuthorizationCapabilityName[];
+
+export type AdmittedAuthorizedMemoryReadRuntime = Readonly<
+  Pick<AuthorizedMemoryRuntime, (typeof AUTHORIZED_MEMORY_READ_METHODS)[number]>
+>;
+
+export type MemoryAuthorizationReadAdmission =
+  | Readonly<{ ok: true; runtime: AdmittedAuthorizedMemoryReadRuntime }>
+  | Readonly<{ ok: false; reasonCode: "backend-nonconforming" }>;
 
 type MemoryAuthorizationCapabilityInspection = Readonly<{
   version: 1;
@@ -155,5 +173,71 @@ export function inspectMemoryAuthorizationCapability(
     missingMethods,
     surfaceComplete,
     reasonCode: surfaceComplete ? "surface-complete" : "backend-nonconforming",
+  });
+}
+
+function isConformanceAdapter(value: unknown): value is MemoryAuthorizationConformanceAdapter {
+  const evaluate = readCallable(value, "evaluate");
+  const prefilter = readCallable(value, "prefilter");
+  return (
+    isObjectReference(value) && typeof evaluate === "function" && typeof prefilter === "function"
+  );
+}
+
+function readCallable(value: unknown, key: string): ((...args: never[]) => unknown) | undefined {
+  const property = readDataProperty(value, key);
+  return property.kind === "data" && typeof property.value === "function"
+    ? (property.value as (...args: never[]) => unknown)
+    : undefined;
+}
+
+/**
+ * Enforced callers use this admission result directly. A failed alternate has no legacy runtime
+ * in the result, so it cannot silently broaden a scoped read through the old search manager.
+ */
+export async function admitMemoryAuthorizationReadRuntime(
+  capability: unknown,
+): Promise<MemoryAuthorizationReadAdmission> {
+  const authorization = readDataProperty(capability, "authorization");
+  const runtime = readDataProperty(capability, "runtime");
+  const conformance = readDataProperty(capability, "authorizationConformance");
+  const authorizationCapabilities =
+    authorization.kind === "data" && isMemoryAuthorizationCapabilities(authorization.value)
+      ? authorization.value
+      : undefined;
+  if (
+    runtime.kind !== "data" ||
+    conformance.kind !== "data" ||
+    !authorizationCapabilities ||
+    AUTHORIZED_MEMORY_READ_CAPABILITIES.some((name) => !authorizationCapabilities[name]) ||
+    !isConformanceAdapter(conformance.value)
+  ) {
+    return Object.freeze({ ok: false, reasonCode: "backend-nonconforming" });
+  }
+  const authorize = readCallable(runtime.value, "authorize");
+  const searchAuthorized = readCallable(runtime.value, "searchAuthorized");
+  const readAuthorized = readCallable(runtime.value, "readAuthorized");
+  if (!authorize || !searchAuthorized || !readAuthorized) {
+    return Object.freeze({ ok: false, reasonCode: "backend-nonconforming" });
+  }
+  try {
+    const report = await runMemoryAuthorizationConformanceSuite(conformance.value);
+    if (!report.ok) {
+      return Object.freeze({ ok: false, reasonCode: "backend-nonconforming" });
+    }
+  } catch {
+    return Object.freeze({ ok: false, reasonCode: "backend-nonconforming" });
+  }
+  return Object.freeze({
+    ok: true,
+    runtime: Object.freeze({
+      authorize: (authorize as AuthorizedMemoryRuntime["authorize"]).bind(runtime.value),
+      searchAuthorized: (searchAuthorized as AuthorizedMemoryRuntime["searchAuthorized"]).bind(
+        runtime.value,
+      ),
+      readAuthorized: (readAuthorized as AuthorizedMemoryRuntime["readAuthorized"]).bind(
+        runtime.value,
+      ),
+    }),
   });
 }

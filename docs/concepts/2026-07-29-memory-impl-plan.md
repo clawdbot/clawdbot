@@ -791,22 +791,22 @@ groups. Add any lazily ensured columns to `allowedMissingColumns`.
 
 Phase 1B is complete only when all of the following are demonstrated:
 
-- [ ] Builtin memory passes the full authorized-backend conformance suite for
+- [x] Builtin memory passes the full authorized-backend conformance suite for
       store isolation, immutable revisions, policy evaluation, search, and
       exact reads.
-- [ ] Pending, quarantined, expired, stale-hash, and tombstoned revisions cannot
+- [x] Pending, quarantined, expired, stale-hash, and tombstoned revisions cannot
       be returned.
-- [ ] Scoped resources and chunks never enter legacy
+- [x] Scoped resources and chunks never enter legacy
       `memory_index_sources`/`memory_index_chunks` or legacy FTS/vector tables.
-- [ ] Every additive per-agent table, column, and trigger group is registered
+- [x] Every additive per-agent table, column, and trigger group is registered
       in schema compatibility so an existing current-version database opens
       before feature-local lazy ensure.
-- [ ] A nonconforming or failed alternate backend becomes unavailable in
+- [x] A nonconforming or failed alternate backend becomes unavailable in
       enforced mode and never falls back to broader legacy search.
-- [ ] Doctor dry-run produces a deterministic, content-redacted classification,
+- [x] Doctor dry-run produces a deterministic, content-redacted classification,
       backup, copy, reindex, verification, and cutover plan without modifying
       files or database state.
-- [ ] Legacy single-user agents remain on the existing runtime path with no
+- [x] Legacy single-user agents remain on the existing runtime path with no
       user-visible behavior change or runtime cutover.
 
 ### Phase 1B rollback

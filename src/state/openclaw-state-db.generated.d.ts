@@ -886,6 +886,50 @@ export interface MeetingTranscriptUtterances {
   utterance_id: string | null;
 }
 
+export interface MemoryIdentityBindings {
+  account_id: string;
+  adapter_id: string;
+  assurance: string;
+  binding_id: string;
+  channel: string;
+  created_at: number;
+  created_by_profile_id: string;
+  evidence_revision: string;
+  expires_at: number | null;
+  principal_id: string;
+  revision: string;
+  revoked_at: number | null;
+  sender_lookup_hmac: string;
+  verification_method: string;
+}
+
+export interface MemoryPairingIdentityReceipts {
+  account_id: string;
+  adapter_id: string;
+  assurance: string;
+  binding_id: string | null;
+  channel: string;
+  consumed_at: number | null;
+  created_at: number;
+  evidence_revision: string;
+  expires_at: number;
+  receipt_id: string;
+  request_identity_hmac: string;
+  sender_lookup_hmac: string;
+  verification_method: string;
+}
+
+export interface MemoryPrincipals {
+  created_at: number;
+  principal_id: string;
+  principal_kind: string;
+  principal_lookup_hmac: string | null;
+  revision: string;
+  revoked_at: number | null;
+  state: string;
+  user_profile_id: string | null;
+}
+
 export interface MigrationRuns {
   finished_at: number | null;
   id: string;
@@ -1757,6 +1801,9 @@ export interface DB {
   meeting_transcript_sessions: MeetingTranscriptSessions;
   meeting_transcript_summaries: MeetingTranscriptSummaries;
   meeting_transcript_utterances: MeetingTranscriptUtterances;
+  memory_identity_bindings: MemoryIdentityBindings;
+  memory_pairing_identity_receipts: MemoryPairingIdentityReceipts;
+  memory_principals: MemoryPrincipals;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;

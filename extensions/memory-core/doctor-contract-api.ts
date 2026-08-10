@@ -6,6 +6,7 @@ import {
   qmdLocksStateMigration,
   qmdWorkspaceStateMigration,
 } from "./src/migration/doctor-memory-sidecar.js";
+import { scopedMemoryMigrationPreview } from "./src/migration/doctor-scoped-memory-preview.js";
 import { vectorIndexProviderDiagnostic } from "./src/migration/doctor-vector-index-provider.js";
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -15,4 +16,5 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   qmdWorkspaceStateMigration,
   qmdLocksStateMigration,
   vectorIndexProviderDiagnostic,
+  scopedMemoryMigrationPreview,
 ];

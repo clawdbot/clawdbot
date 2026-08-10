@@ -19,6 +19,7 @@ export {
   isAcpSessionKey,
   isIncognitoSessionKey,
   isSubagentSessionKey,
+  isValidAgentId,
   normalizeAccountId,
   normalizeAgentId,
   normalizeMainKey,
