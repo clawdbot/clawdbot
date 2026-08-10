@@ -182,7 +182,12 @@ function makeAttemptForFault(
       terminal: {
         kind: "failed",
         source: "prompt",
-        error: Object.assign(new Error("500 Internal Server Error"), { status: 500 }),
+        error: Object.assign(
+          new Error(
+            '500 Internal Server Error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."}}',
+          ),
+          { status: 500 },
+        ),
       },
     });
   }
@@ -371,7 +376,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       expect(outcome.model).toBe("mock-3");
       expect(outcome.attempts).toMatchObject([
         { provider: "openai", model: "mock-1", reason: expect.stringMatching(/^auth/) },
-        // FIXED(refactor-02): the prompt-stage HTTP 500 keeps its concrete server-error reason.
+        // FIXED(refactor-02): shared message evidence keeps the concrete server-error reason.
         { provider: "groq", model: "mock-2", reason: "server_error" },
       ]);
       expect(outcome.result.payloads?.[0]?.text).toContain("fallback chain ok");
@@ -471,7 +476,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         ["groq", "mock-2", "groq:p1"],
         ["groq", "mock-3", "groq:p1"],
       ]);
-      // FIXED(refactor-02): the concrete prompt reason propagates through exhaustion prose and attempts.
+      // FIXED(refactor-02): the shared concrete reason propagates through exhaustion prose and attempts.
       expect(error.message).toMatch(/^All models failed \(3\): /);
       expect(error.message).toMatch(
         /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(server_error\) \| groq\/mock-3: .* \(billing\)/,
