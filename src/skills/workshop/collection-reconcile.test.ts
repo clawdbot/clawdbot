@@ -169,6 +169,44 @@ describe("skill collection reconciliation", () => {
     ).rejects.toThrow("Skill changed after it was read: second");
   });
 
+  it("preserves a concurrent skill-tree edit made before mutation", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Procedure", body: "# Original\n" },
+    ]);
+    const skillDir = path.join(workspaceDir, "skills", "procedure");
+    const supportFile = path.join(skillDir, "references", "live.md");
+    await fs.mkdir(path.dirname(supportFile), { recursive: true });
+    await fs.writeFile(supportFile, "Before\n", "utf8");
+    const readSkillHashes = await readCollectionHashes();
+    const copy = fs.cp.bind(fs);
+    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      await copy(source, destination, options);
+      await fs.appendFile(supportFile, "External edit\n", "utf8");
+    });
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        readSkillHashes,
+        plan: [
+          {
+            action: "write",
+            name: "procedure",
+            description: "Rewritten procedure",
+            content: "# Rewritten\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Skill tree changed before collection mutation: procedure");
+    copySpy.mockRestore();
+
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "# Original",
+    );
+    await expect(fs.readFile(supportFile, "utf8")).resolves.toContain("External edit");
+  });
+
   it("waits behind the same collection commit lock used by proposal apply", async () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "obsolete", description: "Obsolete procedure" },

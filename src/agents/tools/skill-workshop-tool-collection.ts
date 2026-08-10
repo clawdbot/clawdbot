@@ -49,7 +49,6 @@ export async function executeSkillCollectionReconcile(params: {
     readSkillHashes: params.readSkillHashes,
     config: params.config,
     agentId: params.agentId,
-    agentIds: params.context?.agentIds,
     env: params.env,
   });
   if (params.context) {

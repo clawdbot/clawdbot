@@ -22,7 +22,6 @@ import {
 } from "./collection-reconcile.js";
 import {
   isSkillCollectionReviewDue,
-  recordSkillCollectionReviewSuccess,
   withSkillCollectionReviewClaim,
 } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -61,14 +60,12 @@ export function startSkillCollectionMaintenance(options: {
 
 export async function runSkillCollectionReview(params: {
   agentId: string;
-  agentIds?: readonly string[];
   config: OpenClawConfig;
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionReconcileResult | null> {
   const skills = listWritableSkillCollection(params.workspaceDir, {
     agentId: params.agentId,
-    agentIds: params.agentIds,
     config: params.config,
   });
   if (skills.length === 0) {
@@ -91,7 +88,6 @@ export async function runSkillCollectionReview(params: {
   const sessionId = randomUUID();
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const collectionReconcile: SkillCollectionReconcileContext = {
-    agentIds: [...(params.agentIds ?? [params.agentId])],
     approvedSkillNames: new Set(skills.map((skill) => skill.name)),
   };
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
@@ -166,23 +162,11 @@ export async function runScheduledSkillCollectionReviews(params: {
           if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
             return;
           }
-          const reviewModels = agentIds.map((id) =>
-            resolveCollectionReviewModel(params.config, id),
-          );
-          const reviewModel = reviewModels[0]!;
-          if (
-            reviewModels.some(
-              (candidate) =>
-                candidate.provider !== reviewModel.provider ||
-                candidate.model !== reviewModel.model ||
-                candidate.authProfileId !== reviewModel.authProfileId,
-            )
-          ) {
-            throw new Error("Shared workspace agents use different collection-review identities.");
+          if (agentIds.length !== 1) {
+            throw new Error("Shared workspaces are not eligible for automatic skill cleanup.");
           }
           await runWithGatewayIndependentRootWorkAdmission(async () => {
-            await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
-            recordSkillCollectionReviewSuccess(workspaceDir, Date.now(), stateOptions);
+            await runSkillCollectionReview({ ...params, agentId, workspaceDir });
           });
         },
         stateOptions,

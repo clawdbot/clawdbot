@@ -214,9 +214,8 @@ the additional run.
 Daily collection review also uses the configured agent model. It receives the
 names and descriptions of eligible writable workspace skills, then reads each
 complete skill before making one atomic collection change. Disabled and
-agent-filtered skills stay untouched; shared workspaces use the union of each
-agent's allowed skills. Shared workspaces with different configured models or
-auth profiles are skipped to keep skill text within its model-account boundary.
+agent-filtered skills stay untouched. Shared workspaces are skipped; assign each
+agent a distinct workspace to enable automatic cleanup.
 It has no message tool or general agent tools. Skill bodies are treated as
 untrusted evidence, not as instructions. A persisted per-workspace success time
 prevents Gateway restarts from repeating the review within 24 hours. The

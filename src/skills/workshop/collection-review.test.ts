@@ -201,7 +201,7 @@ describe("skill collection review", () => {
     ]);
   });
 
-  it("does not dispatch a second review after a gateway-style restart", async () => {
+  it("does not dispatch a second review when the runner fails after reconciliation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-collection-review-restart-");
     await writeWorkspaceSkills(workspaceDir, [
       { name: "useful", description: "Useful reusable procedure" },
@@ -219,46 +219,28 @@ describe("skill collection review", () => {
         action: "reconcile",
         collection: [{ action: "keep", name: "useful" }],
       });
-      return {};
+      throw new Error("runner crashed after reconciliation");
     });
     const config = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
       skills: { workshop: { autonomous: { mode: "auto" as const } } },
     };
 
-    await runScheduledSkillCollectionReviews({ config, env: testState.env });
-    await runScheduledSkillCollectionReviews({ config, env: testState.env });
+    const onError = vi.fn();
+    await runScheduledSkillCollectionReviews({ config, env: testState.env, onError });
+    await runScheduledSkillCollectionReviews({ config, env: testState.env, onError });
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledOnce();
   });
 
-  it("reviews the union of disjoint agent filters in a shared workspace", async () => {
+  it("skips automatic cleanup when agents share a workspace", async () => {
     const workspaceDir = await tempDirs.make("openclaw-collection-review-shared-");
     await writeWorkspaceSkills(workspaceDir, [
       { name: "alpha", description: "Alpha procedure" },
       { name: "beta", description: "Beta procedure" },
     ]);
-    runEmbeddedAgent.mockImplementation(async (params) => {
-      expect(params.prompt).toContain("alpha");
-      expect(params.prompt).toContain("beta");
-      const tool = createSkillWorkshopTool({
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        agentId: params.agentId,
-        env: params.skillWorkshopProposalEnv,
-        collectionReconcile: params.skillWorkshopCollectionReconcile,
-      });
-      await tool.execute("read-alpha", { action: "read", skill_name: "alpha" });
-      await tool.execute("read-beta", { action: "read", skill_name: "beta" });
-      await tool.execute("reconcile", {
-        action: "reconcile",
-        collection: [
-          { action: "keep", name: "alpha" },
-          { action: "keep", name: "beta" },
-        ],
-      });
-      return {};
-    });
+    const onError = vi.fn();
 
     await runScheduledSkillCollectionReviews({
       config: {
@@ -271,46 +253,10 @@ describe("skill collection review", () => {
         skills: { workshop: { autonomous: { mode: "auto" } } },
       },
       env: testState.env,
-    });
-
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips a shared workspace whose agents use different review models", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-collection-review-provider-boundary-");
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "alpha", description: "Alpha procedure" },
-      { name: "beta", description: "Beta procedure" },
-    ]);
-    const onError = vi.fn();
-
-    await runScheduledSkillCollectionReviews({
-      config: {
-        agents: {
-          list: [
-            {
-              id: "alpha-agent",
-              default: true,
-              workspace: workspaceDir,
-              skills: ["alpha"],
-              model: "openai/gpt-5.5@openai:alpha",
-            },
-            {
-              id: "beta-agent",
-              workspace: workspaceDir,
-              skills: ["beta"],
-              model: "openai/gpt-5.5@openai:beta",
-            },
-          ],
-        },
-        skills: { workshop: { autonomous: { mode: "auto" } } },
-      },
-      env: testState.env,
       onError,
     });
 
-    expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review identities");
+    expect(String(onError.mock.calls[0]?.[0])).toContain("Shared workspaces are not eligible");
     expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
