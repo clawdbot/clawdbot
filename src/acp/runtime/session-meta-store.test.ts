@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -46,8 +45,15 @@ describe("ACP session metadata store ownership", () => {
     expect(mocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
-  it("reads a retained owner's store for a bare key", () => {
-    const cfg = retainLegacyDefaultAgentId(explicitFleet(), "ops");
+  it("reads a persisted fixed-store owner's store after restart", () => {
+    const cfg = {
+      ...explicitFleet(),
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ...explicitFleet().agents,
+        defaults: { sessionStore: { agentId: "ops" } },
+      },
+    } satisfies OpenClawConfig;
     mocks.loadExactSessionEntryReadOnly.mockReturnValue({
       entry: { sessionId: "ops-session" },
     });
@@ -62,6 +68,23 @@ describe("ACP session metadata store ownership", () => {
     expect(mocks.loadExactSessionEntryReadOnly).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "ops", storePath: "/stores/ops.json" }),
     );
+  });
+
+  it("does not read a bare key when the persisted fixed-store owner is retired", () => {
+    const cfg = {
+      ...explicitFleet(),
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ...explicitFleet().agents,
+        defaults: { sessionStore: { agentId: "retired" } },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = readSessionEntryFromStore({ cfg, sessionKey: "global" });
+
+    expect(result).toMatchObject({ storeSessionKey: "global" });
+    expect(result.storePath).toBeUndefined();
+    expect(mocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
   it("rejects a supplied agent that conflicts with an agent-qualified key", () => {

@@ -8,6 +8,7 @@ import {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntryReadOnly,
 } from "../../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -75,18 +76,26 @@ export function resolveSessionStorePathForAcp(params: {
       `Agent id "${requestedAgentId}" does not match session key agent "${parsedAgentId}".`,
     );
   }
-  const agentId =
-    requestedAgentId ??
-    parsedAgentId ??
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(cfg);
+  const agentId = requestedAgentId ?? parsedAgentId;
+  if (!agentId && persistedStoreOwner.kind === "retired") {
+    return { cfg };
+  }
+  const resolvedAgentId =
+    agentId ??
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
     tryResolveSoleAgentId(cfg) ??
     tryResolveLegacyCompatibilityAgentId(cfg);
-  if (!agentId) {
+  if (!resolvedAgentId) {
     return { cfg };
   }
   return {
     cfg,
-    agentId,
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env: params.env }),
+    agentId: resolvedAgentId,
+    storePath: resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: resolvedAgentId,
+      env: params.env,
+    }),
   };
 }
 

@@ -52,12 +52,14 @@ describe("ACP session metadata SQLite store", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("persists bare global metadata only with an explicit fleet owner", async () => {
+  it("persists bare global metadata under a configured fixed-store owner", async () => {
     await withTempDir({ prefix: "openclaw-acp-global-owner-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
       const cfg = {
-        session: { scope: "global", store: path.join(dir, "sessions-{agentId}.json") },
+        session: { scope: "global", store: storePath },
         agents: {
           ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
           entries: { ops: {}, research: {} },
         },
       } satisfies OpenClawConfig;
@@ -65,7 +67,7 @@ describe("ACP session metadata SQLite store", () => {
       await replaceSessionEntry(
         {
           agentId: "ops",
-          storePath: path.join(dir, "sessions-ops.json"),
+          storePath,
           sessionKey: "global",
         },
         { sessionId: "ops-global", updatedAt: 100, sessionStartedAt: 100 },
@@ -83,7 +85,6 @@ describe("ACP session metadata SQLite store", () => {
         cfg,
         databasePath,
         sessionKey: "global",
-        agentId: "ops",
         mutate,
       });
 
@@ -93,13 +94,16 @@ describe("ACP session metadata SQLite store", () => {
           cfg,
           databasePath,
           sessionKey: "global",
-          agentId: "ops",
         })?.runtimeSessionName,
       ).toBe("global");
+      const ownerlessCfg = {
+        ...cfg,
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } satisfies OpenClawConfig;
       const ownerlessMutate = vi.fn(mutate);
       await expect(
         upsertAcpSessionMeta({
-          cfg,
+          cfg: ownerlessCfg,
           databasePath,
           sessionKey: "ownerless-global",
           mutate: ownerlessMutate,

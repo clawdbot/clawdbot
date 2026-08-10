@@ -1,7 +1,6 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
 import {
@@ -850,17 +849,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("uses the retained owner for a restored bare requester key", async () => {
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        session: { scope: "global" },
-        agents: {
-          ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
-        },
+  it("uses the persisted fixed-store owner for a restored bare requester key", async () => {
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        list: [{ id: "ops" }, { id: "research" }],
       },
-      "ops",
-    );
+    } as never;
     const getRequesterSessionActivity = vi.fn(() => ({
       sessionId: "ops-session",
       isActive: true,
@@ -891,6 +888,47 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "child done",
       expect.objectContaining({ steeringMode: "all" }),
     );
+  });
+
+  it("fails closed for a restored bare requester key with a retired store owner", async () => {
+    const cfg = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "retired" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "ops-session", updatedAt: 1 }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+      callGateway: vi.fn(async () => {
+        throw new Error("requester owner unavailable");
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "global",
+      targetRequesterSessionKey: "global",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-retired-restored-entry",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(getRequesterSessionActivity).not.toHaveBeenCalled();
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
   it("preserves best-effort steering for active runtimes without transcript wait support", async () => {

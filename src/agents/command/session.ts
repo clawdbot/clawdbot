@@ -29,6 +29,7 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -180,15 +181,7 @@ function collectSessionIdMatchesForRequest(opts: {
   let ownerConflict = false;
   const configuredAgentIds = listAgentIds(opts.cfg).map(normalizeAgentId);
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(opts.cfg);
-  const persistedSessionStoreAgentId = opts.cfg.agents?.defaults?.sessionStore?.agentId?.trim();
-  const normalizedPersistedSessionStoreAgentId = persistedSessionStoreAgentId
-    ? normalizeAgentId(persistedSessionStoreAgentId)
-    : undefined;
-  const fixedStoreCompatibilityAgentId =
-    normalizedPersistedSessionStoreAgentId &&
-    configuredAgentIds.includes(normalizedPersistedSessionStoreAgentId)
-      ? normalizedPersistedSessionStoreAgentId
-      : compatibilityAgentId;
+  const persistedStoreOwner = resolvePersistedSessionStoreOwner(opts.cfg);
   const configuredStoreOwners = new Map<string, Set<string>>();
   for (const agentId of configuredAgentIds) {
     const configuredStorePath = path.resolve(
@@ -219,28 +212,32 @@ function collectSessionIdMatchesForRequest(opts: {
       const pathOwners = configuredStoreOwners.get(path.resolve(candidateStorePath));
       const pathOwnedAgentId =
         pathOwners?.size === 1 ? pathOwners.values().next().value : undefined;
-      const sharedPathCompatibilityAgentId =
-        pathOwners && pathOwners.size > 1 ? fixedStoreCompatibilityAgentId : undefined;
       const parsedAgentId = parseAgentSessionKey(candidateKey)?.agentId;
       const normalizedParsedAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
       if (normalizedParsedAgentId && !configuredAgentIds.includes(normalizedParsedAgentId)) {
         continue;
       }
       const isLegacyUnscopedKey = classifySessionKeyShape(candidateKey) === "legacy_or_alias";
-      // Unique physical paths prove ownership directly. During cross-agent scans, unscoped rows
-      // in a shared fixed store need a persisted/retained owner; only an agent-constrained lookup
-      // may assign the scan candidate.
+      // A persisted fixed-store owner is authoritative even after retirement: retired rows stay
+      // unavailable instead of being reassigned by path cardinality or scan order.
       const legacyUnscopedOwner = isLegacyUnscopedKey
-        ? (pathOwnedAgentId ??
-          sharedPathCompatibilityAgentId ??
-          (opts.searchOtherAgentStores ? undefined : scopedCandidateAgentId) ??
-          compatibilityAgentId)
+        ? persistedStoreOwner.kind === "configured"
+          ? persistedStoreOwner.agentId
+          : persistedStoreOwner.kind === "retired"
+            ? undefined
+            : (pathOwnedAgentId ??
+              (opts.searchOtherAgentStores ? undefined : scopedCandidateAgentId) ??
+              compatibilityAgentId)
         : undefined;
       const matchedAgentId =
         normalizedParsedAgentId ??
-        legacyUnscopedOwner ??
-        (isLegacyUnscopedKey ? undefined : scopedCandidateAgentId) ??
-        compatibilityAgentId;
+        (isLegacyUnscopedKey
+          ? legacyUnscopedOwner
+          : (scopedCandidateAgentId ?? compatibilityAgentId));
+      if (isLegacyUnscopedKey && persistedStoreOwner.kind === "retired") {
+        ownerConflict = true;
+        continue;
+      }
       if (
         !opts.searchOtherAgentStores &&
         scopedCandidateAgentId &&
@@ -424,10 +421,12 @@ export function resolveSessionKeyForRequestCore(opts: {
     if (selectedMatch) {
       return selectedMatch.resolution;
     }
-    if (ownerConflict && requestedAgentId) {
+    if (ownerConflict) {
       throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
         surface: `session id "${requestedSessionId}"`,
-        hint: `The matching session belongs to a different agent than --agent "${requestedAgentId}".`,
+        hint: requestedAgentId
+          ? `The matching session belongs to a different agent than --agent "${requestedAgentId}".`
+          : "The matching unscoped session belongs to a retired fixed-store owner.",
       });
     }
   }
