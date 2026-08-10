@@ -165,6 +165,30 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes shared home display owners and visible command coverage to Windows", () => {
+    for (const displayPath of [
+      "src/utils.ts",
+      "src/utils.test.ts",
+      "src/infra/home-display.ts",
+      "src/infra/path-guards.ts",
+      "src/commands/agents.commands.list.ts",
+      "src/commands/agents.commands.list.test.ts",
+      "src/cli/daemon-cli/status.print.ts",
+      "src/cli/daemon-cli/status.print.test.ts",
+      "packages/terminal-core/src/display-string.ts",
+      "packages/terminal-core/src/display-string.test.ts",
+      "src/agents/sandbox/fs-paths.ts",
+      "src/agents/sandbox/fs-paths.test.ts",
+      "src/agents/sessions/tools/render-utils.ts",
+      "src/agents/sessions/tools/render-utils.test.ts",
+    ]) {
+      expect(detectChangedScope([displayPath]), displayPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SecretRef path-security changes and native fixtures to Windows", () => {
     for (const secretRefPath of [
       "src/commands/doctor-gateway-auth-token.ts",

@@ -489,6 +489,27 @@ describe("worker placement dispatch", () => {
     }
   });
 
+  it("rejects workspace preflight before allocation and allows a corrected redispatch", async () => {
+    const rejectedHarness = createHarness(placementStore, { failAt: "preflight" });
+
+    await expect(rejectedHarness.service.dispatch(REQUEST)).rejects.toMatchObject({
+      code: "invalid_state",
+      message: "preflight failed",
+    });
+
+    expect(rejectedHarness.placements.current()).toBeUndefined();
+    expect(rejectedHarness.log).toEqual(["barrier", "preflight"]);
+    expect(rejectedHarness.environments.create).not.toHaveBeenCalled();
+
+    const correctedHarness = createHarness(placementStore);
+    const active = await correctedHarness.service.dispatch(REQUEST);
+
+    expect(active.state).toBe("active");
+    expect(correctedHarness.log.indexOf("preflight")).toBeLessThan(
+      correctedHarness.log.indexOf("placement:requested"),
+    );
+  });
+
   it.each(["requested", "provisioning", "syncing"] as const)(
     "allows explicit redispatch after restart recovery fails an interrupted %s placement",
     async (interruptedState) => {
