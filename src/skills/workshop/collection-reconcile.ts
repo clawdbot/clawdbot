@@ -25,6 +25,7 @@ import {
 } from "./collection-byte-limits.js";
 import {
   canonicalSkillCollectionWorkspace,
+  pruneOlderSkillCollectionBackups,
   resolveSkillCollectionBackupRoot,
 } from "./collection-paths.js";
 import { validateSkillCollectionPlan } from "./collection-plan.js";
@@ -262,6 +263,7 @@ export async function reconcileSkillCollection(params: {
         await discardPendingCollectionBackup(backup);
         throw error;
       }
+      bumpSkillsSnapshotVersion({ reason: "workshop" });
       clearCuratedSkillLifecycle(
         current.map((skill) => skill.filePath),
         params.env ? { env: params.env } : {},
@@ -271,8 +273,7 @@ export async function reconcileSkillCollection(params: {
         Date.now(),
         params.env ? { env: params.env } : {},
       );
-      await pruneOlderBackups(backup.backupRoot, backup.manifest.id);
-      bumpSkillsSnapshotVersion({ reason: "workshop" });
+      await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
         for (const entry of plan) {
@@ -691,19 +692,6 @@ async function latestCommittedBackupId(backupRoot: string): Promise<string | und
     .map((entry) => entry.name)
     .toSorted()
     .at(-1);
-}
-
-async function pruneOlderBackups(backupRoot: string, keepId: string): Promise<void> {
-  for (const entry of await fs.readdir(backupRoot, { withFileTypes: true })) {
-    if (entry.isDirectory() && entry.name !== keepId) {
-      await removePathWithinRoot({
-        rootDir: backupRoot,
-        relativePath: entry.name,
-        recursive: true,
-        force: true,
-      });
-    }
-  }
 }
 
 async function removeSkillDirectory(workspaceDir: string, skillDir: string): Promise<void> {

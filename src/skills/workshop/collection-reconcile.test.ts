@@ -9,6 +9,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   listWritableSkillCollection,
@@ -137,6 +138,61 @@ describe("skill collection reconciliation", () => {
       }),
     ).rejects.toThrow("security scan rejected");
     expect(await fs.readdir(backupDir)).toEqual([result.backupId]);
+  });
+
+  it("invalidates skill snapshots before backup pruning fails", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Original procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [
+        {
+          action: "write",
+          name: "procedure",
+          description: "First rewrite",
+          content: "# First rewrite\n",
+        },
+      ],
+    });
+    const beforeVersion = getSkillsSnapshotVersion();
+    const backupRoot = path.join(testState.stateDir, "skill-workshop", "collection-backups");
+    const originalReaddir = fs.readdir.bind(fs);
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
+      if (path.resolve(String(args[0])) === path.resolve(backupRoot)) {
+        throw new Error("forced backup prune failure");
+      }
+      return await (originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>)(...args);
+    }) as typeof fs.readdir);
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      await expect(
+        reconcileSkillCollection({
+          workspaceDir,
+          env: testState.env,
+          ...(await readCollectionReceipt()),
+          plan: [
+            {
+              action: "write",
+              name: "procedure",
+              description: "Second rewrite",
+              content: "# Second rewrite\n",
+            },
+          ],
+        }),
+      ).resolves.toMatchObject({ written: ["procedure"] });
+    } finally {
+      readdirSpy.mockRestore();
+      consoleSpy.mockRestore();
+    }
+
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(beforeVersion);
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "procedure", "SKILL.md"), "utf8"),
+    ).resolves.toContain("# Second rewrite");
   });
 
   it("requires the model to read and decide every current skill", async () => {
