@@ -104,6 +104,26 @@ async function exactOwnedManifestsExist(
   return manifestPaths.length > 0;
 }
 
+async function seedLinuxSecurePreferences(params: {
+  userDataDir: string;
+  extensionId: string;
+  extensionPath: string;
+}): Promise<void> {
+  const profileDir = path.join(params.userDataDir, "Default");
+  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    path.join(profileDir, "Secure Preferences"),
+    `${JSON.stringify({
+      extensions: {
+        settings: {
+          [params.extensionId]: { location: 4, path: params.extensionPath },
+        },
+      },
+    })}\n`,
+    { mode: 0o600 },
+  );
+}
+
 function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
   if (frame.length < 4) {
     throw new Error("native host returned no response frame");
@@ -224,9 +244,14 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         expect(extensionId).toBe(predictedId);
         process.stderr.write("[browser-extension-e2e] unpacked extension loaded\n");
         await context.close();
+        if (process.platform === "linux") {
+          // Linux CDP loads are transient and omit the protected record written by Load unpacked.
+          // Seed that exact record only after Chromium confirms the path-derived extension ID.
+          await seedLinuxSecurePreferences({ userDataDir, extensionId, extensionPath: installed });
+        }
 
         const status = await installPromise;
-        expect(status.manualSetupRequired).toBe(false);
+        expect(status.manualSetupRequired, JSON.stringify(status)).toBe(false);
         expect(
           status.discovered.some(
             (entry) => entry.extensionPath === installed && entry.extensionId === predictedId,
@@ -273,10 +298,10 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         }
 
         const registration = status.registrations.find(
-          (entry) => entry.product === "chrome-for-testing" && entry.state === "owned",
+          (entry) => relevantManifestPaths.includes(entry.manifestPath) && entry.state === "owned",
         );
         if (!registration) {
-          throw new Error("Chrome for Testing native host registration missing");
+          throw new Error("Active Chromium native host registration missing");
         }
         const manifest = JSON.parse(await fs.readFile(registration.manifestPath, "utf8")) as {
           path: string;
