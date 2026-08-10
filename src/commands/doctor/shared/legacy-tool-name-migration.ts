@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 export const LEGACY_TASK_SUGGESTION_TOOL_NAME = "spawn_task";
 export const TASK_SUGGESTION_TOOL_NAME = "suggest_task";
 
-export function isLegacyTaskSuggestionToolName(value: unknown): boolean {
+function isLegacyTaskSuggestionToolName(value: unknown): boolean {
   return (
     typeof value === "string" && value.trim().toLowerCase() === LEGACY_TASK_SUGGESTION_TOOL_NAME
   );
