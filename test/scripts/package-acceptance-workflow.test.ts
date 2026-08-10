@@ -3871,7 +3871,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("repo_live_suite_filter:");
     expect(workflow).toContain('repo_filter_tokens+=("$token")');
     expect(workflow).toContain(
-      'repo_live_suite_filter="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]:-}")"',
+      'repo_live_suite_filter="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]-}")"',
     );
     expect(workflow).toContain("cross_os_suite_filter:");
     expect(workflow).toContain("advisory: false");
@@ -6356,12 +6356,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const releaseChecksParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks");
     expect(releaseChecksParent["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(releaseChecksParent["timeout-minutes"]).toBe(420);
-    const releasePackageTimeouts = Object.fromEntries(
-      profiles.map((profile) => [
-        profile,
-        releasePackagePaths[profile].reduce((total, timeout) => total + timeout, 0),
-      ]),
-    ) as Record<(typeof profiles)[number], number>;
+    const releasePackageTimeouts = {
+      beta: releasePackagePaths.beta.reduce((total, timeout) => total + timeout, 0),
+      stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
+      full: releasePackagePaths.full.reduce((total, timeout) => total + timeout, 0),
+    };
     expect(releasePackageTimeouts).toEqual({ beta: 280, stable: 280, full: 310 });
     for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
       expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(420);
