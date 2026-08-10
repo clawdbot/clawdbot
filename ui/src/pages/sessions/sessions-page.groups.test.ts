@@ -180,7 +180,7 @@ describe("sessions page new group", () => {
     );
   });
 
-  it("skips the assignment when the row disappeared during the catalog write", async () => {
+  it("reports the skipped move when the row left the list during the catalog write", async () => {
     let landCatalogWrite!: () => void;
     const pending = new Promise<SessionGroupMutationResult>((resolve) => {
       landCatalogWrite = () => resolve("completed");
@@ -190,15 +190,20 @@ describe("sessions page new group", () => {
     const created = page.requestNewCategory(SESSION_KEY);
     await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
 
-    // The session was deleted while the catalog write was in flight; patching
-    // its key now would recreate the entry the operator just removed.
+    // The row left this bounded list while the catalog write was in flight;
+    // patching its key now could recreate an entry the operator removed.
     page.result = { count: 0, sessions: [] } as unknown as SessionsListResult;
     landCatalogWrite();
     await created;
 
     expect(sessions.patch).not.toHaveBeenCalled();
-    // The group itself landed, so this closes rather than asking for a retry.
+    // The group landed and the move did not. Retrying would only re-create the
+    // group, so the dialog closes — but the partial outcome has to stay visible
+    // on the page rather than reading as a clean success.
     expect(submitMessages).toEqual([null]);
+    expect(page.error).toBe(
+      "Group created, but the session was not moved into it because it left the current list. Move it from its row menu.",
+    );
   });
 
   it("skips the assignment when the catalog itself reports the write stale", async () => {

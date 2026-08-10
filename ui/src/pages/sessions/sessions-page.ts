@@ -1099,10 +1099,15 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!sessionKey) {
       return null;
     }
-    // The catalog write is awaited first, so the row can disappear in between.
-    // sessions.patch would recreate a store entry for a key the list no longer
-    // has; assignCategory guards the same way before its own patch.
+    // The catalog write is awaited first, so the row can leave this list in
+    // between. sessions.patch would recreate a store entry for a key the list no
+    // longer has, so the move is skipped — but this list is a bounded, filtered
+    // projection, and a plain refresh can page a live row out of it. Skipping
+    // silently would leave the operator with a new group, an unmoved session and
+    // nothing explaining why, so the partial outcome is stated and terminal:
+    // retrying here would only try to create the group that already exists.
     if (!this.result?.sessions.some((row) => row.key === sessionKey)) {
+      this.error = t("sessionsView.newGroupMoveSkipped");
       return null;
     }
     const assigned = await this.patchSession(sessionKey, { category: name }, scope);

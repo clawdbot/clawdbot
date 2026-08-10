@@ -53,8 +53,11 @@ describe("AppSidebar new group dialog", () => {
     }
   });
 
-  it("does not assign selected sessions that were deleted while the dialog was open", async () => {
+  it("reports the skipped moves when selected rows leave the list mid-write", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    await toastHost.updateComplete;
     try {
       const { sidebar, harness } = await mountMultiSelect([
         "sessions.groups.put",
@@ -78,8 +81,8 @@ describe("AppSidebar new group dialog", () => {
       await submitInputDialog("Projects");
       await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
 
-      // Both rows disappear while the catalog write is still in flight; patching
-      // their keys now would recreate the sessions that were just removed.
+      // Both rows leave the list while the catalog write is still in flight;
+      // patching their keys now could recreate sessions that were removed.
       harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
       landCatalogWrite();
 
@@ -91,7 +94,13 @@ describe("AppSidebar new group dialog", () => {
       );
       expect(harness.patchMany).not.toHaveBeenCalled();
       expect(harness.patch).not.toHaveBeenCalled();
+      // The group landed and the moves did not: that partial outcome has to
+      // reach the operator instead of closing as a plain success.
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
+        "Group created, but the selected sessions were not moved into it because they left the current list. Move them from their row menus.",
+      );
     } finally {
+      toastHost.remove();
       restoreDialogPolyfill();
     }
   });

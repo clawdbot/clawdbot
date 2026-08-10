@@ -415,8 +415,20 @@ export async function createSessionGroup(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // Nothing left to file: either a header-created group that starts empty, or
-  // every captured row disappeared. Re-render so the section shows up.
+  // A header-created group starts empty and needs no notice. Rows that were
+  // requested but resolved to nothing are a partial outcome: the group landed
+  // and the moves did not. The sidebar list is a bounded projection, so this is
+  // not proof the sessions are gone — say so rather than closing on a silent
+  // non-outcome the operator cannot account for.
+  if (sessions.length > 0) {
+    showToast({
+      message:
+        sessions.length === 1
+          ? t("sessionsView.newGroupMoveSkipped")
+          : t("sessionsView.newGroupMovesSkipped"),
+    });
+  }
+  // Re-render so the new section shows up.
   host.requestUpdate();
   return "completed";
 }
