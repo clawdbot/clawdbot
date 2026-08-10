@@ -97,6 +97,32 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
+const BROWSER_PATH_CONTROL_ESCAPES: Record<string, string> = {
+  "\b": "b",
+  "\f": "f",
+  "\n": "n",
+  "\r": "r",
+  "\t": "t",
+};
+
+function looksLikeWindowsPathPrefix(prefix: string): boolean {
+  const tail = prefix.slice(-160);
+  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
+}
+
+function recoverMalformedWindowsPath(value: string): string {
+  let recovered = "";
+  for (const char of value) {
+    const escapeLetter = BROWSER_PATH_CONTROL_ESCAPES[char];
+    if (escapeLetter !== undefined && looksLikeWindowsPathPrefix(recovered)) {
+      recovered += `\\${escapeLetter}`;
+    } else {
+      recovered += char;
+    }
+  }
+  return recovered;
+}
+
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
   const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
@@ -900,7 +926,9 @@ export function createBrowserTool(opts?: {
             onTabActivity: sessionTabs.touch,
           });
         case "upload": {
-          const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
+          const paths = Array.isArray(params.paths)
+            ? params.paths.map((p) => recoverMalformedWindowsPath(String(p)))
+            : [];
           if (paths.length === 0) {
             throw new Error("paths required");
           }
