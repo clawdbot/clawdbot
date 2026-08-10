@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -64,6 +65,7 @@ function makeDispatchInput(
       config: {},
       contextEngineLogicalTurnLease: { owner: "logical-turn" },
       onContextEngineTurnCandidate: vi.fn(),
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
     },
     transcriptOwnership: { kind: "caller-owned", sessionManager },
     runtime: {

@@ -19,7 +19,6 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
@@ -31,7 +30,10 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 type ProductionRunEmbeddedAgent = typeof import("./run.js").runEmbeddedAgent;
 export type TestRunEmbeddedAgent = (
-  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+  params: Omit<
+    Parameters<ProductionRunEmbeddedAgent>[0],
+    "admittedRunContext" | "preparedRunAdmission"
+  >,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 
 // Shared Vitest harness for overflow, compaction, failover, and hook tests.
@@ -1114,14 +1116,35 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     };
   });
 
+  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
+    await import("../admitted-run-context.js");
   const { runEmbeddedAgent } = await import("./run.js");
   return {
-    runEmbeddedAgent: (params) =>
-      runEmbeddedAgent({
-        ...params,
-        admittedRunContext: createTestAdmittedRunContext(params.runId),
-        agentId: params.agentId ?? "main",
-      }),
+    runEmbeddedAgent: async (params) => {
+      const agentId = params.agentId ?? "main";
+      const preparedRunAdmission = prepareAgentRunAdmission({
+        cfg: params.config ?? {},
+        operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+        facts: {
+          runId: params.runId,
+          agentId,
+          ingress: {
+            kind: "system",
+            boundary: "run-overflow-compaction-harness",
+            state: "present",
+          },
+        },
+      });
+      try {
+        return await runEmbeddedAgent({
+          ...params,
+          preparedRunAdmission,
+          agentId,
+        });
+      } finally {
+        preparedRunAdmission.close();
+      }
+    },
   };
 }
 

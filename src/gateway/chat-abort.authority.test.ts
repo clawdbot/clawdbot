@@ -60,6 +60,37 @@ it("binds delegated authority only to the exact operational instance object", ()
   expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
 });
 
+it("leaves sessionless authority with the outer admission owner", () => {
+  const runId = "run-sessionless-authority";
+  const operationalRunInstance = createOperationalRunInstanceRef(runId);
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionId: `session-${runId}`,
+    timeoutMs: 60_000,
+    operationalRunInstance,
+  });
+  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const unrelatedInstance = createOperationalRunInstanceRef("run-unrelated-authority");
+  const unrelatedAuthority = claimAgentRunDelegatedAuthority(unrelatedInstance);
+
+  expect(registration.registered).toBe(false);
+  expect(chatAbortControllers).toHaveLength(0);
+  expect(() => registration.bindAgentRunDelegatedAuthority(authority)).toThrow(
+    "does not belong to this controller registration",
+  );
+  expect(() => registration.bindAgentRunDelegatedAuthority(unrelatedAuthority)).toThrow(
+    "does not belong to this controller registration",
+  );
+
+  registration.cleanup({ force: true });
+  expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+  expect(validateAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
+  expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+  expect(releaseAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
+});
+
 it("revokes exact delegated authority before abort callbacks and controller listeners", () => {
   const { authority, ops, registration, runId, sessionKey } =
     createAuthorityAbortFixture("run-authority-abort");

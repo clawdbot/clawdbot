@@ -388,6 +388,10 @@ describe("worker turn launcher", () => {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
+      messageChannel: "telegram",
+      currentMessagingTarget: "chat-worker",
+      agentAccountId: "worker-account",
+      currentThreadTs: "thread-worker",
       sessionFile,
       sessionTarget,
       workspaceDir: root,
@@ -878,6 +882,14 @@ describe("worker turn launcher", () => {
       descriptor?.assignment.operationalRunInstance,
     );
     expect(verifiedRuntimeIdentity?.executionIdentity?.runId).toBe("run-worker-turn");
+    expect(verifiedRuntimeIdentity).toMatchObject({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      turnSourceChannel: "telegram",
+      turnSourceTo: "chat-worker",
+      turnSourceAccountId: "worker-account",
+      turnSourceThreadId: "thread-worker",
+    });
     expect(
       verifiedRuntimeIdentity &&
         createAgentRuntimeApprovalAuthorityValidator(placements)(verifiedRuntimeIdentity),

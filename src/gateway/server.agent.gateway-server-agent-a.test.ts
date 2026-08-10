@@ -2,8 +2,18 @@
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  type AgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -436,6 +446,66 @@ describe("gateway server agent", () => {
     expect(call.sessionKey).toBe("agent:ops:main");
     expect(call.sessionId).toBe("sess-ops");
   });
+
+  test.each(["success", "error"] as const)(
+    "agent executes a group-only run without a resolved session key and closes authority after %s",
+    async (outcome) => {
+      let admittedAuthority: AgentRunDelegatedAuthority | undefined;
+      let finishExecution!: () => void;
+      const executionFinished = new Promise<void>((resolve) => {
+        finishExecution = resolve;
+      });
+      vi.mocked(agentCommand).mockImplementationOnce(async (rawOpts) => {
+        const opts = rawOpts as {
+          runId: string;
+          operationalRunInstance: OperationalRunInstanceRef;
+          onAdmittedRunContext?: (context: AdmittedRunContext) => void | Promise<void>;
+        };
+        const preparedRunAdmission = prepareAgentRunAdmission({
+          cfg: {},
+          operationalRunInstance: opts.operationalRunInstance,
+          facts: {
+            runId: opts.runId,
+            agentId: "main",
+            ingress: {
+              kind: "system",
+              boundary: "gateway-agent-sessionless-test",
+              state: "present",
+            },
+          },
+        });
+        try {
+          const admittedRunContext = await preparedRunAdmission.admit("embedded");
+          admittedAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+          expect(admittedAuthority).toBeDefined();
+          await opts.onAdmittedRunContext?.(admittedRunContext);
+          expect(validateAgentRunDelegatedAuthority(admittedAuthority!)).toBe(true);
+          if (outcome === "error") {
+            throw new Error("sessionless provider failure");
+          }
+        } finally {
+          preparedRunAdmission.close();
+          finishExecution();
+        }
+      });
+
+      const runId = `idem-agent-group-only-sessionless-${outcome}`;
+      const res = await rpcReq(gatewaySuite.ws, "agent", {
+        message: "hi",
+        groupId: "group-sessionless",
+        groupChannel: "discord",
+        groupSpace: "guild-sessionless",
+        idempotencyKey: runId,
+      });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+
+      const call = await waitForAgentCommandCall(runId);
+      await executionFinished;
+      expect(call.sessionKey).toBeUndefined();
+      expect(admittedAuthority).toBeDefined();
+      expect(validateAgentRunDelegatedAuthority(admittedAuthority!)).toBe(false);
+    },
+  );
 
   test("agent rejects unknown reply channel", async () => {
     const res = await rpcReq(gatewaySuite.ws, "agent", {

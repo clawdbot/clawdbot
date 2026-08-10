@@ -232,9 +232,9 @@ export async function prepareAgentRequestRouting(params: {
     resolveSessionStoreKey({ cfg: params.cfg, sessionKey: requestedSessionKey }) === "global"
       ? "global"
       : requestedSessionKey;
-  if (preAcceptedReservedSessionKey) {
-    params.reserveDedupe(preAcceptedReservedSessionKey, agentId);
-  }
+  // Keyless runs still need the run-id reservation before asynchronous preparation,
+  // otherwise concurrent callers can dispatch the same id without a session owner.
+  params.reserveDedupe(preAcceptedReservedSessionKey, agentId);
   const loaded = requestedSessionKey
     ? loadSessionEntry(requestedSessionKey, {
         ...(agentId ? { agentId } : {}),

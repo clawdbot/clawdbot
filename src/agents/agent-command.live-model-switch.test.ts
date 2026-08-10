@@ -125,10 +125,14 @@ vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 
-vi.mock("../audit/execution-identity-admission.js", () => ({
-  enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
-    state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
-}));
+vi.mock("../audit/execution-identity-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../audit/execution-identity-admission.js")>();
+  return {
+    ...actual,
+    enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
+      state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
+  };
+});
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
   buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
@@ -375,10 +379,14 @@ vi.mock("../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
 }));
-vi.mock("../infra/agent-run-registry.js", () => ({
-  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
-  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
-}));
+vi.mock("../infra/agent-run-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/agent-run-registry.js")>();
+  return {
+    ...actual,
+    clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
+    registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
+  };
+});
 
 vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: () => ({}),
@@ -755,6 +763,16 @@ function setupSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
   state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult(provider, model));
 }
 
+function setupAdmittedSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
+  setupSingleAttemptFallback();
+  state.runAgentAttemptMock.mockImplementation(
+    async (params: { preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> } }) => {
+      await params.preparedRunAdmission.admit("embedded");
+      return makeSuccessResult(provider, model);
+    },
+  );
+}
+
 function setupAcpSession(): void {
   state.acpResolveSessionMock.mockReturnValue({
     kind: "ready",
@@ -1086,16 +1104,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("keeps collection off by default without blocking local execution", async () => {
-    setupSuccessfulAttempt();
+    setupAdmittedSuccessfulAttempt();
 
     await runBasicAgentCommand();
 
-    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-      }),
-      { enabled: false },
-    );
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).not.toHaveBeenCalled();
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1104,7 +1117,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ...state.defaultRuntimeConfig,
       logging: { audit: { executionIdentity: true } },
     };
-    setupSuccessfulAttempt();
+    setupAdmittedSuccessfulAttempt();
 
     await runBasicAgentCommand();
     await runSystemAgentCommand();
@@ -1114,14 +1127,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.objectContaining({
         ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
       }),
-      { enabled: true },
+      expect.objectContaining({ enabled: true }),
     );
     expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
       }),
-      { enabled: true },
+      expect.objectContaining({ enabled: true }),
     );
   });
 
@@ -1134,7 +1147,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       logging: { audit: { executionIdentity: true } },
     };
     state.enqueueExecutionIdentityContextAtAdmissionMock.mockReturnValue(undefined);
-    setupSuccessfulAttempt();
+    setupAdmittedSuccessfulAttempt();
 
     await run();
 

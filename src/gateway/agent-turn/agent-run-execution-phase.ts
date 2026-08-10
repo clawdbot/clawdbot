@@ -443,7 +443,11 @@ export function startAgentRunExecution(params: {
             if (!authority) {
               throw new Error("agent run delegated authority was not admitted");
             }
-            prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+            // Sessionless runs intentionally have no abort-map owner. Their
+            // prepared admission retains authority until agentCommand closes it.
+            if (prepared.activeRunAbort.registered) {
+              prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+            }
           },
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
