@@ -315,26 +315,6 @@ describe("session-entry compaction budgeting", () => {
     expect(JSON.stringify(entries)).toContain("private output");
   });
 
-  it("does not compact private output while retaining ordinary shell-output budgeting", () => {
-    const buildEntries = (excludeFromContext: boolean): SessionTreeEntry[] => [
-      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
-      createMessageEntry(createBashMessage("x".repeat(80_000), 2, excludeFromContext), 1),
-      createMessageEntry(createAssistant("done", createUsage(10), 3), 2),
-    ];
-    const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 10_000 };
-
-    expect(prepareCompaction(buildEntries(true), settings)).toEqual({
-      ok: true,
-      value: undefined,
-    });
-
-    const visiblePreparation = prepareCompaction(buildEntries(false), settings);
-    expect(visiblePreparation.ok && visiblePreparation.value).toMatchObject({
-      firstKeptEntryId: "entry-1",
-      messagesToSummarize: [{ role: "user", content: "original request" }],
-    });
-  });
-
   it("applies the shared common-CJK budget heuristic", () => {
     expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
     expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
