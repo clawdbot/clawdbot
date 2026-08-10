@@ -90,6 +90,11 @@ export type HandleCommandsParams = {
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
   shouldContinue: boolean;
+  skillWorkshop?: {
+    proposalOnly: true;
+    toolsAllow: string[];
+    updateProposals: true;
+  };
 };
 
 /** Command handler function shape. */

@@ -3,14 +3,40 @@
 import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getArchivedSkillFiles,
+  getSkillCuratorStatus,
+  restoreCuratedSkill,
+} from "../../skills/workshop/curator.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
+import { listWritableWorkspaceSkillSummaries } from "../../skills/workshop/workspace-skill-read.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+
+const workspaceMutationRace = vi.hoisted(() => ({
+  afterApply: undefined as (() => Promise<void>) | undefined,
+}));
+
+vi.mock("../../skills/lifecycle/workspace-skill-write.js", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../../skills/lifecycle/workspace-skill-write.js")>();
+  return {
+    ...original,
+    applyWorkspaceSkillMutation: async (
+      ...args: Parameters<typeof original.applyWorkspaceSkillMutation>
+    ) => {
+      await original.applyWorkspaceSkillMutation(...args);
+      const afterApply = workspaceMutationRace.afterApply;
+      workspaceMutationRace.afterApply = undefined;
+      await afterApply?.();
+    },
+  };
+});
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -23,6 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  workspaceMutationRace.afterApply = undefined;
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -32,6 +59,7 @@ async function seedLiveSkill(
   name: string,
   description: string,
   content: string,
+  supportFiles?: Array<{ path: string; content: string }>,
 ): Promise<void> {
   const fullTool = createSkillWorkshopTool({
     workspaceDir,
@@ -42,6 +70,7 @@ async function seedLiveSkill(
     name,
     description,
     proposal_content: content,
+    ...(supportFiles ? { support_files: supportFiles } : {}),
   });
   await fullTool.execute("seed-apply", {
     action: "apply",
@@ -51,6 +80,30 @@ async function seedLiveSkill(
 }
 
 describe("skill_workshop review mode", () => {
+  it("marks only workshop-owned skills as eligible consolidation sources", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-eligibility-");
+    await seedLiveSkill(
+      workspaceDir,
+      "curated-runbook",
+      "A workshop-owned runbook",
+      "# Curated Runbook\n\nFollow the verified procedure.\n",
+    );
+    const manualDir = path.join(workspaceDir, "skills", "manual-runbook");
+    await fs.mkdir(manualDir, { recursive: true });
+    await fs.writeFile(
+      path.join(manualDir, "SKILL.md"),
+      '---\nname: manual-runbook\ndescription: "A manually owned runbook"\n---\n\n# Manual Runbook\n',
+      "utf8",
+    );
+
+    expect(listWritableWorkspaceSkillSummaries(workspaceDir)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "curated-runbook", consolidationEligible: true }),
+        expect.objectContaining({ name: "manual-runbook", consolidationEligible: false }),
+      ]),
+    );
+  });
+
   it("restricts internal review runs to one pending proposal mutation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-");
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
@@ -139,6 +192,217 @@ describe("skill_workshop review mode", () => {
     expect(proposalMutationBudget.remaining).toBe(0);
   });
 
+  it("consolidates read workspace skills through one update proposal", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-consolidate-");
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-planner",
+      "Plan around weather forecasts",
+      "# Weather Planner\n\nCheck forecasts before outdoor recommendations.\n",
+    );
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-alerts",
+      "Check severe weather alerts",
+      "# Weather Alerts\n\nCheck official alerts before recommending travel.\n",
+    );
+    const sourceFile = path.join(workspaceDir, "skills", "weather-alerts", "SKILL.md");
+    const sourceContent = await fs.readFile(sourceFile, "utf8");
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      autonomousCapture: true,
+      proposalMutationBudget: { remaining: 1 },
+    });
+
+    await reviewTool.execute("read-target", { action: "read", skill_name: "weather-planner" });
+    await expect(
+      reviewTool.execute("consolidate-without-source-read", {
+        action: "update",
+        skill_name: "weather-planner",
+        supersedes: ["weather-alerts"],
+        proposal_content:
+          "# Weather Planner\n\nCheck forecasts and official alerts before outdoor or travel recommendations.\n",
+      }),
+    ).rejects.toThrow("read every superseded skill first");
+
+    await reviewTool.execute("read-source", { action: "read", skill_name: "weather-alerts" });
+    const proposal = await reviewTool.execute("consolidate", {
+      action: "update",
+      skill_name: "weather-planner",
+      supersedes: ["weather-alerts"],
+      proposal_content:
+        "# Weather Planner\n\nCheck forecasts and official alerts before outdoor or travel recommendations.\n",
+    });
+    expect(proposal.details).toMatchObject({
+      kind: "update",
+      supersedes: [{ skillKey: "weather-alerts" }],
+    });
+
+    const fullTool = createSkillWorkshopTool({ workspaceDir });
+    await fullTool.execute("apply-consolidation", {
+      action: "apply",
+      proposal_id: (proposal.details as { id: string }).id,
+    });
+
+    expect(getArchivedSkillFiles()).toContain(path.resolve(sourceFile));
+    expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceContent);
+    expect(
+      getSkillCuratorStatus().skills.find((skill) => skill.skillKey === "weather-alerts"),
+    ).toMatchObject({
+      state: "archived",
+      archivedReason: "superseded by weather-planner",
+    });
+    await expect(
+      reviewTool.execute("read-archived-source", {
+        action: "read",
+        skill_name: "weather-alerts",
+      }),
+    ).rejects.toThrow("Archived skill cannot be updated");
+
+    restoreCuratedSkill("weather-alerts");
+    expect(getArchivedSkillFiles()).not.toContain(path.resolve(sourceFile));
+  });
+
+  it("refuses consolidation when a source changes after proposal creation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-consolidate-stale-");
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-planner",
+      "Plan around weather forecasts",
+      "# Weather Planner\n\nCheck forecasts before outdoor recommendations.\n",
+    );
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-alerts",
+      "Check severe weather alerts",
+      "# Weather Alerts\n\nCheck official alerts before recommending travel.\n",
+    );
+    const targetFile = path.join(workspaceDir, "skills", "weather-planner", "SKILL.md");
+    const sourceFile = path.join(workspaceDir, "skills", "weather-alerts", "SKILL.md");
+    const targetBefore = await fs.readFile(targetFile, "utf8");
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      autonomousCapture: true,
+      proposalMutationBudget: { remaining: 1 },
+    });
+    await reviewTool.execute("read-target", { action: "read", skill_name: "weather-planner" });
+    await reviewTool.execute("read-source", { action: "read", skill_name: "weather-alerts" });
+    const proposal = await reviewTool.execute("consolidate", {
+      action: "update",
+      skill_name: "weather-planner",
+      supersedes: ["weather-alerts"],
+      proposal_content:
+        "# Weather Planner\n\nCheck forecasts and official alerts before outdoor or travel recommendations.\n",
+    });
+    await fs.appendFile(sourceFile, "\nOperator change after review.\n");
+
+    const fullTool = createSkillWorkshopTool({ workspaceDir });
+    await expect(
+      fullTool.execute("apply-stale-consolidation", {
+        action: "apply",
+        proposal_id: (proposal.details as { id: string }).id,
+      }),
+    ).rejects.toThrow("Superseded skill changed after proposal creation");
+    expect(await fs.readFile(targetFile, "utf8")).toBe(targetBefore);
+    expect(getArchivedSkillFiles()).not.toContain(path.resolve(sourceFile));
+  });
+
+  it("restores the survivor when a source changes immediately before archival", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-consolidate-commit-race-");
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-planner",
+      "Plan around weather forecasts",
+      "# Weather Planner\n\nCheck forecasts before outdoor recommendations.\n",
+    );
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-alerts",
+      "Check severe weather alerts",
+      "# Weather Alerts\n\nCheck official alerts before recommending travel.\n",
+    );
+    const targetFile = path.join(workspaceDir, "skills", "weather-planner", "SKILL.md");
+    const sourceFile = path.join(workspaceDir, "skills", "weather-alerts", "SKILL.md");
+    const targetBefore = await fs.readFile(targetFile, "utf8");
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget: { remaining: 1 },
+    });
+    await reviewTool.execute("read-target", { action: "read", skill_name: "weather-planner" });
+    await reviewTool.execute("read-source", { action: "read", skill_name: "weather-alerts" });
+    const proposal = await reviewTool.execute("consolidate", {
+      action: "update",
+      skill_name: "weather-planner",
+      supersedes: ["weather-alerts"],
+      proposal_content:
+        "# Weather Planner\n\nCheck forecasts and official alerts before outdoor or travel recommendations.\n",
+    });
+    workspaceMutationRace.afterApply = async () => {
+      await fs.appendFile(sourceFile, "\nOperator change during apply.\n");
+    };
+
+    const fullTool = createSkillWorkshopTool({ workspaceDir });
+    await expect(
+      fullTool.execute("apply-raced-consolidation", {
+        action: "apply",
+        proposal_id: (proposal.details as { id: string }).id,
+      }),
+    ).rejects.toThrow("Superseded skill changed after proposal creation");
+
+    expect(await fs.readFile(targetFile, "utf8")).toBe(targetBefore);
+    expect(getArchivedSkillFiles()).not.toContain(path.resolve(sourceFile));
+    const inspected = await fullTool.execute("inspect-stale-consolidation", {
+      action: "inspect",
+      proposal_id: (proposal.details as { id: string }).id,
+    });
+    expect(inspected.details).toMatchObject({ status: "stale" });
+  });
+
+  it("keeps rich skill bundles active until the reviewer can merge them whole", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-consolidate-bundle-");
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-planner",
+      "Plan around weather forecasts",
+      "# Weather Planner\n\nCheck forecasts before outdoor recommendations.\n",
+    );
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-alerts",
+      "Check severe weather alerts",
+      "# Weather Alerts\n\nUse [alert sources](references/alerts.md).\n",
+      [{ path: "references/alerts.md", content: "Check the official warning feed.\n" }],
+    );
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+    });
+    await reviewTool.execute("read-target", { action: "read", skill_name: "weather-planner" });
+    await reviewTool.execute("read-source", { action: "read", skill_name: "weather-alerts" });
+
+    await expect(
+      reviewTool.execute("consolidate-rich-source", {
+        action: "update",
+        skill_name: "weather-planner",
+        supersedes: ["weather-alerts"],
+        proposal_content: "# Weather Planner\n\nCheck forecasts and official alerts.\n",
+      }),
+    ).rejects.toThrow("support files and cannot be superseded automatically");
+    expect(proposalMutationBudget.remaining).toBe(1);
+    expect(getArchivedSkillFiles()).not.toContain(
+      path.join(workspaceDir, "skills", "weather-alerts", "SKILL.md"),
+    );
+  });
+
   it("composes patch proposals by replacing the quoted span of the live body", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-extend-");
     await seedLiveSkill(
@@ -159,6 +423,7 @@ describe("skill_workshop review mode", () => {
       (reviewTool.parameters as { properties: { action: { enum: string[] } } }).properties.action
         .enum,
     ).toEqual(["create", "patch", "update", "read", "revise", "list", "inspect"]);
+    expect(reviewTool.description).toContain("create, patch, update, or revise");
 
     await expect(
       reviewTool.execute("patch-without-read", {

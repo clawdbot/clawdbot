@@ -241,8 +241,10 @@ export async function runEmbeddedFallbackCandidate(params: {
         toolProgressDetail: turn.toolProgressDetail,
         suppressToolErrorWarnings:
           turn.opts?.shouldSuppressToolErrorWarnings ?? turn.opts?.suppressToolErrorWarnings,
-        toolsAllow: turn.opts?.toolsAllow,
+        toolsAllow: turn.followupRun.run.toolsAllow ?? turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
+        skillWorkshopProposalOnly: turn.followupRun.run.skillWorkshopProposalOnly,
+        skillWorkshopUpdateProposals: turn.followupRun.run.skillWorkshopUpdateProposals,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,

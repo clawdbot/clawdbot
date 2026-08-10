@@ -5,6 +5,7 @@ import {
   readStoredSkillProposalEvent,
   type NewSkillProposalEvent,
 } from "./store-sqlite-event.js";
+import { commitAppliedSkillLifecycle } from "./store-sqlite-lifecycle.js";
 import {
   parseSkillProposalRow,
   readStoredProposal,
@@ -51,6 +52,13 @@ export function commitPendingSkillProposalTransition(params: {
           state: "conflict" as const,
           ...(currentRecord ? { current: currentRecord } : {}),
         };
+      }
+      if (params.record.status === "applied") {
+        const appliedAtMs = Date.parse(params.record.appliedAt ?? "");
+        if (!Number.isFinite(appliedAtMs)) {
+          throw new Error("Applied Skill Workshop proposal is missing a valid apply time.");
+        }
+        commitAppliedSkillLifecycle(db, params.record, appliedAtMs);
       }
       updateProposal(db, current, params.record);
       return {

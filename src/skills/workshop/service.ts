@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { buildWorkspaceSkillStatus, resolveSkillStatusEntry } from "../discovery/status.js";
 import {
@@ -18,12 +17,23 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
+import { SkillProposalStaleTargetError } from "./proposal-lifecycle.js";
+import { resolveSkillProposalSupersessions } from "./proposal-supersession.js";
+export {
+  SkillProposalStaleTargetError,
+  SkillProposalSupersessionIneligibleError,
+} from "./proposal-lifecycle.js";
 import {
+  composeSkillBodyPatch,
   nextProposalVersion,
   prepareSkillProposalDraft,
   resolveUpdateProposalDescription,
 } from "./proposal-draft.js";
-export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
+export {
+  composeSkillBodyPatch,
+  readSkillProposalDraftDirectory,
+  readSkillProposalDraftFile,
+} from "./proposal-draft.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertExpectedRevisionHash,
@@ -31,6 +41,7 @@ import {
   SkillProposalCreateTargetConflictError,
 } from "./service-evaluation.js";
 import { readRequiredProposal } from "./service-query.js";
+import { readSkillLifecycleRecord } from "./store-sqlite-lifecycle.js";
 import {
   createSkillProposalId,
   hashSkillProposalContent,
@@ -62,14 +73,8 @@ import {
   type SkillProposalReviseInput,
   type SkillProposalSupportFile,
   type SkillProposalUpdateInput,
+  type SkillWorkshopWorkspaceOptions,
 } from "./types.js";
-
-type SkillWorkshopWorkspaceOptions = {
-  config?: OpenClawConfig;
-  agentId?: string;
-};
-
-export class SkillProposalStaleTargetError extends Error {}
 
 function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
   return env ? { env } : {};
@@ -139,6 +144,14 @@ export async function proposeCreateSkill(
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
+  const supersedes = await resolveSkillProposalSupersessions({
+    workspaceDir: input.workspaceDir,
+    targetSkillFile: target.skillFile,
+    requested: input.supersedes,
+    config: input.config,
+    agentId: input.agentId,
+    env: input.env,
+  });
 
   const now = new Date().toISOString();
   const prepared = prepareSkillProposalDraft({
@@ -192,6 +205,7 @@ export async function proposeCreateSkill(
       skillFile: target.skillFile,
       source: "openclaw-workspace",
     },
+    ...(supersedes ? { supersedes } : {}),
     scan,
     ...(supportFiles.length > 0
       ? { supportFiles: await buildSupportFileMetadata(supportFiles) }
@@ -224,31 +238,6 @@ export async function proposeCreateSkill(
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
 }
 
-/** Applies a reviewer patch to the live body: unique-match replace, or append when oldString is empty. */
-export function composeSkillBodyPatch(
-  body: string,
-  patch: { oldString: string; newString: string },
-): string {
-  if (!patch.oldString) {
-    if (!patch.newString.trim()) {
-      throw new Error("Patch newString must not be empty when appending.");
-    }
-    return `${body.trimEnd()}\n\n${patch.newString.trim()}\n`;
-  }
-  const first = body.indexOf(patch.oldString);
-  if (first === -1) {
-    throw new Error(
-      "Patch oldString not found in the live skill body. Read the skill and quote the exact current text.",
-    );
-  }
-  if (body.includes(patch.oldString, first + 1)) {
-    throw new Error(
-      "Patch oldString matches more than once in the live skill body. Quote a longer unique span.",
-    );
-  }
-  return `${body.slice(0, first)}${patch.newString}${body.slice(first + patch.oldString.length)}`;
-}
-
 export async function proposeUpdateSkill(
   input: SkillProposalUpdateInput & SkillWorkshopWorkspaceOptions,
 ): Promise<SkillProposalReadResult> {
@@ -263,6 +252,13 @@ export async function proposeUpdateSkill(
     throw new Error(`Skill not found: ${skillName}`);
   }
   assertWritableSkillTarget(input.workspaceDir, targetSkill);
+  const targetLifecycle = readSkillLifecycleRecord(
+    targetSkill.filePath,
+    proposalStoreOptions(input.env),
+  );
+  if (targetLifecycle?.state === "archived") {
+    throw new Error(`Archived skill cannot be updated: ${targetSkill.skillKey}`);
+  }
   const currentContent = await readWorkspaceSkillFile(targetSkill.filePath);
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
@@ -285,6 +281,14 @@ export async function proposeUpdateSkill(
     throw new Error("Update proposal requires content or composePatch.");
   }
   const description = resolveUpdateProposalDescription(input.description, targetSkill.description);
+  const supersedes = await resolveSkillProposalSupersessions({
+    workspaceDir: input.workspaceDir,
+    targetSkillFile: targetSkill.filePath,
+    requested: input.supersedes,
+    config: input.config,
+    agentId: input.agentId,
+    env: input.env,
+  });
 
   const now = new Date().toISOString();
   const prepared = prepareSkillProposalDraft({
@@ -339,6 +343,7 @@ export async function proposeUpdateSkill(
       source: targetSkill.source,
       currentContentHash: hashSkillProposalContent(currentContent),
     },
+    ...(supersedes ? { supersedes } : {}),
     scan,
     ...(supportFiles.length > 0
       ? { supportFiles: await buildSupportFileMetadata(supportFiles, targetSkill.baseDir) }

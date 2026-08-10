@@ -1,3 +1,5 @@
+import path from "node:path";
+import { canonicalizePath } from "../../agents/utils/paths.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import {
@@ -16,16 +18,31 @@ export async function withSkillProposalTargetLock<T>(
   options: SkillWorkshopStoreOptions = {},
 ): Promise<T> {
   ensureSkillWorkshopSchema(options);
-  return await withOpenClawStateLease(
-    {
-      scope: "skill-workshop-target",
-      key: hashSkillProposalContent(record.target.skillFile),
-      database: { scope: "shared", options: databaseOptions(options) },
-      leaseMs: TARGET_LEASE_MS,
-      waitMs: TARGET_LEASE_WAIT_MS,
-      leaseLabel: "Skill Workshop target lease",
-      operationLabel: "skill-workshop.target-lease",
-    },
-    async () => await fn(),
-  );
+  const skillFiles = [
+    record.target.skillFile,
+    ...(record.supersedes ?? []).map((skill) => skill.skillFile),
+  ]
+    .map((skillFile) => canonicalizePath(path.resolve(skillFile)))
+    .filter((skillFile, index, files) => files.indexOf(skillFile) === index)
+    .toSorted();
+  const acquisitionDeadline = performance.now() + TARGET_LEASE_WAIT_MS;
+  const lockNext = async (index: number): Promise<T> => {
+    const skillFile = skillFiles[index];
+    if (!skillFile) {
+      return await fn();
+    }
+    return await withOpenClawStateLease(
+      {
+        scope: "skill-workshop-target",
+        key: hashSkillProposalContent(skillFile),
+        database: { scope: "shared", options: databaseOptions(options) },
+        leaseMs: TARGET_LEASE_MS,
+        waitMs: Math.max(0, Math.floor(acquisitionDeadline - performance.now())),
+        leaseLabel: "Skill Workshop target lease",
+        operationLabel: "skill-workshop.target-lease",
+      },
+      async () => await lockNext(index + 1),
+    );
+  };
+  return await lockNext(0);
 }

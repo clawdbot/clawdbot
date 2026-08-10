@@ -996,6 +996,7 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+  const skillWorkshopRunOptions = inlineActionResult.skillWorkshop;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
     : autoFallbackPrimaryProbe;
@@ -1131,6 +1132,7 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
+      skillWorkshop: skillWorkshopRunOptions,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       defaultModel,
       timeoutMs,

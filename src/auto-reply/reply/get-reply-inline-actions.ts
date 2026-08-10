@@ -45,6 +45,7 @@ import {
   takeCommandSessionMetadataChangesFromTargets,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import type { CommandHandlerResult } from "./commands-types.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -172,6 +173,7 @@ type InlineActionResult =
       directives: InlineDirectives;
       abortedLastRun: boolean;
       cleanedBody: string;
+      skillWorkshop?: CommandHandlerResult["skillWorkshop"];
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
@@ -719,5 +721,6 @@ export async function handleInlineActions(params: {
     directives,
     abortedLastRun,
     cleanedBody,
+    ...(commandResult.skillWorkshop ? { skillWorkshop: commandResult.skillWorkshop } : {}),
   };
 }

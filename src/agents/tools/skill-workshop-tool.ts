@@ -22,19 +22,25 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
   SkillProposalStaleTargetError,
+  SkillProposalSupersessionIneligibleError,
 } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
   SkillProposalStatus,
+  SkillProposalSupersedeInput,
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
-import { readWritableWorkspaceSkill } from "../../skills/workshop/workspace-skill-read.js";
+import {
+  readWritableWorkspaceSkill,
+  readWritableWorkspaceSkills,
+} from "../../skills/workshop/workspace-skill-read.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
+  readStringArrayParam,
   readStringParam,
   ToolInputError,
   type AnyAgentTool,
@@ -191,6 +197,14 @@ function buildSkillWorkshopToolSchema(
           { description: "Optional support files to store with the proposal." },
         ),
       ),
+      supersedes: Type.Optional(
+        Type.Array(Type.String(), {
+          maxItems: 8,
+          uniqueItems: true,
+          description:
+            "For create/update consolidation only: existing skill names fully absorbed by the proposed survivor. Read every named skill first. Applying archives them recoverably.",
+        }),
+      ),
       goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
       evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
       reason: Type.Optional(
@@ -249,7 +263,7 @@ function buildSkillWorkshopToolDescription(
     return `Read, patch, create, update, revise, inspect, evaluate, and apply reusable-procedure skill proposals. ${repairPolicy}\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
-  const draftKinds = updateProposals ? "create, update, or revise" : "create or revise";
+  const draftKinds = updateProposals ? "create, patch, update, or revise" : "create or revise";
   return `Inspect reusable-procedure skill proposals and draft pending ${draftKinds} proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
@@ -308,7 +322,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const skill = await readWritableWorkspaceSkill(
           options.workspaceDir,
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, agentId: options.agentId },
+          { config: options.config, agentId: options.agentId, env: options.env },
         );
         const truncated = skill.content.length > SKILL_WORKSHOP_READ_MAX_CHARS;
         // A truncated read is context, not sight of the whole skill: it earns no
@@ -450,6 +464,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("proposal_content required");
       }
       const supportFiles = readSupportFilesParam(params);
+      const supersededSkillNames = readStringArrayParam(params, "supersedes");
+      if (supersededSkillNames && action !== "create" && action !== "update") {
+        throw new ToolInputError("supersedes is only valid for create or update");
+      }
       const goal = readStringParam(params, "goal");
       const evidence = readStringParam(params, "evidence");
 
@@ -461,14 +479,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("foreground skill repair is disabled by autonomous mode off");
       }
       let expectedCurrentContentHash: string | undefined;
-      const requiresRead = action === "patch" || (action === "update" && options.updateProposals);
+      const requiresRead =
+        action === "patch" ||
+        (action === "update" && (options.updateProposals || Boolean(supersededSkillNames?.length)));
       if (requiresRead) {
         // The model must see the entire current skill before a targeted patch or
         // autonomous rewrite. The service binds the proposal to that read.
         const target = await readWritableWorkspaceSkill(
           options.workspaceDir,
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, agentId: options.agentId },
+          { config: options.config, agentId: options.agentId, env: options.env },
         );
         const readHash = readSkillHashes.get(target.skillKey);
         if (!readHash) {
@@ -513,6 +533,25 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           }
         }
       }
+      const supersedes: SkillProposalSupersedeInput[] = [];
+      const supersededSkills = await readWritableWorkspaceSkills(
+        options.workspaceDir,
+        supersededSkillNames ?? [],
+        {
+          config: options.config,
+          agentId: options.agentId,
+          env: options.env,
+        },
+      );
+      for (const source of supersededSkills) {
+        const readHash = readSkillHashes.get(source.skillKey);
+        if (!readHash || readHash !== sha256Hex(source.content)) {
+          throw new ToolInputError(
+            "read every superseded skill first, then retry the consolidation from the returned content",
+          );
+        }
+        supersedes.push({ skillName: source.skillKey, expectedCurrentContentHash: readHash });
+      }
 
       const reservesMutation = SKILL_WORKSHOP_MUTATION_ACTIONS.has(action);
       if (
@@ -545,6 +584,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             description: readStringParam(params, "description", { required: true }),
             content: requireProposalContent(proposalContent),
             supportFiles,
+            ...(supersedes.length > 0 ? { supersedes } : {}),
             createdBy: "skill-workshop",
             ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
@@ -567,6 +607,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             description: readStringParam(params, "description"),
             content: requireProposalContent(proposalContent),
             supportFiles,
+            ...(supersedes.length > 0 ? { supersedes } : {}),
             createdBy: "skill-workshop",
             ...(options.autonomousCapture ? { autonomousCapture: true } : {}),
             ...(options.origin ? { origin: options.origin } : {}),
@@ -676,7 +717,10 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         if (reservesMutation && options.proposalMutationBudget) {
           // A concurrent live edit is not a reviewer mutation. Preserve the budget
           // so the reviewer can re-read the new body and redraft either update form.
-          if (error instanceof SkillProposalStaleTargetError) {
+          if (
+            error instanceof SkillProposalStaleTargetError ||
+            error instanceof SkillProposalSupersessionIneligibleError
+          ) {
             options.proposalMutationBudget.remaining += 1;
           }
           options.proposalMutationBudget.failedMutations =

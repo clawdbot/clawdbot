@@ -36,6 +36,31 @@ type PreparedSkillProposalDraft = {
   supportFiles: PreparedSkillProposalSupportFile[];
 };
 
+/** Applies a reviewer patch to the live body: unique-match replace, or append when oldString is empty. */
+export function composeSkillBodyPatch(
+  body: string,
+  patch: { oldString: string; newString: string },
+): string {
+  if (!patch.oldString) {
+    if (!patch.newString.trim()) {
+      throw new Error("Patch newString must not be empty when appending.");
+    }
+    return `${body.trimEnd()}\n\n${patch.newString.trim()}\n`;
+  }
+  const first = body.indexOf(patch.oldString);
+  if (first === -1) {
+    throw new Error(
+      "Patch oldString not found in the live skill body. Read the skill and quote the exact current text.",
+    );
+  }
+  if (body.includes(patch.oldString, first + 1)) {
+    throw new Error(
+      "Patch oldString matches more than once in the live skill body. Quote a longer unique span.",
+    );
+  }
+  return `${body.slice(0, first)}${patch.newString}${body.slice(first + patch.oldString.length)}`;
+}
+
 export function prepareSkillProposalDraft(input: {
   name: string;
   description: string;

@@ -80,6 +80,7 @@ export type SkillCuratorStatus = {
     useCount: number;
     archivedReason: string | null;
   }>;
+  /** Shipped Gateway response field; remove only through a versioned protocol change. */
   overlaps: SkillOverlapCandidate[];
 };
 

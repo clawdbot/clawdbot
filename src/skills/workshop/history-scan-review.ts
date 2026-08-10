@@ -61,6 +61,20 @@ export async function runSkillHistoryScanReview(params: {
   try {
     const sessionId = randomUUID();
     const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:incognito-${sessionId}`;
+    const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+    const existingSkills = listWritableWorkspaceSkillSummaries(params.workspaceDir, {
+      config: params.config,
+      agentId: params.agentId,
+      env: params.env,
+    }).map((skill) =>
+      skill.description
+        ? {
+            name: skill.name,
+            description: skill.description,
+            consolidationEligible: skill.consolidationEligible,
+          }
+        : { name: skill.name, consolidationEligible: skill.consolidationEligible },
+    );
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
       sessionId,
@@ -75,6 +89,7 @@ export async function runSkillHistoryScanReview(params: {
       workspaceDir: params.workspaceDir,
       config: params.config,
       prompt: buildSkillHistoryScanPrompt({
+        existingSkills,
         sessions: params.sessions,
         requireCompletion: proposalReviewCompletion !== undefined,
       }),
@@ -88,6 +103,7 @@ export async function runSkillHistoryScanReview(params: {
       disableMessageTool: true,
       disableTrajectory: true,
       skillWorkshopProposalOnly: true,
+      skillWorkshopUpdateProposals: true,
       skillWorkshopProposalEnv: params.env,
       skillWorkshopProposalMutationBudget: proposalMutationBudget,
       skillWorkshopProposalReviewCompletion: proposalReviewCompletion,

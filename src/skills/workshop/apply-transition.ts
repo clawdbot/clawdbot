@@ -22,6 +22,7 @@ import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./fro
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
+import { inspectSkillProposalLifecycle } from "./proposal-lifecycle.js";
 import { scanProposalBundle } from "./proposal-scan.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import type { NewSkillProposalEvent } from "./store-sqlite-event.js";
@@ -246,6 +247,10 @@ export async function applySkillProposalTransition(
           throw new Error("Skill target changed after evaluation; retry the operation.");
         }
       }
+      const lifecycle = await inspectSkillProposalLifecycle(record, storeOptions(input.env));
+      if (!lifecycle.ok) {
+        await markSkillProposalStale({ record, input, ...lifecycle });
+      }
 
       const mutation = await prepareWorkspaceSkillMutation({
         workspaceDir: input.workspaceDir,
@@ -298,6 +303,27 @@ export async function applySkillProposalTransition(
             sourceVersion: record.proposedVersion,
           })
         : undefined;
+      const finalLifecycle = await inspectSkillProposalLifecycle(record, storeOptions(input.env));
+      if (!finalLifecycle.ok) {
+        try {
+          await restoreWorkspaceSkillMutation(mutation);
+        } finally {
+          bumpSkillsSnapshotVersion({
+            workspaceDir: input.workspaceDir,
+            reason: "workshop",
+            changedPath: record.target.skillFile,
+          });
+        }
+        const rollbackCleared = await clearSkillProposalRollback({
+          proposalId: record.id,
+          expectedRecordJson: JSON.stringify(record),
+          store: storeOptions(input.env),
+        });
+        if (!rollbackCleared) {
+          throw new Error("Skill proposal rollback changed before stale transition.");
+        }
+        await markSkillProposalStale({ record, input, ...finalLifecycle });
+      }
       const now = new Date().toISOString();
       const applied: SkillProposalRecord = {
         ...record,
@@ -360,7 +386,7 @@ export async function applySkillProposalTransition(
       bumpSkillsSnapshotVersion({
         workspaceDir: input.workspaceDir,
         reason: "workshop",
-        changedPath: record.target.skillFile,
+        ...(record.supersedes?.length ? {} : { changedPath: record.target.skillFile }),
       });
       return {
         result: { record: applied, targetSkillFile: record.target.skillFile },

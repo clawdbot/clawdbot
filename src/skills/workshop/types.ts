@@ -9,6 +9,7 @@ export const SKILL_WORKSHOP_MANIFEST_SCHEMA =
   "openclaw.skill-workshop.proposals-manifest.v1" as const;
 export const SKILL_WORKSHOP_ROLLBACK_SCHEMA = "openclaw.skill-workshop.rollback.v1" as const;
 export const MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS = 4096;
+export const MAX_SKILL_PROPOSAL_SUPERSESSIONS = 8;
 
 type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
@@ -102,6 +103,11 @@ export type SkillWorkshopRunOptions = {
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
 };
 
+export type SkillWorkshopWorkspaceOptions = {
+  config?: OpenClawConfig;
+  agentId?: string;
+};
+
 export type SkillProposalScan = {
   state: SkillProposalScannerState;
   scannedAt: string;
@@ -128,6 +134,15 @@ export type SkillProposalSupportFile = {
   targetContentHash?: string;
 };
 
+export type SkillProposalSupersession = {
+  skillName: string;
+  skillKey: string;
+  skillDir: string;
+  skillFile: string;
+  source: string;
+  treeSha256: string;
+};
+
 export type SkillProposalRecord = {
   schema: typeof SKILL_WORKSHOP_SCHEMA;
   id: string;
@@ -149,6 +164,8 @@ export type SkillProposalRecord = {
   draftFile: "PROPOSAL.md";
   draftHash: string;
   supportFiles?: SkillProposalSupportFile[];
+  /** Workspace skills archived when this proposal applies successfully. */
+  supersedes?: SkillProposalSupersession[];
   target: SkillProposalTarget;
   scan: SkillProposalScan;
   evaluation?: SkillProposalEvaluation;
@@ -203,6 +220,11 @@ export type SkillProposalSupportFileInput = {
   content: string;
 };
 
+export type SkillProposalSupersedeInput = {
+  skillName: string;
+  expectedCurrentContentHash: string;
+};
+
 export type SkillProposalCreateInput = {
   workspaceDir: string;
   agentId?: string;
@@ -213,6 +235,7 @@ export type SkillProposalCreateInput = {
   description: string;
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
+  supersedes?: SkillProposalSupersedeInput[];
   createdBy?: SkillProposalSource;
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
@@ -238,6 +261,7 @@ export type SkillProposalUpdateInput = {
   /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
   expectedCurrentContentHash?: string;
   supportFiles?: SkillProposalSupportFileInput[];
+  supersedes?: SkillProposalSupersedeInput[];
   createdBy?: SkillProposalSource;
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;

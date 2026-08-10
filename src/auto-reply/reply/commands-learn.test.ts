@@ -78,7 +78,14 @@ describe("learn command", () => {
     const result = await handleLearnCommand(params, true);
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent;
 
-    expect(result).toEqual({ shouldContinue: true });
+    expect(result).toEqual({
+      shouldContinue: true,
+      skillWorkshop: {
+        proposalOnly: true,
+        toolsAllow: ["read", "web_fetch", "web_search", "skill_workshop"],
+        updateProposals: true,
+      },
+    });
     expect(instruction).toContain("docs/runbook.md and https://example.com/guide");
     expect(params.command.rawBodyNormalized).toBe(instruction);
     expect(params.command.commandBodyNormalized).toBe(instruction);
@@ -93,13 +100,19 @@ describe("learn command", () => {
     expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
   });
 
-  it("includes the load-bearing skill authoring standards", async () => {
+  it("keeps the authoring turn proposal-only and includes the authoring standards", async () => {
     const params = buildLearnParams("/learn what we just did");
 
-    await handleLearnCommand(params, true);
+    const result = await handleLearnCommand(params, true);
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 
-    expect(instruction).toContain('`skill_workshop` with action `"create"`');
+    expect(result?.skillWorkshop).toEqual({
+      proposalOnly: true,
+      toolsAllow: ["read", "web_fetch", "web_search", "skill_workshop"],
+      updateProposals: true,
+    });
+    expect(instruction).toContain("Make at most one create/patch/update/revise call");
+    expect(instruction).toContain("pending proposal");
     expect(instruction).toContain("first ~60 characters");
     expect(instruction).toContain("never invent flags, commands, paths, APIs");
   });
@@ -157,6 +170,15 @@ describe("learn command", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+  });
+
+  it("does not broaden an existing runtime tool allowlist", async () => {
+    const params = buildLearnParams("/learn");
+    params.opts = { toolsAllow: ["read", "skill_workshop"] };
+
+    const result = await handleLearnCommand(params, true);
+
+    expect(result?.skillWorkshop?.toolsAllow).toEqual(["read", "skill_workshop"]);
   });
 
   it("replies without continuing when the selected model disables tools", async () => {

@@ -78,6 +78,9 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
         ]
       : [];
   const evaluation = proposal.record.evaluation;
+  const supersessionLines = proposal.record.supersedes?.length
+    ? ["", `Supersedes: ${proposal.record.supersedes.map((skill) => skill.skillKey).join(", ")}`]
+    : [];
   const evaluationLines = evaluation
     ? [
         "",
@@ -103,6 +106,7 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
     `Skill: ${proposal.record.target.skillKey}`,
     `Version: ${proposal.record.proposedVersion}`,
     `Scan: ${proposal.record.scan.state}`,
+    ...supersessionLines,
     ...evaluationLines,
     "",
     proposal.content,
