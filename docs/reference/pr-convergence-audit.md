@@ -86,7 +86,8 @@ Fail closed to `UNKNOWN` when evidence is incomplete or unsafe to trust:
 - stale blocking evidence for an older head
 - the PR head changes between the initial and final reads
 - the PR title or description changes between the initial and final reads
-- the latest trusted exact-head pass predates the latest PR title or description edit
+- the latest trusted exact-head pass does not verifiably postdate the latest PR title or
+  description edit
 
 Stale blocking bot comments must produce `UNKNOWN` with a refresh or re-review
 next action. They must never be silently dismissed.

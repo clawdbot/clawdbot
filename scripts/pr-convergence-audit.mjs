@@ -243,7 +243,9 @@ function hasClawSweeperPass({ pullRequest, comments, newerThan = null }) {
     }
     if (newerThanMs !== null) {
       const verdictTimestampMs = Date.parse(comment?.updated_at ?? comment?.created_at ?? "");
-      if (!Number.isFinite(verdictTimestampMs) || verdictTimestampMs < newerThanMs) {
+      // GitHub timestamps are second-granularity. Equality cannot prove whether the
+      // body edit or verdict update happened first, so fail closed and re-review.
+      if (!Number.isFinite(verdictTimestampMs) || verdictTimestampMs <= newerThanMs) {
         return false;
       }
     }
@@ -657,7 +659,7 @@ export function decidePrConvergence({
     return {
       decision: CONVERGENCE_DECISIONS.UNKNOWN,
       reason:
-        "The trusted exact-head ClawSweeper pass predates the latest PR title or description edit.",
+        "The trusted exact-head ClawSweeper pass does not verifiably postdate the latest PR title or description edit.",
       nextAction: "Request a fresh exact-head ClawSweeper review after the PR content edit.",
     };
   }

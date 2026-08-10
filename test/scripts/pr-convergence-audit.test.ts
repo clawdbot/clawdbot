@@ -560,7 +560,7 @@ describe("pr-convergence-audit", () => {
     const result = await auditPrConvergence({ repo, pr, provider });
 
     expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
-    expect(result.reason).toContain("predates the latest PR title or description edit");
+    expect(result.reason).toContain("does not verifiably postdate");
     expect(result.nextAction).toMatch(/fresh exact-head ClawSweeper review/i);
   });
 
@@ -582,6 +582,25 @@ describe("pr-convergence-audit", () => {
 
     expect(result.decision).toBe(CONVERGENCE_DECISIONS.READY);
     expect(result.evidence.prLastEditedAt).toBe("2026-07-26T10:00:00Z");
+  });
+
+  it("fails closed when second-granularity timestamps cannot order the content edit and pass", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      prLastEditedAtInitial: "2026-07-26T10:00:00Z",
+      issueComments: [
+        clawsweeperComment({
+          id: 9653,
+          body: passBody,
+          updatedAt: "2026-07-26T10:00:00Z",
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toContain("does not verifiably postdate");
   });
 
   it("fails closed when PR content changes during evidence collection", async () => {
