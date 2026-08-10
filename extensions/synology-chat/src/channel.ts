@@ -333,6 +333,12 @@ async function sendSynologyChatMedia(
     ctx.to,
     account.allowInsecureSsl,
   );
+  if (sendResult.status === "not-dispatched") {
+    await prepared.cleanup();
+    throw new Error(
+      "Synology Chat attachment request did not start. Retry, and check incomingUrl if it fails again.",
+    );
+  }
   if (sendResult.status === "rejected") {
     await prepared.cleanup();
     throw new Error("Synology Chat rejected the attachment request");

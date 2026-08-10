@@ -6,6 +6,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import {
   buildHostedOutboundMediaResponseHeaders,
   createHostedOutboundMediaStore,
+  type ChunkReadableHostedOutboundMediaStore,
   type HostedOutboundMediaChunkRecord,
   type HostedOutboundMediaMetaRecord,
   type HostedOutboundMediaStore,
@@ -71,7 +72,7 @@ const servingLimiter = createWebhookInFlightLimiter({
   maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES,
   maxTrackedKeys: 128,
 });
-const hostedMediaStores = new Map<string, HostedOutboundMediaStore>();
+const hostedMediaStores = new Map<string, ChunkReadableHostedOutboundMediaStore>();
 const servedByteWindows = new Map<string, { startedAt: number; bytes: number }>();
 let hostedMediaRuntime: ReturnType<typeof getSynologyRuntime> | undefined;
 
@@ -140,7 +141,35 @@ function holdServingLeaseUntilResponseDone(res: ServerResponse, accountId: strin
   res.once("close", release);
 }
 
-function createHostedMediaStore(accountId: string): HostedOutboundMediaStore {
+async function writeHostedMediaChunk(res: ServerResponse, chunk: Buffer): Promise<void> {
+  if (res.destroyed) {
+    throw new Error("Synology Chat attachment response closed before completion.");
+  }
+  if (res.write(chunk)) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      res.off("drain", onDrain);
+      res.off("close", onClose);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Synology Chat attachment response closed before completion."));
+    };
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+    if (res.destroyed) {
+      onClose();
+    }
+  });
+}
+
+function createHostedMediaStore(accountId: string): ChunkReadableHostedOutboundMediaStore {
   const runtime = getSynologyRuntime();
   const accountScope = createHash("sha256").update(accountId).digest("hex").slice(0, 16);
   return createHostedOutboundMediaStore({
@@ -163,7 +192,7 @@ function createHostedMediaStore(accountId: string): HostedOutboundMediaStore {
   });
 }
 
-function getHostedMediaStore(accountId: string): HostedOutboundMediaStore {
+function getHostedMediaStore(accountId: string): ChunkReadableHostedOutboundMediaStore {
   const runtime = getSynologyRuntime();
   if (hostedMediaRuntime !== runtime) {
     hostedMediaRuntime = runtime;
@@ -401,7 +430,8 @@ export async function tryHandleSynologyHostedMediaRequest(
   try {
     const store = getHostedMediaStore(account.accountId);
     const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
-    const metadata = await store.readMetadata(candidate.id);
+    const streamedEntry = method === "GET" ? await store.readChunks(candidate.id) : undefined;
+    const metadata = streamedEntry?.metadata ?? (await store.readMetadata(candidate.id));
     if (!metadata || metadata.routePath !== routePath) {
       res.statusCode = 404;
       res.end("Not Found");
@@ -412,11 +442,9 @@ export async function tryHandleSynologyHostedMediaRequest(
       res.end("Unauthorized");
       return true;
     }
-    let servedMetadata = metadata;
-    let body: Buffer | undefined;
     if (method === "GET") {
-      // Authenticate and reserve from metadata before reconstructing chunk bytes.
-      // Rejected over-budget requests must not force large SQLite reads or allocations.
+      // Authenticate and reserve from metadata before reading stored chunks.
+      // Rejected over-budget requests must not force SQLite payload reads.
       rollbackServedBytes = reserveServedBytes(account.accountId, metadata.byteLength);
       if (!rollbackServedBytes) {
         res.statusCode = 429;
@@ -424,21 +452,14 @@ export async function tryHandleSynologyHostedMediaRequest(
         res.end("Attachment download limit exceeded");
         return true;
       }
-      const entry = await store.read(candidate.id);
-      if (
-        !entry ||
-        entry.metadata.routePath !== routePath ||
-        !safeEqualSecret(candidate.token, entry.metadata.token)
-      ) {
+      if (!streamedEntry) {
         res.statusCode = 404;
         res.end("Not Found");
         return true;
       }
-      servedMetadata = entry.metadata;
-      body = entry.buffer;
     }
     for (const [name, value] of Object.entries(
-      buildHostedOutboundMediaResponseHeaders(servedMetadata, {
+      buildHostedOutboundMediaResponseHeaders(metadata, {
         fallbackFileName: `attachment-${candidate.id.slice(0, 10)}.bin`,
       }),
     )) {
@@ -448,8 +469,22 @@ export async function tryHandleSynologyHostedMediaRequest(
     res.setHeader("Accept-Ranges", "none");
     responseOwnsServingLease = true;
     holdServingLeaseUntilResponseDone(res, account.accountId);
-    res.end(body);
+    // An authenticated GET consumes its bandwidth budget even if the client
+    // disconnects mid-stream; otherwise retries can bypass the served-byte cap.
     rollbackServedBytes = undefined;
+    if (streamedEntry) {
+      try {
+        for await (const chunk of streamedEntry.chunks) {
+          await writeHostedMediaChunk(res, chunk);
+        }
+      } catch {
+        if (!res.destroyed) {
+          res.destroy();
+        }
+        return true;
+      }
+    }
+    res.end();
     return true;
   } finally {
     rollbackServedBytes?.();

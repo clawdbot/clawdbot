@@ -732,6 +732,11 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("sendMedia retains staged bytes when webhook acceptance is indeterminate", async () => {
+      const cleanup = vi.fn(async () => undefined);
+      prepareSynologyHostedMediaMock.mockResolvedValueOnce({
+        url: preparedCapabilityUrl,
+        cleanup,
+      });
       mockSendHostedFileUrl.mockResolvedValueOnce({ status: "indeterminate" });
       await expect(
         synologyChatPlugin.outbound.sendMedia({
@@ -749,6 +754,34 @@ describe("createSynologyChatPlugin", () => {
           to: "user1",
         }),
       ).rejects.toThrow("acceptance could not be confirmed");
+      expect(cleanup).not.toHaveBeenCalled();
+    });
+
+    it("sendMedia cleans up staged bytes when the webhook request never starts", async () => {
+      const cleanup = vi.fn(async () => undefined);
+      prepareSynologyHostedMediaMock.mockResolvedValueOnce({
+        url: preparedCapabilityUrl,
+        cleanup,
+      });
+      mockSendHostedFileUrl.mockResolvedValueOnce({ status: "not-dispatched" });
+
+      await expect(
+        synologyChatPlugin.outbound.sendMedia({
+          cfg: {
+            channels: {
+              "synology-chat": {
+                enabled: true,
+                token: "t",
+                incomingUrl: "https://nas/incoming",
+                webhookUrl: "https://gateway.example.com/w",
+              },
+            },
+          },
+          mediaUrl: "https://example.com/img.png",
+          to: "user1",
+        }),
+      ).rejects.toThrow("request did not start");
+      expect(cleanup).toHaveBeenCalledOnce();
     });
 
     it("sendMedia cleans up staged bytes after a definitive webhook rejection", async () => {

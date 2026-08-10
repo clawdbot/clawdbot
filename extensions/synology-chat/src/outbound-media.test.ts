@@ -1,8 +1,12 @@
 // Synology Chat tests cover guarded outbound attachment staging and same-route capability serving.
 import fs from "node:fs";
 import path from "node:path";
+import type { HostedOutboundMediaChunkRecord } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -16,10 +20,28 @@ import {
   tryHandleSynologyHostedMediaRequest,
 } from "./outbound-media.js";
 import { setSynologyRuntime } from "./runtime.js";
-import { makeReq, makeRes } from "./test-http-utils.js";
+import { makeReq, makeRes as makeBaseRes } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn<typeof loadWebMediaType>());
+
+function makeRes(options: { finishOnEnd?: boolean } = {}) {
+  const res = makeBaseRes(options);
+  const chunks: Buffer[] = [];
+  const end = res.end.bind(res);
+  res.write = ((chunk: Uint8Array | string) => {
+    chunks.push(Buffer.from(chunk));
+    return true;
+  }) as typeof res.write;
+  res.end = ((chunk?: Uint8Array | string) => {
+    if (chunk !== undefined) {
+      chunks.push(Buffer.from(chunk));
+    }
+    end(chunks.length > 0 ? Buffer.concat(chunks) : undefined);
+    return res;
+  }) as typeof res.end;
+  return res;
+}
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
@@ -162,6 +184,98 @@ describe("Synology Chat hosted outbound media", () => {
       expect(Buffer.from(get.body).toString("utf8")).toBe("frozen-image-bytes");
     }
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams persisted chunks only as response backpressure permits", async () => {
+    const { openedStores } = installRuntime();
+    const frozenBytes = Buffer.alloc(40 * 1024, 0x61);
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: frozenBytes,
+      kind: undefined,
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+    });
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/report.pdf",
+    });
+    const chunkStore = openedStores[1] as
+      | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
+      | undefined;
+    if (!chunkStore) {
+      throw new Error("expected hosted media chunk store");
+    }
+    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const response = makeRes();
+    const write = response.write.bind(response);
+    let firstWrite = true;
+    response.write = ((chunk: Uint8Array | string) => {
+      write(chunk);
+      if (firstWrite) {
+        firstWrite = false;
+        return false;
+      }
+      return true;
+    }) as typeof response.write;
+    let settled = false;
+
+    const serving = tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
+      response,
+      account,
+    ).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(chunkLookup).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+
+    response.emit("drain");
+    await expect(serving).resolves.toBe(true);
+    expect(chunkLookup).toHaveBeenCalledTimes(2);
+    expect(Buffer.from(response.body)).toEqual(frozenBytes);
+  });
+
+  it("closes a partial response when a persisted chunk is corrupt", async () => {
+    const { openedStores } = installRuntime();
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.alloc(40 * 1024, 0x61),
+      kind: undefined,
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+    });
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: "https://files.example.com/report.pdf",
+    });
+    const chunkStore = openedStores[1] as
+      | PluginStateKeyedStore<HostedOutboundMediaChunkRecord>
+      | undefined;
+    if (!chunkStore) {
+      throw new Error("expected hosted media chunk store");
+    }
+    const originalLookup = chunkStore.lookup.bind(chunkStore);
+    vi.spyOn(chunkStore, "lookup").mockImplementation(async (key) => {
+      const chunk = await originalLookup(key);
+      return chunk?.index === 1
+        ? { ...chunk, dataBase64: Buffer.from("oversized").toString("base64") }
+        : chunk;
+    });
+    const response = makeRes({ finishOnEnd: false });
+    const writeSpy = vi.spyOn(response, "write");
+
+    await expect(
+      tryHandleSynologyHostedMediaRequest(
+        makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
+        response,
+        account,
+      ),
+    ).resolves.toBe(true);
+
+    expect(response.destroyed).toBe(true);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(Buffer.from(writeSpy.mock.calls[0]?.[0] ?? "")).toHaveLength(36 * 1024);
   });
 
   it("never treats capability query values as an on-demand fetch target", async () => {

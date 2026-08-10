@@ -66,6 +66,11 @@ export type HostedOutboundMediaEntry = {
   buffer: Buffer;
 };
 
+export type HostedOutboundMediaChunkStream = {
+  metadata: HostedOutboundMediaMetadata;
+  chunks: AsyncIterable<Buffer>;
+};
+
 export type HostedOutboundMediaMetaRecord = HostedOutboundMediaMetadata & {
   id: string;
   chunkCount: number;
@@ -99,6 +104,11 @@ export type HostedOutboundMediaStore = {
   delete: (id: string) => Promise<void>;
   cleanupExpired: (nowMs?: number) => Promise<void>;
   clear: () => Promise<void>;
+};
+
+export type ChunkReadableHostedOutboundMediaStore = HostedOutboundMediaStore & {
+  /** Open a lazy, ordered chunk stream without reconstructing the complete payload in memory. */
+  readChunks: (id: string, nowMs?: number) => Promise<HostedOutboundMediaChunkStream | null>;
 };
 
 export type CreateHostedOutboundMediaStoreOptions = {
@@ -216,7 +226,7 @@ async function deleteHostedOutboundMediaRows(
 
 export function createHostedOutboundMediaStore(
   options: CreateHostedOutboundMediaStoreOptions,
-): HostedOutboundMediaStore {
+): ChunkReadableHostedOutboundMediaStore {
   const rawChunkBytes = options.rawChunkBytes ?? DEFAULT_HOSTED_OUTBOUND_MEDIA_RAW_CHUNK_BYTES;
   const maxEntries = options.maxEntries ?? DEFAULT_HOSTED_OUTBOUND_MEDIA_MAX_ENTRIES;
   const chunkRowsPerEntryBudget =
@@ -301,6 +311,58 @@ export function createHostedOutboundMediaStore(
         }
       }
     });
+  }
+
+  async function readChunks(
+    id: string,
+    nowMs = Date.now(),
+  ): Promise<HostedOutboundMediaChunkStream | null> {
+    const meta = await readMetadataRecord(id, nowMs);
+    if (!meta) {
+      return null;
+    }
+    return {
+      metadata: createHostedOutboundMediaMetadata(meta),
+      // Keep chunk lookup lazy so HTTP owners can honor downstream backpressure
+      // instead of reconstructing the complete stored payload before serving it.
+      chunks: (async function* () {
+        const deleteIncompletePayload = async (): Promise<Error> => {
+          await withCapacityMutation(async () => await deleteEntry(id));
+          return new Error("hosted outbound media payload is incomplete");
+        };
+        const expectedChunkCount = Math.max(1, Math.ceil(meta.byteLength / rawChunkBytes));
+        if (
+          !Number.isSafeInteger(meta.byteLength) ||
+          meta.byteLength < 0 ||
+          meta.chunkCount !== expectedChunkCount ||
+          meta.chunkCount > maxChunkRows
+        ) {
+          throw await deleteIncompletePayload();
+        }
+        let streamedBytes = 0;
+        for (let index = 0; index < meta.chunkCount; index += 1) {
+          const chunk = await options.chunkStore.lookup(
+            buildHostedOutboundMediaChunkKey(id, index),
+          );
+          if (!chunk || chunk.id !== id || chunk.index !== index) {
+            throw await deleteIncompletePayload();
+          }
+          const decoded = Buffer.from(chunk.dataBase64, "base64");
+          const expectedBytes =
+            index === meta.chunkCount - 1
+              ? meta.byteLength - rawChunkBytes * (meta.chunkCount - 1)
+              : rawChunkBytes;
+          if (decoded.byteLength !== expectedBytes) {
+            throw await deleteIncompletePayload();
+          }
+          streamedBytes += decoded.byteLength;
+          yield decoded;
+        }
+        if (streamedBytes !== meta.byteLength) {
+          throw await deleteIncompletePayload();
+        }
+      })(),
+    };
   }
 
   async function pruneForCapacity(
@@ -437,6 +499,7 @@ export function createHostedOutboundMediaStore(
       const meta = await readMetadataRecord(id, nowMs);
       return meta ? createHostedOutboundMediaMetadata(meta) : null;
     },
+    readChunks,
     async read(id, nowMs = Date.now()) {
       const meta = await readMetadataRecord(id, nowMs);
       if (!meta) {

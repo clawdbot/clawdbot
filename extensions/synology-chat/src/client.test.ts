@@ -367,6 +367,46 @@ describe("sendHostedFileUrl", () => {
     expect(result).toEqual({ status: "indeterminate" });
   });
 
+  it("returns not-dispatched when the transport proves it never connected", async () => {
+    mockRequestErrorOnce(Object.assign(new Error("host not found"), { code: "ENOTFOUND" }));
+
+    const result = await settleTimers(
+      sendHostedFileUrl(
+        "https://nas.example.com/incoming",
+        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
+      ),
+    );
+
+    expect(result).toEqual({ status: "not-dispatched" });
+  });
+
+  it("returns not-dispatched when request construction fails synchronously", async () => {
+    vi.mocked(https.request).mockImplementationOnce(() => {
+      throw new Error("request construction failed");
+    });
+
+    const result = await settleTimers(
+      sendHostedFileUrl(
+        "https://nas.example.com/incoming",
+        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
+      ),
+    );
+
+    expect(result).toEqual({ status: "not-dispatched" });
+  });
+
+  it("returns not-dispatched when the incoming webhook URL is malformed", async () => {
+    const result = await settleTimers(
+      sendHostedFileUrl(
+        "not-a-url",
+        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
+      ),
+    );
+
+    expect(result).toEqual({ status: "not-dispatched" });
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
   it("respects the shared send interval before posting a file URL", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "hello"));
@@ -391,7 +431,7 @@ describe("sendHostedFileUrl", () => {
     const result = await settleTimers(
       sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("not-a-url")),
     );
-    expect(result).toEqual({ status: "rejected" });
+    expect(result).toEqual({ status: "not-dispatched" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
@@ -399,7 +439,7 @@ describe("sendHostedFileUrl", () => {
     const result = await settleTimers(
       sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("http://example.com/file")),
     );
-    expect(result).toEqual({ status: "rejected" });
+    expect(result).toEqual({ status: "not-dispatched" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
@@ -413,7 +453,7 @@ describe("sendHostedFileUrl", () => {
         hostedUrl(credentialedUrl.toString()),
       ),
     );
-    expect(result).toEqual({ status: "rejected" });
+    expect(result).toEqual({ status: "not-dispatched" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 });

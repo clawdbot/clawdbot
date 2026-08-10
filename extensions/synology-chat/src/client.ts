@@ -90,6 +90,7 @@ type ChatWebhookPayload = {
 
 export type SynologyHostedFileSendResult =
   | { status: "accepted" }
+  | { status: "not-dispatched" }
   | { status: "rejected" }
   | { status: "indeterminate" };
 
@@ -203,16 +204,17 @@ export async function sendHostedFileUrl(
   try {
     body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
   } catch {
-    return { status: "rejected" };
+    return { status: "not-dispatched" };
   }
 
+  await waitForSendSlot();
+
   try {
-    await waitForSendSlot();
     return { status: await doPost(incomingUrl, body, allowInsecureSsl) };
-  } catch {
-    // Once the request starts, transport errors and timeouts cannot prove that
-    // Synology did not queue the capability before the response was lost.
-    return { status: "indeterminate" };
+  } catch (error) {
+    // Proven pre-connect failures cannot have queued the capability. All other
+    // transport errors stay indeterminate because Synology may have the POST.
+    return { status: isProvenPreConnectFailure(error) ? "not-dispatched" : "indeterminate" };
   }
 }
 
@@ -438,55 +440,63 @@ function doPost(
     try {
       parsedUrl = new URL(url);
     } catch {
-      reject(new Error(`Invalid URL: ${url}`));
+      resolve("not-dispatched");
       return;
     }
     const transport = parsedUrl.protocol === "https:" ? https : http;
 
-    const req = transport.request(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Content-Length": Buffer.byteLength(body),
+    let req: http.ClientRequest;
+    try {
+      req = transport.request(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": Buffer.byteLength(body),
+          },
+          // Synology NAS may use self-signed certs on local network.
+          // Set allowInsecureSsl: true in channel config to skip verification.
+          rejectUnauthorized: !allowInsecureSsl,
         },
-        // Synology NAS may use self-signed certs on local network.
-        // Set allowInsecureSsl: true in channel config to skip verification.
-        rejectUnauthorized: !allowInsecureSsl,
-      },
-      (res) => {
-        response = res;
-        const responseChunks: Buffer[] = [];
-        let responseBytes = 0;
-        res.on("data", (chunk: Buffer) => {
-          responseBytes += chunk.length;
-          if (responseBytes <= USER_LIST_RESPONSE_MAX_BYTES) {
-            responseChunks.push(chunk);
-          } else {
-            responseChunks.length = 0;
-          }
-        });
-        res.on("end", () => {
-          const result =
-            responseBytes <= USER_LIST_RESPONSE_MAX_BYTES
-              ? safeParseJsonWithSchema(
-                  ChatUserListResponseSchema.pick({ success: true }),
-                  Buffer.concat(responseChunks).toString("utf8"),
-                )
-              : null;
-          if (res.statusCode === 200) {
-            finish({ status: result?.success === false ? "rejected" : "accepted" });
-            return;
-          }
-          // A reverse proxy can emit a server error after forwarding the POST
-          // and losing Synology's response, so 5xx cannot prove non-acceptance.
-          finish({ status: (res.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected" });
-        });
-        res.on("error", (error) => finish({ error }));
-        res.resume();
-      },
-    );
+        (res) => {
+          response = res;
+          const responseChunks: Buffer[] = [];
+          let responseBytes = 0;
+          res.on("data", (chunk: Buffer) => {
+            responseBytes += chunk.length;
+            if (responseBytes <= USER_LIST_RESPONSE_MAX_BYTES) {
+              responseChunks.push(chunk);
+            } else {
+              responseChunks.length = 0;
+            }
+          });
+          res.on("end", () => {
+            const result =
+              responseBytes <= USER_LIST_RESPONSE_MAX_BYTES
+                ? safeParseJsonWithSchema(
+                    ChatUserListResponseSchema.pick({ success: true }),
+                    Buffer.concat(responseChunks).toString("utf8"),
+                  )
+                : null;
+            if (res.statusCode === 200) {
+              finish({ status: result?.success === false ? "rejected" : "accepted" });
+              return;
+            }
+            // A reverse proxy can emit a server error after forwarding the POST
+            // and losing Synology's response, so 5xx cannot prove non-acceptance.
+            finish({ status: (res.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected" });
+          });
+          res.on("error", (error) => finish({ error }));
+          res.resume();
+        },
+      );
+    } catch {
+      // Synchronous request construction failed before Node returned a request
+      // that could write the capability to the network.
+      finish({ status: "not-dispatched" });
+      return;
+    }
 
     req.on("error", (error) => finish({ error }));
     // ClientRequest timeout is socket-idle based. Keep one absolute budget
