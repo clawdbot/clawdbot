@@ -82,10 +82,12 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     return this.presentedValue;
   }
   set presented(value: boolean) {
-    if (value === this.presentedValue) {
+    const previous = this.presentedValue;
+    if (value === previous) {
       return;
     }
     this.presentedValue = value;
+    this.requestUpdate("presented", previous);
     this.presentedChanged(value);
   }
   protected presentedChanged(_presented: boolean): void {}
@@ -93,10 +95,12 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     return this.activeValue;
   }
   set active(value: boolean) {
-    if (value === this.activeValue) {
+    const previous = this.activeValue;
+    if (value === previous) {
       return;
     }
     this.activeValue = value;
+    this.requestUpdate("active", previous);
     this.activeChanged(value);
   }
   protected activeChanged(_active: boolean): void {}

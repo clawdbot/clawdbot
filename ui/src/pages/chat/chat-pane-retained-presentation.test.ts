@@ -157,6 +157,32 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(state.handleSendChat).toHaveBeenCalledOnce();
   });
 
+  it("schedules renders when an actual retained pane is hidden and reactivated", () => {
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.active = true;
+    const requestUpdate = vi.spyOn(
+      pane as unknown as { requestUpdate(name: PropertyKey, previous: unknown): void },
+      "requestUpdate",
+    );
+
+    pane.presented = false;
+    pane.active = false;
+    pane.presented = true;
+    pane.active = true;
+
+    expect(
+      requestUpdate.mock.calls.filter(([name]) => name === "presented" || name === "active"),
+    ).toEqual([
+      ["presented", true],
+      ["active", true],
+      ["presented", false],
+      ["active", false],
+    ]);
+  });
+
   it("retires foreground-only state when a retained pane is hidden", () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
