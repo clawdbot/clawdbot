@@ -1575,13 +1575,20 @@ openclaw-chat-session-rail {
   background: var(--card);
 }
 
+/* Narrow panes cannot hold two columns, so the companion becomes a full-height
+   sheet on the pane's trailing edge. It still covers the thread, but it reads as
+   a surface that took the pane over rather than a card floating above it — the
+   docked column below is the shape this degrades from. */
 .chat-session-rail--expanded {
   display: flex;
+  top: 0;
+  right: 0;
+  bottom: 0;
   flex-direction: column;
-  width: min(400px, calc(100% - 24px));
-  max-height: min(82%, 680px);
+  width: min(400px, 100%);
   overflow: hidden;
-  border-radius: var(--radius-xl);
+  border-width: 0 0 0 1px;
+  border-radius: 0;
 }
 
 .chat-session-rail__header {
@@ -1830,10 +1837,12 @@ openclaw-chat-session-rail {
   border-top: 0;
 }
 
+/* Sits where the first exchange will land rather than centred in the column:
+   in a full-height rail, centring strands the starters in the middle and makes
+   them jump to the top as soon as an answer arrives. */
 .chat-session-rail__starters {
   display: grid;
   gap: 12px;
-  margin: auto 0;
   justify-items: center;
 }
 
@@ -1856,7 +1865,6 @@ openclaw-chat-session-rail {
   gap: 5px;
   padding: 5px 10px;
   color: var(--text);
-  cursor: pointer;
 }
 
 .chat-session-rail__starter svg {
@@ -1870,7 +1878,7 @@ openclaw-chat-session-rail {
 }
 
 .chat-session-rail__starter:disabled {
-  cursor: default;
+  cursor: not-allowed;
   opacity: 0.5;
 }
 
@@ -1977,20 +1985,21 @@ openclaw-chat-session-rail {
   color: var(--muted);
 }
 
+/* The docked form: a real column in the pane's flex row. It claims layout space
+   instead of painting over the thread, so nothing here may float, shadow, or
+   blur — those cues would read as an overlay again. */
 .chat-main--rail-docked .chat-session-rail--expanded {
   position: static;
   width: 100%;
   height: 100%;
-  max-height: none;
-  border: 0;
-  border-left: 1px solid var(--border);
-  border-radius: 0;
   box-shadow: none;
   backdrop-filter: none;
+  animation: none;
 }
 
 @media (max-width: 768px) {
-  .chat-session-rail {
+  /* The ambient pill stays a small chip above the composer. */
+  .chat-session-rail--pill {
     position: fixed;
     top: auto;
     left: max(8px, var(--safe-area-left));
@@ -2000,8 +2009,15 @@ openclaw-chat-session-rail {
     width: auto;
   }
 
+  /* No pane can hold a column at this width, so the companion takes the whole
+     surface rather than hovering over part of it. */
   .chat-session-rail--expanded {
-    max-height: min(58vh, 460px);
+    position: fixed;
+    z-index: 35;
+    inset: 0;
+    width: 100%;
+    padding-bottom: var(--safe-area-bottom);
+    border-width: 0;
   }
 }
 

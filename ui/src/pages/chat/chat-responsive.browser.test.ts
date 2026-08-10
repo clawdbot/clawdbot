@@ -2889,5 +2889,36 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it("degrades an undocked session rail to a full-height edge sheet, never a floating card", async () => {
+    const page = await openFixture(900, 800, {
+      sessionRailBody: LONG_SESSION_RAIL_BODY,
+      sessionRailDocked: false,
+    });
+    try {
+      const geometry = await page.evaluate(() => {
+        const rail = document.querySelector(".chat-session-rail") as HTMLElement;
+        const main = document.querySelector(".chat-main") as HTMLElement;
+        const railBox = rail.getBoundingClientRect();
+        const mainBox = main.getBoundingClientRect();
+        const style = getComputedStyle(rail);
+        return {
+          topGap: Math.round(railBox.top - mainBox.top),
+          bottomGap: Math.round(mainBox.bottom - railBox.bottom),
+          rightGap: Math.round(mainBox.right - railBox.right),
+          borderRadius: style.borderTopLeftRadius,
+        };
+      });
+
+      // Flush to the pane on three sides with square corners: a surface that
+      // took the pane over, not a card hovering above the conversation.
+      expect(geometry.topGap).toBe(0);
+      expect(geometry.bottomGap).toBe(0);
+      expect(geometry.rightGap).toBe(0);
+      expect(geometry.borderRadius).toBe("0px");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

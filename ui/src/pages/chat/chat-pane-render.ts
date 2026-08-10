@@ -30,7 +30,7 @@ import {
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
-  SESSION_RAIL_DOCK_MIN_WIDTH,
+  SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
 } from "./chat-pane-shared.ts";
@@ -298,7 +298,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         : this.sessionCompanionThreads.view(state.sessionKey),
       ...this.sessionRailCommandProps(state.sessionKey),
       sessionRailMode: this.selectedSessionRailMode(state.sessionKey),
-      sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
+      sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onSessionRailDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft),
