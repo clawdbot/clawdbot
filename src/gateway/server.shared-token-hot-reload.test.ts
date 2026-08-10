@@ -9,7 +9,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "./test-helpers.js";
 
@@ -20,7 +20,7 @@ const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_TOKEN_HOT_RELOAD_SECRET_REF";
 const OLD_TOKEN = "shared-token-hot-reload-old";
 const NEW_TOKEN = "shared-token-hot-reload-new";
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let port = 0;
 
 function buildSharedTokenReloadConfig(): Record<string, unknown> {
@@ -50,7 +50,7 @@ beforeAll(async () => {
     `${JSON.stringify(buildSharedTokenReloadConfig(), null, 2)}\n`,
     "utf-8",
   );
-  server = await startGatewayServer(port, { controlUiEnabled: true });
+  server = await startTestGatewayServer(port, { controlUiEnabled: true });
 });
 
 beforeEach(() => {

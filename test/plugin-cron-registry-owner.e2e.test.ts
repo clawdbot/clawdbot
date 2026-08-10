@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../src/gateway/test-helpers.e2e.js";
 import {
   createOpenClawTestInstance,
@@ -340,7 +340,7 @@ describe("plugin cron registry ownership e2e", () => {
           },
         },
       } satisfies OpenClawConfig;
-      const customPort = await getFreeGatewayPort();
+      const customPort = await getGatewayE2ePortBlock();
       const instance = await createOpenClawTestInstance({
         name: "plugin-cron-registry-owner",
         port: customPort,

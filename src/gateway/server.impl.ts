@@ -9,4 +9,4 @@ export {
   type GatewayServer,
   type GatewayServerOptions,
 } from "./server-public.js";
-export { resetPreparedModelCatalogForTest, startGatewayServer } from "./server-start.js";
+export { resetPreparedModelCatalogForTestCore, startGatewayServerCore } from "./server-start.js";

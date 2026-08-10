@@ -22,7 +22,7 @@ import {
   restoreGatewayToken,
   rpcReq,
   startRateLimitedTokenServerWithPairedDeviceToken,
-  startGatewayServer,
+  startTestGatewayServer,
   startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
@@ -166,7 +166,7 @@ export function registerControlUiAndPairingSuite(): void {
   const withControlUiGatewayServer = async <T>(
     fn: (ctx: {
       port: number;
-      server: Awaited<ReturnType<typeof startGatewayServer>>;
+      server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     }) => Promise<T>,
   ): Promise<T> => {
     return await withGatewayServer(fn, {

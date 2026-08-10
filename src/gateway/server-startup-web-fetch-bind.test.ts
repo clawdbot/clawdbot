@@ -4,7 +4,7 @@
 import http from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+import { getFreePort, installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 import { readClientResponseBody } from "./test-http-response.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
@@ -94,7 +94,7 @@ async function writeConfig(config: OpenClawConfig): Promise<void> {
 describe("gateway startup web fetch config", () => {
   let port: number;
   let previousMinimal: string | undefined;
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
 
   beforeAll(async () => {
     previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
@@ -122,7 +122,7 @@ describe("gateway startup web fetch config", () => {
     } as OpenClawConfig);
 
     port = await getFreePort();
-    server = await startGatewayServer(port, {
+    server = await startTestGatewayServer(port, {
       auth: { mode: "none" },
     });
   });

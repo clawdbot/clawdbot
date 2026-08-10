@@ -12,7 +12,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   onceMessage,
-  startGatewayServer,
+  startTestGatewayServer,
   trackConnectChallengeNonce,
 } from "../../test-helpers.js";
 import {
@@ -289,7 +289,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
 
     const token = "gateway-request-trace-test-token";
     const port = await getFreePort();
-    const server = await startGatewayServer(port, {
+    const server = await startTestGatewayServer(port, {
       auth: { mode: "token", token },
       bind: "loopback",
       controlUiEnabled: false,

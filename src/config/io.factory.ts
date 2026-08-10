@@ -1,9 +1,9 @@
 import { createConfigIoContext } from "./io.context.js";
 import { loadConfigFromContext } from "./io.load.js";
 import {
-  preserveConfigSnapshotAsClobbered,
-  promoteConfigSnapshotToLastKnownGood,
-  recoverConfigFromLastKnownGood,
+  preserveConfigSnapshotAsClobberedCore,
+  promoteConfigSnapshotToLastKnownGoodCore,
+  recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
 import { recoverConfigFromJsonRootSuffixWithContext } from "./io.recovery.js";
 import {
@@ -36,20 +36,20 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
     readConfigFileSnapshotForWrite: () => readConfigFileSnapshotForWriteFromContext(context),
     promoteConfigSnapshotToLastKnownGood: (snapshot: ConfigFileSnapshot) =>
-      promoteConfigSnapshotToLastKnownGood({
+      promoteConfigSnapshotToLastKnownGoodCore({
         deps: context.deps,
         snapshot,
         logger: context.deps.logger,
       }),
     recoverConfigFromLastKnownGood: (params: { snapshot: ConfigFileSnapshot; reason: string }) =>
-      recoverConfigFromLastKnownGood({
+      recoverConfigFromLastKnownGoodCore({
         deps: context.deps,
         snapshot: params.snapshot,
         reason: params.reason,
         prepareCandidate: context.prepareRecoveryBackupCandidate,
       }),
     preserveConfigSnapshotAsClobbered: (snapshot: ConfigFileSnapshot) =>
-      preserveConfigSnapshotAsClobbered({ deps: context.deps, snapshot }),
+      preserveConfigSnapshotAsClobberedCore({ deps: context.deps, snapshot }),
     recoverConfigFromJsonRootSuffix: (snapshot: ConfigFileSnapshot) =>
       recoverConfigFromJsonRootSuffixWithContext(context, snapshot),
     writeConfigFile: (
