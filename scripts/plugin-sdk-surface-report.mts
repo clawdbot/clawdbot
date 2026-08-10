@@ -328,29 +328,18 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
       // +1: shipped channel setup state-migration declaration during its migration window.
-<<<<<<< HEAD
       // +7: candidate continuation/#666 deprecated-compat exports retained through this back-merge.
-      1711,
-||||||| 6ee409ca7b6
-      1704,
-=======
-      // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
-      1708,
->>>>>>> upstream/main
+      // +4: upstream's session-write lease no-op compatibility stubs through the 2026.10 train.
+      1715,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // -1: text-runtime now names its global-singleton exports explicitly.
       // -1: infra-runtime now names its error exports explicitly.
-<<<<<<< HEAD
       // -1: candidate continuation names one more re-export explicitly.
-||||||| 6ee409ca7b6
-      80,
-=======
-      // -1: infra-runtime excludes the internal system-event receipt API.
->>>>>>> upstream/main
-      79,
+      // -1: upstream's infra-runtime excludes the internal system-event receipt API.
+      78,
       env,
     ),
   };
