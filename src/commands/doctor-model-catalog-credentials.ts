@@ -1,4 +1,5 @@
 /** Doctor-owned migration of plaintext model-catalog credentials into agent SQLite. */
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,6 +12,7 @@ import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-ma
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { parseModelCatalogJson } from "../agents/model-catalog-json.js";
 import {
   isGeneratedPluginModelCatalog,
   loadPersistedPluginModelCatalogsReadOnly,
@@ -18,7 +20,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { listAgentModelsJsonPaths, readJsonObjectIfExists } from "../secrets/storage-scan.js";
+import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -183,11 +185,17 @@ function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalo
   const localStore = loadPersistedAuthProfileStore(agentDir) ?? emptyStore();
   const providers: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
-  const root = readJsonObjectIfExists(rootPath, { requireRegularFile: true });
-  if (root.error) {
-    warnings.push(`Could not read model catalog ${shortenHomePath(rootPath)}: ${root.error}`);
-  } else if (isRecord(root.value?.providers)) {
-    providers.push(root.value.providers);
+  try {
+    const root = parseModelCatalogJson(fs.readFileSync(rootPath, "utf8"));
+    if (isRecord(root) && isRecord(root.providers)) {
+      providers.push(root.providers);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      warnings.push(
+        `Could not read model catalog ${shortenHomePath(rootPath)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   try {
     for (const catalog of loadPersistedPluginModelCatalogsReadOnly(agentDir)) {

@@ -82,11 +82,10 @@ describe("doctor model catalog credential migration", () => {
     const cfg: OpenClawConfig = {
       models: { providers: { configured: provider("configured-secret") } },
     };
-    const rootContents = `${JSON.stringify(
-      { providers: { root: provider("root-secret") } },
-      null,
-      2,
-    )}\n`;
+    const rootContents = `{
+      // Root catalogs use the same comment-tolerant syntax as ModelRegistry.
+      "providers": { "root": ${JSON.stringify(provider("root-secret"))}, },
+    }\n`;
     fs.writeFileSync(path.join(agentDir, "models.json"), rootContents);
     const pluginContents = `${JSON.stringify(
       {
