@@ -231,7 +231,7 @@ export function createAgentHarnessHostCapabilities(params: {
     },
     requestApproval: async (request) => {
       assertActive();
-      return await withCaller(
+      const result = await withCaller(
         async () =>
           await withGatewayToolApprovalOwner(
             params.pluginId,
@@ -255,6 +255,10 @@ export function createAgentHarnessHostCapabilities(params: {
               ),
           ),
       );
+      // Gateway approval calls may outlive their owning attempt. A late
+      // request result must not escape after exact authority has closed.
+      assertActive();
+      return result;
     },
     waitForApproval: async (request) => {
       assertActive();
@@ -267,6 +271,9 @@ export function createAgentHarnessHostCapabilities(params: {
             { signal: request.signal },
           ),
       );
+      // An allowed decision is useful only while this exact admitted owner is
+      // still live; fail closed if closure raced the awaited Gateway result.
+      assertActive();
       return result?.id === request.approvalId
         ? (result.decision as "allow-once" | "allow-always" | "deny" | null | undefined)
         : undefined;

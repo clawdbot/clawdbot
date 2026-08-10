@@ -22,6 +22,7 @@ import {
   type InternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { callGatewayTool } from "../tools/gateway.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
@@ -29,9 +30,11 @@ vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
   rewrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
   runBeforeToolCallHook: vi.fn(async ({ params }) => ({ blocked: false, params })),
 }));
+vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 
 const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
+const mockCallGatewayTool = vi.mocked(callGatewayTool);
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
 const admissions: PreparedAgentRunAdmission[] = [];
@@ -110,6 +113,7 @@ describe("agent harness host capability", () => {
   beforeEach(() => {
     mockRewrap.mockClear();
     mockRunBefore.mockClear();
+    mockCallGatewayTool.mockReset();
   });
 
   it("overwrites plugin policy fields with the host snapshot and revokes lexically", async () => {
@@ -248,6 +252,73 @@ describe("agent harness host capability", () => {
     hookResult.resolve({ blocked: false, params: { command: "true" } });
 
     await expect(pending).rejects.toThrow("no longer active");
+  });
+
+  it.each([
+    {
+      name: "lexical host closure",
+      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
+        host.close();
+      },
+    },
+    {
+      name: "exact authority release",
+      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
+        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+      },
+    },
+    {
+      name: "outer admission abort",
+      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
+        admission.close();
+      },
+    },
+    {
+      name: "replacement owner",
+      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
+        await admittedAttempt(attempt.runId);
+      },
+    },
+  ])("rejects late approval results after $name", async ({ name, revoke }) => {
+    const operations = [
+      {
+        name: "request",
+        result: { id: "approval-1", decision: null },
+        start: (host: ReturnType<typeof createAgentHarnessHostCapabilities>) =>
+          host.capabilities.requestApproval({
+            title: "Run command",
+            description: "Execute a native command",
+            severity: "warning",
+            toolName: "exec",
+            timeoutMs: 1_000,
+          }),
+      },
+      {
+        name: "wait",
+        result: { id: "approval-1", decision: "allow-once" as const },
+        start: (host: ReturnType<typeof createAgentHarnessHostCapabilities>) =>
+          host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
+      },
+    ] as const;
+
+    for (const operation of operations) {
+      const runId = `run-approval-race-${name.replaceAll(" ", "-")}-${operation.name}`;
+      const { attempt, admission } = await admittedAttempt(runId);
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const gatewayStarted = createDeferred();
+      const gatewayResult = createDeferred<typeof operation.result>();
+      mockCallGatewayTool.mockImplementationOnce(async () => {
+        gatewayStarted.resolve();
+        return await gatewayResult.promise;
+      });
+
+      const pending = operation.start(host);
+      await gatewayStarted.promise;
+      await revoke({ admission, attempt, host });
+      gatewayResult.resolve(operation.result);
+
+      await expect(pending).rejects.toThrow("no longer active");
+    }
   });
 
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {
