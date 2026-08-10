@@ -332,4 +332,10 @@ describe("package scripts", () => {
       "src/auto-reply/usage-bar/template.windows.test.ts",
     );
   });
+
+  it("runs native media-understanding file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+    );
+  });
 });
