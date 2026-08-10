@@ -210,6 +210,8 @@ Define providers under `secrets.providers`:
 }
 ```
 
+Provider aliases are source-specific. A matching explicit provider entry wins; if an `env` or `store` default alias is also used by an entry for another source, that source's built-in provider wins. Non-default aliases and `file` or `exec` providers must resolve to an explicit entry with the matching source.
+
 <Accordion title="Env provider">
 - Optional exact-name allowlist via `allowlist`.
 - Missing or empty env values fail resolution.
