@@ -53,6 +53,7 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "memory-core-doctor-dreaming-state-import",
   "memory-core-doctor-qmd-retirement",
   "memory-core-doctor-vector-index-diagnostic",
+  "doctor-transcript-memory-repair",
   "gateway-memory-search",
   "memory-import",
   "session-backfill-transcript-read",
@@ -80,6 +81,7 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "profile-and-short-term-promotion",
   "short-term-promotion-recall-recording",
   "short-term-promotion-operator-repair",
+  "memory-rem-harness-preview",
   "child-agent-delegation",
   "child-agent-completion-handoff",
   "cron-triggered-run",
@@ -135,6 +137,7 @@ const MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES = [
   "src/wizard/setup.migration-import.ts",
   "src/wizard/setup.migration-finalize.ts",
   "src/wizard/setup.post-install-migration.ts",
+  "src/wizard/setup.memory-import.ts",
   "src/plugin-sdk/migration-runtime.ts",
 ] as const;
 
@@ -149,7 +152,16 @@ const MEMORY_MIGRATION_IMPORT_ROOTS = [
   "src/wizard/setup.migration-import.ts",
   "src/wizard/setup.migration-finalize.ts",
   "src/wizard/setup.post-install-migration.ts",
+  "src/wizard/setup.memory-import.ts",
   "src/plugin-sdk/migration-runtime.ts",
+] as const;
+
+const MEMORY_CORE_DOCTOR_STATE_MIGRATION_REGISTRATION_SURFACES = [
+  "extensions/memory-core/doctor-contract-api.ts",
+  "src/plugins/doctor-contract-registry.ts",
+  "src/infra/state-migrations.doctor.ts",
+  "src/commands/doctor-config-preflight.ts",
+  "src/flows/doctor-health-contributions.ts",
 ] as const;
 
 const MEMORY_CORE_DOCTOR_STATE_MIGRATION_SURFACES = [
@@ -302,6 +314,10 @@ function listMemoryMigrationIngressMarkers(file: string, sourceText: string): st
   const defaultCommandBindings = listImportedCallBindings(source, "migrateDefaultCommand");
   const applyCommandBindings = listImportedCallBindings(source, "migrateApplyCommand");
   const applyBindings = listImportedCallBindings(source, "runMigrationApply");
+  const providerMemoryImportBindings = listImportedCallBindings(
+    source,
+    "applyProviderMemoryImport",
+  );
   const markers: string[] = [];
   const visit = (node: ts.Node) => {
     if (
@@ -324,6 +340,9 @@ function listMemoryMigrationIngressMarkers(file: string, sourceText: string): st
         // Generic migration application admits provider plans containing memory items, so every
         // caller is an ingress route until an owning Phase records its authorization boundary.
         markers.push("migration-plan-apply");
+      }
+      if (isNamedCall(node.expression, providerMemoryImportBindings)) {
+        markers.push("provider-memory-import-apply");
       }
       if (isMigrationProviderApplyCall(node.expression)) {
         markers.push("migration-provider-apply");
@@ -431,7 +450,9 @@ describe("memory authorization path inventory", () => {
       direction: "control",
       owner: "operator-memory-host",
       disposition: "blocked-in-enforced-mode",
-      surfaces: ["extensions/memory-core/doctor-contract-api.ts"],
+      surfaces: expect.arrayContaining([
+        ...MEMORY_CORE_DOCTOR_STATE_MIGRATION_REGISTRATION_SURFACES,
+      ]),
     });
     for (const [id, surface] of [
       [
@@ -461,6 +482,7 @@ describe("memory authorization path inventory", () => {
       surfaces: expect.arrayContaining([
         "extensions/memory-core/src/short-term-promotion-apply.ts",
         "extensions/memory-core/src/short-term-promotion-memory-write.ts",
+        "extensions/memory-core/src/cli-index-search.runtime.ts",
       ]),
     });
     expect([...inventoriedSurfaces]).toEqual(
@@ -487,9 +509,20 @@ describe("memory authorization path inventory", () => {
       disposition: "blocked-in-enforced-mode",
       surfaces: ["extensions/memory-core/src/migration/doctor-vector-index-provider.ts"],
     });
+    expect(entriesById.get("doctor-transcript-memory-repair")).toMatchObject({
+      direction: "control",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "src/flows/doctor-health-contribution-runners.state.ts",
+        "src/commands/doctor-session-transcripts.ts",
+        "src/commands/doctor-session-transcript-headers.ts",
+        "src/commands/doctor-session-transcript-labels.ts",
+      ]),
+    });
   });
 
-  it("keeps import, recall recording, promotion, and operator repair as separate paths", () => {
+  it("keeps import, preview, recall recording, promotion, and operator repair as separate paths", () => {
     const entriesById = new Map(inventory.map((item) => [item.id, item]));
 
     expect(entriesById.get("memory-migration-import")).toMatchObject({
@@ -501,6 +534,7 @@ describe("memory authorization path inventory", () => {
         "src/wizard/setup.migration-import.ts",
         "src/wizard/setup.migration-finalize.ts",
         "src/wizard/setup.post-install-migration.ts",
+        "src/wizard/setup.memory-import.ts",
         "src/plugin-sdk/migration-runtime.ts",
       ]),
     });
@@ -511,6 +545,9 @@ describe("memory authorization path inventory", () => {
       surfaces: expect.arrayContaining([
         "extensions/memory-core/src/tools.ts",
         "extensions/memory-core/src/cli-index-search.runtime.ts",
+        "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/dreaming-phases.ts",
+        "extensions/memory-core/src/session-backfill.ts",
         "extensions/memory-core/src/short-term-promotion-record.ts",
         "extensions/memory-core/src/short-term-promotion-store.ts",
       ]),
@@ -524,6 +561,22 @@ describe("memory authorization path inventory", () => {
         "src/commands/doctor-memory-search.ts",
         "src/gateway/server-methods/doctor.ts",
         "src/gateway/server-methods/doctor.memory-core-runtime.ts",
+        "src/plugin-sdk/memory-core-bundled-runtime.ts",
+        "extensions/memory-core/src/short-term-promotion-artifacts.ts",
+      ]),
+    });
+    expect(entriesById.get("memory-rem-harness-preview")).toMatchObject({
+      direction: "egress",
+      owner: "operator-memory-host",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: expect.arrayContaining([
+        "extensions/memory-core/src/cli.ts",
+        "extensions/memory-core/src/cli.runtime.ts",
+        "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/rem-harness.ts",
+        "src/gateway/server-methods/doctor.ts",
+        "src/gateway/server-methods/doctor.memory-core-runtime.ts",
+        "src/plugin-sdk/memory-core-bundled-runtime.ts",
       ]),
     });
   });
@@ -673,6 +726,21 @@ describe("memory authorization path inventory", () => {
     ).toEqual(["migration-plan-apply"]);
   });
 
+  it("finds hosted provider memory import calls", () => {
+    expect(
+      listMemoryMigrationIngressMarkers(
+        "fixture.ts",
+        `
+          import { applyProviderMemoryImport as applyMemory } from "./memory-import.js";
+          async function migrate() {
+            await applyMemory({});
+            await unrelated({});
+          }
+        `,
+      ),
+    ).toEqual(["provider-memory-import-apply"]);
+  });
+
   it("recognizes the generic CLI migration apply ingress", () => {
     const command = "src/cli/program/register.migrate.ts";
     const source = fs.readFileSync(path.join(REPO_ROOT, command), "utf8");
@@ -682,6 +750,15 @@ describe("memory authorization path inventory", () => {
         "migration-default-command-dispatch",
         "migration-apply-command-dispatch",
       ]),
+    );
+  });
+
+  it("recognizes the hosted wizard memory import ingress", () => {
+    const command = "src/wizard/setup.memory-import.ts";
+    const source = fs.readFileSync(path.join(REPO_ROOT, command), "utf8");
+
+    expect(listMemoryMigrationIngressMarkers(command, source)).toEqual(
+      expect.arrayContaining(["provider-memory-import-apply"]),
     );
   });
 
@@ -747,16 +824,19 @@ describe("memory authorization path inventory", () => {
       pathspecs: ["extensions/memory-core/src"],
     });
     if (!tracked) {
-      throw new Error("could not list tracked files for the session transcript ingestion inventory");
+      throw new Error(
+        "could not list tracked files for the session transcript ingestion inventory",
+      );
     }
     const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
     const missing = tracked
       .filter(isProductionTypeScript)
-      .filter((file) =>
-        listSessionTranscriptIngestionCalls(
-          file,
-          fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
-        ).length > 0,
+      .filter(
+        (file) =>
+          listSessionTranscriptIngestionCalls(
+            file,
+            fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
+          ).length > 0,
       )
       .filter((file) => !inventoried.has(file));
 
