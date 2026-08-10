@@ -176,6 +176,16 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
     func webView(
         _: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        decisionHandler(self.allowsNavigation(
+            to: navigationAction.request.url,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame) ? .allow : .cancel)
+    }
+
+    func webView(
+        _: WKWebView,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping @MainActor @Sendable (
             URLSession.AuthChallengeDisposition,
@@ -191,8 +201,8 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             host: challenge.protectionSpace.host,
             port: challenge.protectionSpace.port)
         else {
-            // The startup script withholds credentials outside the Control UI origin.
-            // Other authorities keep platform trust and do not inherit the Gateway pin.
+            // Cross-origin main-frame loads are already cancelled by navigation policy.
+            // Other authorities may belong to embedded content and do not inherit the Gateway pin.
             completionHandler(.performDefaultHandling, nil)
             return
         }
@@ -211,6 +221,14 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         case .reject:
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
+    }
+
+    func allowsNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
+        if isMainFrame == false {
+            return true
+        }
+        guard isMainFrame == true, let candidateURL else { return false }
+        return AuthenticatedControlUIOrigin(url: candidateURL) == self.expectedOrigin
     }
 
     func matchesExpectedAuthority(host: String, port: Int) -> Bool {
