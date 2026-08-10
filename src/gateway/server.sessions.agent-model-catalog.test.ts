@@ -62,6 +62,37 @@ test.each([
   });
 });
 
+test("sessions.create loads the authenticated parent agent model catalog", async () => {
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  const parentSessionKey = "agent:work:dashboard:catalog-parent";
+  await writeSessionStore({
+    agentId: "work",
+    storePath: workStorePath,
+    entries: { [parentSessionKey]: sessionStoreEntry("work-catalog-parent") },
+  });
+  const loadGatewayModelCatalog = createAgentModelCatalogLoader();
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: { modelOverride?: string; providerOverride?: string };
+  }>(
+    "sessions.create",
+    {
+      parentSessionKey,
+      model: "work-provider/work-only",
+    },
+    { context: { loadGatewayModelCatalog } },
+  );
+
+  expect(created.ok, created.error?.message).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:work:dashboard:/u);
+  expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
+  expect(created.payload?.entry).toMatchObject({
+    providerOverride: "work-provider",
+    modelOverride: "work-only",
+  });
+});
+
 test.each([
   { label: "explicit agent", agentId: "work" },
   { label: "agent-qualified session", agentId: undefined },

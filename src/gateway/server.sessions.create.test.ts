@@ -1495,6 +1495,54 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
   }
 });
 
+test("sessions.create provisions a worktree from the authenticated parent agent workspace", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-inherited-agent-worktree-",
+  });
+  const workWorkspace = await initializeGitWorkspace(openClawState.root);
+  const mainWorkspace = await makeNonGitTempDir("openclaw-main-non-git-workspace-");
+  closeOpenClawStateDatabaseForTest();
+  await createSelectedGlobalSessionStore();
+  testState.agentsConfig = {
+    list: [
+      { id: "main", default: true, workspace: mainWorkspace },
+      { id: "work", workspace: workWorkspace },
+    ],
+  };
+  let worktreeId: string | undefined;
+  try {
+    const parent = await directSessionReq<{ key?: string }>("sessions.create", {
+      agentId: "work",
+    });
+    const parentSessionKey = requireNonEmptyString(parent.payload?.key, "work parent key");
+
+    const child = await directSessionReq<{
+      key?: string;
+      worktree?: { id: string; path: string };
+    }>(
+      "sessions.create",
+      { parentSessionKey, worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(child.ok, JSON.stringify(child.error)).toBe(true);
+    expect(child.payload?.key).toMatch(/^agent:work:dashboard:/u);
+    worktreeId = child.payload?.worktree?.id;
+    expect(
+      findLiveRegistryWorktreeByOwner(process.env, "session", child.payload?.key ?? ""),
+    ).toMatchObject({ id: worktreeId, repoRoot: workWorkspace });
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentsConfig = undefined;
+    testState.sessionConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
   const workspace = await makeNonGitTempDir("openclaw-session-unborn-workspace-");
   await execFileAsync("git", ["init", workspace]);

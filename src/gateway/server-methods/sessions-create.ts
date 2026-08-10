@@ -28,7 +28,11 @@ import { resolveUserPath } from "../../utils.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { generateDashboardSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
+import {
+  buildDashboardSessionKey,
+  createGatewaySession,
+  resolveGatewaySessionCreateAgentRouting,
+} from "../session-create-service.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
@@ -78,6 +82,24 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    const spawnActorSessionKey =
+      sessionCreation.via === "spawn" && sessionCreation.actor?.type === "agent"
+        ? normalizeOptionalString(sessionCreation.actor.id)
+        : undefined;
+    if (
+      sessionCreation.inheritedToolPolicy &&
+      spawnActorSessionKey &&
+      normalizeOptionalString(p.parentSessionKey) !== spawnActorSessionKey
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
+      );
+      return;
+    }
     const catalogId = normalizeOptionalString(p.catalogId);
     if (catalogId && p.model) {
       respond(
@@ -95,14 +117,22 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const authorizedPluginId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+    const agentRouting = resolveGatewaySessionCreateAgentRouting({
+      cfg,
+      key: p.key,
+      agentId: p.agentId,
+      parentSessionKey: p.parentSessionKey,
+      fork: p.fork,
+      authorizedPluginId,
+    });
+    if (!agentRouting.ok) {
+      respond(false, undefined, agentRouting.error);
+      return;
+    }
+    const effectiveAgentId = agentRouting.routing.agentId;
     const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
-    const catalogAgentId = catalogId
-      ? normalizeAgentId(
-          normalizeOptionalString(p.agentId) ??
-            parseAgentSessionKey(catalogRequestedKey)?.agentId ??
-            resolveDefaultAgentId(cfg),
-        )
-      : undefined;
+    const catalogAgentId = catalogId ? effectiveAgentId : undefined;
     const catalogRequestedAgent = catalogAgentId
       ? resolveRequestedGlobalAgentId(cfg, catalogRequestedKey, catalogAgentId)
       : undefined;
@@ -181,7 +211,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     let sessionKey = p.key;
-    let sessionAgentId = catalogAgentId ?? p.agentId;
+    let sessionAgentId = effectiveAgentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : requestedCwd;
@@ -224,7 +254,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // An explicit cwd can target another host checkout, so method-scopes requires admin.
       const explicitKey = normalizeOptionalString(p.key);
       const requestedKey = explicitKey ?? "global";
-      const requestedAgent = resolveRequestedGlobalAgentId(cfg, requestedKey, p.agentId);
+      const requestedAgent = resolveRequestedGlobalAgentId(cfg, requestedKey, sessionAgentId);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
@@ -404,33 +434,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
-    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
-    const spawnActorSessionKey =
-      sessionCreation.via === "spawn" && sessionCreation.actor?.type === "agent"
-        ? normalizeOptionalString(sessionCreation.actor.id)
-        : undefined;
-    if (
-      sessionCreation.inheritedToolPolicy &&
-      spawnActorSessionKey &&
-      normalizeOptionalString(p.parentSessionKey) !== spawnActorSessionKey
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
-      );
-      return;
-    }
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
       ADMIN_SCOPE,
       clientScopes,
     ).allowed;
-    const modelCatalogAgentId = normalizeAgentId(
-      sessionAgentId ??
-        parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-        resolveDefaultAgentId(cfg),
-    );
+    const modelCatalogAgentId = sessionAgentId;
     const captureCreatedSessionBaseline = async (created: {
       agentId: string;
       entry: SessionEntry;
@@ -496,7 +504,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       creation: sessionCreation,
-      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      authorizedPluginId,
+      preflightAgentRouting: agentRouting.routing,
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
