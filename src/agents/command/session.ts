@@ -175,9 +175,14 @@ function collectSessionIdMatchesForRequest(opts: {
   const configuredAgentIds = listAgentIds(opts.cfg).map(normalizeAgentId);
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(opts.cfg);
   const persistedSessionStoreAgentId = opts.cfg.agents?.defaults?.sessionStore?.agentId?.trim();
-  const fixedStoreCompatibilityAgentId = persistedSessionStoreAgentId
+  const normalizedPersistedSessionStoreAgentId = persistedSessionStoreAgentId
     ? normalizeAgentId(persistedSessionStoreAgentId)
-    : compatibilityAgentId;
+    : undefined;
+  const fixedStoreCompatibilityAgentId =
+    normalizedPersistedSessionStoreAgentId &&
+    configuredAgentIds.includes(normalizedPersistedSessionStoreAgentId)
+      ? normalizedPersistedSessionStoreAgentId
+      : compatibilityAgentId;
   const configuredStoreOwners = new Map<string, Set<string>>();
   for (const agentId of configuredAgentIds) {
     const configuredStorePath = path.resolve(

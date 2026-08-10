@@ -168,6 +168,27 @@ describe("resolveSessionKeyForRequest", () => {
     ]);
   });
 
+  it("does not route an unscoped shared-store row to a retired persisted owner", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
+    mockSessionStores({
+      "/stores/shared.sqlite": {
+        main: { sessionId: "retired-session", updatedAt: 10 },
+      },
+    });
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "retired" } },
+        entries: { research: {}, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() => resolveSessionKeyForRequest({ cfg, sessionId: "retired-session" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+  });
+
   it("fails closed for an ownerless unscoped row during a cross-agent shared-store scan", () => {
     hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
     const sharedStore = {

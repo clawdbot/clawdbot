@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   listSessionEntryKeysReadOnly,
@@ -9,7 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 
 /**
  * Resolve one session's store key and entry with targeted single-row probes.
@@ -64,10 +65,24 @@ export function resolveSessionStorePathForAcp(params: {
   agentId?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): { cfg: OpenClawConfig; agentId?: string; storePath: string } {
+}): { cfg: OpenClawConfig; agentId?: string; storePath?: string } {
   const cfg = params.cfg ?? getRuntimeConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
-  const agentId = params.agentId ?? parsed?.agentId ?? tryResolveSoleAgentId(cfg);
+  const requestedAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const parsedAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : undefined;
+  if (requestedAgentId && parsedAgentId && requestedAgentId !== parsedAgentId) {
+    throw new Error(
+      `Agent id "${requestedAgentId}" does not match session key agent "${parsedAgentId}".`,
+    );
+  }
+  const agentId =
+    requestedAgentId ??
+    parsedAgentId ??
+    tryResolveSoleAgentId(cfg) ??
+    tryResolveLegacyCompatibilityAgentId(cfg);
+  if (!agentId) {
+    return { cfg };
+  }
   return {
     cfg,
     agentId,
@@ -85,7 +100,7 @@ export function readSessionEntryFromStore(params: {
 }): {
   cfg: OpenClawConfig;
   agentId?: string;
-  storePath: string;
+  storePath?: string;
   storeSessionKey: string;
   entry?: SessionEntry;
   storeReadFailed?: boolean;
@@ -96,6 +111,13 @@ export function readSessionEntryFromStore(params: {
     cfg: params.cfg,
     env: params.env,
   });
+  if (!storePath) {
+    return {
+      cfg,
+      agentId,
+      storeSessionKey: normalizeLowercaseStringOrEmpty(params.sessionKey),
+    };
+  }
   try {
     const { storeSessionKey, entry } = resolveStoreEntryForSessionKey({
       ...(agentId ? { agentId } : {}),

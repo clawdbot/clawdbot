@@ -148,7 +148,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: resolvePluginIdScope(metadataConfig),
         });
-        return manifestRegistry ? { ...snapshot, manifestRegistry } : snapshot;
+        return manifestRegistry
+          ? { ...snapshot, manifestRegistry, plugins: manifestRegistry.plugins }
+          : snapshot;
       },
     };
   }

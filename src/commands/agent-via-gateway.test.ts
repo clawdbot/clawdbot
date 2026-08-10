@@ -11,6 +11,7 @@ import {
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -534,6 +535,62 @@ describe("agentCliCommand", () => {
       },
       {
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
+  it("dispatches a retained-owner global session through --local", async () => {
+    await withTempStore(
+      async () => {
+        const cfg = retainLegacyDefaultAgentId(
+          {
+            ...loadRuntimeConfig(),
+            agents: {
+              ...loadRuntimeConfig().agents,
+              ownership: "explicit",
+              list: [{ id: "ops" }, { id: "research" }],
+            },
+          },
+          "ops",
+        );
+        loadRuntimeConfig.mockReturnValue(cfg);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+          runtime,
+          undefined,
+        );
+      },
+      {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
+  it("keeps an ownerless explicit global session fail-closed through --local", async () => {
+    await withTempStore(
+      async () => {
+        loadRuntimeConfig.mockReturnValue({
+          ...loadRuntimeConfig(),
+          agents: {
+            ...loadRuntimeConfig().agents,
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        });
+
+        await expect(
+          agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+        expect(agentCommand).not.toHaveBeenCalled();
+      },
+      {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
         session: { scope: "global" },
       },
     );
