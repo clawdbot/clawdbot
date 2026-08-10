@@ -95,6 +95,40 @@ describe("Claw tool profile consent", () => {
     });
   });
 
+  it("freezes a standalone allowlist against inherited host profiles", () => {
+    expect(
+      materializeClawToolProfile({
+        tools: {
+          allow: ["read", "write", "cron"],
+          deny: ["exec"],
+        },
+      }).tools,
+    ).toEqual({
+      profile: "full",
+      allow: ["read", "write", "automations"],
+      deny: ["exec"],
+    });
+  });
+
+  it("freezes the bounded portion of a legacy dynamic profile for update", () => {
+    const settings = materializeClawToolProfile(
+      {
+        tools: {
+          profile: "coding",
+          deny: ["exec"],
+        },
+      },
+      { allowLegacyDynamicProfile: true },
+    );
+
+    expect(settings.tools).toMatchObject({
+      profile: "full",
+      allow: expect.arrayContaining(["read", "write", "apply_patch"]),
+      deny: ["exec"],
+    });
+    expect(settings.tools?.allow).not.toContain("bundle-mcp");
+  });
+
   it("fails closed for an empty explicit profile intersection", () => {
     expect(() =>
       materializeClawToolProfile({

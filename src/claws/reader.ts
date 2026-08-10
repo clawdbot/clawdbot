@@ -597,7 +597,10 @@ async function resolveSource(
   };
 }
 
-export async function readClawManifestFile(path: string): Promise<ClawReadResult> {
+export async function readClawManifestFile(
+  path: string,
+  options: { allowLegacyDynamicToolProfile?: boolean } = {},
+): Promise<ClawReadResult> {
   const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
@@ -631,6 +634,7 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
     metadata: parsed.manifest.metadata,
+    ...(options.allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
   });
   if (!profile.ok) {
     return profile;

@@ -114,4 +114,43 @@ describe("Claw tool policy consent provenance", () => {
       }),
     ).toThrow("uses a legacy dynamic tool policy");
   });
+
+  it("does not intersect a standalone Claw allowlist with the host profile", async () => {
+    const root = tempDirs.make("openclaw-claw-standalone-tool-consent-");
+    const env = stateEnv(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(root, "state"));
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(plan, { env });
+
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      agentId: "worker",
+      config: {
+        tools: { profile: "minimal" },
+        agents: { list: [plan.agent.config] },
+      },
+    });
+    const policies = resolveConversationToolPolicies({ capabilityProfile });
+    const filtered = applyToolPolicyPipeline({
+      tools: [{ name: "read" }, { name: "exec" }],
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: buildConversationToolPolicyPipelineSteps({
+        capabilityProfile,
+        policies,
+        includeRuntimeToolPolicy: true,
+      }),
+    });
+
+    expect(plan.agent.config.tools).toEqual({ profile: "full", allow: ["read"] });
+    expect(filtered.map((tool) => tool.name)).toEqual(["read"]);
+  });
 });

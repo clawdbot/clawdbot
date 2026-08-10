@@ -95,7 +95,7 @@ function portableOpenClawProfile(
     ...(agent.tools?.fs?.workspaceOnly === true ? { fs: { workspaceOnly: true as const } } : {}),
   };
   let tools: NonNullable<ClawOpenClawProfile["agent"]["tools"]> = configuredTools;
-  if (configuredTools.profile) {
+  if (configuredTools.profile || configuredTools.allow?.length) {
     try {
       tools = materializeClawToolProfile({ tools: configuredTools }).tools ?? {};
     } catch (error) {

@@ -3,6 +3,10 @@ import { isScalar, parseDocument, visit } from "yaml";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
+import {
+  materializeClawToolProfile,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
 import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
@@ -79,6 +83,62 @@ function parseProfileYaml(
   }
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function migrateLegacyDynamicToolProfile(value: unknown): unknown {
+  const profile = record(value);
+  const agent = record(profile?.agent);
+  const tools = record(agent?.tools);
+  if (
+    !profile ||
+    !agent ||
+    !tools ||
+    typeof tools.profile !== "string" ||
+    tools.allow !== undefined
+  ) {
+    return value;
+  }
+  if (!resolveClawToolProfileSnapshot({ profile: tools.profile })?.allow.includes("bundle-mcp")) {
+    return value;
+  }
+  const validationProbe = parseClawOpenClawProfile({
+    ...profile,
+    agent: {
+      ...agent,
+      tools: {
+        ...tools,
+        profile: "minimal",
+      },
+    },
+  });
+  if (!validationProbe.ok) {
+    return value;
+  }
+  const validatedTools = validationProbe.profile.agent.tools;
+  if (!validatedTools) {
+    return value;
+  }
+  const selection = {
+    ...validatedTools,
+    profile: tools.profile,
+  };
+  const migrated = materializeClawToolProfile(
+    { tools: selection },
+    { allowLegacyDynamicProfile: true },
+  );
+  return {
+    ...profile,
+    agent: {
+      ...agent,
+      tools: migrated.tools,
+    },
+  };
+}
+
 async function readProfileFile(packageRoot: string, path: string): Promise<Buffer> {
   const packageFiles = await fsSafeRoot(packageRoot);
   const read = await packageFiles.read(path, {
@@ -102,6 +162,7 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
 export async function readClawOpenClawProfile(params: {
   packageRoot: string;
   metadata?: Record<string, string>;
+  allowLegacyDynamicToolProfile?: boolean;
 }): Promise<
   | {
       ok: true;
@@ -193,7 +254,9 @@ export async function readClawOpenClawProfile(params: {
   if (!yaml.ok) {
     return yaml;
   }
-  const parsed = parseClawOpenClawProfile(yaml.value);
+  const parsed = parseClawOpenClawProfile(
+    params.allowLegacyDynamicToolProfile ? migrateLegacyDynamicToolProfile(yaml.value) : yaml.value,
+  );
   if (!parsed.ok) {
     return {
       ok: false,

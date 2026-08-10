@@ -158,6 +158,39 @@ describe("OpenClaw profile reader", () => {
     expect(second.source.integrity).not.toBe(first.source.integrity);
   });
 
+  it("loads a legacy dynamic profile only through the update migration path", async () => {
+    const root = tempDirs.make("openclaw-claw-legacy-profile-");
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "openclaw.claw.json"),
+      JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
+
+    const manifestPath = join(root, "openclaw.claw.json");
+    await expect(readClawManifestFile(manifestPath)).resolves.toMatchObject({ ok: false });
+    const migrated = await readClawManifestFile(manifestPath, {
+      allowLegacyDynamicToolProfile: true,
+    });
+
+    expect(migrated).toMatchObject({
+      ok: true,
+      openClawProfile: {
+        agent: {
+          tools: {
+            profile: "full",
+            allow: expect.not.arrayContaining(["bundle-mcp"]),
+          },
+        },
+      },
+    });
+  });
+
   it("rejects a hardlinked profile", async () => {
     const root = tempDirs.make("openclaw-claw-profile-hardlink-");
     await mkdir(join(root, "profiles"));

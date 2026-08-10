@@ -46,17 +46,19 @@ export function resolveClawToolProfileSnapshot(
 
 export function materializeClawToolProfile(
   settings: ClawOpenClawProfile["agent"],
+  options: { allowLegacyDynamicProfile?: boolean } = {},
 ): ClawOpenClawProfile["agent"] {
   const tools = settings.tools;
   if (!tools) {
     return settings;
   }
   if (!tools.profile) {
+    const allow = expandToolGroups(tools.allow);
     const deny = expandToolGroups(tools.deny);
     return {
       ...settings,
       tools: {
-        ...(tools.allow ? { allow: expandToolGroups(tools.allow) } : {}),
+        ...(allow.length > 0 ? { profile: "full" as const, allow } : {}),
         ...(tools.alsoAllow ? { alsoAllow: expandToolGroups(tools.alsoAllow) } : {}),
         ...(deny.length > 0 ? { deny } : {}),
         ...(tools.fs ? { fs: tools.fs } : {}),
@@ -73,16 +75,22 @@ export function materializeClawToolProfile(
   if (tools.allow && snapshot.allow.length === 0) {
     throw new Error("Claw tool allowlist does not overlap the selected profile.");
   }
-  if (snapshot.allow.includes("bundle-mcp")) {
+  const allow = options.allowLegacyDynamicProfile
+    ? snapshot.allow.filter((grant) => grant !== "bundle-mcp")
+    : snapshot.allow;
+  if (allow.includes("bundle-mcp")) {
     throw new Error(
       "Claw tool profiles containing bundle-mcp require an explicit bounded allowlist of concrete tool names.",
     );
+  }
+  if (allow.length === 0) {
+    throw new Error("Legacy Claw tool profile has no bounded authority to preserve.");
   }
   return {
     ...settings,
     tools: {
       profile: "full",
-      ...(snapshot.allow.length > 0 ? { allow: snapshot.allow } : {}),
+      allow,
       ...(snapshot.deny.length > 0 ? { deny: snapshot.deny } : {}),
       ...(tools.fs ? { fs: tools.fs } : {}),
     },
