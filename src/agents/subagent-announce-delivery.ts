@@ -50,6 +50,7 @@ import {
 } from "./embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
+import { isFailoverError } from "./failover-error.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -367,9 +368,6 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway not connected/i,
   /gateway closed \(1006/i,
   /gateway timeout/i,
-  /\ball models failed\b/i,
-  /\ball profiles unavailable\b/i,
-  /\boverloaded\b/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
@@ -432,6 +430,12 @@ function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
 }
 
+function isTransientFailoverAnnounceError(error: unknown): boolean {
+  return (
+    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0)
+  );
+}
+
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   const topLevelPermanent = Boolean(
@@ -464,7 +468,10 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   if (topLevelPermanent) {
     return false;
   }
-  return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+  return (
+    hasAnnounceErrorMatch(error, isTransientFailoverAnnounceError) ||
+    TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))
+  );
 }
 
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {

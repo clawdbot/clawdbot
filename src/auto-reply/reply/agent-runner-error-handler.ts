@@ -1,21 +1,14 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import {
-  classifyOAuthRefreshFailure,
-  classifyOAuthRefreshFailureError,
-} from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import {
   formatRateLimitOrOverloadedErrorCopy,
-  isBillingErrorMessage,
   isCompactionFailureError,
   isLikelyContextOverflowError,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
@@ -39,17 +32,15 @@ import {
   buildAuthProfileFailoverFailureText,
   buildExternalRunFailureReply,
   buildRateLimitCooldownMessage,
-  hasBillingAttemptSummary,
   isNonDirectConversationContext,
-  isPureTransientRateLimitSummary,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
   resolveBillingFailureReplyText,
   resolveExternalRunFailureTextForConversation,
+  resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
-import { classifyProviderRequestError } from "./provider-request-error-classifier.js";
 import {
   buildRestartLifecycleReplyText,
   isReplyOperationRestartAbort,
@@ -197,34 +188,29 @@ export async function handleAgentExecutionError(params: {
     outcome: "error",
     error: message,
   });
-  const isFallbackSummary = isFallbackSummaryError(err);
+  const failoverFacts = resolveReplyFailoverFacts(err, message);
+  const fallbackAttempts = isFailoverError(err) ? err.attempts : undefined;
+  const hasFallbackAttempts = Boolean(fallbackAttempts?.length);
   const isPureOverloadSummary =
-    isFallbackSummary &&
-    err.attempts.length > 0 &&
-    err.attempts.every((attempt) => attempt.reason === "overloaded");
-  const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
-  const isOverloaded = isFallbackSummary
+    hasFallbackAttempts && fallbackAttempts?.every((attempt) => attempt.reason === "overloaded");
+  const failoverReason = failoverFacts.reason;
+  const isOverloaded = hasFallbackAttempts
     ? isPureOverloadSummary
-    : failoverReason === "overloaded" || isOverloadedErrorMessage(message);
-  const isBilling = isFallbackSummary
-    ? hasBillingAttemptSummary(err)
-    : isFailoverError(err)
-      ? err.reason === "billing"
-      : isBillingErrorMessage(message);
+    : failoverReason === "overloaded";
+  const isBilling = hasFallbackAttempts
+    ? fallbackAttempts?.some((attempt) => attempt.reason === "billing")
+    : failoverReason === "billing";
   const isContextOverflow =
-    !isBilling &&
-    ((isFailoverError(err) && err.reason === "context_overflow") ||
-      isLikelyContextOverflowError(message));
+    !isBilling && (failoverReason === "context_overflow" || isLikelyContextOverflowError(message));
   const isCompactionFailure = !isBilling && isCompactionFailureError(message);
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
+  const oauthRefreshFailure = classifyOAuthRefreshFailureError(err);
   const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
   const providerRequestError =
     !isBilling &&
     !oauthRefreshFailure &&
     !hasAuthProfileFailoverFailure &&
     !params.shouldSurfaceToControlUi
-      ? classifyProviderRequestError(err)
+      ? failoverFacts.providerRequestError
       : undefined;
   const isTransientHttp =
     isTransientHttpError(message) ||
@@ -428,16 +414,19 @@ export async function handleAgentExecutionError(params: {
     };
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-  const isPureTransientSummary = isFallbackSummary ? isPureTransientRateLimitSummary(err) : false;
-  const isRateLimit = isFallbackSummary
+  const isPureTransientSummary = Boolean(
+    hasFallbackAttempts &&
+    fallbackAttempts?.every(
+      (attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded",
+    ),
+  );
+  const isRateLimit = hasFallbackAttempts
     ? isPureTransientSummary
-    : failoverReason
-      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
-      : isRateLimitErrorMessage(message);
+    : failoverReason === "rate_limit" || failoverReason === "overloaded";
   const rateLimitOrOverloadedCopy =
-    !isFallbackSummary || isPureTransientSummary
+    !hasFallbackAttempts || isPureTransientSummary
       ? formatRateLimitOrOverloadedErrorCopy(
-          failoverReason === "overloaded" ? "overloaded" : message,
+          isFailoverError(err) && failoverReason === "overloaded" ? "overloaded" : message,
         )
       : undefined;
   const userFacingMessage = isTransientHttp
@@ -456,6 +445,7 @@ export async function handleAgentExecutionError(params: {
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
             replayPrevented: params.overloadRetryState.unsafeToReplay,
+            failoverFacts,
           },
         )
       : undefined;

@@ -202,5 +202,4 @@ describe("normalizeEmbeddedRunAttempt", () => {
     }
     expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
   });
-
 });

@@ -155,8 +155,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {
-      // Completed sessions cannot accept later answers; purge immediately so
-      // clients get a clean not-found response for stale session ids.
+      // Let the runner release setup admission before the terminal response,
+      // so an immediate replacement wizard is not rejected as still busy.
+      await session.whenSettled();
       context.purgeWizardSession(sessionId);
     }
     respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
@@ -196,8 +197,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const result = await session.next();
     if (result.done) {
-      // The final step may be reached after an answer, so cleanup mirrors
-      // wizard.start's immediate-completion path.
+      // Keep terminal response ordering identical to wizard.start.
+      await session.whenSettled();
       context.purgeWizardSession(sessionId);
     }
     respond(true, sanitizeWizardResultForClient(result), undefined);

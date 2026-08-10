@@ -31,13 +31,18 @@ export function unwrapGatewayMethodDispatchResponse(
   response: GatewayMethodDispatchResponse,
 ): unknown {
   if (!response.ok) {
-    throw new GatewayClientRequestError({
+    const requestError = new GatewayClientRequestError({
       code: response.error?.code,
       message: response.error?.message ?? `Gateway method "${method}" failed.`,
       details: response.error?.details,
       retryable: response.error?.retryable,
       retryAfterMs: response.error?.retryAfterMs,
     });
+    const cause = (response.error as (ErrorShape & { cause?: unknown }) | undefined)?.cause;
+    if (cause !== undefined) {
+      Object.defineProperty(requestError, "cause", { value: cause });
+    }
+    throw requestError;
   }
   return response.payload;
 }

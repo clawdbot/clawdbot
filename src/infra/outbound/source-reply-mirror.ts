@@ -43,7 +43,7 @@ type SourceReplyTranscriptMirrorParams = {
   replyToIsExplicit?: boolean;
 };
 
-export type TerminalSourceReplyDeliveryStart =
+type TerminalSourceReplyDeliveryStart =
   | TerminalSourceReplyDeliveryReceipt
   | {
       outcome: "already_delivered" | "delivery_ambiguous";
