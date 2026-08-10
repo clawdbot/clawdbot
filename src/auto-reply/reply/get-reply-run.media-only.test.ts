@@ -19,7 +19,6 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
-import { applySessionHints } from "./body.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
