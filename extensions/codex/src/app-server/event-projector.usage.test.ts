@@ -53,6 +53,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
         reasoningOutputTokens: 4,
       },
     });
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 875_900,
+    });
   });
 
   it("ignores cumulative thread usage after exact response usage", async () => {

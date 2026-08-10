@@ -95,6 +95,7 @@ export class CodexAppServerEventProjector {
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
+  private contextTokens: number | undefined;
   private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
   private lastTranscriptTimestamp = 0;
@@ -276,7 +277,10 @@ export class CodexAppServerEventProjector {
           params,
           this.tokenUsage,
           (usage) => (this.tokenUsage = usage),
-          (data) => this.emitAgentEvent({ stream: "codex_app_server.usage", data }),
+          (data) => {
+            this.contextTokens = data.modelContextWindow ?? this.contextTokens;
+            this.emitAgentEvent({ stream: "codex_app_server.usage", data });
+          },
         );
         break;
       case "turn/completed":
@@ -443,6 +447,7 @@ export class CodexAppServerEventProjector {
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       acceptedSessionSpawns: toolTelemetry.acceptedSessionSpawns,
       cloudCodeAssistFormatError: false,
+      contextTokens: this.contextTokens,
       attemptUsage: projectedUsage,
       ...(this.completedCompactionCount > 0
         ? { compactionCount: this.completedCompactionCount }
