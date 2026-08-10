@@ -105,6 +105,8 @@ export type LegacyStateDetection = {
   };
   commitments: {
     sourcePath: string;
+    hasLegacyFile: boolean;
+    rowCount: number;
     hasLegacy: boolean;
   };
   auditLogs: LegacyAuditLogsDetection;

@@ -105,24 +105,16 @@ export async function resolvePromptBuildHookResult(params: {
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const commitmentOnly = params.bootstrapContextRunKind === "commitment-only";
-  // Commitment fan-out must leave global queued context intact for the next
-  // normal turn and must not inherit heartbeat-wide prompt policy.
-  const queuedContext = commitmentOnly
+  const queuedContext = cachedInjections
     ? {
-        queuedInjections: [],
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: [] }),
+        queuedInjections: cachedInjections,
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
       }
-    : cachedInjections
-      ? {
-          queuedInjections: cachedInjections,
-          ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
-        }
-      : await drainPluginNextTurnInjectionContext({
-          cfg: params.config,
-          sessionKey: params.hookCtx.sessionKey,
-        });
-  if (runId && !commitmentOnly && !cachedInjections) {
+    : await drainPluginNextTurnInjectionContext({
+        cfg: params.config,
+        sessionKey: params.hookCtx.sessionKey,
+      });
+  if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
@@ -145,7 +137,6 @@ export async function resolvePromptBuildHookResult(params: {
       : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
-    !commitmentOnly &&
     params.hookRunner?.runHeartbeatPromptContribution &&
     params.hookRunner.hasHooks("heartbeat_prompt_contribution")
       ? await params.hookRunner
@@ -220,7 +211,6 @@ export function shouldInjectHeartbeatPrompt(params: {
 }): boolean {
   return (
     params.isDefaultAgent &&
-    params.bootstrapContextRunKind !== "commitment-only" &&
     shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
     Boolean(
       resolveHeartbeatPromptForSystemPrompt({

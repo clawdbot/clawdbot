@@ -321,68 +321,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
   });
 
-  it("keeps pending parent steering queued during commitment-only runs", async () => {
-    const childRunId = "queued-child-run";
-    const frozenResultText = "queued child result for the next normal turn";
-    const endedAt = Date.now() - 1_000;
-    const pendingRun: SubagentRunRecord = {
-      runId: childRunId,
-      childSessionKey: `agent:main:subagent:${childRunId}`,
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "inspect the parent flow",
-      cleanup: "delete",
-      createdAt: endedAt - 1_000,
-      execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: frozenResultText },
-      delivery: {
-        status: "pending",
-        createdAt: endedAt + 1,
-        payload: {
-          requesterSessionKey: sessionKey,
-          requesterDisplayKey: sessionKey,
-          childSessionKey: `agent:main:subagent:${childRunId}`,
-          childRunId,
-          task: "inspect the parent flow",
-          endedAt,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-        },
-      },
-    };
-    let submittedPrompt = "";
-    resetSubagentRegistryForTests({ persist: false });
-    addSubagentRunForTests(pendingRun);
-
-    try {
-      await createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey,
-        tempPaths,
-        attemptOverrides: {
-          bootstrapContextRunKind: "commitment-only",
-          trigger: "heartbeat",
-        },
-        sessionPrompt: async (_session, prompt) => {
-          submittedPrompt = prompt;
-        },
-      });
-
-      expect(submittedPrompt).not.toContain(frozenResultText);
-      const leaseId = "next-normal-turn";
-      const retained = leasePendingAgentSteeringItems({
-        requesterSessionKey: sessionKey,
-        leaseId,
-      });
-      expect(retained?.runIds).toEqual([childRunId]);
-      expect(retained?.prompt).toContain(frozenResultText);
-      releasePendingAgentSteeringItems({ runIds: [childRunId], leaseId });
-    } finally {
-      resetSubagentRegistryForTests({ persist: false });
-    }
-  });
-
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {

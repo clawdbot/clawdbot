@@ -69,10 +69,6 @@ type HeartbeatAgent = {
   heartbeat?: HeartbeatConfig;
 };
 
-export function canHeartbeatDeliverCommitments(heartbeat?: HeartbeatConfig): boolean {
-  return (normalizeOptionalString(heartbeat?.target) ?? "none") !== "none";
-}
-
 type ActiveHoursSchedule = {
   start?: string;
   end?: string;

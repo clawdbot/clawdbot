@@ -3,9 +3,8 @@ import { describe, expect, it } from "vitest";
 import { isHeartbeatLifecycleRunKind, resolveBootstrapMode } from "./bootstrap-mode.js";
 
 describe("resolveBootstrapMode", () => {
-  it("classifies global and commitment-only runs as heartbeat lifecycle turns", () => {
+  it("classifies heartbeat runs as heartbeat lifecycle turns", () => {
     expect(isHeartbeatLifecycleRunKind("heartbeat")).toBe(true);
-    expect(isHeartbeatLifecycleRunKind("commitment-only")).toBe(true);
     expect(isHeartbeatLifecycleRunKind("cron")).toBe(false);
     expect(isHeartbeatLifecycleRunKind("default")).toBe(false);
   });
@@ -64,16 +63,6 @@ describe("resolveBootstrapMode", () => {
       resolveBootstrapMode({
         bootstrapPending: true,
         runKind: "heartbeat",
-        isInteractiveUserFacing: true,
-        isPrimaryRun: true,
-        isCanonicalWorkspace: true,
-        hasBootstrapFileAccess: true,
-      }),
-    ).toBe("none");
-    expect(
-      resolveBootstrapMode({
-        bootstrapPending: true,
-        runKind: "commitment-only",
         isInteractiveUserFacing: true,
         isPrimaryRun: true,
         isCanonicalWorkspace: true,

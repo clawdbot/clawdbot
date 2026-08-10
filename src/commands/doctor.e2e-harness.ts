@@ -305,6 +305,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     commitments: {
       sourcePath: "/tmp/state/commitments/commitments.json",
+      hasLegacyFile: false,
+      rowCount: 0,
       hasLegacy: false,
     },
     auditLogs: {

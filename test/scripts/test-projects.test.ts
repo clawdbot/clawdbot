@@ -682,15 +682,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/system-agent/operations.test.ts",
         "src/system-agent/audit.test.ts",
       ],
-      "scripts/e2e/commitments-safety-docker-client.ts": [
-        "src/commitments/runtime.test.ts",
-        "src/commitments/store.test.ts",
-      ],
-      "scripts/e2e/commitments-safety-docker.sh": [
-        "test/scripts/docker-e2e-plan.test.ts",
-        "src/commitments/runtime.test.ts",
-        "src/commitments/store.test.ts",
-      ],
       "scripts/e2e/session-runtime-context-docker-client.ts": [
         "src/agents/embedded-agent-runner/run/runtime-context-prompt.test.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -3547,18 +3538,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/commands/doctor-memory-search.test.ts",
         "packages/memory-host-sdk/src/host/embeddings.test.ts",
       ],
-    );
-  });
-
-  it("routes commitment model-selection runtime edits away from broad gateway dependents", () => {
-    expectChangedTargets(
-      [
-        "src/agents/model-selection.test.ts",
-        "src/commitments/model-selection.runtime.ts",
-        "src/commitments/runtime.test.ts",
-        "src/commitments/runtime.ts",
-      ],
-      ["src/agents/model-selection.test.ts", "src/commitments/runtime.test.ts"],
     );
   });
 

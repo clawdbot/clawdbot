@@ -315,7 +315,6 @@ export const AgentParamsSchema = closedObject({
   bootstrapContextMode: Type.Optional(
     Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
   ),
-  // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
   bootstrapContextRunKind: Type.Optional(
     Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
   ),

@@ -1797,7 +1797,6 @@
     "test:docker:sandbox-browser-sidecar": "bash scripts/e2e/sandbox-browser-sidecar-docker.sh",
     "test:docker:bundled-plugin-install-uninstall": "bash scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
-    "test:docker:commitments-safety": "bash scripts/e2e/commitments-safety-docker.sh",
     "test:docker:config-reload": "bash scripts/e2e/config-reload-source-docker.sh",
     "test:docker:system-agent-first-run": "bash scripts/e2e/system-agent-first-run-docker.sh",
     "test:docker:system-agent-rescue": "bash scripts/e2e/system-agent-rescue-docker.sh",

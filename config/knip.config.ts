@@ -395,9 +395,6 @@ const config = {
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
-    // Test and E2E callers reach these hooks through runtime.test-support.ts;
-    // the full-tree companion config still audits their actual consumers.
-    "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
