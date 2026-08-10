@@ -286,9 +286,11 @@ describe("TerminalConnection", () => {
     const { client, conn } = makeHarness();
     const oldReplay = deferred<void>();
     const oldReplayEvents: string[] = [];
+    let oldReplayIsCurrent: (() => boolean) | undefined;
     await openSession(conn, {
       onData: () => {},
-      onReplay: async () => {
+      onReplay: async (_snapshot, _newlyObservedFrom, _mode, isCurrent) => {
+        oldReplayIsCurrent = isCurrent;
         oldReplayEvents.push("start");
         await oldReplay.promise;
         oldReplayEvents.push("done");
@@ -298,6 +300,7 @@ describe("TerminalConnection", () => {
     emitData(client, 5, "hello");
     emitData(client, 12, "world");
     await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start"]));
+    expect(oldReplayIsCurrent?.()).toBe(true);
 
     const newReplay = deferred<void>();
     const newReplayEvents: string[] = [];
@@ -313,6 +316,7 @@ describe("TerminalConnection", () => {
       onExit: () => {},
     });
     await vi.waitFor(() => expect(newReplayEvents).toEqual(["start"]));
+    expect(oldReplayIsCurrent?.()).toBe(false);
     emitData(client, 21, "!");
 
     oldReplay.resolve();

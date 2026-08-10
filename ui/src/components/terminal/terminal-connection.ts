@@ -64,6 +64,7 @@ type SessionSink = {
     data: string,
     newlyObservedFrom: number,
     mode: "initial" | "recovery",
+    isCurrent: () => boolean,
   ) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
@@ -270,7 +271,12 @@ export class TerminalConnection {
     try {
       if (replay !== undefined) {
         if (sink.onReplay) {
-          await sink.onReplay(replay, replay.length, "initial");
+          await sink.onReplay(
+            replay,
+            replay.length,
+            "initial",
+            () => this.streams.get(sessionId) === stream,
+          );
         } else {
           sink.onData(replay);
         }
@@ -378,7 +384,12 @@ export class TerminalConnection {
           typeof previouslyObservedThrough === "number"
             ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
             : 0;
-        await stream.sink.onReplay(result.buffer, newlyObservedFrom, "recovery");
+        await stream.sink.onReplay(
+          result.buffer,
+          newlyObservedFrom,
+          "recovery",
+          () => this.streams.get(sessionId) === stream,
+        );
         if (this.streams.get(sessionId) !== stream) {
           return;
         }

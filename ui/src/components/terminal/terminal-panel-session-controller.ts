@@ -352,7 +352,12 @@ export class TerminalPanelSessionController
           }
         }
       },
-      onReplay: (data: string, newlyObservedFrom: number, mode: "initial" | "recovery") => {
+      onReplay: (
+        data: string,
+        newlyObservedFrom: number,
+        mode: "initial" | "recovery",
+        isReplayCurrent: () => boolean,
+      ) => {
         if (tab.cancelled) {
           return undefined;
         }
@@ -365,7 +370,7 @@ export class TerminalPanelSessionController
             target: tab,
             createController: tab.createController,
             replay: TERMINAL_OUTPUT_ENCODER.encode(data),
-            isCurrent: () => !tab.cancelled && this.tabs.includes(tab),
+            isCurrent: () => isReplayCurrent() && !tab.cancelled && this.tabs.includes(tab),
           }).then((replaced) => {
             if (replaced && data) {
               this.readiness.markReady(tab);
