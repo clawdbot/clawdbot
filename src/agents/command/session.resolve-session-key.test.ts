@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -189,6 +190,31 @@ describe("resolveSessionKeyForRequest", () => {
     expect(() => resolveSessionKeyForRequest({ cfg, sessionId: "retired-session" })).toThrowError(
       expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
     );
+  });
+
+  it("persists a legacy main fixed-store owner and fails closed after main is removed", () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["research"]);
+    const sharedStore = {
+      main: { sessionId: "legacy-main-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+    const migrated = migratePersistedImplicitMainRoster({
+      session: { store: "/stores/shared.sqlite" },
+      agents: { entries: { main: { default: true }, research: {} } },
+    }).config as OpenClawConfig;
+    expect(migrated.agents?.defaults?.sessionStore?.agentId).toBe("main");
+    const afterMainRemoval = {
+      ...migrated,
+      agents: {
+        ...migrated.agents,
+        ownership: "explicit" as const,
+        entries: { research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveSessionKeyForRequest({ cfg: afterMainRemoval, sessionId: "legacy-main-session" }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
 
   it("resolves an unscoped fixed-store row while its persisted owner is configured", () => {

@@ -125,12 +125,13 @@ export function materializeLegacyDefaultAgentRoles(
       !listAgentEntries(cfg).some((entry) => entry.heartbeat) && defaults?.heartbeat === undefined,
     );
     materialize("systemAgent", unset("systemAgent"));
+    // Auth transitions are pinned or refused by the roster write guard; fixed-store rows need
+    // their owner recorded immediately because a later restart loses the migration sidecar.
     materialize("authInheritance", agentId !== soleFallback && unset("authInheritance"));
     materialize(
       "sessionStore",
       options.materializeSessionStore !== false &&
         !isPerAgentSessionStoreConfig(cfg.session?.store) &&
-        agentId !== soleFallback &&
         unset("sessionStore"),
     );
     if (changed) {
