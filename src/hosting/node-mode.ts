@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
 import type { NodeSession } from "../gateway/node-registry.js";
-import { listNodePairing } from "../infra/node-pairing.js";
+import { listNodePairing } from "../infra/device-pairing-node.js";
 import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "../readiness/subjects.js";
 import type { NodeModeReadinessEvidence } from "./profiles.js";
 

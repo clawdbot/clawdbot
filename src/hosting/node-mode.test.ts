@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const listNodePairing = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/node-pairing.js", () => ({ listNodePairing }));
+vi.mock("../infra/device-pairing-node.js", () => ({ listNodePairing }));
 
 const { createNodeModeReadinessEvidenceResolver } = await import("./node-mode.js");
 const resolveNodeModeReadinessEvidence = createNodeModeReadinessEvidenceResolver({
