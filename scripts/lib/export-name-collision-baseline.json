@@ -1313,14 +1313,6 @@
     "sdk": true
   },
   {
-    "name": "resolveHomeDir",
-    "files": [
-      "src/daemon/paths.ts",
-      "src/utils.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "resolveMarketplaceInstallShortcut",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
