@@ -324,10 +324,17 @@ export async function gatherDispatchRequest(
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = hasInboundAudio(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+  // A bound ACP key names an external harness, not a configured model-runtime owner.
+  // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
+  const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    : sessionAgentId;
   const preparedReplyDispatchRuntime = params.usePublishedModelRuntime
     ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
-        return await loadPublishedGatewayReplyDispatchRuntime({ agentId: sessionAgentId });
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+        });
       })
     : undefined;
   const workspaceDir =

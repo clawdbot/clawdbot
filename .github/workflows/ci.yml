@@ -1339,7 +1339,7 @@ jobs:
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
-              node --import tsx scripts/check-gateway-watch-regression.mts --skip-build
+              pnpm test:gateway:watch-regression -- --skip-build
           fi
 
           wait_checks
@@ -1348,7 +1348,7 @@ jobs:
           # starve the Gateway readiness deadline used by this regression gate.
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
             start_check "gateway-watch" \
-              node --import tsx scripts/check-gateway-watch-regression.mts --skip-build
+              pnpm test:gateway:watch-regression -- --skip-build
             wait_checks
           fi
 
@@ -1807,18 +1807,22 @@ jobs:
         run: |
           # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
           unset OPENCLAW_BUILD_PRIVATE_QA
-          node --import tsx scripts/build-all.mts qaRuntime
+          pnpm build qaRuntime
           pnpm ui:build
           package_args=(
             --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
-          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
+          package_script="scripts/package-openclaw-for-docker.mts"
+          if [[ ! -f "$package_script" ]]; then
+            package_script="scripts/package-openclaw-for-docker.mjs"
+          fi
+          if grep -Fq -- '--allow-unreleased-changelog' "$package_script"; then
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime
+          OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime
 
       - name: Run smoke profile part
         env:
@@ -2450,6 +2454,9 @@ jobs:
           - check_name: check-prompt-snapshots
             group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
+          - check_name: check-export-name-collisions
+            group: export-name-collisions
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -2635,7 +2642,11 @@ jobs:
 
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
-              node --import tsx scripts/run-additional-boundary-checks.mts
+              boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)
+              if [[ ! -f scripts/run-additional-boundary-checks.mts ]]; then
+                boundary_runner=(node scripts/run-additional-boundary-checks.mjs)
+              fi
+              "${boundary_runner[@]}"
               ;;
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
@@ -2649,26 +2660,29 @@ jobs:
                 run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               fi
               ;;
+            export-name-collisions)
+              if [ ! -f scripts/check-export-name-collisions.mts ]; then
+                echo "[skip] export name collision check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:export-name-collisions"] ? 0 : 1);'; then
+                echo "[skip] export name collision script is not present in package.json"
+              else
+                run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions
+              fi
+              ;;
             session-accessor-boundary)
-              if [ ! -f scripts/check-session-accessor-boundary.mts ]; then
-                echo "[skip] session accessor boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
                 echo "[skip] session accessor boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
-              if [ ! -f scripts/check-sqlite-transaction-boundary.mts ]; then
-                echo "[skip] SQLite transaction boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
                 echo "[skip] SQLite transaction boundary script is not present in package.json"
               else
                 run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
               fi
               ;;
             session-transcript-reader-boundary)
-              if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]; then
-                echo "[skip] session transcript reader boundary check is not present in this checkout"
-              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary

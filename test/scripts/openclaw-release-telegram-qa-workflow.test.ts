@@ -312,6 +312,22 @@ describe("release Telegram QA workflow", () => {
     });
     expect(step("trusted_identity", "Verify dispatched-main identity").id).toBe("identity");
 
+    const candidateBuild = requireRun(
+      "build_candidate",
+      "Build candidate runtime without runner credentials",
+    );
+    expect(candidateBuild).toContain("pnpm build qaRuntime");
+    expect(candidateBuild).not.toContain("scripts/build-all.mts");
+    expect(requireRun("build_candidate", "Archive bounded candidate tree")).toContain(
+      '--arg buildCommand "pnpm build qaRuntime"',
+    );
+    expect(requireRun("attest_candidate", "Bounded extract and validate candidate")).toContain(
+      '.buildCommand == "pnpm build qaRuntime"',
+    );
+    expect(requireRun("run_telegram", "Build trusted QA harness").trim()).toBe(
+      "pnpm build qaRuntime",
+    );
+
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
     expect(runJob["timeout-minutes"]).toBe(60);

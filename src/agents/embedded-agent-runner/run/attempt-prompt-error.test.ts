@@ -22,7 +22,7 @@ vi.mock("./midturn-precheck.js", () => ({
   isMidTurnPrecheckSignal: hoisted.isMidTurnPrecheckSignal,
 }));
 
-import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
+import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-submit.js";
 
 type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
 

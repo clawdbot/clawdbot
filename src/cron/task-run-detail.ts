@@ -2,10 +2,13 @@
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
  * the event->entry write codec lives in task-run-event-codec.ts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  FAILOVER_REASONS,
+  type FailoverReason,
+} from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
 
-type FailoverReason = import("../agents/embedded-agent-helpers/types.js").FailoverReason;
 type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
 type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
 type TaskStatus = import("../tasks/task-registry.types.js").TaskStatus;
@@ -14,24 +17,7 @@ type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
 type CronRunStatus = import("./types.js").CronRunStatus;
 
 const CRON_TASK_DETAIL_KIND = "cron-run";
-const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
-  "auth",
-  "auth_permanent",
-  "format",
-  "rate_limit",
-  "overloaded",
-  "billing",
-  "server_error",
-  "timeout",
-  "tls_certificate",
-  "model_not_found",
-  "session_expired",
-  "context_overflow",
-  "empty_response",
-  "no_error_details",
-  "unclassified",
-  "unknown",
-]);
+const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
 
 function toJsonValue(value: unknown): JsonValue | undefined {
   const serialized = JSON.stringify(value);

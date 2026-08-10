@@ -40,6 +40,23 @@ function createAssistant(text: string, usage: Usage, timestamp: number): Assista
   };
 }
 
+function createBashMessage(
+  output: string,
+  timestamp: number,
+  excludeFromContext: boolean,
+): AgentMessage {
+  return {
+    role: "bashExecution",
+    command: "print output",
+    output,
+    exitCode: 0,
+    cancelled: false,
+    truncated: false,
+    timestamp,
+    excludeFromContext,
+  };
+}
+
 function createMessageEntry(message: AgentMessage, index: number): SessionTreeEntry {
   return {
     type: "message",
@@ -229,6 +246,75 @@ describe("calculateContextTokens", () => {
 });
 
 describe("session-entry compaction budgeting", () => {
+  it("counts visible shell output while ignoring private output after provider usage", () => {
+    const hidden = createBashMessage("x".repeat(80_000), 2, true);
+    const visible = createBashMessage("x".repeat(80_000), 2, false);
+    const assistant = createAssistant("done", createUsage(42), 1);
+    const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
+
+    expect(estimateTokens(hidden)).toBe(0);
+    expect(estimateTokens(visible)).toBeGreaterThan(20_000);
+    expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
+      tokens: 44,
+      usageTokens: 42,
+      trailingTokens: 2,
+      lastUsageIndex: 0,
+    });
+    expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
+      20_000,
+    );
+  });
+
+  it("never rewinds a retained visible turn onto an excluded shell-history row", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("earlier", createUsage(10), 2), 1),
+      createMessageEntry(createBashMessage("x".repeat(80_000), 3, true), 2),
+      createMessageEntry({ role: "user", content: "recent turn", timestamp: 4 }, 3),
+      createMessageEntry(createAssistant("ok", createUsage(10), 5), 4),
+    ];
+
+    expect(findCutPoint(entries, 0, entries.length, 2)).toEqual({
+      firstKeptEntryIndex: 3,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
+  });
+
+  it("omits private shell history from a genuine split-turn summary prefix", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("earlier work", createUsage(10), 2), 1),
+      createMessageEntry(createBashMessage("private output ".repeat(6_000), 3, true), 2),
+      createMessageEntry(createAssistant("latest", createUsage(10), 4), 3),
+    ];
+
+    expect(findCutPoint(entries, 0, entries.length, 1)).toEqual({
+      firstKeptEntryIndex: 3,
+      turnStartIndex: 0,
+      isSplitTurn: true,
+    });
+
+    const preparation = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    });
+
+    expect(preparation.ok).toBe(true);
+    if (!preparation.ok || !preparation.value) {
+      throw new Error("expected a genuine split turn to remain compactable");
+    }
+    expect(preparation.value).toMatchObject({
+      firstKeptEntryId: "entry-3",
+      isSplitTurn: true,
+      tokensBefore: 10,
+      turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
+    });
+    expect(JSON.stringify(preparation.value)).not.toContain("private output");
+    expect(JSON.stringify(entries)).toContain("private output");
+  });
+
   it("applies the shared common-CJK budget heuristic", () => {
     expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
     expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);

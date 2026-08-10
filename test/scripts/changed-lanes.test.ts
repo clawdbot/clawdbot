@@ -2431,6 +2431,17 @@ describe("delegationFailedBeforeRunning", () => {
     expect(delegationFailedBeforeRunning(output)).toBe(false);
   });
 
+  it("treats a full workload-routing provider outage as never having run", () => {
+    // Provider selection happens before any dispatch, so an exhausted routing
+    // chain (every doctor failing) can never carry a remote verdict.
+    const output = [
+      "[crabbox] no ready provider for workload=ci-fast",
+      "[crabbox] provider readiness blacksmith-testbox:doctor exited 1,daytona:doctor exited 124,azure:doctor exited 124,aws:doctor exited 124",
+    ].join("\n");
+
+    expect(delegationFailedBeforeRunning(output)).toBe(true);
+  });
+
   it("does not mistake an infrastructure error kind for a command verdict", () => {
     const output = [
       "failed to acquire lease for testbox",

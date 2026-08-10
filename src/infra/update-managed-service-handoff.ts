@@ -18,6 +18,8 @@ import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
+import { applyDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
@@ -440,6 +442,7 @@ function buildFallbackFailurePayload(reason) {
     message: typeof meta.note === "string" ? meta.note : null,
     stats: {
       mode: "unknown",
+      ...(typeof meta.root === "string" && meta.root.trim() ? { root: meta.root } : {}),
       ...(typeof meta.handoffId === "string" && meta.handoffId.trim()
         ? { handoffId: meta.handoffId }
         : {}),
@@ -677,6 +680,7 @@ type ManagedServiceUpdateHandoffParams = {
   handoffId?: string;
   supervisor?: RespawnSupervisor | null;
   env?: NodeJS.ProcessEnv;
+  devTarget?: DevUpdateTarget;
   execPath?: string;
   argv1?: string;
   parentPid?: number;
@@ -697,7 +701,10 @@ type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff
 // Keep one helper per Gateway process through its lifetime. Readiness only
 // means it loaded its parameters; spawning another helper before it exits races
 // update mutation, service recovery, and restart sentinel ownership.
-let activeManagedServiceUpdateHandoff: Promise<StartedManagedServiceUpdateHandoff> | null = null;
+let activeManagedServiceUpdateHandoff: {
+  root: string;
+  flight: Promise<StartedManagedServiceUpdateHandoff>;
+} | null = null;
 
 function isNodeLikeRuntime(execPath: string | undefined): boolean {
   if (!execPath?.trim()) {
@@ -968,6 +975,7 @@ async function resolveHandoffSpawn(params: {
 
 async function spawnManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
+  rootIdentity: string,
   onExit: () => void,
 ): Promise<StartedManagedServiceUpdateHandoff> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
@@ -990,7 +998,7 @@ async function spawnManagedServiceUpdateHandoff(
   const handoffCwd = await resolveManagedServiceHandoffCwd(params.root);
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
-    meta: params.meta,
+    meta: { ...params.meta, root: rootIdentity },
   };
   const stateDatabasePath = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   const helperParams = {
@@ -1020,11 +1028,12 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
-    const env = {
+    const childEnv = {
       ...stripSupervisorHintEnv(params.env ?? process.env),
       [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     };
+    const env = params.devTarget ? applyDevUpdateTargetEnv(childEnv, params.devTarget) : childEnv;
     const spawnTarget = await resolveHandoffSpawn({
       supervisor: params.supervisor,
       env,
@@ -1063,21 +1072,27 @@ async function spawnManagedServiceUpdateHandoff(
 export async function startManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
 ): Promise<ManagedServiceUpdateHandoffResult> {
+  const root = resolveUpdateInstallRoot(params.root);
   const active = activeManagedServiceUpdateHandoff;
   if (active) {
-    return { ...(await active), status: "joined" };
+    if (active.root !== root) {
+      throw new Error(
+        `managed update handoff root mismatch: active=${active.root} requested=${root}`,
+      );
+    }
+    return { ...(await active.flight), status: "joined" };
   }
 
-  const flight = spawnManagedServiceUpdateHandoff(params, () => {
-    if (activeManagedServiceUpdateHandoff === flight) {
+  const flight = spawnManagedServiceUpdateHandoff(params, root, () => {
+    if (activeManagedServiceUpdateHandoff?.flight === flight) {
       activeManagedServiceUpdateHandoff = null;
     }
   });
-  activeManagedServiceUpdateHandoff = flight;
+  activeManagedServiceUpdateHandoff = { root, flight };
   try {
     return await flight;
   } catch (err) {
-    if (activeManagedServiceUpdateHandoff === flight) {
+    if (activeManagedServiceUpdateHandoff?.flight === flight) {
       activeManagedServiceUpdateHandoff = null;
     }
     throw err;

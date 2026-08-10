@@ -392,6 +392,35 @@ describe("dedicated worker websocket protocol", () => {
     expect(invalid.service.pushLiveEvent).not.toHaveBeenCalled();
   });
 
+  it("dispatches a TLS certificate fallback step without closing the worker", async () => {
+    const request = {
+      ...LIVE_EVENT,
+      event: {
+        kind: "lifecycle" as const,
+        payload: {
+          phase: "fallback_step" as const,
+          fallbackStepType: "fallback_step" as const,
+          fallbackStepFromModel: "openai/gpt-primary",
+          fallbackStepFromFailureReason: "tls_certificate" as const,
+          fallbackStepFinalOutcome: "next_fallback" as const,
+        },
+      },
+    };
+    const harness = attachHarness();
+    await admit(harness);
+    harness.sendRequest("worker.live-event", request);
+
+    await waitForWorkerProtocol(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.service.pushLiveEvent).toHaveBeenCalledWith(IDENTITY, request);
+    expect(harness.responses[1]).toEqual({
+      type: "res",
+      id: "request-1",
+      ok: true,
+      payload: { ackedSeq: request.seq },
+    });
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
   it("rejects transcript commits when the admitted worker lacks the feature", async () => {
     const harness = attachHarness({
       identity: { ...IDENTITY, protocolFeatures: ["worker-heartbeat-v1"] },
