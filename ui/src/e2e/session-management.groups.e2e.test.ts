@@ -9,9 +9,11 @@ import {
   controlUiSessionPath,
   createSessionManagementE2eSuite,
   installMockGateway,
+  openSessionMenuSubmenu,
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  submitInputDialog,
   uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -479,17 +481,21 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.locator(".session-groupby__select").selectOption("category");
-      page.once("dialog", (dialog) => void dialog.accept("X".repeat(513)));
       await page.getByRole("button", { name: "New group…" }).click();
+      const field = page.locator("openclaw-modal-dialog input");
+      await field.waitFor({ state: "visible" });
+      await field.fill("X".repeat(513));
+      await field.press("Enter");
       await gateway.waitForRequest("sessions.groups.put");
       await gateway.rejectDeferred("sessions.groups.put", {
         code: "INVALID_REQUEST",
         message: "group name exceeds 512 characters",
       });
 
-      const error = page.getByRole("alert");
+      const error = page.locator('openclaw-modal-dialog [role="alert"]');
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
+      expect(await field.inputValue()).toBe("X".repeat(513));
       expect(pageErrors).toEqual([]);
     } finally {
       await context.close();
@@ -794,37 +800,9 @@ suite.define(() => {
       );
       await sessionTen.hover();
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
-      const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
-      await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
-      const moveToGroupIndex = await moveToGroup.evaluate((element) =>
-        [...(element.parentElement?.children ?? [])]
-          .filter(
-            (item) =>
-              item.localName === "wa-dropdown-item" &&
-              item.getAttribute("slot") !== "submenu" &&
-              !(item as HTMLElement & { disabled?: boolean }).disabled,
-          )
-          .indexOf(element),
-      );
-      expect(moveToGroupIndex).toBeGreaterThanOrEqual(0);
-      // Submenu ARIA is ready before Web Awesome finishes opening the dropdown.
-      // Wait for its focus contract so navigation keys cannot outrun the menu.
-      await expect
-        .poll(() =>
-          page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
-        )
-        .toBe(1);
-      await page.keyboard.press("Home");
-      for (let index = 0; index < moveToGroupIndex; index += 1) {
-        await page.keyboard.press("ArrowDown");
-      }
-      await expect
-        .poll(() => moveToGroup.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowRight");
-      await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
-      page.once("dialog", (dialog) => void dialog.accept("Gamma"));
+      await openSessionMenuSubmenu(page, "Move to group");
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await submitInputDialog(page, "Gamma");
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
       const createdPatch = await waitForPatch(
@@ -953,8 +931,8 @@ suite.define(() => {
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Second group"));
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await submitInputDialog(page, "Second group");
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });

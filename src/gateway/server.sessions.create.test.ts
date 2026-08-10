@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
+  getRegistryWorktree,
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -26,6 +27,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -55,6 +57,7 @@ import {
   sessionHookMocks,
   sessionLifecycleHookMocks,
   seedSessionTranscript,
+  threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 
 type EnsureSessionDiffBaseline =
@@ -893,6 +896,162 @@ test("sessions.create rejects draft visibility when policy disables drafts", asy
   });
 });
 
+test("sessions.create provisions its worktree inside the target lifecycle fence", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-fence-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:worktree-fence";
+  const originalCreate = managedWorktrees.create.bind(managedWorktrees);
+  const createSpy = vi.spyOn(managedWorktrees, "create").mockImplementation(async (params) => {
+    expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
+    return await originalCreate(params);
+  });
+  let worktreeId: string | undefined;
+  try {
+    const created = await directSessionReq<{
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      { key, agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(created.ok).toBe(true);
+    worktreeId = created.payload?.worktree.id;
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    createSpy.mockRestore();
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
+test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-worktree-rollback-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  testState.sessionConfig = { sharing: { drafts: false } };
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:worktree-rollback";
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
+  let failedWorktreeId: string | undefined;
+  let successorWorktreeId: string | undefined;
+  let releaseRollback = () => {};
+  const rollbackGate = new Promise<void>((resolve) => {
+    releaseRollback = resolve;
+  });
+  let markRollbackStarted = () => {};
+  const rollbackStarted = new Promise<void>((resolve) => {
+    markRollbackStarted = resolve;
+  });
+  const removeSpy = vi.spyOn(managedWorktrees, "remove").mockImplementation(async (params) => {
+    if (params.reason === "session-create-failed") {
+      failedWorktreeId = params.id;
+      markRollbackStarted();
+      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
+      await rollbackGate;
+    }
+    return await originalRemove(params);
+  });
+  try {
+    const failedPromise = directSessionReq(
+      "sessions.create",
+      {
+        key,
+        agentId: "main",
+        visibility: "draft",
+        worktree: true,
+      },
+      { client: adminClient },
+    );
+    await rollbackStarted;
+    let successorSettled = false;
+    const successorPromise = directSessionReq<{
+      entry: { worktree?: { id: string; branch: string; repoRoot: string } };
+      worktree: { id: string; path: string; branch: string };
+    }>("sessions.create", { key, agentId: "main", worktree: true }, { client: adminClient }).then(
+      (result) => {
+        successorSettled = true;
+        return result;
+      },
+    );
+    await Promise.resolve();
+    expect(successorSettled).toBe(false);
+
+    releaseRollback();
+    const [failed, successor] = await Promise.all([failedPromise, successorPromise]);
+    expect(failed).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "session visibility is disabled: draft",
+        details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+      },
+    });
+    expect(failedWorktreeId).toBeTruthy();
+    expect(getRegistryWorktree(process.env, failedWorktreeId!)).toMatchObject({
+      removedAt: expect.any(Number),
+    });
+    expect(successor.ok).toBe(true);
+    const successorWorktree = successor.payload!.worktree;
+    successorWorktreeId = successorWorktree.id;
+    expect(successorWorktree.id).not.toBe(failedWorktreeId);
+    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.worktree).toEqual({
+      id: successorWorktree.id,
+      branch: successorWorktree.branch,
+      repoRoot: workspace,
+    });
+
+    const adoptedFailure = await directSessionReq(
+      "sessions.create",
+      { key, agentId: "main", visibility: "draft", worktree: true },
+      { client: adminClient },
+    );
+    expect(adoptedFailure).toMatchObject({
+      ok: false,
+      error: { message: "sessions.create visibility requires a new session" },
+    });
+    expect(
+      removeSpy.mock.calls.some(
+        ([params]) =>
+          params.reason === "session-create-failed" && params.id === successorWorktree.id,
+      ),
+    ).toBe(false);
+    expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
+  } finally {
+    releaseRollback();
+    removeSpy.mockRestore();
+    if (
+      successorWorktreeId &&
+      getRegistryWorktree(process.env, successorWorktreeId)?.removedAt === undefined
+    ) {
+      await managedWorktrees.remove({
+        id: successorWorktreeId,
+        reason: "test-cleanup",
+        force: true,
+      });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    testState.sessionConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
@@ -1512,6 +1671,8 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
   let worktreeId: string | undefined;
+  let releaseWorktreeRemoval = () => {};
+  let restoreRemoveIfLossless = () => {};
   try {
     const created = await directSessionReq<{
       key: string;
@@ -1542,9 +1703,32 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
       worktree?.path,
     );
 
-    // A later plain New Chat on the same main session must leave the worktree: cwd clears
-    // and the (clean) session worktree is lossless-removed rather than left orphaned.
-    const reset = await directSessionReq<{
+    // Pause the exact old-binding removal before destructive work. A same-key
+    // worktree reset must remain fenced until that prior generation is gone.
+    const originalRemoveIfLossless = managedWorktrees.removeIfLossless.bind(managedWorktrees);
+    const removalGate = new Promise<void>((resolve) => {
+      releaseWorktreeRemoval = resolve;
+    });
+    let markRemovalStarted = () => {};
+    const removalStarted = new Promise<void>((resolve) => {
+      markRemovalStarted = resolve;
+    });
+    const removeIfLosslessSpy = vi
+      .spyOn(managedWorktrees, "removeIfLossless")
+      .mockImplementation(async (id) => {
+        if (id === worktree?.id) {
+          expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+            targetSessionKey: "agent:main:main",
+            reason: "session-reset",
+          });
+          markRemovalStarted();
+          expect(isSessionLifecycleMutationActive(storePath, ["agent:main:main"])).toBe(true);
+          await removalGate;
+        }
+        return await originalRemoveIfLossless(id);
+      });
+    restoreRemoveIfLossless = () => removeIfLosslessSpy.mockRestore();
+    const resetPromise = directSessionReq<{
       key: string;
       entry: { spawnedCwd?: string };
       resolved: { modelProvider?: string; model?: string };
@@ -1553,23 +1737,53 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
       { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
       { client: { connect: { scopes: ["operator.write"] } } as never },
     );
+    await removalStarted;
+    let successorSettled = false;
+    const successorPromise = directSessionReq<{
+      entry: { spawnedCwd?: string; worktree?: { id: string; branch: string; repoRoot: string } };
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      {
+        key: "agent:main:main",
+        agentId: "main",
+        worktree: true,
+      },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    ).then((result) => {
+      successorSettled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(successorSettled).toBe(false);
+    releaseWorktreeRemoval();
+    const [reset, successor] = await Promise.all([resetPromise, successorPromise]);
+    restoreRemoveIfLossless();
     expect(reset.ok).toBe(true);
     expect(reset.payload?.entry.spawnedCwd).toBeUndefined();
     expect(reset.payload?.resolved).toEqual({
       modelProvider: "openai",
       model: "current-model",
     });
-    expect(
-      listRegistryWorktrees(process.env).filter(
-        (record) =>
-          record.ownerKind === "session" &&
-          record.ownerId === "agent:main:main" &&
-          record.removedAt === undefined,
-      ),
-    ).toHaveLength(0);
-    worktreeId = undefined;
+    expect(getRegistryWorktree(process.env, worktree!.id)?.removedAt).toEqual(expect.any(Number));
+    expect(successor.ok).toBe(true);
+    const successorWorktree = successor.payload!.worktree;
+    expect(successorWorktree.id).not.toBe(worktree?.id);
+    worktreeId = successorWorktree.id;
+    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      spawnedCwd: successorWorktree.path,
+      worktree: {
+        id: successorWorktree.id,
+        branch: successorWorktree.branch,
+        repoRoot: workspace,
+      },
+    });
+    expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
   } finally {
-    if (worktreeId) {
+    releaseWorktreeRemoval();
+    restoreRemoveIfLossless();
+    if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();

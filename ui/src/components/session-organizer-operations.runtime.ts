@@ -365,8 +365,12 @@ async function rememberSessionGroup(
     return "failed";
   }
   try {
-    await scope.sessions.groupsPut([...groups, name]);
-    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
+    const written = await scope.sessions.groupsPut([...groups, name]);
+    // The catalog owns the authoritative stale signal; the mutation scope adds
+    // its own. Either one retiring means no confirmed entry to assign against.
+    return written === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
+      ? "completed"
+      : "stale";
   } catch (error) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
@@ -390,18 +394,46 @@ export async function createSessionGroup(
   name: string,
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
-): Promise<void> {
-  if ((await rememberSessionGroup(host, name, scope)) !== "completed") {
-    return;
+): Promise<SidebarSessionMutationResult> {
+  const remembered = await rememberSessionGroup(host, name, scope);
+  if (remembered !== "completed") {
+    return remembered;
   }
-  if (sessions.length === 1) {
-    await patchSession(host, sessions[0]!, { category: name }, scope);
-  } else if (sessions.length > 1) {
-    await patchSessions(host, sessions, { category: name }, scope);
-  } else if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    // Header-created groups start empty; re-render so the section shows up.
-    host.requestUpdate();
+  // The dialog no longer blocks, so a captured row can be deleted while the
+  // catalog write is in flight, and sessions.patch would recreate it. Re-resolve
+  // every target against the current list, as the Sessions-page path does.
+  const targets = sessions.flatMap((session) => {
+    const current = host.findSidebarSessionByKey(session.key);
+    return current ? [current] : [];
+  });
+  if (targets.length > 0) {
+    const moved =
+      targets.length === 1
+        ? await patchSession(host, targets[0]!, { category: name }, scope)
+        : await patchSessions(host, targets, { category: name }, scope);
+    // Rows that left the list are absent from `targets`, so patching the
+    // remainder reports success for a selection that was only partly applied.
+    // Closing on that would leave the skipped rows unaccounted for, so the
+    // partial outcome is named here; it is terminal, as the group already exists.
+    if (moved === "completed" && targets.length < sessions.length) {
+      showToast({ message: t("sessionsView.newGroupMovePartial") });
+    }
+    return moved;
   }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return "stale";
+  }
+  // A header-created group starts empty and needs no notice. Rows that were
+  // requested but resolved to nothing are a partial outcome: the group landed
+  // and the moves did not. The sidebar list is a bounded projection, so this is
+  // not proof the sessions are gone — say so rather than closing on a silent
+  // non-outcome the operator cannot account for.
+  if (sessions.length > 0) {
+    showToast({ message: t("sessionsView.newGroupMoveSkipped") });
+  }
+  // Re-render so the new section shows up.
+  host.requestUpdate();
+  return "completed";
 }
 
 export async function renameSessionGroup(

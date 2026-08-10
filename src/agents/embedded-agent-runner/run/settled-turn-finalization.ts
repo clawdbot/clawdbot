@@ -87,8 +87,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       ...initial,
       prepared,
       lastRunPromptUsage,
-      finalizationAttempted: false,
-      finalizationSucceeded: false,
+      finalizationOutcome: "not-attempted" as const,
     };
   }
   const settledFailureSignal = prepared.failureSignal;
@@ -100,13 +99,38 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
   );
   try {
-    attempt = await runPreparedSettledTurnFinalization({
+    const finalization = await runPreparedSettledTurnFinalization({
       attempt: input.finalization.preparedAttempt,
       settledAttempt: initial.attempt,
       harness: input.finalization.harness,
       prompt,
       noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
     });
+    if (finalization.outcome === "empty") {
+      mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, finalization.result.usage);
+      lastRunPromptUsage = finalization.result.usage ?? lastRunPromptUsage;
+      log.warn(
+        `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${errorContext.provider}/${errorContext.model} — recording completed-empty outcome`,
+      );
+      const emptyAssistant = finalization.result.assistant;
+      const completedEmptyAttempt = {
+        ...initial.attempt,
+        lastAssistant: emptyAssistant,
+        currentAttemptAssistant: emptyAssistant,
+        currentAttemptCompletedAssistant: emptyAssistant,
+      };
+      return {
+        ...initial,
+        attempt: completedEmptyAttempt,
+        attemptAssistant: emptyAssistant,
+        currentAttemptCompletedAssistant: emptyAssistant,
+        prepared,
+        lastRunPromptUsage,
+        finalizationOutcome: "completed-empty" as const,
+      };
+    }
+    attempt = finalization.attempt;
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
     mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
     lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
@@ -139,8 +163,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       sessionFileUsed: attempt.sessionFileUsed,
       prepared,
       lastRunPromptUsage,
-      finalizationAttempted: true,
-      finalizationSucceeded: true,
+      finalizationOutcome: "answered" as const,
     };
   } catch (error) {
     log.warn(
@@ -151,8 +174,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       ...initial,
       prepared,
       lastRunPromptUsage,
-      finalizationAttempted: true,
-      finalizationSucceeded: false,
+      finalizationOutcome: "failed" as const,
     };
   }
 }
@@ -163,9 +185,15 @@ async function runPreparedSettledTurnFinalization(input: {
   harness: AgentHarness;
   prompt: string;
   noteLaneTaskProgress: () => void;
-}): Promise<EmbeddedRunAttemptResult> {
+}): Promise<
+  | { outcome: "answered"; attempt: EmbeddedRunAttemptResult }
+  | {
+      outcome: "empty";
+      result: AgentHarnessSettledTurnFinalizationResult;
+    }
+> {
   return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
-    const result = await runEmbeddedSettledTurnFinalizationWithBackend(
+    const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
         operation: "settled-tool-finalization",
@@ -177,12 +205,18 @@ async function runPreparedSettledTurnFinalization(input: {
       input.settledAttempt,
       input.harness,
     );
-    return buildSettledTurnFinalizationAttemptResult({
-      result,
-      settledAttempt: input.settledAttempt,
-      prompt: input.prompt,
-      agentHarnessId: input.attempt.agentHarnessId,
-    });
+    if (finalization.outcome === "empty") {
+      return finalization;
+    }
+    return {
+      outcome: "answered",
+      attempt: buildSettledTurnFinalizationAttemptResult({
+        result: finalization.result,
+        settledAttempt: input.settledAttempt,
+        prompt: input.prompt,
+        agentHarnessId: input.attempt.agentHarnessId,
+      }),
+    };
   });
 }
 
