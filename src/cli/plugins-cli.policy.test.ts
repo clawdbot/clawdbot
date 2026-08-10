@@ -133,6 +133,7 @@ describe("plugins cli policy mutations", () => {
 
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
     expect(runtimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
