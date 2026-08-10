@@ -300,6 +300,7 @@ export function registerSlackMessageEvents(params: {
           channelId,
           channelType: subtypeHandler.resolveChannelType(message),
           eventKind: subtypeHandler.eventKind,
+          ...(eventScope ? { eventScope } : {}),
         });
         if (!ingressContext) {
           return;
