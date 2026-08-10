@@ -205,6 +205,13 @@ export const icons = {
   listFilter: strokeIcon(svg` <path d="M3 6h18" />
     <path d="M7 12h10" />
     <path d="M10 18h4" />`),
+  // Filled dots: strokeIcon()'s shell sets fill="none", so each dot opts back in.
+  gripVertical: strokeIcon(svg` <circle cx="9" cy="6" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="9" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="9" cy="18" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="6" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none" />`),
   arrowDown: strokeIcon(svg`<path d="M12 5v14m7-7-7 7-7-7" />`),
   arrowUp: strokeIcon(svg`<path d="M12 19V5m-7 7 7-7 7 7" />`),
   chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),

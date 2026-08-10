@@ -231,6 +231,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onQueueRemove: (id: string) => void;
     onQueueRetry?: (id: string) => void;
     onQueueSteer?: (id: string) => void;
+    onQueueMove?: (id: string, toIndex: number) => void;
     onGoalCommand?: (command: string) => void;
     onHistoryIntent?: (event: Event) => void;
     onCompanionQuestion?: (question: string) => void;
@@ -516,6 +517,7 @@ export function renderChat(props: ChatProps) {
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
+    onQueueMove: props.onQueueMove,
     onGoalCommand: props.onGoalCommand,
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,

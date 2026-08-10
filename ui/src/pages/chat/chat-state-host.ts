@@ -134,6 +134,7 @@ export type ChatPageHost = ChatHost &
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
+    moveQueuedChatMessage: (id: string, toIndex: number) => void;
     handleCloseSidebar: () => void;
     updateSidebarLayout: (layout: SidebarLayout) => void;
     beginImageOpen: () => number;
