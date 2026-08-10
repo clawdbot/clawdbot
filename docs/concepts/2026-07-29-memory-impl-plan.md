@@ -447,24 +447,24 @@ until the stable identifiers are decided.
 Phase 0 is complete only when all of the following are demonstrated on the
 current implementation head:
 
-- [ ] Every memory ingress and egress path has a recorded owner and one explicit
+- [x] Every memory ingress and egress path has a recorded owner and one explicit
       disposition: authorized, blocked in enforced mode, or legacy-only.
-- [ ] Phase 0 exposes no trusted-context factory or enforcement admission path;
+- [x] Phase 0 exposes no trusted-context factory or enforcement admission path;
       tool JSON, prompt text, plugin extras, and caller-assembled objects
       therefore cannot opt into or modify an enforced authorization plan.
-- [ ] Shadow inspection records whether the selected backend has a conforming
+- [x] Shadow inspection records whether the selected backend has a conforming
       declared authorization surface, and the conformance suite rejects a
       context-free allow-all adapter. A later Phase 1A admission path must
       reject any backend selected for an enforced agent without that surface.
-- [ ] Shadow evaluation emits only bounded selected-runtime surface metadata;
+- [x] Shadow evaluation emits only bounded selected-runtime surface metadata;
       it never logs memory content, prompts, queries, snippets, or raw
       principal identifiers, and does not claim to evaluate context-free policy
       decisions.
-- [ ] Existing single-user results, configured corpora, and measured hot-path
+- [x] Existing single-user results, configured corpora, and measured hot-path
       latency remain unchanged.
-- [ ] SDK exports, API baselines, contract and runtime-inspection tests, and any
+- [x] SDK exports, API baselines, contract and runtime-inspection tests, and any
       required build/lazy-import gates pass.
-- [ ] Product and security documentation still describes the feature as
+- [x] Product and security documentation still describes the feature as
       shadow-only, with no public isolation claim or public configuration.
 
 ### Phase 0 rollback
