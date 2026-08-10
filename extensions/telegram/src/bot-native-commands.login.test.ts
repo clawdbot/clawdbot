@@ -1,14 +1,13 @@
 // Tests Telegram native Codex login command behavior.
 import {
   createEmptyPluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -49,6 +48,8 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
 
 type LoginFlowMock = ReturnType<typeof vi.fn>;
 
+let loginAccountIndex = 0;
+
 function registerLoginCommand(params: {
   cfg: OpenClawConfig;
   loginFlow: LoginFlowMock;
@@ -57,7 +58,9 @@ function registerLoginCommand(params: {
   runtime?: RuntimeEnv;
 }) {
   const botHarness = createCommandBot();
+  const accountId = `login-test-${++loginAccountIndex}`;
   const nativeParams = createNativeCommandTestParams(params.cfg, {
+    accountId,
     bot: botHarness.bot,
     allowFrom: params.allowFrom ?? ["200"],
     ...(params.abortSignal
@@ -74,20 +77,25 @@ function registerLoginCommand(params: {
     const result = await botHarness.bot.api.sendMessage(100, text, {});
     return { messageId: String(result.message_id), chatId: "100" };
   });
-  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
-    ...nativeParams,
-    telegramDeps: {
-      ...nativeParams.telegramDeps,
-      runModelsAuthLoginFlow: params.loginFlow,
-      sendMessageTelegram,
-    } as never,
-  });
+  const nativeCommandCallbackDispatcher = withPluginRuntimeRegistryScope(
+    createEmptyPluginRegistry(),
+    () =>
+      registerTelegramNativeCommands({
+        ...nativeParams,
+        telegramDeps: {
+          ...nativeParams.telegramDeps,
+          runModelsAuthLoginFlow: params.loginFlow,
+          sendMessageTelegram,
+        } as never,
+      }),
+  );
   const handler = botHarness.commandHandlers.get("login");
   if (!handler) {
     throw new Error("expected login command handler to be registered");
   }
   return {
     ...botHarness,
+    accountId,
     handler,
     nativeCommandCallbackDispatcher,
     sendMessageTelegram,
@@ -95,18 +103,10 @@ function registerLoginCommand(params: {
 }
 
 describe("registerTelegramNativeCommands /login", () => {
-  beforeAll(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
-    setActivePluginRegistry(createEmptyPluginRegistry());
   });
-
-  afterAll(() => resetPluginRuntimeStateForTest());
 
   it("handles /login codex by sending the device code before login completes", async () => {
     let loginParams: ModelsAuthLoginFlowOptions | undefined;
@@ -507,7 +507,7 @@ describe("registerTelegramNativeCommands /login", () => {
         profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
       };
     });
-    const { handler, sendMessage, sendMessageTelegram } = registerLoginCommand({
+    const { accountId, handler, sendMessage, sendMessageTelegram } = registerLoginCommand({
       cfg: {
         commands: { native: true, ownerAllowFrom: ["200"] },
         agents: { list: [{ id: "main", default: true }] },
@@ -527,7 +527,7 @@ describe("registerTelegramNativeCommands /login", () => {
       expect(sendMessageTelegram).toHaveBeenCalledWith(
         "telegram:100",
         "Codex login complete. Try your request again now.",
-        expect.objectContaining({ accountId: "default", token: "token" }),
+        expect.objectContaining({ accountId, token: "token" }),
       ),
     );
     expect(sendMessage).toHaveBeenCalledTimes(1);

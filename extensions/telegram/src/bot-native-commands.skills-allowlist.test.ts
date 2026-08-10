@@ -4,12 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import {
   createEmptyPluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
@@ -27,18 +26,12 @@ async function makeWorkspace(prefix: string) {
 }
 
 describe("registerTelegramNativeCommands skill allowlist integration", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
   afterEach(async () => {
     resetNativeCommandMenuMocks();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
-
-  afterAll(() => resetPluginRuntimeStateForTest());
 
   it("registers only allowlisted skills for the bound agent menu", async () => {
     const workspaceDir = await makeWorkspace("openclaw-telegram-skills-");
@@ -73,21 +66,23 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         listActualSkillCommandsForAgents({ cfg: cfgLocal, agentIds }),
     );
 
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg, {
-        bot: {
-          api: {
-            setMyCommands,
-            sendMessage: vi.fn().mockResolvedValue(undefined),
-          },
-          command: vi.fn(),
-        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        runtime: { log: vi.fn() } as unknown as Parameters<
-          typeof registerTelegramNativeCommands
-        >[0]["runtime"],
-        accountId: "bot-a",
+    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+      registerTelegramNativeCommands({
+        ...createNativeCommandTestParams(cfg, {
+          bot: {
+            api: {
+              setMyCommands,
+              sendMessage: vi.fn().mockResolvedValue(undefined),
+            },
+            command: vi.fn(),
+          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+          runtime: { log: vi.fn() } as unknown as Parameters<
+            typeof registerTelegramNativeCommands
+          >[0]["runtime"],
+          accountId: "bot-a",
+        }),
       }),
-    });
+    );
 
     expect(setMyCommands).toHaveBeenCalledOnce();
     const registeredCommands = setMyCommands.mock.calls[0]?.[0] ?? [];
