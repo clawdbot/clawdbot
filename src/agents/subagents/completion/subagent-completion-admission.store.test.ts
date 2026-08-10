@@ -13,6 +13,10 @@ import { publishTaskRecordAfterAtomicStore } from "../../../tasks/task-registry.
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
@@ -22,10 +26,6 @@ import {
   resolveCorrelatedSubagentDelivery,
   retrySubagentCompletionDelivery,
 } from "./subagent-completion-delivery.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

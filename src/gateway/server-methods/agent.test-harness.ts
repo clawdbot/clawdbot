@@ -228,7 +228,9 @@ vi.mock("../../infra/agent-run-registry.js", () => ({
 // surface stays real so registry paths reached through the gateway (paused-run
 // adoption, descendant queries) observe the runs these tests seed.
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry-read.js")>()),
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
   getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
 }));
 

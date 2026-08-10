@@ -31,7 +31,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
 }));
 
-const { listDescendantRunsForRequester } = await import("../../agents/subagents/registry/subagent-registry-read.js");
+const { listDescendantRunsForRequester } =
+  await import("../../agents/subagents/registry/subagent-registry-read.js");
 const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 

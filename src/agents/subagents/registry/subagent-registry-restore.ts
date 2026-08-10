@@ -8,6 +8,11 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
+import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
+import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
+import { resolveSwarmConfig } from "../swarm/swarm-config.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
   reconcileOrphanedRestoredRuns,
@@ -20,11 +25,6 @@ import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
-import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
-import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
-import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
-import { resolveSwarmConfig } from "../swarm/swarm-config.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 
 type RestoredQueuedFailureSettlementClaim = {
   entry: SubagentRunRecord;

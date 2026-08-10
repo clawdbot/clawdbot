@@ -14,16 +14,16 @@ import {
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
+  isTrustedSubagentCompletionHandoffForRun,
+  type TrustedSubagentCompletionHandoff,
+} from "./subagents/announce/subagent-announce-handoff.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
+import {
   isSubagentEnvelopeSession,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
   type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
-import {
-  isTrustedSubagentCompletionHandoffForRun,
-  type TrustedSubagentCompletionHandoff,
-} from "./subagents/announce/subagent-announce-handoff.js";
-import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 

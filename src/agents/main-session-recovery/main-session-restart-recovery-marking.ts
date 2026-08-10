@@ -15,6 +15,7 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/run-state.js";
+import { resolveAgentSessionDirs } from "../session-dirs.js";
 import {
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
@@ -27,7 +28,6 @@ import {
   normalizeStringSet,
   resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
-import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 async function markRecoveryStore(params: {
   storePath: string;

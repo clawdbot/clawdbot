@@ -4,7 +4,10 @@ import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-eve
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { runExclusiveSessionLifecycleMutation } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import { finalizeTaskRunByRunId, findDetachedTaskRun } from "../../../tasks/detached-task-runtime.js";
+import {
+  finalizeTaskRunByRunId,
+  findDetachedTaskRun,
+} from "../../../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {

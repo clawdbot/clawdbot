@@ -21,6 +21,8 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
+import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -30,8 +32,6 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
 
 type LifecycleControllerParams = Parameters<typeof createSubagentRegistryLifecycleController>[0];
 type LifecycleController = ReturnType<typeof createSubagentRegistryLifecycleController>;

@@ -6,13 +6,13 @@ import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
-import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
   entries: {} as Record<string, SessionEntry>,

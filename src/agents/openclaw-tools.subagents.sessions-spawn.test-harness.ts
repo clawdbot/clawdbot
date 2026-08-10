@@ -14,7 +14,8 @@ type RunSubagentAnnounceFlow =
   (typeof import("./subagents/announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
-type SubagentRegistryTesting = (typeof import("./subagents/registry/subagent-registry.test-helpers.js"))["testing"];
+type SubagentRegistryTesting =
+  (typeof import("./subagents/registry/subagent-registry.test-helpers.js"))["testing"];
 type SubagentSpawnTesting =
   (typeof import("./subagents/spawn/subagent-spawn.test-support.js"))["testing"];
 type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];

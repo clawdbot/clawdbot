@@ -10,6 +10,7 @@ import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-event
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
@@ -18,7 +19,6 @@ import {
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
-import { resolveAgentTimeoutMs } from "../../timeout.js";
 
 type SubagentAnnounceModule = Pick<
   typeof import("../announce/subagent-announce.js"),

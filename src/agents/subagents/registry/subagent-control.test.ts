@@ -25,6 +25,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   buildControlledSubagentRunsReadContext,
   testing,
@@ -47,7 +48,6 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 
 type GatewayCaller = typeof import("../../../gateway/call.js").callGateway;
 

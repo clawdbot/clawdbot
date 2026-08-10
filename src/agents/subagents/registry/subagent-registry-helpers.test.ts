@@ -3,6 +3,7 @@
 import { promises as fs } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../../runtime.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import {
   capFrozenResultText,
   logAnnounceGiveUp,
@@ -13,7 +14,6 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {

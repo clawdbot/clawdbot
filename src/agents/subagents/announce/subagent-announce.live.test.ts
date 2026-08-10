@@ -19,7 +19,10 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "../../live-test-helpers.js";
-import { resolveSubagentController, steerControlledSubagentRun } from "../registry/subagent-control.js";
+import {
+  resolveSubagentController,
+  steerControlledSubagentRun,
+} from "../registry/subagent-control.js";
 import { listSubagentRunsForRequester } from "../registry/subagent-registry.test-helpers.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";

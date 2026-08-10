@@ -5,6 +5,13 @@ import { recordSubagentTerminalState } from "../../../sessions/session-state-eve
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
+import {
+  type SubagentRunOutcome,
+  withSubagentOutcomeTiming,
+} from "../announce/subagent-announce-output.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -32,13 +39,6 @@ import type {
 import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import { createSubagentRegistryLifecycleTerminalCleanup } from "./subagent-registry-lifecycle-terminal-cleanup.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  type SubagentRunOutcome,
-  withSubagentOutcomeTiming,
-} from "../announce/subagent-announce-output.js";
-import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
-import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 
 export function createSubagentRegistryLifecycleCompletion(
   params: SubagentRegistryLifecycleParams,

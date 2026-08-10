@@ -1,7 +1,10 @@
 /** Controller-authorized subagent list, kill, steer, and message operations. */
 import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../../../auto-reply/reply/queue.js";
-import { resolveSubagentLabel, sortSubagentRuns } from "../../../auto-reply/reply/subagents-utils.js";
+import {
+  resolveSubagentLabel,
+  sortSubagentRuns,
+} from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -30,7 +33,12 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../../run-wait.js";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
+import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSessionEntryForKey } from "./subagent-list.js";
 import {
@@ -54,8 +62,6 @@ import {
   replaceSubagentRunAfterSteer,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "../../tools/sessions-helpers.js";
 
 /** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;

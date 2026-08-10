@@ -1,5 +1,5 @@
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { selectDeliverableSessionsReply } from "../../tools/sessions-send-tokens.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Selects the canonical operator-visible result from captured completion state. */
 export function resolveSubagentCompletionResultText(

@@ -90,10 +90,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual([
-      "subagent-announce-delivery",
-      "subagent-lifecycle-registry",
-    ]);
+    expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual(
+      ["subagent-announce-delivery", "subagent-lifecycle-registry"],
+    );
   });
 
   it("detects the shared delivery-context announce seam", () => {

@@ -9,6 +9,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
+import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
@@ -47,7 +48,6 @@ import {
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
 } from "./subagent-session-reconciliation.js";
-import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");

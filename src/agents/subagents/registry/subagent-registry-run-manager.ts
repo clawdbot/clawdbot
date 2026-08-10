@@ -31,6 +31,12 @@ import { removeInternalSessionEffectsSession } from "../../internal-session-effe
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
 import {
+  type SubagentRunOutcome,
+  withSubagentOutcomeTiming,
+} from "../announce/subagent-announce-output.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import { isSwarmRunQueued, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
   clearDeliveryState,
   ensureCompletionState,
   normalizeSubagentRunState,
@@ -68,12 +74,6 @@ import {
   getSubagentSessionStartedAt,
 } from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
-import {
-  type SubagentRunOutcome,
-  withSubagentOutcomeTiming,
-} from "../announce/subagent-announce-output.js";
-import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
-import { isSwarmRunQueued, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = isFastTestRuntimeEnv() ? 25 : 5_000;

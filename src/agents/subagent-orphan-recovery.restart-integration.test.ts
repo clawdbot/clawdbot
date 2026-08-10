@@ -23,6 +23,10 @@ import {
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
 import {
@@ -41,10 +45,6 @@ import {
   testing,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "./subagent-test-fixtures.test-helpers.js";
 
 function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
   const sessionKey = String(payload.sessionKey);

@@ -7,9 +7,9 @@ const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/subagents/registry/subagent-registry-read.js")>(
-    "../agents/subagents/registry/subagent-registry-read.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../agents/subagents/registry/subagent-registry-read.js")
+  >("../agents/subagents/registry/subagent-registry-read.js");
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>

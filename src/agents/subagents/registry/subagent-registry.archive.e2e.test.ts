@@ -62,7 +62,8 @@ vi.mock("../../../tasks/task-status-access.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+  const actual =
+    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
     listSessionEntriesReadOnly: sessionAccessorMocks.listSessionEntriesReadOnly,
@@ -80,7 +81,9 @@ vi.mock("../../../infra/agent-run-registry.js", () => ({
 }));
 
 vi.mock("../../../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../config/config.js")>("../../../config/config.js");
+  const actual = await vi.importActual<typeof import("../../../config/config.js")>(
+    "../../../config/config.js",
+  );
   return {
     ...actual,
     getRuntimeConfig: loadConfigMock,
@@ -112,7 +115,8 @@ describe("subagent registry archive behavior", () => {
   ) => {
     mod.testing.setDepsForTest({
       callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig:
+        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadAgentRuntimePluginRegistryHandle: vi.fn(),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
         params.completeBatch([params.settledEntry.runId]);

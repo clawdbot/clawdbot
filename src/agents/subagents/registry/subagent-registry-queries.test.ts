@@ -2,6 +2,10 @@
 // lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it } from "vitest";
 import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import {
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
@@ -13,10 +17,6 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "../../subagent-test-fixtures.test-helpers.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 

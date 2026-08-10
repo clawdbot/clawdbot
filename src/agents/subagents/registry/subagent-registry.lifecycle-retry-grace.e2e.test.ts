@@ -1,8 +1,6 @@
 // Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
 // lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as announceRead from "./subagent-registry-announce-read.js";
-import * as mod from "./subagent-registry.test-helpers.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
@@ -10,6 +8,8 @@ import {
   maybeWakeRequesterAfterAllChildrenSettled,
   testing as settleWakeTesting,
 } from "../announce/subagent-announce.requester-settle-wake.js";
+import * as announceRead from "./subagent-registry-announce-read.js";
+import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -182,7 +182,8 @@ describe("subagent registry lifecycle error grace", () => {
     );
     mod.testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig:
+        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadAgentRuntimePluginRegistryHandle: () => undefined,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../../../infra/agent-events.js").onAgentEvent,
@@ -192,7 +193,8 @@ describe("subagent registry lifecycle error grace", () => {
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig:
+        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
     settleWakeTesting.setDepsForTest({
@@ -200,7 +202,8 @@ describe("subagent registry lifecycle error grace", () => {
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig:
+        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadSessionEntry: ({ sessionKey }) => sessionStore[sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = sessionStore[requesterSessionKey];
@@ -212,7 +215,8 @@ describe("subagent registry lifecycle error grace", () => {
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig:
+        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       readSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
       resolveStorePath: () => "/tmp/test-store",

@@ -41,16 +41,6 @@ import {
 } from "../../../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import {
-  SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
-  SUBAGENT_ENDED_REASON_KILLED,
-} from "./subagent-lifecycle-events.js";
-import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
-import type {
-  ContextEngineSubagentEndedParams,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
-import {
   createSessionStore,
   createSubagentRunParams,
   createSubagentRunRecord,
@@ -64,6 +54,16 @@ import type {
   SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
+import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
+import type {
+  ContextEngineSubagentEndedParams,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 
 const noop = () => {};
 

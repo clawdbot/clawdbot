@@ -20,8 +20,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
-import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
+import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
 import { resolveSubagentTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
 

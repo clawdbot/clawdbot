@@ -63,6 +63,16 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-runtime-context.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../run-termination.js";
+import {
+  createAssistantToolCallMessage,
+  createSessionEntry,
+  createSessionStore,
+  type SessionEntryFixture,
+  expectRecord,
+  mockCallArg,
+  waitForFast,
+} from "../subagent-test-fixtures.test-helpers.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryStorePaths } from "./main-session-restart-recovery-shared.js";
@@ -74,16 +84,6 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
-import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../run-termination.js";
-import {
-  createAssistantToolCallMessage,
-  createSessionEntry,
-  createSessionStore,
-  type SessionEntryFixture,
-  expectRecord,
-  mockCallArg,
-  waitForFast,
-} from "../subagent-test-fixtures.test-helpers.js";
 
 const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),

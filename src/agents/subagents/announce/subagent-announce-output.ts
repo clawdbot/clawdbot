@@ -12,12 +12,12 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import { extractAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import {
   isAnnounceSkip,
   selectDeliverableSessionsReply,
 } from "../../tools/sessions-send-tokens.js";
+import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,

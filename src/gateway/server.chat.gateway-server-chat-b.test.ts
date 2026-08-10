@@ -75,15 +75,20 @@ const restartRecoveryMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../agents/main-session-recovery/main-session-restart-recovery.js")>();
-  return {
-    ...actual,
-    retryRestartAbortedMainSessionRecovery:
-      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
-  };
-});
+vi.mock(
+  "../agents/main-session-recovery/main-session-restart-recovery.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../agents/main-session-recovery/main-session-restart-recovery.js")
+      >();
+    return {
+      ...actual,
+      retryRestartAbortedMainSessionRecovery:
+        restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
+    };
+  },
+);
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 2_000, interval: 1 } as const;

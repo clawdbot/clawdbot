@@ -2,6 +2,10 @@
 // prompt/control paths instead of repeatedly scanning the run map.
 import { describe, expect, it } from "vitest";
 import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
+import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
@@ -14,10 +18,6 @@ import {
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "../../subagent-test-fixtures.test-helpers.js";
 
 function makeRun(overrides: Partial<SubagentRunRecordOverrides>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";

@@ -30,8 +30,8 @@ import {
   formatAgentInternalEventsForPrompt,
   type AgentInternalEvent,
 } from "../../internal-events.js";
-import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import {

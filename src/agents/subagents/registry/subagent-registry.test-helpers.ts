@@ -2,6 +2,10 @@ export * from "./subagent-registry.js";
 
 import { collectSessionMaintenancePreserveKeys } from "../../../config/sessions/store-maintenance-preserve.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countPendingDescendantRunsExcludingRunFromRuns,
@@ -12,10 +16,6 @@ import {
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "../../subagent-test-fixtures.test-helpers.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,

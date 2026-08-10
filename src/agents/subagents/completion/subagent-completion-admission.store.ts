@@ -12,7 +12,10 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../../state/openclaw-state-db.js";
-import { bindTaskRecord, upsertTaskRunRowInDatabase } from "../../../tasks/task-registry.store.sqlite.js";
+import {
+  bindTaskRecord,
+  upsertTaskRunRowInDatabase,
+} from "../../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   bindSubagentRunRecord,

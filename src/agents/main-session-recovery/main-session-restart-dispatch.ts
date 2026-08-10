@@ -30,6 +30,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
   repairMainSessionRecoveryMutation,
@@ -44,7 +45,6 @@ import {
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE =
