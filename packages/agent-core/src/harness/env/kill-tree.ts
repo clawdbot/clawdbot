@@ -6,6 +6,8 @@ const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
 const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
+const treeSnapshotCache = new Map<number, number[]>();
+
 export type KillProcessTreeOptions = {
   graceMs?: number;
   detached?: boolean;
@@ -53,11 +55,12 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
   const graceMs = normalizeGraceMs(opts?.graceMs);
   signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
   setTimeout(() => {
-    const pids = useGroupKill ? [pid] : getUnixProcessTreePids(pid);
+    const pids = useGroupKill ? [pid] : (treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid));
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
       : pids.some((p) => isProcessAlive(p));
     if (!stillAlive) {
+      treeSnapshotCache.delete(pid);
       return;
     }
     signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
@@ -258,7 +261,22 @@ function signalProcessTreeUnix(
     }
   }
 
-  const pidsToSignal = getUnixProcessTreePids(pid);
+  let pidsToSignal: number[];
+  
+  if (signal === "SIGTERM") {
+    pidsToSignal = treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid);
+    treeSnapshotCache.set(pid, pidsToSignal);
+    
+    setTimeout(() => {
+      treeSnapshotCache.delete(pid);
+    }, MAX_GRACE_MS + 5000).unref();
+  } else if (signal === "SIGKILL") {
+    pidsToSignal = treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid);
+    treeSnapshotCache.delete(pid);
+  } else {
+    pidsToSignal = getUnixProcessTreePids(pid);
+  }
+
   for (const p of pidsToSignal) {
     try {
       process.kill(p, signal);
