@@ -156,8 +156,6 @@ describe("worktrees gateway methods", () => {
 
   it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
     const os = await import("node:os");
-    const path = await import("node:path");
-    const fs = await import("node:fs/promises");
     const workspace = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
     );
