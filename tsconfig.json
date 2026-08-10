@@ -70,6 +70,9 @@
       "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/browser": ["./packages/gateway-client/src/browser.ts"],
+      "@openclaw/gateway-client/websocket-data": [
+        "./packages/gateway-client/src/websocket-data.ts"
+      ],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
       "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
       "@openclaw/gateway-protocol/client-info": [

@@ -999,7 +999,7 @@ openclaw-chat-sidebar-region,
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-tasks-rail__task:hover,
@@ -1026,7 +1026,7 @@ openclaw-chat-sidebar-region,
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-tasks-rail__task-chevron {
@@ -1301,7 +1301,7 @@ openclaw-chat-sidebar-region,
   font: inherit;
   font-size: var(--control-ui-text-xs);
   line-height: 1.3;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
   text-underline-offset: 2px;
@@ -1987,7 +1987,7 @@ openclaw-session-discussion {
   font: inherit;
   font-size: var(--control-ui-text-sm);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .session-diff__chevron {

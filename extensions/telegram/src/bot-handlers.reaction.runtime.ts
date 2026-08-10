@@ -10,16 +10,17 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramThreadSpec,
+  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
 
-/** Stable operator-facing reason for a forum reaction dropped without a known topic. */
+/** Stable operator-facing reason for a scoped reaction dropped without a known topic. */
 const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
 
 /** Only the message-cache lookup this handler needs, so tests can supply it directly. */
 type TelegramReactionThreadRecovery = Pick<
   TelegramHandlerMessageRuntime,
-  "resolveCachedMessageThreadId"
+  "resolveCachedMessageThreadSpec"
 >;
 
 export function registerTelegramReactionHandler(
@@ -46,7 +47,8 @@ export function registerTelegramReactionHandler(
       const senderId = user?.id != null ? String(user.id) : "";
       const senderUsername = user?.username ?? "";
       const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
-      const isForum = reaction.chat.is_forum === true;
+      const isDirectMessagesChat = reaction.chat.is_direct_messages === true;
+      const isForum = !isDirectMessagesChat && reaction.chat.is_forum === true;
       const authorizationCfg = telegramDeps.getRuntimeConfig();
       const authorizationTelegramCfg = resolveTelegramAccount({
         cfg: authorizationCfg,
@@ -85,23 +87,23 @@ export function registerTelegramReactionHandler(
         return;
       }
 
-      // `MessageReactionUpdated` omits `message_thread_id`, so a forum reaction only has a
-      // topic if the reacted-to message is still in the bounded message cache. Recover it
-      // before authorization: topic allowlists and topic agents are both keyed by thread
-      // id, so an assumed thread here authorizes and routes the wrong topic.
-      let cachedForumThreadId: number | undefined;
-      if (isForum) {
-        cachedForumThreadId = await threadRecovery.resolveCachedMessageThreadId({
+      // `MessageReactionUpdated` omits every topic field. Scoped reactions only have a
+      // route if the reacted-to message is still in the bounded message cache.
+      let recoveredThreadSpec: TelegramThreadSpec | undefined;
+      const requiredScope = isDirectMessagesChat
+        ? "direct-messages"
+        : isForum
+          ? "forum"
+          : undefined;
+      if (requiredScope) {
+        recoveredThreadSpec = await threadRecovery.resolveCachedMessageThreadSpec({
           chatId,
           messageId,
         });
-        if (cachedForumThreadId === undefined) {
-          // Never fall back to General: that would authorize and enqueue this reaction
-          // against a topic the user did not react in. Degrade to one bounded warning
-          // carrying route ids only.
+        if (recoveredThreadSpec?.scope !== requiredScope || recoveredThreadSpec.id === undefined) {
           runtime.log?.(
             warn(
-              `telegram: skipped forum reaction account=${accountId} chat=${chatId} message=${messageId} reason=${TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON}`,
+              `telegram: skipped scoped reaction account=${accountId} chat=${chatId} message=${messageId} reason=${TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON}`,
             ),
           );
           return;
@@ -113,11 +115,12 @@ export function registerTelegramReactionHandler(
         chatId,
         isGroup,
         senderId,
-        threadSpec: resolveTelegramThreadSpec({
-          isGroup,
-          isForum,
-          messageThreadId: cachedForumThreadId,
-        }),
+        threadSpec:
+          recoveredThreadSpec ??
+          resolveTelegramThreadSpec({
+            isGroup,
+            isForum,
+          }),
       });
       const senderAuthorization = await authorizeTelegramEventSender({
         chatId,
@@ -149,16 +152,16 @@ export function registerTelegramReactionHandler(
 
       const resolvedThreadId = eventAuthContext.resolvedThreadId;
       let sessionKey: string;
-      if (isForum) {
-        // Forum topics carry topic agents and conversation bindings, so the recovered
-        // topic goes through the canonical route resolver instead of a bare peer route.
+      if (recoveredThreadSpec) {
+        // Scoped topics carry topic agents and conversation bindings, so the recovered
+        // spec goes through the canonical route resolver instead of a bare peer route.
         sessionKey = resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
           isGroup,
           resolvedThreadId,
-          replyThreadId: resolvedThreadId,
+          replyThreadId: recoveredThreadSpec.id,
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
         }).route.sessionKey;

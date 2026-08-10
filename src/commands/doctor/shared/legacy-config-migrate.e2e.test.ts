@@ -128,6 +128,7 @@ describe("legacy config migration end to end", () => {
         defaults: { pdfMaxMb: 12, mediaModels: { image: "openai/image-1" } },
         entries: { main: { name: "Main", tools: { exec: { timeoutSeconds: 45 } } } },
       },
+      plugins: { entries: { openai: { config: { personality: "off" } } } },
       tools: { exec: { timeoutSeconds: 30 } },
       attachments: { ttlHours: 24 },
       logging: { consoleStyle: "pretty", audit: { enabled: false, messages: "direct" } },
@@ -155,6 +156,9 @@ describe("legacy config migration end to end", () => {
         },
       },
     });
+    expect(result.changes).toContain(
+      "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+    );
     const validation = validateConfigObjectRaw(result.config);
     expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
@@ -170,6 +174,19 @@ describe("legacy config migration end to end", () => {
     ]) {
       expect(serialized).not.toContain(`"${key}"`);
     }
+  });
+
+  it("preserves canonical OpenAI personality over the retired prompt overlay", () => {
+    const result = migrateLegacyConfig({
+      agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },
+      plugins: { entries: { openai: { config: { personality: "friendly" } } } },
+    });
+
+    expect(result.config?.plugins?.entries?.openai?.config?.personality).toBe("friendly");
+    expect(result.config?.agents?.defaults?.promptOverlays).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+    );
   });
 
   it("repairs unsupported OTel grpc once and is then a no-op", () => {

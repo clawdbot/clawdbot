@@ -43,9 +43,9 @@ import {
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
-  getLegacySessionSurfaces,
   isLegacyGroupKey,
   isSurfaceGroupKey,
+  type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
 
@@ -79,6 +79,7 @@ function canonicalizeSessionKeyForAgent(params: {
   preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): string {
   const raw = params.key.trim();
   if (!raw) {
@@ -182,7 +183,7 @@ function canonicalizeSessionKeyForAgent(params: {
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback so plugin-specific legacy group keys can canonicalize to their
   // owning channel instead of the generic `...:unknown:group:...` bucket.
-  for (const surface of getLegacySessionSurfaces()) {
+  for (const surface of params.legacySessionSurfaces ?? []) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
       agentId,
@@ -203,6 +204,7 @@ function canonicalizeSessionKeyForAgent(params: {
 
 export function pickLatestLegacyDirectEntry(
   store: Record<string, SessionEntryLike>,
+  legacySessionSurfaces: PreparedLegacySessionSurfaces["surfaces"] = [],
 ): SessionEntryLike | null {
   let best: SessionEntryLike | null = null;
   let bestUpdated = -1;
@@ -224,7 +226,7 @@ export function pickLatestLegacyDirectEntry(
     if (normalizedLower.startsWith("subagent:")) {
       continue;
     }
-    if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {
+    if (isLegacyGroupKey(normalized, legacySessionSurfaces) || isSurfaceGroupKey(normalized)) {
       continue;
     }
     const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
@@ -293,6 +295,7 @@ export function canonicalizeSessionStore(params: {
   preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
@@ -311,6 +314,7 @@ export function canonicalizeSessionStore(params: {
       preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
@@ -544,6 +548,7 @@ export function listLegacySessionKeys(params: {
   scope?: SessionScope;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): string[] {
   const legacy: string[] = [];
   for (const key of Object.keys(params.store)) {
@@ -556,6 +561,7 @@ export function listLegacySessionKeys(params: {
       preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
     if (canonical !== key) {
       legacy.push(key);
@@ -589,10 +595,17 @@ export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
+  if (params.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...params.legacySessionSurfaces.failures],
+    };
+  }
   const stateDir = resolveStateDir(env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
@@ -738,6 +751,7 @@ export async function migrateOrphanedSessionKeys(params: {
         preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
+        legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so
@@ -775,10 +789,17 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   pluginSessionStoreAgentIds?: readonly string[];
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
+  if (params.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...params.legacySessionSurfaces.failures],
+    };
+  }
   const now = params.now ?? (() => Date.now());
   const stateDir = resolveStateDir(env);
   const storeConfig = params.cfg.session?.store;
@@ -937,6 +958,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
           mainKey,
           scope,
           skipCrossAgentRemap: true,
+          legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
         });
         writeAcpSessionMetaForMigration({
           sessionKey: canonicalSessionKey,

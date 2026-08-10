@@ -50,11 +50,13 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
-import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
-import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import {
+  buildActiveImageGenerationTaskPromptContextForSession,
+  buildActiveMusicGenerationTaskPromptContextForSession,
+  buildActiveVideoGenerationTaskPromptContextForSession,
+} from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
-import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import { prepareCliRunContext } from "./prepare.js";
 import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -105,23 +107,17 @@ vi.mock("../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-vi.mock("../video-generation-task-status.js", () => ({
+vi.mock("../media-generation-task-status.js", () => ({
   VIDEO_GENERATION_TASK_KIND: "video_generation",
   buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => ""),
   findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
-}));
-
-vi.mock("../image-generation-task-status.js", () => ({
   IMAGE_GENERATION_TASK_KIND: "image_generation",
   buildActiveImageGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => ""),
   findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
-}));
-
-vi.mock("../music-generation-task-status.js", () => ({
   MUSIC_GENERATION_TASK_KIND: "music_generation",
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
   buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),

@@ -30,6 +30,11 @@ import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import {
+  createEmbeddedStateSignalBridge,
+  type EmbeddedStateSignal,
+  type EmbeddedStateSignalProcess,
+} from "../infra/embedded-state-lock.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -96,11 +101,9 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
 };
 
-type AgentCliSignal = "SIGINT" | "SIGTERM";
-type AgentCliProcessLike = {
+type AgentCliSignal = EmbeddedStateSignal;
+type AgentCliProcessLike = EmbeddedStateSignalProcess & {
   exitCode?: NodeJS.Process["exitCode"];
-  on(signal: AgentCliSignal, handler: () => void): unknown;
-  off(signal: AgentCliSignal, handler: () => void): unknown;
 };
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
@@ -113,7 +116,6 @@ type AgentGatewayCallIdentity = Pick<
 type AgentSessionModule = typeof import("./agent/session.runtime.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
-const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
 const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
@@ -138,9 +140,10 @@ const agentSessionModuleCache = createLazyPromiseLoader(() => agentSessionModule
 const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
   cacheRejections: true,
 });
-const gatewayLockModuleLoader = createLazyPromiseLoader(() => import("../infra/gateway-lock.js"), {
-  cacheRejections: true,
-});
+const embeddedStateLockModuleLoader = createLazyPromiseLoader(
+  () => import("../infra/embedded-state-lock.js"),
+  { cacheRejections: true },
+);
 const replyPayloadModuleLoader = createLazyPromiseLoader(
   () => import("openclaw/plugin-sdk/reply-payload"),
   { cacheRejections: true },
@@ -226,32 +229,12 @@ async function acquireEmbeddedAgentStateLock(
   options: GatewayLockOptions | undefined,
   signal: AbortSignal,
 ) {
-  const { acquireGatewayLock, GatewayLockError, readActiveGatewayLockIdentity } =
-    await gatewayLockModuleLoader.load();
-  const env = options?.env ?? process.env;
-  if (options?.allowInTests !== true && (env.VITEST || env.NODE_ENV === "test")) {
-    return null;
-  }
-  const activeGateway = await readActiveGatewayLockIdentity(options);
-  if (activeGateway) {
-    throw new GatewayLockError(formatActiveGatewayLocalRefusal(activeGateway));
-  }
-  try {
-    return await acquireGatewayLock({
-      ...options,
-      role: "agent-embedded",
-      sleep: options?.sleep ?? (async (ms) => await delayMs(ms, signal)),
-    });
-  } catch (error) {
-    if (!(error instanceof GatewayLockError)) {
-      throw error;
-    }
-    const racedGateway = await readActiveGatewayLockIdentity(options);
-    if (racedGateway) {
-      throw new GatewayLockError(formatActiveGatewayLocalRefusal(racedGateway), error);
-    }
-    throw error;
-  }
+  const { acquireEmbeddedStateLock } = await embeddedStateLockModuleLoader.load();
+  return await acquireEmbeddedStateLock({
+    options,
+    signal,
+    formatActiveGatewayRefusal: formatActiveGatewayLocalRefusal,
+  });
 }
 
 const loadReplyPayloadModule = replyPayloadModuleLoader.load;
@@ -263,7 +246,7 @@ export const agentViaGatewayTesting = {
     localAuditModuleLoader.clear();
     agentSessionModuleCache.clear();
     runtimeConfigModuleLoader.clear();
-    gatewayLockModuleLoader.clear();
+    embeddedStateLockModuleLoader.clear();
     replyPayloadModuleLoader.clear();
     agentSessionModuleLoader = defaultAgentSessionModuleLoader;
   },
@@ -530,34 +513,12 @@ function readAcceptedRunContext(payload: unknown): {
 }
 
 function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) {
-  const controller = new AbortController();
-  let receivedSignal: AgentCliSignal | undefined;
-  const handlers = new Map<AgentCliSignal, () => void>();
-  const detachHandlers = () => {
-    for (const [signal, handler] of handlers) {
-      processLike.off(signal, handler);
-    }
-    handlers.clear();
-  };
-  for (const signal of AGENT_CLI_SIGNALS) {
-    const handler = () => {
-      receivedSignal = signal;
-      if (!controller.signal.aborted) {
-        // runtime.exit may bypass finally cleanup, so first-signal self-detach is load-bearing.
-        controller.abort();
-        detachHandlers();
-      }
-    };
-    handlers.set(signal, handler);
-    processLike.on(signal, handler);
-  }
+  const bridge = createEmbeddedStateSignalBridge(processLike);
   return {
-    signal: controller.signal,
-    getReceivedSignal: () => receivedSignal,
+    ...bridge,
     setExitCode: (code: number) => {
       processLike.exitCode = code;
     },
-    dispose: detachHandlers,
   };
 }
 

@@ -956,7 +956,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           install: profile.install ?? "bundle",
           settings,
         }),
-        provisionOperationId: `provision:${digest}`,
+        provisionOperationId: `provision:v2:${digest}`,
       });
       return resumeProvision(intent, provider);
     });

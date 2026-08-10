@@ -494,9 +494,6 @@ describe("prepareEmbeddedAttemptStream", () => {
     const markExternalAbort = vi.fn();
     const markAborted = vi.fn();
     const abortActiveSession = vi.fn(async () => {});
-    const releaseHeldLockForAbort = vi.fn(
-      async (_params: { reason?: unknown; terminal: boolean }) => {},
-    );
     const abortState = {
       markAborted,
       markExternalAbort,
@@ -527,7 +524,6 @@ describe("prepareEmbeddedAttemptStream", () => {
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController: { releaseHeldLockForAbort },
       state: abortState,
     });
     externalAbortController.setRunAbort(abortRun);
@@ -558,14 +554,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(onAttemptAbort).toHaveBeenCalledOnce();
       expect(markAborted).toHaveBeenCalledOnce();
       expect(abortActiveSession).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
-        reason: expect.any(Error),
-        terminal: true,
-      });
-      expect(
-        isAgentRunSupersededAbortReason(releaseHeldLockForAbort.mock.calls[0]?.[0].reason),
-      ).toBe(true);
+      expect(isAgentRunSupersededAbortReason(runAbortController.signal.reason)).toBe(true);
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {

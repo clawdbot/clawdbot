@@ -422,7 +422,46 @@ describe("getTelegramSequentialConstraints", () => {
       "telegram:-1001:topic:9",
       expected,
     ]);
-    expect(getTelegramSequentialConstraints(reaction)).toEqual(["telegram:-1001", expected]);
+    expect(getTelegramSequentialConstraints(reaction)).toBe(expected);
+  });
+
+  it("bridges a channel Direct Messages message with its reaction without coupling topics", () => {
+    const message = mockMessage({
+      chat: mockChat({
+        id: -1002,
+        type: "supergroup",
+        is_direct_messages: true,
+      } as Chat),
+      message_id: 77,
+      message_thread_id: 999,
+      direct_messages_topic: { topic_id: 9, user: { id: 1 } as never },
+      is_topic_message: true,
+    });
+    const expected = "telegram:-1002:message:77";
+    const reaction = {
+      update: {
+        message_reaction: {
+          chat: { id: -1002, type: "supergroup", is_direct_messages: true },
+          message_id: 77,
+        },
+      },
+    };
+
+    expect(getTelegramSequentialConstraints({ message })).toEqual([
+      "telegram:-1002:topic:9",
+      expected,
+    ]);
+    expect(getTelegramSequentialConstraints(reaction)).toBe(expected);
+    expect(
+      getTelegramSequentialConstraints({
+        update: {
+          message_reaction: {
+            chat: { id: -1002, type: "supergroup", is_direct_messages: true },
+            message_id: 78,
+          },
+        },
+      }),
+    ).toBe("telegram:-1002:message:78");
   });
 
   it("does not add a bridge lane outside forum chats", () => {

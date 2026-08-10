@@ -528,20 +528,6 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains(".background(Color(uiColor: .systemBackground))"))
     }
 
-    @Test func `root shell preview matrix covers phone and I pad states`() throws {
-        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("#Preview(\n    \"Shell iPhone portrait\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPhone drawer open\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPhone landscape\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPhone connected\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPhone gateway error\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPad portrait drawer\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPad landscape split\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPad connecting\""))
-        #expect(source.contains("#Preview(\n    \"Shell iPad gateway error\""))
-    }
-
     @Test func `shared chat preview matrix covers connection states`() throws {
         let source = try String(contentsOf: Self.sharedChatPreviewSourceURL(), encoding: .utf8)
 

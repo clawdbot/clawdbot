@@ -46,9 +46,29 @@ public struct DeviceIdentity: Codable, Sendable, Equatable {
     }
 }
 
+struct DeviceIdentityStateRootState {
+    private(set) var url: URL?
+    private(set) var used = false
+
+    mutating func configure(_ url: URL) -> Bool {
+        let normalized = url.standardizedFileURL
+        if let configured = self.url { return configured == normalized }
+        guard !self.used else { return false }
+        self.url = normalized
+        return true
+    }
+
+    mutating func resolve() -> URL? {
+        self.used = true
+        return self.url
+    }
+}
+
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
     @TaskLocal static var scopedStateDirURL: URL?
+    private static let configuredStateLock = NSLock()
+    private nonisolated(unsafe) static var configuredState = DeviceIdentityStateRootState()
 
     /// Entitlements are baked into the code signature, so resolve the gate once per process.
     /// Every identity load and DeviceAuthStore read/write resolves the state dir through here;
@@ -63,6 +83,10 @@ enum DeviceIdentityPaths {
             appGroupStateDirURL: self.appGroupStateDirURL(),
             appGroupStateDirAvailable: self.appGroupStateDirAvailable,
             temporaryDirectory: FileManager.default.temporaryDirectory)
+    }
+
+    static func configureStateDirURL(_ url: URL) -> Bool {
+        self.configuredStateLock.withLock { self.configuredState.configure(url) }
     }
 
     static func stateDirURL(
@@ -89,6 +113,9 @@ enum DeviceIdentityPaths {
         // otherwise race whenever another suite temporarily swaps OPENCLAW_STATE_DIR.
         if let scopedStateDirURL {
             return scopedStateDirURL
+        }
+        if let configured = self.configuredStateLock.withLock({ self.configuredState.resolve() }) {
+            return configured
         }
         for key in self.stateDirEnv {
             if let raw = getenv(key) {
@@ -202,6 +229,11 @@ public enum DeviceIdentityStore {
 
     public static func loadOrCreate() -> DeviceIdentity {
         self.loadOrCreate(profile: .primary)
+    }
+
+    @discardableResult
+    public static func configureStateDirectory(_ url: URL) -> Bool {
+        DeviceIdentityPaths.configureStateDirURL(url)
     }
 
     #if compiler(>=6.4)

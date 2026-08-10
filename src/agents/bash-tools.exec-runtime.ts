@@ -17,10 +17,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
-import {
-  consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
-} from "../infra/system-events.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -358,15 +355,17 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     sessionScope: session.sessionScope,
   };
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
-  const event = enqueueSystemEventEntry(eventText, {
-    sessionKey: eventSessionKey,
-    deliveryContext: session.notifyDeliveryContext,
-  });
-  if (event) {
-    recordNotifyOnExitRemoval(
-      session,
-      () => consumeSelectedSystemEventEntries(eventSessionKey, [event]).length > 0,
-    );
+  const remove = enqueueSystemEventWithReceipt(
+    eventText,
+    {
+      sessionKey: eventSessionKey,
+      contextKey: `exec:${session.id}`,
+      deliveryContext: session.notifyDeliveryContext,
+    },
+    { allowDuplicate: true },
+  );
+  if (remove) {
+    recordNotifyOnExitRemoval(session, remove);
   }
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.

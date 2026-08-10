@@ -17,6 +17,7 @@ import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
 import {
+  getActiveCronTaskRunId,
   resolveMainSessionCronRunSessionKey,
   tryCreateCronTaskRun,
   tryFindCronTaskRunIdForRecovery,
@@ -231,28 +232,31 @@ describe("cron task run terminal records", () => {
           updatedAtMs: 100,
           enabled: true,
         };
+        let activeTaskRunId: string | undefined;
+        const runIsolatedAgentJob = vi.fn(async ({ onExecutionStarted }) => {
+          activeTaskRunId = getActiveCronTaskRunId();
+          onExecutionStarted?.({
+            jobId: job.id,
+            agentId: "ops",
+            sessionId: "session-1",
+            sessionKey: testCase.executionSessionKey,
+            phase: "runner_entered",
+          });
+          resolveStarted();
+          await runPending;
+          return {
+            status: "ok" as const,
+            sessionId: "session-1",
+            sessionKey: testCase.executionSessionKey,
+          };
+        });
         const state = createCronServiceState({
           storePath: "/tmp/jobs.json",
           cronEnabled: true,
           log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           enqueueSystemEvent: vi.fn(),
           requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async ({ onExecutionStarted }) => {
-            onExecutionStarted?.({
-              jobId: job.id,
-              agentId: "ops",
-              sessionId: "session-1",
-              sessionKey: testCase.executionSessionKey,
-              phase: "runner_entered",
-            });
-            resolveStarted();
-            await runPending;
-            return {
-              status: "ok" as const,
-              sessionId: "session-1",
-              sessionKey: testCase.executionSessionKey,
-            };
-          }),
+          runIsolatedAgentJob,
         });
 
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt: 1_500 });
@@ -265,12 +269,16 @@ describe("cron task run terminal records", () => {
         expect(taskRecords()).toHaveLength(1);
         expect(taskRecords()[0]?.agentId).toBe("ops");
         expect(taskRecords()[0]?.childSessionKey).toBe(testCase.initialSessionKey);
+        expect(getActiveCronTaskRunId()).toBeUndefined();
 
         const runPromise = executeJobCoreWithTimeout(state, job, { runId: taskRunId });
         try {
           await started;
+          expect(activeTaskRunId).toBe(taskRunId);
+          expect(getActiveCronTaskRunId()).toBeUndefined();
           expect(taskRecords()[0]?.agentId).toBe("ops");
           expect(taskRecords()[0]?.childSessionKey).toBe(testCase.executionSessionKey);
+          expect(runIsolatedAgentJob.mock.calls[0]?.[0]).not.toHaveProperty("taskRunId");
         } finally {
           resolveRun();
           await runPromise;

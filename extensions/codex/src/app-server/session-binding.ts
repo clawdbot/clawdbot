@@ -1580,13 +1580,4 @@ export function normalizeCodexAppServerBindingModelProvider(params: {
   return modelProvider;
 }
 
-/** Restores the sole provider intentionally omitted from canonical binding rows. */
-export function resolveCodexAppServerBindingModelProvider(
-  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
-  return (
-    params.modelProvider?.trim() ||
-    (isCodexAppServerNativeAuthProfile(params) ? PUBLIC_OPENAI_MODEL_PROVIDER : undefined)
-  );
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

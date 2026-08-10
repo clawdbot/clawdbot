@@ -2263,6 +2263,7 @@ export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;
   providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   outputMode?: "json" | "jsonl" | "text";
   fallbackSessionId?: string;
 }): CliOutput {
@@ -2271,7 +2272,20 @@ export function parseCliOutput(params: {
     return { text: params.raw.trim(), sessionId: params.fallbackSessionId };
   }
   if (outputMode === "jsonl") {
-    const parsed = parseCliJsonl(params.raw, params.backend, params.providerId);
+    let parsed: CliOutput | null;
+    if (params.parseJsonlEvent) {
+      const parser = createCliJsonlStreamingParser({
+        backend: params.backend,
+        providerId: params.providerId,
+        parseJsonlEvent: params.parseJsonlEvent,
+        onAssistantDelta: () => {},
+      });
+      parser.push(params.raw);
+      parser.finish();
+      parsed = parser.getOutput();
+    } else {
+      parsed = parseCliJsonl(params.raw, params.backend, params.providerId);
+    }
     if (parsed) {
       return parsed;
     }

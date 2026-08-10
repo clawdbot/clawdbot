@@ -579,7 +579,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       fetchGuard: params.fetchGuard,
       signal: params.signal,
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
-      auditContext: "openai-codex-model-discovery",
+      auditContext: "openai-model-discovery",
       readRows: readCodexModelRows,
       buildRequestHeaders: ({ discoveryApiKey }) => ({
         Accept: "application/json",
@@ -1127,8 +1127,4 @@ export function buildOpenAIProvider(): ProviderPlugin {
   };
 }
 
-/** @deprecated Use buildOpenAIProvider; OpenAI Codex is now an OpenAI auth/transport mode. */
-export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
-  return buildOpenAIProvider();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,6 +10,14 @@ export default {
     // per-site visual proof. Tighten in a follow-up, keep new code honest via
     // review until then.
     "no-duplicate-selectors": null,
+    // stylelint 17.14.1 knows display-mode as fullscreen | standalone |
+    // minimal-ui | browser | picture-in-picture (lib/reference/mediaFeatures.mjs),
+    // predating window-controls-overlay. Allow that one value only, so typos in
+    // the rest still fail.
+    "media-feature-name-value-no-unknown": [
+      true,
+      { ignoreMediaFeatureNameValues: { "display-mode": ["window-controls-overlay"] } },
+    ],
     // `clip` survives only inside the standard sr-only fallback pattern.
     "property-no-deprecated": [true, { ignoreProperties: ["clip"] }],
     // `word-break: break-word` is deprecated but swapping it for overflow-wrap

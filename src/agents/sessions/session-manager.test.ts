@@ -13,6 +13,7 @@ import {
   loadTranscriptEvents,
   readTranscriptRawDelta,
   replaceTranscriptEventsSync,
+  updateSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -891,7 +892,7 @@ describe("SessionManager.open", () => {
     });
 
     const sessionManager = openMarker(marker, sessionKey, dir);
-    const branchedMarker = sessionManager.createBranchedSession(assistant.messageId);
+    const branchedMarker = await sessionManager.createBranchedSession(assistant.messageId);
     const branchedSessionId = sessionManager.getSessionId();
 
     expect(branchedMarker).toBe(branchedSessionId);
@@ -918,6 +919,73 @@ describe("SessionManager.open", () => {
         parentSession: sessionId,
         type: "session",
       }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+  });
+
+  it("rejects a queued branch when lifecycle ownership changes before persistence", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-branch-race-source";
+    const sessionKey = "agent:main:dashboard:sqlite-branch-race-source";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(scope, {
+      lifecycleRevision: "branch-original-revision",
+      sessionFile: marker,
+      sessionId,
+      updatedAt: 10,
+    });
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "branch-race-user",
+      message: { role: "user", content: "question before raced branch" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "branch-race-assistant",
+      message: buildAssistantMessage("answer before raced branch"),
+      parentId: user.messageId,
+    });
+    const sessionManager = openMarker(marker, sessionKey, dir);
+
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionEntry(scope, async () => {
+      markOwnerChangeStarted();
+      await ownerChangeGate;
+      return { lifecycleRevision: "branch-replacement-revision" };
+    });
+    await ownerChangeStarted;
+
+    const branch = sessionManager.createBranchedSession(assistant.messageId);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(branch).rejects.toMatchObject({
+      cause: {
+        code: "session-rebound",
+        expectedSessionId: sessionId,
+        sessionKey,
+      },
+    });
+    expect(loadSessionEntry(scope)).toMatchObject({
+      lifecycleRevision: "branch-replacement-revision",
+      sessionId,
+    });
+    expect(sessionManager.getSessionId()).toBe(sessionId);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
       expect.objectContaining({ id: user.messageId, type: "message" }),
       expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);

@@ -33,7 +33,6 @@ type StreamGuardPhaseInput = Omit<
   | "onIdleTimeout"
   | "onRejectedThinkingReplayRepaired"
   | "session"
-  | "sessionLockController"
   | "sessionManager"
 >;
 type HistoryPhaseInput = Omit<HistoryInput, "activeSession" | "attempt" | "sessionManager">;
@@ -54,7 +53,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
   activeSession: StreamInput["activeSession"];
   sessionManager: HistoryInput["sessionManager"] &
     NonNullable<ToolResultFlushInput["sessionManager"]>;
-  sessionLockController: StreamGuardInput["sessionLockController"];
   ownedTranscriptWriteContext: Parameters<typeof withOwnedSessionTranscriptWrites>[0];
   runAbortController: AbortController;
   externalAbortController: ExternalAbortController;
@@ -86,7 +84,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     attempt,
     session: activeSession,
     sessionManager,
-    sessionLockController: input.sessionLockController,
     isYieldDetected: input.lifecycle.isYieldDetected,
     onRejectedThinkingReplayRepaired: input.lifecycle.markRejectedThinkingReplayRepaired,
     onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
@@ -123,7 +120,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     isProbeSession,
     log,
     runAbortController: input.runAbortController,
-    sessionLockController: input.sessionLockController,
     state: input.abortState,
   });
   input.externalAbortController.setRunAbort(abortRun);

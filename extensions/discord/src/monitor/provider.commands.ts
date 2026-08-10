@@ -2,15 +2,16 @@
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
-  type NativeCommandSpec,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntriesLower,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  mergeNativeCommandSpecs,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/native-command-registry";
+import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 
 export type GetPluginCommandSpecs =
   typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
@@ -20,43 +21,12 @@ const loadPluginCommandSpecs = createLazyRuntimeNamedExport(
   "getPluginCommandSpecs",
 );
 
-async function appendPluginCommandSpecs(params: {
-  commandSpecs: NativeCommandSpec[];
-  runtime: RuntimeEnv;
-  cfg: OpenClawConfig;
-  getPluginCommandSpecs?: GetPluginCommandSpecs;
-}): Promise<NativeCommandSpec[]> {
-  const merged = [...params.commandSpecs];
-  const existingNames = new Set(normalizeStringEntriesLower(merged.map((spec) => spec.name)));
-  const getPluginCommandSpecs = params.getPluginCommandSpecs ?? (await loadPluginCommandSpecs());
-  for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {
-    const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
-    if (!normalizedName) {
-      continue;
-    }
-    if (existingNames.has(normalizedName)) {
-      params.runtime.error?.(
-        danger(
-          `discord: plugin command "/${normalizedName}" duplicates an existing native command. Skipping.`,
-        ),
-      );
-      continue;
-    }
-    existingNames.add(normalizedName);
-    merged.push({
-      name: pluginCommand.name,
-      description: pluginCommand.description,
-      acceptsArgs: pluginCommand.acceptsArgs,
-    });
-  }
-  return merged;
-}
-
 export async function resolveDiscordProviderCommandSpecs(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
+  voiceEnabled: boolean;
   maxDiscordCommands?: number;
   listSkillCommandsForAgents?: typeof listSkillCommandsForAgents;
   listNativeCommandSpecsForConfig?: typeof listNativeCommandSpecsForConfig;
@@ -69,24 +39,57 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   const listNativeCommandSpecs =
     params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;
   const maxDiscordCommands = params.maxDiscordCommands ?? 100;
+  const pluginCommandSpecs = params.nativeEnabled
+    ? (params.getPluginCommandSpecs ?? (await loadPluginCommandSpecs()))("discord", {
+        config: params.cfg,
+      })
+    : [];
+  const onCollision = (normalizedName: string) => {
+    params.runtime.error?.(
+      danger(
+        `discord: plugin command "/${normalizedName}" duplicates an existing native command. Skipping.`,
+      ),
+    );
+  };
+  const mergePluginCommandSpecs = (
+    primary: readonly NativeCommandSpec[],
+    collisionHandler: (normalizedName: string) => void,
+  ) =>
+    mergeNativeCommandSpecs({
+      primary,
+      secondary: pluginCommandSpecs,
+      onCollision: collisionHandler,
+    });
+  const listPrimaryCommandSpecs = (
+    skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+  ): NativeCommandSpec[] => {
+    const standardSpecs = listNativeCommandSpecs(params.cfg, {
+      skillCommands,
+      provider: "discord",
+    });
+    if (!params.voiceEnabled) {
+      return standardSpecs;
+    }
+    // The specialized voice handler owns /vc before plugin merging and cap planning;
+    // remove generic specs so the deployed catalog cannot contain a shadow duplicate.
+    const voiceName = DISCORD_VOICE_COMMAND_SPEC.name;
+    return [
+      ...standardSpecs.filter((spec) => normalizeLowercaseStringOrEmpty(spec.name) !== voiceName),
+      DISCORD_VOICE_COMMAND_SPEC,
+    ];
+  };
+  // Defer first-pass diagnostics until the skill-limit decision. A collision can disappear
+  // when fallback removes skills, so only the final retained command set should report it.
+  const provisionalCollisions: string[] = [];
   let skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
       ? listSkillCommands({ cfg: params.cfg })
       : [];
   let commandSpecs = params.nativeEnabled
-    ? listNativeCommandSpecs(params.cfg, {
-        skillCommands,
-        provider: "discord",
-      })
+    ? mergePluginCommandSpecs(listPrimaryCommandSpecs(skillCommands), (normalizedName) =>
+        provisionalCollisions.push(normalizedName),
+      )
     : [];
-  if (params.nativeEnabled) {
-    commandSpecs = await appendPluginCommandSpecs({
-      commandSpecs,
-      runtime: params.runtime,
-      cfg: params.cfg,
-      getPluginCommandSpecs: params.getPluginCommandSpecs,
-    });
-  }
   const initialCommandCount = commandSpecs.length;
   if (
     params.nativeEnabled &&
@@ -94,21 +97,16 @@ export async function resolveDiscordProviderCommandSpecs(params: {
     commandSpecs.length > maxDiscordCommands
   ) {
     skillCommands = [];
-    commandSpecs = listNativeCommandSpecs(params.cfg, {
-      skillCommands: [],
-      provider: "discord",
-    });
-    commandSpecs = await appendPluginCommandSpecs({
-      commandSpecs,
-      runtime: params.runtime,
-      cfg: params.cfg,
-      getPluginCommandSpecs: params.getPluginCommandSpecs,
-    });
+    commandSpecs = mergePluginCommandSpecs(listPrimaryCommandSpecs([]), onCollision);
     params.runtime.log?.(
       warn(
         `${initialCommandCount} commands exceed the ${maxDiscordCommands}-command Discord limit; removing per-skill commands and keeping /skill.`,
       ),
     );
+  } else {
+    for (const normalizedName of provisionalCollisions) {
+      onCollision(normalizedName);
+    }
   }
   if (params.nativeEnabled && commandSpecs.length > maxDiscordCommands) {
     params.runtime.log?.(

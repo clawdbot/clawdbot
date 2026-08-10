@@ -9,6 +9,7 @@ import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-c
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -16,7 +17,6 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
-import { rawDataToString } from "../infra/ws.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   getDirectAgentForCdp,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
@@ -49,7 +50,6 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,

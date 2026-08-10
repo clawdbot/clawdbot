@@ -1223,6 +1223,9 @@ export async function modelsStatusCommand(
               concurrency: probeConcurrency,
               maxTokens: probeMaxTokens,
             },
+            // Direct CLI probes create hidden sessions in the canonical agent DB.
+            // Gateway RPC probes omit this because the Gateway already owns the lock.
+            stateOwnership: { mode: "exclusive" },
             onProgress: update,
           });
         },

@@ -1,4 +1,4 @@
-// Coverage for external cancellation, timeout, and session-lock release paths.
+// Coverage for external cancellation and timeout paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import {
@@ -8,8 +8,6 @@ import {
 } from "./attempt-abort.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
-import { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 const mocks = vi.hoisted(() => ({
   countActiveToolExecutions: vi.fn(() => 0),
@@ -153,7 +151,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     const state = createAbortState();
     const session = createTrackedSessionAbort();
     const onAttemptTimeout = vi.fn();
-    const releaseHeldLockForAbort = vi.fn(async () => {});
     const attempt = {
       abortSignal: source.signal,
       onAttemptTimeout,
@@ -178,7 +175,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController: { releaseHeldLockForAbort },
       state: state.port,
     });
     controller.setRunAbort(abortRun);
@@ -210,7 +206,6 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
       expect(onAttemptTimeout).toHaveBeenCalledOnce();
       expect(session.abort).toHaveBeenCalledExactlyOnceWith(reason);
       expect(mocks.markActiveEmbeddedRunAbandoned).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
     } finally {
       timeout.clearTimers();
       controller.dispose();
@@ -241,42 +236,13 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
 });
 
 describe("createEmbeddedAttemptRunAbort", () => {
-  it("releases session ownership non-terminally for sessions_yield handoff", async () => {
-    const releaseHeldLockForAbort = vi.fn(async () => {});
-    const abortRun = createEmbeddedAttemptRunAbort({
-      abortActiveSession: vi.fn(async () => {}),
-      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
-      attempt: {
-        runId: "run-yield",
-        sessionFile: "agent:main:main",
-        sessionId: "session-yield",
-        sessionKey: "agent:main:main",
-      },
-      getQueueHandle: () => undefined,
-      isProbeSession: false,
-      log: { warn: vi.fn() },
-      runAbortController: new AbortController(),
-      sessionLockController: { releaseHeldLockForAbort },
-      state: createAbortState().port,
-    });
-
-    abortRun(false, SESSIONS_YIELD_ABORT_REASON);
-    await vi.waitFor(() => {
-      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
-        reason: SESSIONS_YIELD_ABORT_REASON,
-        terminal: false,
-      });
-    });
-  });
-
-  it("settles timeout state, session work, queue ownership, and the lock", async () => {
+  it("settles timeout state, session work, and queue ownership", async () => {
     const state = createAbortState();
     const timeoutReason = new Error("attempt deadline");
     timeoutReason.name = "TimeoutError";
     const abortCompaction = vi.fn();
     const abortActiveSession = vi.fn(async () => {});
     const onAttemptTimeout = vi.fn();
-    const releaseHeldLockForAbort = vi.fn(async () => {});
     const queueHandle = {} as EmbeddedAgentQueueHandle;
     const runAbortController = new AbortController();
     mocks.countActiveToolExecutions.mockReturnValue(1);
@@ -294,7 +260,6 @@ describe("createEmbeddedAttemptRunAbort", () => {
       isProbeSession: false,
       log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController: { releaseHeldLockForAbort },
       state: state.port,
     });
 
@@ -315,60 +280,15 @@ describe("createEmbeddedAttemptRunAbort", () => {
       sessionFile: "/tmp/session.jsonl",
       reason: "timeout",
     });
-    expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
-    expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
-      reason: timeoutReason,
-      terminal: true,
-    });
   });
 
-  it("preserves a timeout reason through the abort path to a late prompt handoff", async () => {
-    const sessionLockController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
-      lockOptions: { sessionFile: "agent:main:main" },
-    });
-    const timeoutReason = new Error("cron setup timed out");
-    timeoutReason.name = "TimeoutError";
-    const abortRun = createEmbeddedAttemptRunAbort({
-      abortActiveSession: vi.fn(async () => {}),
-      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
-      attempt: {
-        onAttemptTimeout: vi.fn(),
-        runId: "run-timeout-handoff",
-        sessionFile: "agent:main:main",
-        sessionId: "session-timeout-handoff",
-        sessionKey: "agent:main:main",
-      },
-      getQueueHandle: () => undefined,
-      isProbeSession: false,
-      log: { warn: vi.fn() },
-      runAbortController: new AbortController(),
-      sessionLockController,
-      state: createAbortState().port,
-    });
-
-    abortRun(true, timeoutReason);
-
-    await expect(sessionLockController.releaseForPrompt()).rejects.toBe(timeoutReason);
-    await sessionLockController.dispose();
-  });
-
-  it("logs lock release failures without replacing the manual abort reason", async () => {
-    // Abort cleanup must not replace the original timeout/manual-abort reason
-    // with a secondary lock-release failure.
-    const state = createAbortState();
+  it("preserves a manual abort reason", () => {
     const abortReason = new Error("manual abort");
-    const releaseError = new Error("locked");
-    const releaseHeldLockForAbort = vi.fn(async () => {
-      throw releaseError;
-    });
-    const warn = vi.fn();
     const runAbortController = new AbortController();
     const abortRun = createEmbeddedAttemptRunAbort({
       abortActiveSession: vi.fn(async () => {}),
       activeSession: { abortCompaction: vi.fn(), isCompacting: false },
       attempt: {
-        onAttemptTimeout: vi.fn(),
         runId: "run-manual",
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-manual",
@@ -376,21 +296,13 @@ describe("createEmbeddedAttemptRunAbort", () => {
       },
       getQueueHandle: () => undefined,
       isProbeSession: false,
-      log: { warn },
+      log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController: { releaseHeldLockForAbort },
-      state: state.port,
+      state: createAbortState().port,
     });
 
     abortRun(false, abortReason);
 
-    await Promise.resolve();
-    await Promise.resolve();
-
     expect(runAbortController.signal.reason).toBe(abortReason);
-    expect(releaseHeldLockForAbort).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "failed to release session lock on abort: runId=run-manual Error: locked",
-    );
   });
 });
