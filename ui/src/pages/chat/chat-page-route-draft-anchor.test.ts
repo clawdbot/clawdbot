@@ -12,7 +12,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import {
   SESSION_HISTORY_MESSAGE_ID_PARAM,
   SESSION_HISTORY_SESSION_ID_PARAM,
-} from "../../lib/sessions/route-navigation.ts";
+} from "../../lib/sessions/history-anchor.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPage } from "./chat-page.ts";
 

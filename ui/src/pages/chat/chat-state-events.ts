@@ -29,7 +29,6 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import {
   chatScopedEventSessionMatches,
-  deferPendingChatHistoryAnchorTerminalRefresh,
   isChatHistoryAnchorIsolated,
   isHiddenAssistantStreamText,
   loadChatBranches,
@@ -181,7 +180,6 @@ function finishSessionMessageRunReconcile(
     return false;
   }
   retireSteeredChipsForTerminalRun(state, runId ?? undefined);
-  deferPendingChatHistoryAnchorTerminalRefresh(state);
   void loadChatHistory(state)
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
@@ -264,7 +262,6 @@ function replayPendingSessionMessageReload(
     return;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  deferPendingChatHistoryAnchorTerminalRefresh(state);
   void loadChatHistory(state).finally(() => state.requestUpdate?.());
 }
 
@@ -286,7 +283,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   }
   const resetsSelectedSession = matchesChat && resetsSession;
   const defersSelectedSessionReset =
-    resetsSelectedSession && deferPendingChatHistoryAnchorTerminalRefresh(state);
+    resetsSelectedSession && state.chatHistoryAnchorPending != null;
   if (resetsSelectedSession) {
     const anchoredMessages = defersSelectedSessionReset ? state.chatMessages : null;
     const agentId = resolveChatAgentId(state);
@@ -521,8 +518,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     if (
       isolatesHistoricalAnchor &&
       terminal &&
-      !deferPendingChatHistoryAnchorTerminalRefresh(state) &&
-      !state.chatLoading
+      (state.chatHistoryAnchorPending != null || !state.chatLoading)
     ) {
       void loadChatHistory(state).finally(() => state.requestUpdate?.());
     }

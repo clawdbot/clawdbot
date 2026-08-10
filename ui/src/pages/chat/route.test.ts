@@ -5,7 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import {
   SESSION_HISTORY_MESSAGE_ID_PARAM,
   SESSION_HISTORY_SESSION_ID_PARAM,
-} from "../../lib/sessions/route-navigation.ts";
+} from "../../lib/sessions/history-anchor.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";

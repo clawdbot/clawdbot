@@ -6,7 +6,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import {
   SESSION_HISTORY_MESSAGE_ID_PARAM,
   SESSION_HISTORY_SESSION_ID_PARAM,
-} from "../../lib/sessions/route-navigation.ts";
+} from "../../lib/sessions/history-anchor.ts";
 import { ChatPageRouteController } from "./chat-page-route-controller.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 

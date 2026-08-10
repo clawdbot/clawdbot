@@ -52,11 +52,11 @@ import {
   type SessionsGroupBy,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/history-anchor.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
-  type SessionHistoryAnchor,
 } from "../../lib/sessions/route-navigation.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 

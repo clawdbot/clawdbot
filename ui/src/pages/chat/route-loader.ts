@@ -13,11 +13,11 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/history-anchor.ts";
 import {
   findUiSessionRow,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
-  type SessionHistoryAnchor,
 } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,

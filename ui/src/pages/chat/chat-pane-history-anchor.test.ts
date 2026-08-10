@@ -4,11 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import {
-  cancelPendingChatHistoryAnchor,
-  deferPendingChatHistoryAnchorTerminalRefresh,
-  loadChatHistory,
-} from "./chat-history.ts";
+import { cancelPendingChatHistoryAnchor, loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 
 describe("chat pane history anchor", () => {
@@ -135,7 +131,8 @@ describe("chat pane history anchor", () => {
 
     anchorPane.loadHistoryAnchorIfNeeded();
     await vi.waitFor(() => expect(state.chatHistoryAnchorPending).not.toBeNull());
-    expect(deferPendingChatHistoryAnchorTerminalRefresh(state)).toBe(true);
+    void loadChatHistory(state);
+    expect(state.chatHistoryAnchorPending?.deferredRefresh).toBeDefined();
 
     resolveAnchor(historicalResponse);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -146,6 +143,54 @@ describe("chat pane history anchor", () => {
     expect(state.chatHistoryAnchorActive).toBe(false);
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
+  });
+
+  it("does not retry a failed anchor while canonical recovery is pending", async () => {
+    const currentResponse = {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "current tail" }] }],
+      sessionId: "session-current",
+    };
+    let resolveCurrent: (value: typeof currentResponse) => void = () => undefined;
+    const current = new Promise<typeof currentResponse>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("anchor unavailable"))
+      .mockReturnValueOnce(current);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { setModelOverride: vi.fn() } as unknown as SessionCapability,
+    });
+    const anchorPane = pane as TestChatPane & {
+      historyAnchor?: { messageId: string; sessionId: string };
+      loadHistoryAnchorIfNeeded: () => void;
+      onHistoryAnchorConsumed: () => void;
+    };
+    anchorPane.active = true;
+    anchorPane.historyAnchor = { sessionId: "session-history", messageId: "historical-hit" };
+    anchorPane.onHistoryAnchorConsumed = vi.fn(() => {
+      anchorPane.historyAnchor = undefined;
+    });
+
+    anchorPane.loadHistoryAnchorIfNeeded();
+    const deferredRefresh = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    anchorPane.loadHistoryAnchorIfNeeded();
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(anchorPane.onHistoryAnchorConsumed).not.toHaveBeenCalled();
+
+    resolveCurrent(currentResponse);
+    await expect(deferredRefresh).resolves.toMatchObject({ sessionId: "session-current" });
+    await vi.waitFor(() => expect(anchorPane.onHistoryAnchorConsumed).toHaveBeenCalledOnce());
+    anchorPane.loadHistoryAnchorIfNeeded();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatHistoryAnchorFailedRequestKey).toBeUndefined();
+    expect(state.chatMessages).toEqual(currentResponse.messages);
   });
 
   it("restores current history and reports an unavailable anchor", async () => {
@@ -203,16 +248,13 @@ describe("chat pane history anchor", () => {
     });
 
     anchorPane.loadHistoryAnchorIfNeeded();
-    expect(deferPendingChatHistoryAnchorTerminalRefresh(state)).toBe(true);
     const deferredRefresh = loadChatHistory(state);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(state.lastError).toBeNull();
     resolveCurrent(currentResponse);
     await vi.waitFor(() =>
-      expect(state.lastError).toBe(
-        "The selected transcript message is no longer available. Showing the current thread.",
-      ),
+      expect(state.lastError).toBe("That message is unavailable. Showing the current thread."),
     );
     expect(anchorPane.onHistoryAnchorConsumed).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[1]).toMatchObject({

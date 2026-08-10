@@ -3,7 +3,7 @@ import {
   SESSION_HISTORY_MESSAGE_ID_PARAM,
   SESSION_HISTORY_SESSION_ID_PARAM,
   type SessionHistoryAnchor,
-} from "../../lib/sessions/route-navigation.ts";
+} from "../../lib/sessions/history-anchor.ts";
 import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
 
 export function locationWithoutHistoryAnchor(location: RouteLocation): RouteLocation {

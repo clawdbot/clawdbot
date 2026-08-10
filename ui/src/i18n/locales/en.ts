@@ -4624,8 +4624,7 @@ export const en: TranslationMap = {
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
     },
-    historyAnchorUnavailable:
-      "The selected transcript message is no longer available. Showing the current thread.",
+    historyAnchorUnavailable: "That message is unavailable. Showing the current thread.",
     commandResults: {
       startingNewThread: "Starting new session...",
       resettingThread: "Resetting session...",

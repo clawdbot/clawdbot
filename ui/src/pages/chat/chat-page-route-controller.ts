@@ -1,9 +1,10 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
-  sessionNavigationTarget,
   type SessionHistoryAnchor,
-} from "../../lib/sessions/route-navigation.ts";
+  withSessionHistoryAnchor,
+} from "../../lib/sessions/history-anchor.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { locationWithoutHistoryAnchor } from "./route-history-anchor.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -43,14 +44,16 @@ export class ChatPageRouteController {
       return;
     }
     const context = this.host.context();
-    const options = sessionNavigationTarget({
+    const targetOptions = sessionNavigationTarget({
       context,
       face,
       sessionKey,
       agentId: data?.agentId,
       shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
-      ...(updateOptions.historyAnchor ? { historyAnchor: updateOptions.historyAnchor } : {}),
     }).options;
+    const options = updateOptions.historyAnchor
+      ? withSessionHistoryAnchor(targetOptions, updateOptions.historyAnchor)
+      : targetOptions;
     if (replace) {
       context.replace(face, options);
     } else {

@@ -27,13 +27,13 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import type { SessionHistoryAnchor } from "../../lib/sessions/history-anchor.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
   type SessionCapability,
   type SessionMessageSubscription,
 } from "../../lib/sessions/index.ts";
-import type { SessionHistoryAnchor } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
@@ -283,7 +283,6 @@ export type ChatState = {
   chatHistoryAnchorPending?:
     | (SessionHistoryAnchor & {
         requestKey: string;
-        terminalRefreshPending?: boolean;
         deferredRefresh?: {
           promise: Promise<ChatHistoryResult | undefined>;
           resolve: (result: ChatHistoryResult | undefined) => void;
@@ -366,18 +365,6 @@ function deferPendingChatHistoryAnchorRefresh(
     pending.deferredRefresh.deferBranches &&= opts.deferBranches === true;
   }
   return pending.deferredRefresh;
-}
-
-export function deferPendingChatHistoryAnchorTerminalRefresh(state: ChatState): boolean {
-  if (!deferPendingChatHistoryAnchorRefresh(state, {})) {
-    return false;
-  }
-  const pending = state.chatHistoryAnchorPending;
-  if (!pending) {
-    return false;
-  }
-  pending.terminalRefreshPending = true;
-  return true;
 }
 
 type ChatHistoryAnchorVisibilityCompletion = {
@@ -1584,7 +1571,6 @@ export async function loadChatHistory(
     state.chatHistoryAnchorPending = {
       ...historyAnchor,
       requestKey,
-      ...(previous?.terminalRefreshPending ? { terminalRefreshPending: true } : {}),
       ...(previous?.deferredRefresh ? { deferredRefresh: previous.deferredRefresh } : {}),
     };
   }

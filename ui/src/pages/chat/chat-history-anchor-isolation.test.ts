@@ -3,7 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   cancelPendingChatHistoryAnchor,
   completeChatHistoryAnchorVisibility,
-  deferPendingChatHistoryAnchorTerminalRefresh,
   loadChatHistory,
   loadOlderChatHistoryPage,
   type ChatHistoryResult,
@@ -300,12 +299,9 @@ describe("historical transcript anchor isolation", () => {
       expect(state.chatHistoryAnchorPending).toMatchObject({
         sessionId: "session-history",
         messageId: "historical-hit",
-        terminalRefreshPending: true,
+        deferredRefresh: { promise: expect.any(Promise) },
       });
       if (prepare) {
-        expect(state.chatHistoryAnchorPending?.deferredRefresh?.promise).toEqual(
-          expect.any(Promise),
-        );
         expect(state.pendingSessionMessageReloadSessionKey ?? null).toBeNull();
       }
       if (reset) {
@@ -355,7 +351,6 @@ describe("historical transcript anchor isolation", () => {
     const load = loadChatHistory(state, {
       historyAnchor: { sessionId: "session-history", messageId: "historical-hit" },
     });
-    expect(deferPendingChatHistoryAnchorTerminalRefresh(state)).toBe(true);
     const deferred = loadChatHistory(state);
     const duplicate = loadChatHistory(state);
     const settled = vi.fn();
@@ -493,7 +488,7 @@ describe("historical transcript anchor isolation", () => {
       sessionId: "session-history",
       messageId: "historical-hit",
     });
-    expect(state.chatHistoryAnchorPending?.terminalRefreshPending).toBeUndefined();
+    expect(state.chatHistoryAnchorPending?.deferredRefresh).toBeUndefined();
     expect(state.chatMessages).toEqual([historical]);
   });
 

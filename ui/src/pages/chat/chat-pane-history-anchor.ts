@@ -80,9 +80,29 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
     }
     void anchorLoad.then(async (result) => {
       if (!result) {
-        if (state.chatHistoryAnchorFailedRequestKey !== requestKey) {
+        const failedRequestKey = pendingOwner.requestKey;
+        const recovery =
+          state.chatHistoryAnchorFailedRequestKey === failedRequestKey
+            ? pendingOwner.deferredRefresh?.promise
+            : undefined;
+        if (!recovery) {
           this.releaseHistoryAnchorRequest(requestKey);
+          return;
         }
+        await recovery;
+        if (state.chatHistoryAnchorFailedRequestKey === failedRequestKey) {
+          state.chatHistoryAnchorFailedRequestKey = undefined;
+        }
+        if (
+          this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration) &&
+          this.historyAnchor?.sessionId === anchor.sessionId &&
+          this.historyAnchor.messageId === anchor.messageId &&
+          this.historyAnchorRequestKey === requestKey &&
+          this.historyAnchorAttemptGeneration === attemptGeneration
+        ) {
+          this.onHistoryAnchorConsumed?.();
+        }
+        this.releaseHistoryAnchorRequest(requestKey);
         return;
       }
       if (
@@ -132,12 +152,12 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
         return;
       }
       const completion = completeChatHistoryAnchorVisibility(state, anchor);
+      this.onHistoryAnchorConsumed?.();
+      if (!this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration)) {
+        completion?.completeRefresh(undefined);
+        return;
+      }
       if (centered) {
-        this.onHistoryAnchorConsumed?.();
-        if (!this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration)) {
-          completion?.completeRefresh(undefined);
-          return;
-        }
         if (completion?.shouldRefresh) {
           void loadChatHistory(state, completion.refreshOptions)
             .then(completion.completeRefresh, () => completion.completeRefresh(undefined))
@@ -146,11 +166,6 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
         return;
       }
 
-      this.onHistoryAnchorConsumed?.();
-      if (!this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration)) {
-        completion?.completeRefresh(undefined);
-        return;
-      }
       let currentHistory: Awaited<ReturnType<typeof loadChatHistory>> = undefined;
       try {
         currentHistory = await loadChatHistory(
