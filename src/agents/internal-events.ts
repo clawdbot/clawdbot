@@ -63,6 +63,12 @@ function sanitizeMediaDirectiveValue(value: string): string | null {
   return sanitized || null;
 }
 
+function formatGeneratedMediaDirective(mediaUrl: string): string {
+  // Quote only suffixes the unquoted media parser treats as surrounding punctuation.
+  const value = /[`"'\\})\],]$/u.test(mediaUrl) ? `"${mediaUrl}"` : mediaUrl;
+  return `MEDIA:${value}`;
+}
+
 function formatChildResultDataBlock(value: string): string {
   return (
     wrapPromptDataBlock({
@@ -83,7 +89,7 @@ function formatGeneratedMediaDirectiveLines(event: AgentTaskCompletionInternalEv
   if (mediaUrls.length === 0) {
     return [];
   }
-  return ["Generated media:", ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
+  return ["Generated media:", ...mediaUrls.map(formatGeneratedMediaDirective)];
 }
 
 function formatTaskCompletionEvent(
@@ -164,7 +170,7 @@ export function formatGeneratedMediaDeliveryRetryForPrompt(mediaUrls: string[]):
     new Set(
       mediaUrls.map(sanitizeMediaDirectiveValue).filter((value): value is string => value !== null),
     ),
-  ).map((mediaUrl) => `MEDIA:${mediaUrl}`);
+  ).map(formatGeneratedMediaDirective);
   if (mediaDirectiveLines.length === 0) {
     return "";
   }

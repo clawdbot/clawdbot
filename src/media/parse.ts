@@ -617,7 +617,10 @@ export function splitMediaFromOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = normalizeMediaSource(cleanCandidate(part));
+        // Explicit quotes already delimit the source; trimming signed URL punctuation changes it.
+        const candidate = normalizeMediaSource(
+          unwrapped === undefined ? cleanCandidate(part) : part,
+        );
         if (
           isValidMedia(candidate, unwrapped || /\s/.test(part) ? { allowSpaces: true } : undefined)
         ) {

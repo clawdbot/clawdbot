@@ -97,6 +97,16 @@ describe("splitMediaFromOutput", () => {
   });
 
   it.each([
+    "https://example.com/video.mp4?X-Amz-Signature=abc[[reply_to:999]]",
+    "https://example.com/video.mp4?signature=abc(value)",
+    "https://example.com/video.mp4?token=ends,",
+    'https://example.com/video.mp4?token=ends"',
+    "https://example.com/video.mp4?token=ends\\",
+  ])("preserves every byte in an explicitly quoted signed media URL: %s", (mediaUrl) => {
+    expectAcceptedMediaPathCase(mediaUrl, `MEDIA:"${mediaUrl}"`);
+  });
+
+  it.each([
     ["bare image", "Generated image\nMEDIA:image.png", ["image.png"]],
     ["bare audio", "Generated audio\nMEDIA:voice.ogg", ["voice.ogg"]],
     ["bare document", "Generated document\nMEDIA:report.pdf", ["report.pdf"]],
@@ -168,6 +178,7 @@ describe("splitMediaFromOutput", () => {
   it.each([
     "MEDIA:../../../etc/passwd",
     "MEDIA:../../.env",
+    'MEDIA:"../../.env)"',
     "MEDIA:~user/Pictures/My File.png",
     "MEDIA:~/Pictures/../../.ssh/id_rsa",
     "MEDIA:./foo/../../../etc/shadow",
@@ -189,13 +200,16 @@ describe("splitMediaFromOutput", () => {
 
   it.each([
     "MEDIA:http://example.com/a.png",
+    'MEDIA:"http://example.com/a.png)"',
     "MEDIA:https://intranet/a.png",
     "MEDIA:https://printer/a.png",
     "MEDIA:https://localhost/a.png",
     "MEDIA:https://localhost../a.png",
     "MEDIA:https://127.0.0.1/a.png",
+    'MEDIA:"https://127.0.0.1/a.png)"',
     "MEDIA:https://127.0.0.1../a.png",
     "MEDIA:https://169.254.169.254/latest/meta-data",
+    'MEDIA:"https://169.254.169.254/a.png)"',
     "MEDIA:https://[::1]/a.png",
     "MEDIA:https://metadata.google.internal/a.png",
     "MEDIA:https://metadata.google.internal../a.png",
