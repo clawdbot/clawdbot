@@ -23,9 +23,16 @@ export function runWithSqliteCoordinator<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
+    let releaseFailed = false;
+    let releaseError: unknown;
     try {
       coordinator.release();
-    } catch (releaseError) {
+    } catch (error) {
+      releaseFailed = true;
+      releaseError = error;
+    }
+    if (releaseFailed) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError retains both failures and the operation cause.
       throw new AggregateError(
         [operationError, releaseError],
         `${operationLabel} and coordinator release both failed`,
