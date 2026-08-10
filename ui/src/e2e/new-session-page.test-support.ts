@@ -57,6 +57,18 @@ export const reconnectProofArtifactDir = path.join(
   "control-ui-e2e",
   "initial-prompt-reconnect",
 );
+export const projectProofArtifactDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "project-registry",
+);
+
+export async function prepareProjectUiProof() {
+  if (captureUiProofEnabled) {
+    await mkdir(projectProofArtifactDir, { recursive: true });
+  }
+}
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 export const SESSION_LIST_DEFAULTS = {
@@ -128,6 +140,18 @@ export async function captureUiProof(page: Page, fileName: string) {
     animations: "disabled",
     fullPage: true,
     path: path.join(uiProofArtifactDir, fileName),
+  });
+}
+
+export async function captureProjectUiProof(page: Page, fileName: string) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(projectProofArtifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(projectProofArtifactDir, fileName),
   });
 }
 

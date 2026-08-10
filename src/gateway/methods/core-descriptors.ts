@@ -493,6 +493,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Additive catalog terminal start appends so older advertised indices stay stable.
   ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
   ["worker.desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
+  // First-class project RPCs append so every older advertised index remains stable.
+  ["projects.list", "projects", "operator.read", "2026.8"],
+  ["projects.register", "projects", "operator.admin", "2026.8"],
+  ["projects.remove", "projects", "operator.admin", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

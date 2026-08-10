@@ -15,6 +15,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "model_catalog_remote",
   "secret_store_entries",
+  "projects",
   "gateway_origin_device_tokens",
   "sidebar_sections",
   "skill_workshop_proposal_events",

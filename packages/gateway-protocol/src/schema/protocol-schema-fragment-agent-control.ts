@@ -1,6 +1,7 @@
 import * as agent from "./agent.js";
 import * as environments from "./environments.js";
 import * as fsSchemas from "./fs.js";
+import * as projects from "./projects.js";
 import * as systemInfo from "./system-info.js";
 import * as worktrees from "./worktrees.js";
 
@@ -41,6 +42,13 @@ export const AgentControlProtocolSchemas = {
   AgentIdentityResult: agent.AgentIdentityResultSchema,
   AgentWaitParams: agent.AgentWaitParamsSchema,
   WakeParams: agent.WakeParamsSchema,
+  ProjectRecord: projects.ProjectRecordSchema,
+  ProjectsListParams: projects.ProjectsListParamsSchema,
+  ProjectsListResult: projects.ProjectsListResultSchema,
+  ProjectsRegisterParams: projects.ProjectsRegisterParamsSchema,
+  ProjectsRegisterResult: projects.ProjectsRegisterResultSchema,
+  ProjectsRemoveParams: projects.ProjectsRemoveParamsSchema,
+  ProjectsRemoveResult: projects.ProjectsRemoveResultSchema,
   WorktreeRecord: worktrees.WorktreeRecordSchema,
   WorktreesListParams: worktrees.WorktreesListParamsSchema,
   WorktreesListResult: worktrees.WorktreesListResultSchema,

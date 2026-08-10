@@ -696,6 +696,7 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     places: "Places",
+    projects: "Projects",
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",

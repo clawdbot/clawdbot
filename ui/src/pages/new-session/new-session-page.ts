@@ -4,6 +4,8 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
   FsListDirResult,
+  ProjectRecord,
+  ProjectsListResult,
   SessionsCatalogStartTerminalResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -92,6 +94,8 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   @state() private agentId = "";
   @state() private folder = "";
+  @state() private projects: ProjectRecord[] = [];
+  @state() private projectId = "";
   @state() private worktree = false;
   @state() private visibility: NewSessionVisibility = "normal";
   @state() private worktreeName = "";
@@ -194,6 +198,34 @@ class NewSessionPage extends OpenClawLightDomElement {
       discoverGatewayName(client, advertised, signal),
     onComplete: (name) => {
       this.gatewayName = name;
+    },
+  });
+
+  private readonly projectsTask = new Task(this, {
+    args: () =>
+      [
+        this.isConnected && this.gatewayConnected ? this.gatewayClient : null,
+        this.context
+          ? isGatewayMethodAdvertised(this.context.gateway.snapshot, "projects.list") === true
+          : false,
+        this.gatewayConnectionEpoch,
+      ] as const,
+    task: async ([client, advertised]) => {
+      if (!client || !advertised) {
+        return [] as ProjectRecord[];
+      }
+      return (await client.request<ProjectsListResult>("projects.list", {})).projects ?? [];
+    },
+    onComplete: (projects) => {
+      this.projects = projects;
+      if (this.projectId && !projects.some((project) => project.id === this.projectId)) {
+        this.projectId = "";
+        this.maybeLoadBranches();
+      }
+    },
+    onError: () => {
+      this.projects = [];
+      this.projectId = "";
     },
   });
 
@@ -361,6 +393,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentId = "";
     this.agentSelectedByUser = false;
     this.folder = "";
+    this.projects = [];
+    this.projectId = "";
     this.folderSelectedByUser = false;
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = false;
@@ -488,6 +522,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.attachmentDraft.reset({ release: true });
     this.composerTextarea.disconnect();
     void this.gatewayNameTask.run([null, false, -1]);
+    void this.projectsTask.run([null, false, -1]);
     void this.cloudProfileTask.run([null, -1, false, ""]);
     this.resetCloudProfileRetry();
     super.disconnectedCallback();
@@ -574,6 +609,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
   }
 
+  private selectedProject() {
+    return this.projects.find((project) => project.id === this.projectId);
+  }
+
   private execNodes(): DraftNode[] {
     return this.nodes.filter((node) => node.canExec);
   }
@@ -630,11 +669,17 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private usesCustomFolder(): boolean {
+    if (this.projectId) {
+      return false;
+    }
     const folder = this.folder.trim();
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
   private folderSubmissionMode(): "blocked" | "approved" | "server" {
+    if (this.projectId) {
+      return this.selectedProject() ? "approved" : "blocked";
+    }
     if (this.restoredFolderValidation !== "none") {
       return "blocked";
     }
@@ -660,6 +705,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       model: this.modelControl.selected,
       thinkingLevel: this.modelControl.thinkingLevel,
       visibility,
+      projectId: this.projectId,
       worktree: this.worktree,
       baseRef: this.baseRef,
       worktreeName: this.worktreeName,
@@ -871,6 +917,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       : null;
     this.agentSelectedByUser = false;
     this.folder = "";
+    this.projectId = "";
     this.folderSelectedByUser = false;
     this.folderGatewayApproved = false;
     this.gatewayApprovedWorkspaceRoots = [];
@@ -999,6 +1046,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     const baseRefEditGeneration = this.baseRefEditGeneration;
     this.repository = { kind: "idle" };
     this.baseRef = "";
+    const selectedProject = this.selectedProject();
+    if (selectedProject) {
+      this.repository = {
+        kind: "git",
+        repoRoot: selectedProject.repoRoot,
+        branches: [],
+      };
+      this.preferredWorktreeRestore = false;
+      return;
+    }
     if (this.execNode) {
       this.preferredWorktreeRestore = false;
       return;
@@ -1093,6 +1150,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   private worktreeAvailable(): boolean {
     if (this.execNode) {
       return false;
+    }
+    if (this.selectedProject()) {
+      return true;
     }
     if (this.repository.kind === "git") {
       return true;
@@ -1281,6 +1341,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         thinkingLevel: this.modelControl.thinkingLevel,
         visibility: draftRetired ? "normal" : this.visibility,
         attachments: cloudProfileId ? undefined : apiAttachments,
+        projectId: this.projectId,
         worktree: this.worktree,
         baseRef: this.baseRef,
         worktreeName: this.worktreeName,
@@ -1551,6 +1612,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.folderSelectedByUser = false;
     this.folderGatewayApproved = false;
     this.gatewayApprovedWorkspaceRoots = [];
+    this.projectId = "";
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = false;
     this.cloudProfileId = "";
@@ -1583,6 +1645,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.execNode = execNode;
+    this.projectId = "";
     this.cancelRestoredFolderValidation();
     if (execNode) {
       // Node sessions run on that device; a cloud worker cannot sync a node path.
@@ -1608,6 +1671,27 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.maybeLoadBranches();
   }
 
+  private selectProjectId(projectId: string) {
+    if (this.submitting || this.pendingCloud.sessionKey) {
+      return;
+    }
+    const project = this.projects.find((candidate) => candidate.id === projectId);
+    if (!project) {
+      return;
+    }
+    this.cancelRestoredFolderValidation();
+    this.projectId = project.id;
+    this.execNode = "";
+    this.cloudProfileId = "";
+    this.error = null;
+    this.folderSelectedByUser = false;
+    this.preferredWorktreeRestore = false;
+    this.worktreeSelectedByUser = true;
+    this.worktree = false;
+    this.worktreeName = "";
+    this.maybeLoadBranches();
+  }
+
   private selectExecNode(execNode: string) {
     if (this.submitting || this.pendingCloud.sessionKey) {
       return;
@@ -1627,6 +1711,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.folder = execNode ? "" : this.workspacePath();
       this.folderSelectedByUser = false;
       this.folderGatewayApproved = false;
+      this.projectId = "";
     }
     this.worktree = keepWorktree;
     this.closeBrowser();
@@ -1649,6 +1734,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // stays selected: its repo is what the managed worktree checks out and the
     // dispatch tunnel syncs to the cloud worker.
     this.cloudProfileId = profileId;
+    this.projectId = "";
     this.error = null;
     this.worktree = true;
     this.closeBrowser();
@@ -1814,6 +1900,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       folder: this.folder,
       workspace: this.workspacePath(),
       workspaceRoots: this.knownWorkspaceRoots(),
+      projects: catalog.isTarget(this.data) ? [] : this.projects,
+      projectId: this.projectId,
       sessions: this.context?.sessions.state.result?.sessions ?? [],
       execNodes: this.isAdmin() ? execNodes : [],
       gatewayName: this.gatewayName,
@@ -1869,6 +1957,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       },
       onSelectExecNode: (nodeId) => this.selectExecNode(nodeId),
       onSelectCloudProfile: (profileId) => this.selectCloudProfile(profileId),
+      onSelectProject: (projectId) => this.selectProjectId(projectId),
       onApplyFolder: (folder, execNode) =>
         this.applyFolder(folder, execNode, !execNode && this.browserListing?.path === folder),
       onBrowse: (target) => this.selectBrowserTarget(target),
