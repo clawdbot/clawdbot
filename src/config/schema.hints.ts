@@ -64,6 +64,7 @@ const SECTION_DOCS_URLS = {
   discovery: "https://docs.openclaw.ai/gateway/discovery",
   acp: "https://docs.openclaw.ai/tools/acp-agents",
   agents: "https://docs.openclaw.ai/concepts/agent",
+  runtimeContext: "https://docs.openclaw.ai/cli/config",
   models: "https://docs.openclaw.ai/concepts/models",
   skills: "https://docs.openclaw.ai/tools/skills",
   tools: "https://docs.openclaw.ai/tools",
