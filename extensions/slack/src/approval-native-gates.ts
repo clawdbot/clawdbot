@@ -34,6 +34,7 @@ import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalClientEnabled,
 } from "./exec-approvals.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
 import {
   canonicalizeSlackApiTargetId,
   formatSlackTarget,
@@ -421,7 +422,7 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
 }): boolean {
   const account = resolveSlackAccount(params);
   if (
-    account.config.enterpriseOrgInstall === true &&
+    getSlackInstallationKind(account.accountId) === "enterprise" &&
     !resolveEnterpriseApprovalTeamId(params.request)
   ) {
     return false;

@@ -4018,7 +4018,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         accountConfig: {
-          enterpriseOrgInstall: true,
           streaming: {
             mode: "progress",
             progress: { label: false, commentary: true, toolProgress: false, maxLines: 1 },

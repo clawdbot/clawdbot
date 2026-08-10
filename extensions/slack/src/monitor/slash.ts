@@ -501,6 +501,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       const effectiveAllowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
         includePairingStore: isDirectMessage,
+        eventScope,
       });
 
       // Privileged command surface: compute CommandAuthorized, don't assume true.
@@ -512,6 +513,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           ctx,
           accountId: ctx.accountId,
           senderId: command.user_id,
+          eventScope,
           allowFromLower: effectiveAllowFromLower,
           resolveSenderName: (userId) => ctx.resolveUserName(userId, eventScope),
           sendPairingReply: async (text) => {

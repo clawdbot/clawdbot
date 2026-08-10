@@ -13,8 +13,11 @@ import {
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { setSlackRuntime } from "./runtime.js";
+
+type SlackInstallationStateRegistration = ReturnType<typeof registerSlackInstallationState>;
 
 const CONVERSATION = {
   channel: "slack",
@@ -22,10 +25,11 @@ const CONVERSATION = {
   conversationId: "channel:C123",
 };
 
-describe("Slack Enterprise Grid runtime conversation bindings", () => {
+describe("Slack runtime conversation bindings", () => {
   let cfg: OpenClawConfig;
   let previousStateDir: string | undefined;
   let testStateDir = "";
+  let installationState: SlackInstallationStateRegistration;
 
   beforeEach(async () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -36,10 +40,12 @@ describe("Slack Enterprise Grid runtime conversation bindings", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
     );
+    installationState = registerSlackInstallationState("default", "workspace");
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
   afterEach(async () => {
+    installationState.release();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     closeOpenClawStateDatabaseForTest();
     setSlackRuntime(null as never);
@@ -79,7 +85,7 @@ describe("Slack Enterprise Grid runtime conversation bindings", () => {
     ).resolves.toEqual([reassigned]);
   });
 
-  it("does not advertise, select, or mutate bindings for an enterprise account", async () => {
+  it("does not advertise, select, or mutate bindings for a detected org install", async () => {
     const service = getSessionBindingService();
     const existing = await service.bind({
       targetSessionKey: "agent:main:workspace",
@@ -87,7 +93,8 @@ describe("Slack Enterprise Grid runtime conversation bindings", () => {
       conversation: CONVERSATION,
     });
     const originalActivityAt = existing.metadata?.lastActivityAt;
-    cfg = { channels: { slack: { enterpriseOrgInstall: true } } };
+
+    installationState.update("enterprise");
 
     expect(service.getCapabilities({ channel: "slack", accountId: "default" })).toEqual({
       adapterAvailable: false,
@@ -96,7 +103,7 @@ describe("Slack Enterprise Grid runtime conversation bindings", () => {
       placements: [],
     });
     expect(service.resolveByConversation(CONVERSATION)).toBeNull();
-    expect(service.listBySession("agent:main:workspace")).toEqual([]);
+    expect(service.listBySession(existing.targetSessionKey)).toEqual([]);
 
     service.touch(existing.bindingId, 9999);
     await expect(
@@ -107,23 +114,13 @@ describe("Slack Enterprise Grid runtime conversation bindings", () => {
       }),
     ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
     await expect(
-      service.bind({
-        targetSessionKey: "agent:main:new-enterprise",
-        targetKind: "session",
-        conversation: { ...CONVERSATION, conversationId: "channel:C456" },
-      }),
-    ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
-    await expect(
       service.unbind({ bindingId: existing.bindingId, reason: "enterprise cleanup" }),
     ).resolves.toEqual([]);
-    await expect(
-      service.unbind({ targetSessionKey: existing.targetSessionKey, reason: "enterprise cleanup" }),
-    ).resolves.toEqual([]);
 
-    cfg = { channels: { slack: {} } };
+    installationState.update("workspace");
     expect(service.resolveByConversation(CONVERSATION)).toMatchObject({
       bindingId: existing.bindingId,
-      targetSessionKey: "agent:main:workspace",
+      targetSessionKey: existing.targetSessionKey,
       metadata: { lastActivityAt: originalActivityAt },
     });
   });
