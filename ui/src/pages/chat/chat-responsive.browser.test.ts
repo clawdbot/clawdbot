@@ -390,6 +390,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         <article class="chat-session-rail__exchange">
                           <div class="chat-session-rail__question">What should I check next?</div>
                           <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
+                          <span class="chat-session-rail__pr-checks">2 passed</span>
                           <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
                           <div class="chat-session-rail__hint">The companion is already answering a question.</div>
                         </article>
@@ -2912,17 +2913,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
         return {
           thread: read(".chat-session-rail__thread"),
+          prChecks: read(".chat-session-rail__pr-checks"),
           timestamp: read(".chat-session-rail__timestamp"),
           hint: read(".chat-session-rail__hint"),
         };
       });
 
-      // Timestamps and hints are metadata inside an exchange. Sharing the
+      // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
       // thread's rule would give each one a 96px scrolling bordered box; the
       // selector list has silently merged before.
       expect(styles.thread.minHeight).toBe("96px");
       expect(styles.thread.overflowY).toBe("auto");
-      for (const metadata of [styles.timestamp, styles.hint]) {
+      for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
         expect(metadata.minHeight).toBe("0px");
         expect(metadata.overflowY).toBe("visible");
         expect(metadata.borderTopWidth).toBe("0px");
@@ -2949,6 +2951,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           bottomGap: Math.round(mainBox.bottom - railBox.bottom),
           rightGap: Math.round(mainBox.right - railBox.right),
           borderRadius: style.borderTopLeftRadius,
+          boxShadow: style.boxShadow,
+          backdropFilter: style.backdropFilter,
+          animationName: style.animationName,
         };
       });
 

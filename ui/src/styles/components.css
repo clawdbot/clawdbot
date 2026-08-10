@@ -1592,6 +1592,7 @@ openclaw-chat-session-rail {
   border-radius: 0;
   box-shadow: none;
   backdrop-filter: none;
+  animation: none;
 }
 
 .chat-session-rail__header {
@@ -1995,7 +1996,6 @@ openclaw-chat-session-rail {
   position: static;
   width: 100%;
   height: 100%;
-  animation: none;
 }
 
 @media (max-width: 768px) {
