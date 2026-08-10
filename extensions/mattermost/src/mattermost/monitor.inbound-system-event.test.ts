@@ -3273,6 +3273,105 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.sendMessageMattermost).toHaveBeenCalledTimes(1);
   });
 
+  it("does not recreate failed progress after a successful final and later tool warning", async () => {
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: {
+            mode: "progress",
+            progress: { finalDelivery: "separate" },
+          },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    const clear = vi.fn(async () => {});
+    const retainTerminalText = vi.fn(async () => true);
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      forceNewMessage: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => "progress-post-1"),
+      clear,
+      discardPending: vi.fn(async () => {}),
+      retainTerminalText,
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
+    });
+    const successReceipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId: "success-final-1", channelId: "chan-1" }],
+      kind: "text",
+    });
+    const warningReceipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId: "tool-warning-1", channelId: "chan-1" }],
+      kind: "text",
+    });
+    mockState.sendMessageMattermost
+      .mockResolvedValueOnce({
+        messageId: "success-final-1",
+        channelId: "chan-1",
+        receipt: successReceipt,
+        content: "Successful assistant final",
+      })
+      .mockResolvedValueOnce({
+        messageId: "tool-warning-1",
+        channelId: "chan-1",
+        receipt: warningReceipt,
+        content: "Tool error warning",
+      });
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver({ text: "Successful assistant final" }, { kind: "final" });
+      await dispatcherOptions?.deliver(
+        { text: "Tool error warning", isError: true },
+        { kind: "final" },
+      );
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: progressConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-success-final-late-warning",
+      message: "run this",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledTimes(2);
+    expect(mockState.sendMessageMattermost.mock.calls.map((call) => call[1])).toEqual([
+      "Successful assistant final",
+      "Tool error warning",
+    ]);
+    expect(clear).toHaveBeenCalledOnce();
+    expect(mockState.sendMessageMattermost.mock.invocationCallOrder[0]).toBeLessThan(
+      clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(clear.mock.invocationCallOrder[0]).toBeLessThan(
+      mockState.sendMessageMattermost.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(retainTerminalText).not.toHaveBeenCalled();
+  });
+
   it("keeps separate progress and final delivery rootless in flat direct messages", async () => {
     const directConfig: OpenClawConfig = {
       channels: {

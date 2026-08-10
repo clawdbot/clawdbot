@@ -37,6 +37,18 @@ describe("createMattermostSeparateProgressController", () => {
     expect(retainTerminalText).toHaveBeenCalledExactlyOnceWith("Progress\n\nFailed.");
   });
 
+  it("preserves a successful final across a later tool warning", async () => {
+    const { controller, retainTerminalText } = createController();
+
+    await controller.prepareFinal(false);
+    await controller.settleFinal({ visibleReplySent: true }, false);
+    await controller.prepareFinal(true);
+    await controller.settleFinal({ visibleReplySent: true }, true);
+    await controller.settleTurnError();
+
+    expect(retainTerminalText).not.toHaveBeenCalled();
+  });
+
   it("surfaces terminal status failure when no visible final exists", async () => {
     const { controller } = createController({
       retainTerminalText: async () => {

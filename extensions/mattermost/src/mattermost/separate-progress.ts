@@ -16,9 +16,16 @@ export function createMattermostSeparateProgressController(params: {
   logVerboseMessage: (message: string) => void;
 }) {
   let terminalProgressPromise: Promise<void> | undefined;
+  let successfulFinalDelivered = false;
+
+  const recordSuccessfulFinal = () => {
+    if (params.enabled) {
+      successfulFinalDelivered = true;
+    }
+  };
 
   const markFailed = async () => {
-    if (!params.enabled) {
+    if (!params.enabled || successfulFinalDelivered) {
       return;
     }
     if (!terminalProgressPromise) {
@@ -53,7 +60,11 @@ export function createMattermostSeparateProgressController(params: {
   };
 
   const settleFinal = async (result: { visibleReplySent: boolean }, isError: boolean) => {
-    if (!params.enabled || (result.visibleReplySent && !isError)) {
+    if (!params.enabled) {
+      return;
+    }
+    if (result.visibleReplySent && !isError) {
+      recordSuccessfulFinal();
       return;
     }
     try {
@@ -83,6 +94,7 @@ export function createMattermostSeparateProgressController(params: {
     formatDraft: (text: string) =>
       params.enabled ? pinMattermostProgressLabel(text, params.pinnedLabel) : text,
     startReasoningImmediately: params.enabled,
+    recordSuccessfulFinal,
     prepareFinal,
     settleFinal,
     settleTurnError,

@@ -375,23 +375,29 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   it("sends a separate final before deleting the progress post", async () => {
     const draftStream = createDraftStreamMock("progress-post-1");
     const deliverFinal = createDeliverFinalMock();
+    const recordSuccessfulFinal = vi.fn();
 
     const result = await deliverDraftPreview({
       payload: { text: "All good" } as never,
       draftStream,
       effectiveReplyToId: "thread-root-1",
       separateProgressFinalDelivery: true,
+      recordSuccessfulFinal,
       deliverPayload: deliverFinal,
     });
 
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "All good" });
+    expect(recordSuccessfulFinal).toHaveBeenCalledOnce();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
       deliverFinal.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(deliverFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      recordSuccessfulFinal.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(recordSuccessfulFinal.mock.invocationCallOrder[0]).toBeLessThan(
       draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(result).toMatchObject({
@@ -424,11 +430,13 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   it("retains sanitized separate progress after delivering a terminal error", async () => {
     const draftStream = createDraftStreamMock("progress-post-1");
     const deliverFinal = createDeliverFinalMock();
+    const recordSuccessfulFinal = vi.fn();
 
     await deliverDraftPreview({
       payload: { text: "Sensitive provider failure", isError: true } as never,
       draftStream,
       separateProgressFinalDelivery: true,
+      recordSuccessfulFinal,
       deliverPayload: deliverFinal,
     });
 
@@ -438,6 +446,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(recordSuccessfulFinal).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 
@@ -486,6 +495,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     draftStream.update("Working...");
     await draftStream.flush();
     const deliverFinal = createDeliverFinalMock();
+    const recordSuccessfulFinal = vi.fn();
 
     let caught: unknown;
     try {
@@ -493,6 +503,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
         payload: { text: "Already visible" } as never,
         draftStream,
         separateProgressFinalDelivery: true,
+        recordSuccessfulFinal,
         deliverPayload: deliverFinal,
       });
     } catch (error: unknown) {
@@ -511,6 +522,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(draftStream.postId()).toBe("progress-post-1");
     expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(recordSuccessfulFinal).toHaveBeenCalledOnce();
   });
 
   it("deletes the preview after a successful non-finalizable media final", async () => {

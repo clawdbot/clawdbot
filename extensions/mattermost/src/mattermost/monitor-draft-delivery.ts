@@ -52,6 +52,8 @@ type MattermostDraftPreviewDeliverParams = {
   separateProgressFinalDelivery?: boolean;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
+  /** Records the accepted durable final before fallible progress cleanup begins. */
+  recordSuccessfulFinal?: () => void;
   // Visible same-thread finals can be delivered by editing the draft preview in
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
@@ -152,6 +154,7 @@ async function deliverMattermostSeparateProgressFinal(
     await params.draftStream.discardPending();
     normalDeliveryResult = await params.deliverPayload(params.payload);
     if (normalDeliveryResult.visibleReplySent && params.payload.isError !== true) {
+      params.recordSuccessfulFinal?.();
       await params.draftStream.clear();
     }
     return normalDeliveryResult.visibleReplySent
