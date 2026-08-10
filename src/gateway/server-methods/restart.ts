@@ -3,10 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
-import {
-  createSafeGatewayRestartPreflight,
-  requestSafeGatewayRestart,
-} from "../../infra/restart-coordinator.js";
+import { requestSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -161,8 +158,5 @@ export const restartHandlers: GatewayRequestHandlers = {
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),
     });
     respond(true, result);
-  },
-  "gateway.restart.preflight": async ({ respond }) => {
-    respond(true, createSafeGatewayRestartPreflight());
   },
 };

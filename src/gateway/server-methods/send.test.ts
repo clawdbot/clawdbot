@@ -38,7 +38,9 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   beginRestartRecoveryTerminalDelivery: vi.fn<
-    () => Promise<"started" | "blocked" | "stale" | "not-applicable">
+    () => Promise<
+      "started" | "already-delivered" | "delivery-ambiguous" | "stale" | "not-applicable"
+    >
   >(async () => "started"),
   cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
   completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
@@ -3084,14 +3086,30 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-shared-source-message-action",
     });
 
-    await runMessageActionRequest(request("progress"), identity(false));
-    await runMessageActionRequest(request("terminal"), identity(true));
+    const progress = await runMessageActionRequest(request("progress"), identity(false));
+    const terminal = await runMessageActionRequest(request("terminal"), identity(true));
+    mocks.beginRestartRecoveryTerminalDelivery.mockResolvedValueOnce("already-delivered");
+    const repeatedTerminal = await runMessageActionRequest(
+      {
+        ...request("repeated terminal"),
+        idempotencyKey: "idem-repeated-terminal",
+      },
+      identity(true),
+    );
 
     expect(mocks.appendAssistantMessageToSessionTranscript.mock.calls).toHaveLength(2);
     expect(appendTranscriptCall(0)?.idempotencyKey).toBe("idem-shared-source-message-action");
     expect(appendTranscriptCall(1)?.idempotencyKey).toBe(
       "idem-shared-source-message-action:terminal-receipt:channel-user:v1:shared-key",
     );
+    expect(firstRespondCall(progress.respond)[0]).toBe(true);
+    expect(firstRespondCall(terminal.respond)[0]).toBe(true);
+    expect(firstRespondCall(repeatedTerminal.respond)[0]).toBe(true);
+    expect(firstRespondCall(repeatedTerminal.respond)[1]).toMatchObject({
+      status: "already_delivered",
+      delivered: false,
+    });
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
   });
 
   it("rejects a terminal source send without tool-call correlation before dispatch", async () => {
@@ -3131,8 +3149,8 @@ describe("gateway send mirroring", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
   });
 
-  it("blocks a repeated terminal send before provider dispatch", async () => {
-    mocks.beginRestartRecoveryTerminalDelivery.mockResolvedValueOnce("blocked");
+  it("returns an already-delivered outcome for a repeated terminal send", async () => {
+    mocks.beginRestartRecoveryTerminalDelivery.mockResolvedValueOnce("already-delivered");
     const { respond } = await runTelegramTerminalAction({
       sessionId: "session-duplicate-terminal",
       idempotencyKey: "idem-duplicate-terminal",
@@ -3141,7 +3159,11 @@ describe("gateway send mirroring", () => {
       message: "duplicate terminal",
     });
 
-    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(firstRespondCall(respond)[1]).toMatchObject({
+      status: "already_delivered",
+      delivered: false,
+    });
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
   });
 

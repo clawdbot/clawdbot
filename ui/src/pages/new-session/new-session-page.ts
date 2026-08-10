@@ -1450,7 +1450,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           },
           submissionClient,
           {
-            messageId: result.initialRun.messageId,
+            runId: result.initialRun.runId,
             messageSeq: result.initialRun.messageSeq,
           },
         );

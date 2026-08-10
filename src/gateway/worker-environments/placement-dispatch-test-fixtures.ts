@@ -19,6 +19,7 @@ type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentSer
 export type DispatchStage =
   | "barrier"
   | "workspace"
+  | "preflight"
   | "create"
   | "tunnel:ready"
   | "sync"

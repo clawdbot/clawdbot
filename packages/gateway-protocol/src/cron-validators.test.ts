@@ -1,5 +1,6 @@
-import { Value } from "typebox/value";
 // Gateway Protocol tests cover cron validators behavior.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
@@ -58,12 +59,21 @@ describe("cron protocol validators", () => {
         consecutiveErrors: 10,
         autoDisabled: {
           reason: "consecutive-failures",
-          atMs: 2,
+          atMs: MAX_DATE_TIMESTAMP_MS,
           consecutiveErrors: 10,
         },
       },
     };
     expect(Value.Check(CronJobSchema, job)).toBe(true);
+    expect(
+      Value.Check(CronJobSchema, {
+        ...job,
+        state: {
+          ...job.state,
+          autoDisabled: { ...job.state.autoDisabled, atMs: MAX_DATE_TIMESTAMP_MS + 1 },
+        },
+      }),
+    ).toBe(false);
     expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
   });
 
@@ -97,6 +107,32 @@ describe("cron protocol validators", () => {
     expectCases(validateCronUpdateParams, false, [
       update({ schedule: { kind: "every", everyMs: 60_000, anchorMs: unsafe } }),
       update({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: unsafe } }),
+    ]);
+  });
+
+  it("rejects every schedule numbers outside the ECMAScript Date range", () => {
+    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
+    expectCases(validateCronAddParams, false, [
+      add({ schedule: { kind: "every", everyMs: invalidTimestamp } }),
+      add({ schedule: { kind: "every", everyMs: 60_000, anchorMs: invalidTimestamp } }),
+      add({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: invalidTimestamp } }),
+    ]);
+    expectCases(validateCronUpdateParams, false, [
+      update({ schedule: { kind: "every", everyMs: invalidTimestamp } }),
+      update({ schedule: { kind: "every", everyMs: 60_000, anchorMs: invalidTimestamp } }),
+      update({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: invalidTimestamp } }),
+    ]);
+  });
+
+  it("rejects mutable scheduler state outside the ECMAScript Date range", () => {
+    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
+    expectCases(validateCronUpdateParams, false, [
+      update({ state: { nextRunAtMs: invalidTimestamp } }),
+      update({ state: { runningAtMs: invalidTimestamp } }),
+      update({ state: { lastRunAtMs: invalidTimestamp } }),
+    ]);
+    expectCases(validateCronUpdateParams, true, [
+      update({ state: { nextRunAtMs: MAX_DATE_TIMESTAMP_MS } }),
     ]);
   });
 
@@ -232,6 +268,29 @@ describe("cron protocol validators", () => {
         },
       }),
       update({ delivery: { threadId: 42 } }),
+    ]);
+  });
+
+  it("accepts completion webhooks only alongside announce delivery", () => {
+    const completionDestination = {
+      mode: "webhook",
+      to: "https://example.invalid/complete",
+    } as const;
+    expectCases(validateCronAddParams, true, [
+      add({ delivery: { mode: "announce", completionDestination } }),
+    ]);
+    expectCases(validateCronAddParams, false, [
+      add({ delivery: { mode: "none", completionDestination } }),
+      add({ delivery: { mode: "webhook", to: "https://example.invalid", completionDestination } }),
+      add({ delivery: { mode: "announce", completionDestination: null } }),
+    ]);
+    expectCases(validateCronUpdateParams, true, [
+      update({ delivery: { completionDestination } }),
+      update({ delivery: { completionDestination: null } }),
+    ]);
+    expectCases(validateCronUpdateParams, false, [
+      update({ delivery: { completionDestination: {} } }),
+      update({ delivery: { completionDestination: { mode: "announce", to: "https://x.test" } } }),
     ]);
   });
 

@@ -330,12 +330,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   }
 
   let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
-  if (
-    attempt.sessionKey &&
-    !input.isRawModelRun &&
-    !isSettledTurnFinalization &&
-    attempt.bootstrapContextRunKind !== "commitment-only"
-  ) {
+  if (attempt.sessionKey && !input.isRawModelRun && !isSettledTurnFinalization) {
     const leaseId = `${attempt.runId}:agent-steering`;
     const leased = leasePendingAgentSteeringItems({
       requesterSessionKey: attempt.sessionKey,

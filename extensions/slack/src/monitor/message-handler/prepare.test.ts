@@ -15,6 +15,7 @@ import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { registerSlackInstallationState } from "../../installation-identity-state.js";
 import {
   clearSlackThreadParticipationCache,
   recordSlackThreadParticipation,
@@ -37,13 +38,23 @@ const {
   sendTranscriptEchoMock,
   shouldLogVerboseMock,
   transcribeFirstAudioMock,
+  upsertChannelPairingRequestMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   logVerboseMock: vi.fn(),
   sendTranscriptEchoMock: vi.fn(),
   shouldLogVerboseMock: vi.fn(() => false),
   transcribeFirstAudioMock: vi.fn(),
+  upsertChannelPairingRequestMock: vi.fn(),
 }));
+
+vi.mock("../conversation.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../conversation.runtime.js")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: upsertChannelPairingRequestMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
   const actual =
@@ -95,6 +106,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     shouldLogVerboseMock.mockReset();
     shouldLogVerboseMock.mockReturnValue(false);
     transcribeFirstAudioMock.mockReset();
+    upsertChannelPairingRequestMock.mockReset().mockResolvedValue({
+      code: "PAIRCODE",
+      created: true,
+    });
   });
 
   afterAll(() => {
@@ -474,6 +489,55 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  it("sends Enterprise pairing codes through the validated listener scope", async () => {
+    const postMessage = vi.fn(async () => ({ ok: true, ts: "123.456", channel: "D999" }));
+    const listenerClient = {
+      chat: { postMessage },
+    } as unknown as SlackEventScope["client"];
+    const eventScope = {
+      teamId: "T123ENTERPRISE",
+      client: listenerClient,
+    } satisfies SlackEventScope;
+    const ctx = createDefaultSlackCtx();
+    ctx.allowFrom = [];
+    ctx.dmPolicy = "pairing";
+    ctx.installationIdentity = {
+      kind: "enterprise",
+      enterpriseId: "E123ENTERPRISE",
+    };
+    const installationState = registerSlackInstallationState("default", "enterprise");
+
+    try {
+      await expect(
+        prepareSlackMessage({
+          ctx,
+          account: defaultAccount,
+          message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
+          opts: { source: "message", eventScope },
+        }),
+      ).resolves.toBeNull();
+
+      expect(upsertChannelPairingRequestMock).toHaveBeenCalledWith({
+        channel: "slack",
+        id: "team:T123ENTERPRISE:user:U123",
+        accountId: "default",
+        meta: {
+          name: "Alice",
+          teamId: "T123ENTERPRISE",
+          senderId: "U123",
+        },
+      });
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "D999",
+          text: expect.stringContaining("PAIRCODE"),
+        }),
+      );
+    } finally {
+      installationState.release();
+    }
+  });
+
   it("carries the validated event workspace through reusable channel routing", async () => {
     const ctx = createReplyToAllSlackCtx({
       groupPolicy: "open",
@@ -508,6 +572,94 @@ describe("slack prepareSlackMessage inbound contract", () => {
         to: "team:T123ENTERPRISE:channel:C123CHANNEL",
       },
     });
+  });
+
+  it("applies workspace-qualified Enterprise mention pattern policy", async () => {
+    const cfg = {
+      messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+      channels: { slack: { enabled: true, groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const ctx = createInboundSlackCtx({ cfg, defaultRequireMention: true, groupPolicy: "open" });
+    ctx.botUserId = "";
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    const account = createSlackAccount({
+      groupPolicy: "open",
+      mentionPatterns: {
+        mode: "deny",
+        allowIn: ["team:T123ENTERPRISE:channel:C123CHANNEL"],
+      },
+    });
+    const message = createSlackMessage({
+      channel: "C123CHANNEL",
+      channel_type: "channel",
+      user: "U123",
+      text: "Bill, please check this",
+    });
+
+    const allowed = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T123ENTERPRISE", client: ctx.app.client },
+      },
+    });
+    const otherWorkspace = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T456ENTERPRISE", client: ctx.app.client },
+      },
+    });
+
+    assertPrepared(allowed, "workspace-qualified mention policy");
+    expect(otherWorkspace).toBeNull();
+  });
+
+  it("routes Enterprise messages through workspace-qualified configured bindings", async () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "strategist" }] },
+      bindings: [
+        {
+          agentId: "strategist",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "team:T123ENTERPRISE:channel:C123CHANNEL" },
+          },
+        },
+      ],
+      channels: { slack: { enabled: true, groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const ctx = createInboundSlackCtx({
+      cfg,
+      defaultRequireMention: false,
+      groupPolicy: "open",
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ groupPolicy: "open" }),
+      message: createSlackMessage({
+        channel: "C123CHANNEL",
+        channel_type: "channel",
+        user: "U123",
+        text: "hello",
+      }),
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T123ENTERPRISE", client: ctx.app.client },
+      },
+    });
+
+    assertPrepared(prepared, "workspace-qualified configured binding");
+    expect(prepared.route.agentId).toBe("strategist");
+    expect(prepared.route.matchedBy).toBe("binding.peer");
   });
 
   it("routes a self-threaded Agent View root before capability detection completes", async () => {

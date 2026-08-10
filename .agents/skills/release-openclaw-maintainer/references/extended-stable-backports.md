@@ -87,12 +87,12 @@ git diff --name-status "$baseline_sha"..HEAD -- \
   scripts/lib/plugin-sdk-deprecated-public-subpaths.json \
   scripts/generate-plugin-sdk-api-baseline.ts \
   scripts/generate-config-doc-baseline.ts \
-  docs/.generated/plugin-sdk-api-baseline.sha256 \
+  docs/.generated/plugin-sdk-api-baseline.jsonl \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 
 git diff --numstat "$baseline_sha"..HEAD -- \
-  docs/.generated/plugin-sdk-api-baseline.sha256 \
+  docs/.generated/plugin-sdk-api-baseline.jsonl \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 ```
@@ -104,10 +104,11 @@ review context, not a warning by itself. A recorded decision is not a reusable
 waiver.
 
 Do not use a SHA of all SDK/config source as an automated warning: it would
-noise on harmless implementation-only repairs. The two generated hash manifests
-are the stable public-contract signal. If this becomes CI, run the comparison
-after `pnpm release:prep` and annotate the staging PR with changed records and
-the required maintainer decision; do not add a caller-controlled bypass.
+noise on harmless implementation-only repairs. The generated SDK JSONL contract
+and config hash manifest are the stable public-contract signals. If this becomes
+CI, run the comparison after `pnpm release:prep` and annotate the staging PR with
+changed records and the required maintainer decision; do not add a
+caller-controlled bypass.
 
 ## Resolve the Active Line
 

@@ -42,6 +42,17 @@ baseline worktree and record whether it is clean, conflicted,
 empty/already-covered, or failed. A clean patch is triage evidence, not an
 automatic backport.
 
+Also snapshot OpenClaw issues carrying `maturity:stable` at the pinned source
+SHA and record the label query time with the audit bounds. Reconcile every
+labelled issue, whether open or closed, whose fixing PR or commit actually
+landed in the scan range with a commit-ledger decision, and give every open
+P0/P1 labelled issue an explicit fixed, not-affected, maintainer-deferred, or
+blocked release disposition. Treat the label only as a completeness and
+priority signal: validate its review rationale, record feature, new
+configuration or policy, docs/support, and lower-maturity matches as
+`label-drift`, and never infer a fix, backport approval, or release blocker from
+the label alone.
+
 For every proposed item, inspect the complete change, baseline behavior,
 callers, callees, siblings, tests, dependency contracts, security impact, and
 publication surface. Collapse overlapping or dependent commits to the smallest

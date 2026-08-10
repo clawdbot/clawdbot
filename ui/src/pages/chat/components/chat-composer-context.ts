@@ -33,7 +33,6 @@ type ProviderCostStats = {
   cacheRead?: number;
   cacheWrite?: number;
   provider: string | null;
-  model: string | null;
 };
 
 function readCostValue(
@@ -60,10 +59,6 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
     const stats: ProviderCostStats = {
       provider: typeof message.provider === "string" ? message.provider.trim() || null : null,
-      model:
-        (typeof message.responseModel === "string" ? message.responseModel.trim() : "") ||
-        (typeof message.model === "string" ? message.model.trim() : "") ||
-        null,
     };
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
@@ -370,7 +365,7 @@ export function renderContextNotice(
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
-    value === undefined
+    value === undefined || value <= 0
       ? nothing
       : html`
           <div>
@@ -378,6 +373,14 @@ export function renderContextNotice(
             <dd>${formatCost(value)}</dd>
           </div>
         `;
+  const hasProviderCosts = providerCosts
+    ? [
+        providerCosts.input,
+        providerCosts.output,
+        providerCosts.cacheRead,
+        providerCosts.cacheWrite,
+      ].some((value) => value !== undefined && value > 0)
+    : false;
   return html`
     <div
       class="context-usage"
@@ -456,31 +459,15 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${showCosts && providerCosts
+          ${showCosts && providerCosts && hasProviderCosts
             ? html`
                 <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
-                <dl class="context-usage__stats context-usage__stats--cost">
+                <dl class="context-usage__stats">
                   ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
                   ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
                   ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
                   ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
                 </dl>
-                ${providerCosts.provider
-                  ? html`
-                      <div class="context-usage__provenance">
-                        <span>${t("sessionsView.provider")}:</span>
-                        <strong>${providerCosts.provider}</strong>
-                      </div>
-                    `
-                  : nothing}
-                ${providerCosts.model
-                  ? html`
-                      <div class="context-usage__provenance">
-                        <span>${t("sessionsView.model")}:</span>
-                        <strong>${providerCosts.model}</strong>
-                      </div>
-                    `
-                  : nothing}
               `
             : nothing}
           ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}

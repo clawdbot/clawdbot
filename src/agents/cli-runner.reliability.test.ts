@@ -984,6 +984,48 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces a CLI failure after a delivered progress reply", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: { action: "send", message: "still working", final: false },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: { action: "send", message: "still working", final: false },
+        result: { status: "sent", messageId: "progress-1" },
+        outcome: "completed",
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return makeManagedRun({ exitCode: 1, durationMs: 150, stderr: "failed after progress" });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:telegram:direct:chat123",
+      runId: "run-progress-failure",
+    });
+    context.mcpDeliveryCapture = true;
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+    context.params.messageChannel = "telegram";
+    context.params.currentChannelId = "chat123";
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({ sourceReplyFinal: false }),
+    ]);
+    expect(result.payloads).toEqual([
+      { text: "The reply stopped after sending progress. Please try again.", isError: true },
+    ]);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("clears a soft-resumed binding after confirmed message send followed by failure", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1153,7 +1195,9 @@ describe("runCliAgent reliability", () => {
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(result.messagingToolSourceReplyPayloads).toEqual([{ text: "sent before failure" }]);
+    expect(result.messagingToolSourceReplyPayloads).toEqual([
+      { text: "sent before failure", sourceReplyFinal: true },
+    ]);
     expect(result.payloads).toEqual([{ text: "sent before failure" }]);
     expect(getReplyPayloadMetadata(result.payloads?.[0] as object)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
@@ -2361,7 +2405,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it.each(["timeout", "unknown", "context_overflow"] as const)(
+  it.each(["timeout", "unknown", "context_overflow", "format"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
       const runId = `run-retry-${reason}`;
@@ -2413,10 +2457,29 @@ describe("runCliAgent reliability", () => {
             stderr: "Prompt is too long",
           });
         }
+        if (spawnCount === 1 && reason === "format") {
+          return makeManagedRun({
+            stdout: [
+              JSON.stringify({
+                type: "assistant",
+                message: {
+                  model: "<synthetic>",
+                  content: [{ type: "text", text: "No response requested." }],
+                },
+              }),
+              JSON.stringify({ type: "result", subtype: "success", result: "" }),
+            ].join("\n"),
+          });
+        }
         if (spawnCount === 1) {
           return makeManagedRun({
             exitCode: 1,
             durationMs: 150,
+          });
+        }
+        if (reason === "format") {
+          return makeManagedRun({
+            stdout: JSON.stringify({ type: "result", result: "hello from fresh cli" }),
           });
         }
         return makeManagedRun({ stdout: "hello from fresh cli" });
@@ -2436,6 +2499,15 @@ describe("runCliAgent reliability", () => {
           cliSessionId: "stale-cli-session",
           openClawHistoryPrompt: CLI_RESEED_PROMPT,
         });
+        if (reason === "format") {
+          context.preparedBackend.backend = {
+            ...context.preparedBackend.backend,
+            output: "jsonl",
+            input: "stdin",
+            jsonlDialect: "claude-stream-json",
+          };
+          context.backendResolved.config = context.preparedBackend.backend;
+        }
         const result = await runPreparedCliAgent({
           ...context,
           params: {

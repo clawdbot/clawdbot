@@ -8,7 +8,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -18,7 +18,6 @@ import type { ChatProps } from "./chat-view.ts";
 import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import type { ChatComposerDraftRetry } from "./composer-persistence.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { PendingChatAbort } from "./run-lifecycle.ts";
@@ -32,13 +31,7 @@ import type {
   WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
-export type ChatComposerMemoryFallback = {
-  message: string;
-  attachments: ChatAttachment[];
-  storageFailed: boolean;
-  draftRetry?: ChatComposerDraftRetry;
-  sequence: number;
-};
+export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 
 export type ChatPageHost = ChatHost &
   ChatState &

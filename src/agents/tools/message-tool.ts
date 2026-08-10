@@ -9,7 +9,7 @@ import {
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { Type, type TSchema } from "typebox";
+import { Type, type TObject, type TSchema } from "typebox";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -1095,6 +1095,22 @@ const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
   threadId: Type.Optional(Type.String()),
 });
 const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]);
+const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
+  Type.Boolean({
+    description:
+      "Set false for progress. Set true, or omit, for the completed current-source reply.",
+  }),
+);
+
+function addSourceReplyFinalControl<T extends TObject>(
+  schema: T,
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined,
+): T | TObject {
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return schema;
+  }
+  return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
+}
 
 function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
   if (typeof args.message !== "string" || !args.message.trim()) {
@@ -1574,11 +1590,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const actions = messageToolDiscoveryParams
     ? resolveMessageToolActionSchemaActions(messageToolDiscoveryParams)
     : undefined;
-  const schema = options?.sourceReplyOnly
+  const baseSchema = options?.sourceReplyOnly
     ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
     : messageToolDiscoveryParams
       ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
       : MessageToolSchema;
+  const schema = addSourceReplyFinalControl(baseSchema, sourceReplySinkDeliveryMode);
   const description = options?.sourceReplyOnly
     ? appendMessageToolVisibleReplyHint(
         "Send a message to the current source conversation. Supports actions: send.",

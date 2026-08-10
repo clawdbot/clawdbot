@@ -338,9 +338,13 @@ export async function executeGatewayAction(params: {
     sourceReplyFinal: params.input.sourceReplyFinal,
     toolCallId: params.input.sourceReplyToolCallId,
   };
-  const terminalDeliveryReceipt = callerOwnsTerminalReceipt
+  const terminalDeliveryStart = callerOwnsTerminalReceipt
     ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
     : undefined;
+  if (terminalDeliveryStart && "outcome" in terminalDeliveryStart) {
+    return params.result(terminalDeliveryStart.result);
+  }
+  const terminalDeliveryReceipt = terminalDeliveryStart;
   let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {

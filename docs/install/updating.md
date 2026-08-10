@@ -282,8 +282,10 @@ install time until their next verified successful update.
 ### Update campaigns
 
 When an automatic update is due, the campaign waits for active work to finish,
-then starts a one-minute countdown. A 15-minute hard deadline starts the update
-even if work remains, using the normal restart drain and session-recovery path.
+then starts a one-minute countdown. Once that countdown starts, new work does
+not reset it or return the campaign to waiting. A 15-minute hard deadline starts
+the update even if work remains, using the normal restart drain and
+session-recovery path.
 
 An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
 deadline, or choose **Update now** from the sidebar update card or

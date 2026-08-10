@@ -39,7 +39,7 @@ vi.mock("../node-wake-state.js", () => ({
   releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
 }));
 
-vi.mock("./nodes.js", () => ({
+vi.mock("./nodes.wake.js", () => ({
   maybeWakeNodeWithApns: mocks.maybeWakeNodeWithApns,
   maybeSendNodeWakeNudge: mocks.maybeSendNodeWakeNudge,
   waitForNodeReconnect: mocks.waitForNodeReconnect,

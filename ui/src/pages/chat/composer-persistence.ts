@@ -1,4 +1,8 @@
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatComposerDraftRetry,
+  ChatQueueItem,
+} from "../../lib/chat/chat-types.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   MAX_STORED_QUEUE_ITEMS,
@@ -66,10 +70,7 @@ type RestoreOptions = {
   sessionKey?: string;
 };
 
-export type ChatComposerDraftRetry = {
-  expectedDraftRevision: number;
-  draftRevision: number;
-};
+export type { ChatComposerDraftRetry } from "../../lib/chat/chat-types.ts";
 
 type ChatComposerPersistStatus = "persisted" | "conflict" | "storage-failed";
 
@@ -399,6 +400,12 @@ function persistChatComposerStateResult(
       options.agentId,
     ).session;
     if (persisted?.draftRevision === draftRevision && (persisted.draft ?? "") === draft) {
+      // Notify only on presence transitions: sidebar draft indicators consume
+      // presence, and content-only notifies would let projection subscribers
+      // re-persist a stale pane over a newer draft (route-fallback invariant).
+      if (Boolean(storedDraft) !== Boolean(draft)) {
+        notifyStoredChatOutboxChanges();
+      }
       return "persisted";
     }
     // Retention limits can make a successful storage write omit this draft.
