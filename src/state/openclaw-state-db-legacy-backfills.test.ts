@@ -1,7 +1,9 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  repairLegacySubagentAttachmentRoots,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
 } from "./openclaw-state-db-legacy-backfills.js";
@@ -14,6 +16,56 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     cleanup();
+  });
+});
+
+const ATTACHMENT_ID = "12345678-1234-4123-8123-123456789abc";
+
+describe("repairLegacySubagentAttachmentRoots", () => {
+  it("canonicalizes only shipped direct generated attachment roots", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE subagent_runs (
+        run_id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL
+      ) STRICT;
+    `);
+    const workspaceDir = path.resolve("/tmp/openclaw-legacy-workspace");
+    const legacyRootDir = path.join(workspaceDir, ".openclaw", "attachments");
+    const insert = db.prepare("INSERT INTO subagent_runs (run_id, payload_json) VALUES (?, ?)");
+    insert.run(
+      "legacy",
+      JSON.stringify({
+        attachmentsRootDir: legacyRootDir,
+        attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
+      }),
+    );
+    insert.run(
+      "unexpected",
+      JSON.stringify({
+        attachmentsRootDir: legacyRootDir,
+        attachmentsDir: path.join(legacyRootDir, "not-generated"),
+      }),
+    );
+
+    repairLegacySubagentAttachmentRoots(db);
+    const firstPass = db
+      .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
+      .all();
+    repairLegacySubagentAttachmentRoots(db);
+    const secondPass = db
+      .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
+      .all();
+
+    expect(secondPass).toEqual(firstPass);
+    const payloads = Object.fromEntries(
+      firstPass.map((row) => [
+        String(row.run_id),
+        JSON.parse(String(row.payload_json)) as Record<string, unknown>,
+      ]),
+    );
+    expect(payloads.legacy?.attachmentsRootDir).toBe(workspaceDir);
+    expect(payloads.unexpected?.attachmentsRootDir).toBe(legacyRootDir);
   });
 });
 

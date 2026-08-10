@@ -356,7 +356,7 @@ describe("safeRemoveAttachmentsDir", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "refuses legacy cleanup through a symlinked attachment root",
+    "refuses canonical cleanup through a symlinked attachment root",
     async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-root-"));
       const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-outside-"));
@@ -371,7 +371,7 @@ describe("safeRemoveAttachmentsDir", () => {
           safeRemoveAttachmentsDir(
             createRunEntry({
               attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
-              attachmentsRootDir: legacyRootDir,
+              attachmentsRootDir: workspaceDir,
             }),
           ),
         ).resolves.toBe(false);

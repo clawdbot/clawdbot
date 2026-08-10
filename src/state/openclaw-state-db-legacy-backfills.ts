@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
@@ -120,6 +121,44 @@ export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
     SET delivery_status = 'not_applicable'
     WHERE delivery_status = 'not-requested';
   `);
+}
+
+const GENERATED_SUBAGENT_ATTACHMENT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Re-root shipped attachment receipts before canonical registry hydration. */
+export function repairLegacySubagentAttachmentRoots(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs")) {
+    return;
+  }
+  const rows = db.prepare("SELECT run_id, payload_json FROM subagent_runs").all() as Array<{
+    run_id: string;
+    payload_json: string;
+  }>;
+  const update = db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?");
+  for (const row of rows) {
+    const payload = parseJsonRecord(row.payload_json);
+    const storedRoot = payload ? textField(payload, "attachmentsRootDir") : null;
+    const storedDir = payload ? textField(payload, "attachmentsDir") : null;
+    if (!payload || !storedRoot || !storedDir) {
+      continue;
+    }
+    const rootDir = path.resolve(storedRoot);
+    const attachmentsDir = path.resolve(storedDir);
+    const attachmentId = path.relative(rootDir, attachmentsDir);
+    if (
+      path.basename(rootDir) !== "attachments" ||
+      path.basename(path.dirname(rootDir)) !== ".openclaw" ||
+      path.dirname(attachmentId) !== "." ||
+      !GENERATED_SUBAGENT_ATTACHMENT_ID.test(attachmentId)
+    ) {
+      continue;
+    }
+    // v2026.7.x stored the attachment container as the root. Re-root lexically;
+    // cleanup must still traverse .openclaw through the no-symlink filesystem owner.
+    payload.attachmentsRootDir = path.dirname(path.dirname(rootDir));
+    update.run(JSON.stringify(payload), row.run_id);
+  }
 }
 
 type LegacyRetainedResultRow = {
