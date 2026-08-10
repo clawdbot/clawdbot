@@ -1208,6 +1208,33 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(withNew);
   });
 
+  it.each(["throws", "returns malformed context"] as const)(
+    "restores the live source array when loop assembly mutates then %s",
+    async (failure) => {
+      const agent = makeGuardableAgent();
+      const engine = makeMockEngine({
+        assemble: async ({ messages }) => {
+          messages.splice(0, messages.length);
+          if (failure === "throws") {
+            throw new Error("context engine failed after changing loop history");
+          }
+          return { estimatedTokens: 0 } as never;
+        },
+      });
+      installHook(agent, engine);
+
+      const { withNew, transformed } = await callAfterInitialToolResult(agent);
+
+      expect(transformed).toBe(withNew);
+      expect(withNew).toEqual([
+        expect.objectContaining({ role: "user", content: "first" }),
+        expect.objectContaining({ role: "toolResult", toolCallId: "call_1" }),
+        expect.objectContaining({ role: "user", content: "second" }),
+        expect.objectContaining({ role: "toolResult", toolCallId: "call_2" }),
+      ]);
+    },
+  );
+
   it("invokes any pre-existing transformContext before the engine sees messages", async () => {
     const upstream = vi.fn(async (messages: AgentMessage[]) => [...messages, makeUser("appended")]);
     const agent = makeGuardableAgent(upstream);

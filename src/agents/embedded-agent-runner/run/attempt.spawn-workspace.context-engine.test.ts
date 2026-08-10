@@ -2447,6 +2447,55 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
+  it.each(["throws", "returns malformed context"] as const)(
+    "restores original user turns when context-engine assembly mutates then %s",
+    async (failure) => {
+      let promptMessages: AgentMessage[] = [];
+      const originalMessages = [
+        { role: "user", content: "first preserved operator instruction", timestamp: 1 },
+        { role: "user", content: "second preserved operator instruction", timestamp: 2 },
+      ] as AgentMessage[];
+
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createTestContextEngine({
+          assemble: async ({ messages }: { messages: AgentMessage[] }) => {
+            messages.splice(0, messages.length);
+            if (failure === "throws") {
+              throw new Error("context engine failed after changing history");
+            }
+            return { estimatedTokens: 0 } as never;
+          },
+        }),
+        sessionKey,
+        tempPaths,
+        sessionMessages: originalMessages,
+        sessionPrompt: async (session) => {
+          promptMessages = session.messages.map((message) => message as AgentMessage);
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 3 },
+          ];
+        },
+      });
+
+      expect(promptMessages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("first preserved operator instruction"),
+            timestamp: 1,
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("second preserved operator instruction"),
+            timestamp: 2,
+          }),
+        ]),
+      );
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    },
+  );
+
   it("repairs tool-result pairing after context engine assembly", async () => {
     let promptMessages: AgentMessage[] = [];
 

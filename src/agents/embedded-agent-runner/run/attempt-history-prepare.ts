@@ -200,10 +200,10 @@ export async function prepareEmbeddedAttemptHistory(input: {
   let contextEngineAssemblySucceeded = false;
   let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
   if (input.activeContextEngine) {
+    // Engines may window history in place; preserve it for failed assembly and
+    // for successful preassembly-authority overflow checks.
+    const preassemblyMessages = activeSession.messages.slice();
     try {
-      // Assemble may window the input in place. Preserve the original history for
-      // the overflow precheck when the engine says preassembly can still overflow.
-      const preassemblyMessages = activeSession.messages.slice();
       const reserveTokens = Math.max(
         0,
         Math.floor(input.settingsManager.getCompactionReserveTokens()),
@@ -270,6 +270,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         );
       }
     } catch (error) {
+      activeSession.agent.state.messages = preassemblyMessages;
       log.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
     }
   }
