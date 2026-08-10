@@ -69,7 +69,7 @@ vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: hoisted.notifyToolActivity,
 }));
 
-import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
+import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 
 const attempt = {
   authStorage: { id: "auth" },

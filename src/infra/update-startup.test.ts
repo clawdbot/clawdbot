@@ -21,6 +21,7 @@ import {
 } from "./kysely-sync.js";
 import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import type { UpdateCheckResult } from "./update-check.js";
+import { parseDevUpdateTargetEnv } from "./update-dev-target.js";
 
 const {
   detectRespawnSupervisorMock,
@@ -327,13 +328,16 @@ describe("update-startup", () => {
 
   function mockDevGitStatus(params?: {
     currentSha?: string;
+    branch?: string | null;
     upstream?: string | null;
+    upstreamSource?: "tracking" | "receipt";
     upstreamSha?: string | null;
     commitAtMs?: number | null;
     ahead?: number | null;
     behind?: number | null;
     fetchOk?: boolean;
   }) {
+    const upstream = params?.upstream === undefined ? "origin/main" : params.upstream;
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -343,8 +347,13 @@ describe("update-startup", () => {
         root: "/opt/openclaw",
         sha: params?.currentSha ?? "current-sha",
         tag: null,
-        branch: "main",
-        upstream: params?.upstream === undefined ? "origin/main" : params.upstream,
+        branch: params?.branch === undefined ? "main" : params.branch,
+        upstream,
+        ...(params?.upstreamSource
+          ? { upstreamSource: params.upstreamSource }
+          : upstream
+            ? { upstreamSource: "tracking" as const }
+            : {}),
         upstreamSha: params?.upstreamSha === undefined ? "upstream-sha" : params.upstreamSha,
         commitAtMs: params?.commitAtMs ?? null,
         dirty: false,
@@ -1141,7 +1150,11 @@ describe("update-startup", () => {
       timeoutMs: 45 * 60 * 1000,
       restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
-      devTargetSha: "upstream-sha",
+      devTarget: {
+        mode: "tracked",
+        upstreamRef: "origin/main",
+        upstreamSha: "upstream-sha",
+      },
     });
   });
 
@@ -1165,10 +1178,18 @@ describe("update-startup", () => {
     const updateCall = vi
       .mocked(runCommandWithTimeout)
       .mock.calls.find(([argv]) => argv.includes("update"));
-    expect(updateCall).toBeDefined();
-    expect(updateCall?.[1]).toMatchObject({
-      timeoutMs: 45 * 60 * 1000,
-      env: { OPENCLAW_UPDATE_DEV_TARGET_REF: "frozen-upstream-sha" },
+    const updateOptions = updateCall?.[1];
+    if (!updateOptions || typeof updateOptions === "number") {
+      throw new Error("expected update command options");
+    }
+    expect(updateOptions.timeoutMs).toBe(45 * 60 * 1000);
+    expect(parseDevUpdateTargetEnv(updateOptions.env ?? {})).toEqual({
+      status: "valid",
+      target: {
+        mode: "tracked",
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-upstream-sha",
+      },
     });
   });
 
@@ -1186,10 +1207,83 @@ describe("update-startup", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     const [handoffParams] = startManagedServiceUpdateHandoffMock.mock.calls[0] ?? [];
-    expect(handoffParams?.env).toEqual({
-      ...process.env,
-      OPENCLAW_UPDATE_DEV_TARGET_REF: "frozen-upstream-sha",
+    expect(handoffParams?.devTarget).toEqual({
+      mode: "tracked",
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-upstream-sha",
     });
+  });
+
+  it("continues automatic dev campaigns from receipt-backed detached HEAD", async () => {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      writeUpdateInstallReceiptRowSync(db, {
+        kind: "update",
+        status: "ok",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "git",
+          root: "/opt/openclaw",
+          after: {
+            sha: "current-sha",
+            version: "1.0.0",
+            upstreamRef: "origin/main",
+          },
+        },
+      });
+    });
+    mockDevGitStatus({ branch: "HEAD", upstreamSource: "receipt" });
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      runAutoUpdate,
+    });
+
+    expect(checkUpdateStatus).toHaveBeenCalledWith({
+      root: "/opt/openclaw",
+      timeoutMs: 2500,
+      fetchGit: true,
+      includeRegistry: false,
+      gitUpstreamFallback: { currentSha: "current-sha", upstreamRef: "origin/main" },
+    });
+    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runAutoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        devTarget: {
+          mode: "tracked",
+          upstreamRef: "origin/main",
+          upstreamSha: "upstream-sha",
+        },
+      }),
+    );
+  });
+
+  it.each([
+    { name: "ahead", git: { ahead: 1, behind: 0 } },
+    { name: "diverged", git: { ahead: 1, behind: 2 } },
+    { name: "non-main", git: { branch: "feature" } },
+    { name: "detached", git: { branch: "HEAD" } },
+  ])("does not announce an automatic dev campaign for a $name checkout", async ({ git }) => {
+    mockDevGitStatus(git);
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      runAutoUpdate,
+    });
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
   });
 
   it("does not probe dev commits when the checkout is up to date", async () => {
@@ -1221,7 +1315,7 @@ describe("update-startup", () => {
         stats: {
           mode: "git",
           root: "/opt/openclaw",
-          after: { sha: "current-sha", version: "1.0.0" },
+          after: { sha: "current-sha", version: "1.0.0", upstreamRef: "origin/main" },
         },
       });
     });
@@ -1281,6 +1375,18 @@ describe("update-startup", () => {
       name: "missing upstream",
       git: { upstream: null, upstreamSha: null, ahead: null, behind: null },
       expected: { status: "unavailable", reason: "no-upstream" },
+    },
+    {
+      name: "missing receipt-backed upstream ref",
+      git: {
+        branch: "HEAD",
+        upstream: "origin/missing",
+        upstreamSource: "receipt" as const,
+        upstreamSha: null,
+        ahead: null,
+        behind: null,
+      },
+      expected: { status: "unavailable", reason: "no-upstream-sha" },
     },
     {
       name: "incomparable history",

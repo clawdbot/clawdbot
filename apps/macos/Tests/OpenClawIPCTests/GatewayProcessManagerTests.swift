@@ -1153,6 +1153,43 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `responsive startup progress extends readiness without launchd status proof`() async throws {
+        let port = 19119
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            self.gatewayTask(healthSucceedsAfter: 1)
+        }
+        defer { manager.setTestingConnection(nil) }
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
+        {
+            manager.setTestingSkipControlChannelRefresh(true)
+            manager._testClearLaunchAgentReadinessFailure()
+            let descriptor = self.gatewayDescriptor(pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.setTestingSkipControlChannelRefresh(false)
+                manager._testClearLaunchAgentReadinessFailure()
+            }
+
+            manager._testStartLaunchdGatewayReadiness(
+                port: port,
+                pid: 4242,
+                readinessWindow: 0.05,
+                firstInstallReadinessBudget: 0.5)
+            await manager.waitForStartupAttempt()
+
+            #expect(manager.status == .running(details: "pid 4242"))
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
     @Test func `delayed fresh install authorization cannot restart readiness budget`() async throws {
         let port = 19118
         let url = try #require(URL(string: "ws://example.invalid"))

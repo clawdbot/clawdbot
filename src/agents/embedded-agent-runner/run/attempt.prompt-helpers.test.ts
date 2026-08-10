@@ -38,7 +38,7 @@ vi.mock("../../media-generation-task-status.js", () => ({
 }));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
-import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-skip.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
   forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,

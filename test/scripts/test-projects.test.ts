@@ -2963,12 +2963,6 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     {
-      title: "routes misc extensions to the misc extension shard",
-      target: "extensions/thread-ownership",
-      config: "test/vitest/vitest.extension-misc.config.ts",
-      includePattern: "extensions/thread-ownership/**/*.test.ts",
-    },
-    {
       title: "routes explicit plugin-sdk light tests to the lighter plugin-sdk lane",
       target: "src/plugin-sdk/temp-path.test.ts",
       config: "test/vitest/vitest.plugin-sdk-light.config.ts",

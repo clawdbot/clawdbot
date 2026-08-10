@@ -123,13 +123,19 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     pullRequestSummaries.delete(normalizedKey);
   };
 
+  // Canonical Gateway rows are the source of truth for everything except the
+  // UI-owned facts the capability keeps beside them, so every published result
+  // passes through the same overlay: swarm notes, then in-flight pin intents.
+  const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
+    mutations.applyPendingPins(swarmActivity.decorate(result));
+
   const roster = createSessionRosterRefresh({
     connection,
     snapshot: () => gateway.snapshot,
     readState: () => state,
     publish,
     observerError: () => sessionEventSubscriptionError,
-    decorate: (result) => swarmActivity.decorate(result),
+    decorate: decorateRows,
     onCanonicalList(result) {
       mutations.settlePrepared(result);
       canonicalListRevision += 1;
@@ -172,6 +178,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    publishedRow: (key) => roster.publishedRow(key),
+    redecorateLists: () => roster.redecorateLists(),
     notifyCreated(key) {
       for (const listener of createdListeners) {
         listener(key);
@@ -225,9 +233,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions,
   ): boolean => {
-    const result = swarmActivity.decorate(
-      reconcileSessionHistory(state.result, row, defaults, options),
-    );
+    const result = decorateRows(reconcileSessionHistory(state.result, row, defaults, options));
     if (result === state.result) {
       return false;
     }
@@ -255,7 +261,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
     const base = reconcileSessionChanged(state.result, payload, options);
-    const result = swarmActivity.decorate(base.result);
+    const result = decorateRows(base.result);
     const reconciled =
       result === base.result
         ? base
@@ -355,7 +361,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return;
     }
     swarmActivity.observe(event.payload);
-    const decoratedResult = swarmActivity.decorate(state.result);
+    const decoratedResult = decorateRows(state.result);
     if (decoratedResult !== state.result) {
       publish({ ...state, result: decoratedResult });
     }

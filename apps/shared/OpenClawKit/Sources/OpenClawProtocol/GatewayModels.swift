@@ -5182,7 +5182,6 @@ public struct SessionRow: Codable, Sendable {
     public let archivedby: SessionCreatedActor?
     public let pinned: Bool?
     public let pinnedat: Double?
-    public let icon: String?
     public let unread: Bool?
     public let lastreadat: Double?
     public let lastactivityat: Double?
@@ -5245,7 +5244,6 @@ public struct SessionRow: Codable, Sendable {
         archivedby: SessionCreatedActor? = nil,
         pinned: Bool? = nil,
         pinnedat: Double? = nil,
-        icon: String? = nil,
         unread: Bool? = nil,
         lastreadat: Double? = nil,
         lastactivityat: Double? = nil,
@@ -5307,7 +5305,6 @@ public struct SessionRow: Codable, Sendable {
         self.archivedby = archivedby
         self.pinned = pinned
         self.pinnedat = pinnedat
-        self.icon = icon
         self.unread = unread
         self.lastreadat = lastreadat
         self.lastactivityat = lastactivityat
@@ -5371,7 +5368,6 @@ public struct SessionRow: Codable, Sendable {
         case archivedby = "archivedBy"
         case pinned
         case pinnedat = "pinnedAt"
-        case icon
         case unread
         case lastreadat = "lastReadAt"
         case lastactivityat = "lastActivityAt"
@@ -7792,7 +7788,6 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let label: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
-    public let icon: AnyCodable?
     public let statusnote: AnyCodable?
     public let attention: AnyCodable?
     public let ttlminutes: Int?
@@ -7827,7 +7822,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
-        icon: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
         attention: AnyCodable? = nil,
         ttlminutes: Int? = nil,
@@ -7861,7 +7855,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.label = label
         self.category = category
         self.boardface = boardface
-        self.icon = icon
         self.statusnote = statusnote
         self.attention = attention
         self.ttlminutes = ttlminutes
@@ -7897,7 +7890,6 @@ public struct SessionsPatchParams: Codable, Sendable {
         case label
         case category
         case boardface = "boardFace"
-        case icon
         case statusnote = "statusNote"
         case attention
         case ttlminutes = "ttlMinutes"
@@ -7930,7 +7922,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let label: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
-    public let icon: AnyCodable?
     public let statusnote: AnyCodable?
     public let attention: AnyCodable?
     public let ttlminutes: Int?
@@ -7961,7 +7952,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
-        icon: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
         attention: AnyCodable? = nil,
         ttlminutes: Int? = nil,
@@ -7991,7 +7981,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.label = label
         self.category = category
         self.boardface = boardface
-        self.icon = icon
         self.statusnote = statusnote
         self.attention = attention
         self.ttlminutes = ttlminutes
@@ -8023,7 +8012,6 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case label
         case category
         case boardface = "boardFace"
-        case icon
         case statusnote = "statusNote"
         case attention
         case ttlminutes = "ttlMinutes"

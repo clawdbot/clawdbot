@@ -5,6 +5,7 @@ import {
   createVitestProcessCompletion,
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
+  parseVitestProcessGroupMembers,
   resolveVitestProcessGroupSignalTarget,
   shouldUseDetachedVitestProcessGroup,
 } from "../../scripts/vitest-process-group.mts";
@@ -40,6 +41,15 @@ describe("vitest process group helpers", () => {
     expect(resolveVitestProcessGroupSignalTarget({ childPid: undefined, platform: "darwin" })).toBe(
       null,
     );
+  });
+
+  it("formats bounded process-group diagnostics without command arguments", () => {
+    expect(
+      parseVitestProcessGroupMembers(
+        [" 116 1 116 Z node", " 117 1 116 Sl claude", " 118 1 999 S unrelated"].join("\n"),
+        116,
+      ),
+    ).toBe("pid=116 ppid=1 state=Z comm=node; pid=117 ppid=1 state=Sl comm=claude");
   });
 
   it("forwards signals to the computed target and ignores cleanup races", () => {

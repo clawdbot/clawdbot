@@ -56,8 +56,6 @@ extension OnboardingAISetupModel {
     struct ActivateResult: Decodable {
         let ok: Bool
         let modelRef: String?
-        let latencyMs: Double?
-        let lines: [String]?
         let status: String?
         let error: String?
     }
@@ -91,7 +89,6 @@ extension OnboardingAISetupModel {
         case untried
         case testing
         case failed(Failure)
-        case connected
     }
 
     struct Failure: Equatable {
@@ -303,13 +300,6 @@ extension OnboardingAISetupModel {
         requested == returned ? nil : returned
     }
 
-    static func normalizedSetupLines(_ lines: [String]?) -> [String] {
-        (lines ?? []).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-    }
-
     /// Keep the exact Gateway-sanitized error available behind the friendly
     /// summary so users can copy it into support or diagnostics.
     static func failure(label: String, status: String?, error: String?) -> Failure {
@@ -347,22 +337,6 @@ extension OnboardingAISetupModel {
                 ? "\(label) couldn’t complete the test."
                 : "\(label) couldn’t complete the test. Show details to inspect or copy the error."
         }
-    }
-
-    var connectedSummary: String {
-        guard let modelRef = connectedModelRef else { return "Your AI is connected." }
-        let label = candidates.first { $0.kind == self.selectedKind }?.label ??
-            (selectedKind == "api-key" ? self.selectedManualProvider?.label : nil)
-        let via = label.map { " via \($0)" } ?? ""
-        if let latency = connectedLatencyMs {
-            let seconds = Double(latency) / 1000
-            return "\(modelRef)\(via) — replied in \(String(format: "%.1f", seconds))s"
-        }
-        return "\(modelRef)\(via)"
-    }
-
-    var connectedSetupCopyText: String {
-        connectedSetupLines.joined(separator: "\n")
     }
 
     static func activationTransitionWasPersisted(

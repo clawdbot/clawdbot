@@ -21,8 +21,8 @@ import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
-import { retrySubagentCleanup } from "./subagent-spawn-cleanup.js";
-import { readGatewayRunId } from "./subagent-spawn-gateway.js";
+import { retrySubagentCleanup } from "./subagents/spawn/subagent-spawn-cleanup.js";
+import { readGatewayRunId } from "./subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { enqueueSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 

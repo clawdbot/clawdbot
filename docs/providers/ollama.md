@@ -727,15 +727,15 @@ Replace model IDs with exact names from `ollama list` or
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "local",
+        entries: {
+          local: {
+            default: true,
             experimental: {
               localModelLean: true,
             },
             model: { primary: "ollama/gemma4" },
           },
-        ],
+        },
       },
       models: {
         providers: {
@@ -1077,28 +1077,17 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     | --- | --- |
     | Default model | `nomic-embed-text` |
     | Auto-pull | Yes, if not present locally |
-    | Default inline concurrency | 1 (other providers default higher; raise with `nonBatchConcurrency` if the host can take it) |
+    | Embedding concurrency | Provider-owned; no memory-search tuning key is required |
 
     Query-time embeddings use retrieval prefixes for models that require or
     recommend them: `nomic-embed-text`, `qwen3-embedding`, and
     `mxbai-embed-large`. Document batches stay raw, so existing indexes need
     no format migration.
 
-    ```json5
-    {
-      memory: {
-        search: {
-          provider: "ollama",
-          remote: {
-            // Default for Ollama. Raise on larger hosts if reindexing is too slow.
-            nonBatchConcurrency: 1,
-          },
-        },
-      },
-    }
-    ```
-
-    For a remote embedding host, keep auth scoped to that host:
+    Embedding concurrency and batching behavior are owned by the Ollama
+    memory provider. For a remote embedding host, use the supported
+    `remote.baseUrl` and `remote.apiKey` fields to keep auth scoped to that
+    host:
 
     ```json5
     {
@@ -1109,7 +1098,6 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
           remote: {
             baseUrl: "http://gpu-box.local:11434",
             apiKey: "ollama-local",
-            nonBatchConcurrency: 2,
           },
         },
       },

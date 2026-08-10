@@ -13,7 +13,7 @@ import {
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "./embedded-agent-helpers/failover-matches.js";
+} from "./failover/classify.js";
 import { isApiKeyRateLimitError } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 

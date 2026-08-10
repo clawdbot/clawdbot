@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
@@ -156,8 +157,9 @@ export function renderRecentSession(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
   display?: CatalogBackingSessionDisplay;
+  listItem?: boolean;
 }) {
-  const { host, session, display } = params;
+  const { host, session, display, listItem = true } = params;
   const pinAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, pinned: !session.pinned },
@@ -239,7 +241,7 @@ export function renderRecentSession(params: {
     <div
       class=${rowClass}
       data-session-key=${session.key}
-      role="listitem"
+      role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
       title=${!session.isChild && !groupWriteAccess.allowed ? groupWriteAccess.reason : nothing}
       @dragstart=${!rowDraggable
@@ -357,7 +359,11 @@ export function renderRecentSession(params: {
       <span class="sidebar-recent-session__aside session-row-aside">
         ${trailingIndicator === nothing
           ? nothing
-          : html`<span class="session-row-state" id=${stateId} aria-label=${trailingDescription}
+          : html`<span
+              class="session-row-state"
+              id=${stateId}
+              role="img"
+              aria-label=${trailingDescription}
               >${trailingIndicator}</span
             >`}
         ${hasTrail
@@ -415,22 +421,34 @@ export function renderRecentSession(params: {
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
+  listItem?: boolean;
 }): TemplateResult {
-  const { host, session } = params;
+  const { host, session, listItem = true } = params;
   const expanded = host.isSessionChildrenExpanded(session);
   const visibleChildren = visibleSessionChildren({
     session,
     fullyShownChildSessionKeys: host.fullyShownChildSessionKeys,
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
-  return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
-    ${renderRecentSession({ host, session })}
+  return html`<div
+    class="sidebar-session-tree"
+    data-session-tree=${session.key}
+    role=${ifDefined(listItem ? "listitem" : undefined)}
+  >
+    ${renderRecentSession({ host, session, listItem: false })}
     ${expanded
-      ? html`<div
-          class="sidebar-session-tree__children"
-          aria-label=${t("sessionsView.childSessions")}
-        >
-          ${visibleChildren.map((child) => renderSessionTree({ host, session: child }))}
+      ? html`<div class="sidebar-session-tree__children">
+          ${visibleChildren.length > 0
+            ? html`<div
+                class="sidebar-session-tree__list"
+                role=${ifDefined(listItem ? "list" : undefined)}
+                aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
+              >
+                ${visibleChildren.map((child) =>
+                  renderSessionTree({ host, session: child, listItem }),
+                )}
+              </div>`
+            : nothing}
           ${hiddenChildCount > 0
             ? html`<button
                 class="sidebar-session-tree__show-more"

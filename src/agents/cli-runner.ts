@@ -40,7 +40,7 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import type { CliOutput } from "./cli-output.js";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
 import {

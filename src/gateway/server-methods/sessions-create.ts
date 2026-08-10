@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -45,6 +46,7 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 async function prepareOperatorSessionDiffBaseline(params: {
   agentId: string;
@@ -142,7 +144,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       hasInitialTurn,
       message: initialMessage,
     } = initialTurn;
-    const requestedCwd = normalizeOptionalString(p.cwd);
+    let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     // Agent tools expand `~` before RPC; the Gateway contract stays absolute-only.
     // Remote nodes may use Windows paths; local cwd must match the Gateway host.
@@ -158,6 +160,22 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"),
       );
       return;
+    }
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    if (requestedCwd && !requestedExecNode && !clientScopes.includes(ADMIN_SCOPE)) {
+      const containment = await resolveWorkspacePathContainment(requestedCwd, cfg);
+      if (!containment) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({
+            missingScope: ADMIN_SCOPE,
+            requiredScopes: [ADMIN_SCOPE],
+          }),
+        );
+        return;
+      }
+      requestedCwd = containment.path;
     }
     if (requestedExecNode && p.worktree === true) {
       respond(
@@ -404,7 +422,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
-    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
     const spawnActorSessionKey =
       sessionCreation.via === "spawn" && sessionCreation.actor?.type === "agent"

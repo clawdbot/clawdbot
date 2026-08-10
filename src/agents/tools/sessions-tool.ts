@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -90,12 +90,6 @@ const SessionsToolSchema = Type.Object(
     ),
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
-    ),
-    icon: Type.Optional(
-      Type.String({
-        description:
-          "Sidebar icon: an emoji, name:<curated-id>, or svg:<svg …> you draw yourself (tiny, sanitized). Empty string removes it.",
-      }),
     ),
     statusNote: Type.Optional(
       Type.String({
@@ -246,7 +240,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -323,7 +317,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       const patch = {
         key,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
-        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),

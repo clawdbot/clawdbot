@@ -28,6 +28,11 @@ import {
 } from "../../infra/update-check.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import {
+  parseDevUpdateTargetEnv,
+  type DevUpdateTarget,
+  UPDATE_DEV_TARGET_REF_ENV,
+} from "../../infra/update-dev-target.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
@@ -85,6 +90,18 @@ export { updateFinalizeCommand } from "./update-command-post-core.js";
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
+function readDevUpdateTargetOrExit(): { ok: true; target?: DevUpdateTarget } | { ok: false } {
+  const parsed = parseDevUpdateTargetEnv(process.env);
+  if (parsed.status === "invalid") {
+    defaultRuntime.error(
+      `Invalid internal ${UPDATE_DEV_TARGET_REF_ENV} contract; expected a plain Git ref or a supported tracked-target encoding.`,
+    );
+    defaultRuntime.exit(1);
+    return { ok: false };
+  }
+  return parsed.status === "valid" ? { ok: true, target: parsed.target } : { ok: true };
+}
+
 async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
@@ -133,6 +150,14 @@ async function updateCommandInternal(
     );
     defaultRuntime.exit(1);
     return;
+  }
+  let devTarget: DevUpdateTarget | undefined;
+  if (requestedChannel === "dev") {
+    const resolvedDevTarget = readDevUpdateTargetOrExit();
+    if (!resolvedDevTarget.ok) {
+      return;
+    }
+    devTarget = resolvedDevTarget.target;
   }
 
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
@@ -246,8 +271,13 @@ async function updateCommandInternal(
           currentVersion: VERSION,
           installKind: updateInstallKind,
         }).channel);
-  const devTargetRef =
-    channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
+  if (channel === "dev" && requestedChannel !== "dev") {
+    const resolvedDevTarget = readDevUpdateTargetOrExit();
+    if (!resolvedDevTarget.ok) {
+      return;
+    }
+    devTarget = resolvedDevTarget.target;
+  }
 
   const explicitTag = normalizeTag(opts.tag);
   if (channel === "extended-stable" && explicitTag) {
@@ -579,7 +609,7 @@ async function updateCommandInternal(
     showProgress,
     opts,
     shouldRestart,
-    devTargetRef,
+    devTarget,
     packageInstallSpec,
     packageInstallEnv,
     packageInstallTarget,

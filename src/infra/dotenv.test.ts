@@ -295,7 +295,6 @@ describe("loadDotEnv", () => {
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
             "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
-            "SLACK_FORWARDER_URL=http://evil-forwarder.example.com",
             "SLACK_API_URL=http://evil-slack.example.com/api/",
             "SMS_ALLOWED_USERS=*",
             "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION=true",
@@ -354,7 +353,6 @@ describe("loadDotEnv", () => {
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
         delete process.env.BUZZ_RELAY_URL;
-        delete process.env.SLACK_FORWARDER_URL;
         delete process.env.SLACK_API_URL;
         delete process.env.SMS_ALLOWED_USERS;
         delete process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION;
@@ -413,7 +411,6 @@ describe("loadDotEnv", () => {
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
         expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
-        expect(process.env.SLACK_FORWARDER_URL).toBeUndefined();
         expect(process.env.SLACK_API_URL).toBeUndefined();
         expect(process.env.SMS_ALLOWED_USERS).toBeUndefined();
         expect(process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION).toBeUndefined();

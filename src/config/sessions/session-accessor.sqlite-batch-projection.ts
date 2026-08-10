@@ -7,6 +7,7 @@ import type { SessionEntry } from "./types.js";
 export async function applySqliteSessionEntryBatchProjection<T>(params: {
   activeSessionKey?: string;
   agentId?: string;
+  sessionKeys?: readonly string[];
   skipMaintenance?: boolean;
   storePath: string;
   update: (

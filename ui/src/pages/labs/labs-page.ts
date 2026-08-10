@@ -5,7 +5,6 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   renderDocsLink,
-  renderSettingsDefaultState,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
@@ -113,39 +112,26 @@ class LabsPage extends OpenClawLightDomElement {
     );
   }
 
-  private resetFeature(feature: LabFeature) {
-    const config = this.editableConfig();
-    const featureState = resolveLabFeatureState(config, feature);
-    const resetPatch = labFeatureResetPatch(config, feature);
-    if (!resetPatch) {
-      return;
-    }
-    void this.updateFeature(feature, featureState.defaultEnabled, resetPatch);
-  }
-
   private renderFeature(feature: LabFeature) {
     const title = feature.title();
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
     const canToggle = this.canToggle();
-    const defaultState = renderSettingsDefaultState({
-      value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),
-      overridden: featureState.overridden,
-      disabled: !canToggle,
-      onReset: () => this.resetFeature(feature),
-    });
+    const defaultDescription = t(
+      featureState.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
+      { value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled") },
+    );
     const description = html`
       ${feature.description()}
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
       >${feature.restartHint ? html` <span>${feature.restartHint()}</span>` : nothing}
-      <span>${defaultState.description}</span>
+      <span>${defaultDescription}</span>
     `;
     return renderSettingsToggleRow({
       title,
       description,
       checked: this.featureEnabled(feature),
       disabled: !canToggle,
-      actions: defaultState.action,
       onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
     });
   }

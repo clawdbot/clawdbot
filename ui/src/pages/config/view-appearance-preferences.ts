@@ -396,6 +396,7 @@ export function renderLobsterPetSection(props: ConfigProps) {
                           : "lobsterdex__mini--unseen"}"
                         style=${lobsterLookStyle(look)}
                         tabindex="0"
+                        role="img"
                         aria-label=${ariaLabel}
                       >
                         ${renderLobsterSvg(look, { standalone: true })}

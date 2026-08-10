@@ -13,7 +13,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/context.ts";
+import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,

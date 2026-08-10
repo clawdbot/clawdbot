@@ -20,7 +20,7 @@ import {
   forkSqliteSessionAtMessage as forkSessionAtMessage,
   rewindSqliteSessionToMessage as rewindSessionToMessage,
   switchSqliteSessionBranch as switchSessionBranch,
-} from "../../config/sessions/session-accessor.sqlite.js";
+} from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {
   isCompetingSessionWorkAdmissionActive,

@@ -213,7 +213,7 @@ The MiniMax plugin registers the `image-01` model for the `image_generate` tool 
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "minimax/image-01" },
+      mediaModels: { image: { primary: "minimax/image-01" } },
     },
   },
 }
@@ -260,7 +260,7 @@ The bundled MiniMax plugin registers music generation through the shared `music_
 {
   agents: {
     defaults: {
-      musicGenerationModel: { primary: "minimax/music-2.6" },
+      mediaModels: { music: { primary: "minimax/music-2.6" } },
     },
   },
 }
@@ -283,7 +283,7 @@ The bundled MiniMax plugin registers video generation through the shared `video_
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "minimax/MiniMax-Hailuo-2.3" },
+      mediaModels: { video: { primary: "minimax/MiniMax-Hailuo-2.3" } },
     },
   },
 }

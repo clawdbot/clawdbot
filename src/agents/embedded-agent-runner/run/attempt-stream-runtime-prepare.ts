@@ -10,8 +10,8 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import {
   type createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-} from "./attempt-abort.js";
-import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+} from "./attempt-finalize.js";
+import { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";

@@ -448,9 +448,9 @@ Per-agent overrides use the same model-scoped shape:
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "codex-only",
+    "entries": {
+      "codex-only": {
+        "default": true,
         "model": "openai/gpt-5.6-sol",
         "models": {
           "openai/gpt-5.6-sol": {
@@ -458,7 +458,7 @@ Per-agent overrides use the same model-scoped shape:
           }
         }
       }
-    ]
+    }
   }
 }
 ```

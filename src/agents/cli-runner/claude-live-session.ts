@@ -38,23 +38,24 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
+import type {
+  CliOutput,
+  CliStreamingDelta,
+  CliStreamJsonOutputLimits,
+  CliThinkingDelta,
+  CliThinkingProgress,
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+  CliUsage,
+} from "../cli-output-contracts.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+  CLI_STREAM_JSON_OUTPUT_LIMITS,
   createCliJsonlStreamingParser,
-  extractCliErrorMessage,
   frameBoundedCliJsonlChunk,
   normalizeClaudeCliStreamJsonRecord,
-  parseCliOutput,
-  type CliOutput,
-  type CliUsage,
-  type CliStreamJsonOutputLimits,
-  type CliStreamingDelta,
-  type CliThinkingDelta,
-  type CliThinkingProgress,
-  type CliToolResultDelta,
-  type CliToolUseStartDelta,
-  resolveCliStreamJsonOutputLimits,
-} from "../cli-output.js";
+} from "../cli-output-stream.js";
+import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
   type CliTimeoutContext,
@@ -1696,7 +1697,7 @@ function createTurn(params: {
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
     abortSignal: params.context.params.abortSignal,
-    outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
+    outputLimits: CLI_STREAM_JSON_OUTPUT_LIMITS,
     startedAtMs: Date.now(),
     rawLines: [],
     noOutputTimer: null,

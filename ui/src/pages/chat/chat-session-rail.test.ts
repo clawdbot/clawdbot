@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,6 +11,8 @@ import {
   requestSessionCompanionState,
   resetSessionCompanion,
 } from "./chat-session-companion.ts";
+import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
+import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import {
   ChatSessionRailElement,
   ChatSessionRailState,
@@ -34,6 +37,33 @@ function input(overrides: Partial<SessionRailInput> = {}): SessionRailInput {
     digest: digest(),
     hasCompanionActivity: false,
     ...overrides,
+  };
+}
+
+function backgroundTasksToggleProps(): BackgroundTasksProps {
+  return {
+    sessionKey: "agent:main:run",
+    statusRowId: "status-row",
+    collapsed: true,
+    narrowLayout: false,
+    connected: true,
+    canCancel: false,
+    loading: false,
+    error: null,
+    tasks: null,
+    view: { kind: "list" },
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
+    cancellingTaskIds: new Set(),
+    finishedCollapsed: true,
+    onToggleCollapsed: () => {},
+    onToggleFinished: () => {},
+    onRefresh: () => {},
+    onCancel: () => {},
+    onSelectTask: () => {},
+    onBack: () => {},
+    onOpenTranscript: () => {},
   };
 }
 
@@ -357,6 +387,22 @@ describe("ChatSessionRailElement", () => {
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
     expect(onOpenRequestConsumed).toHaveBeenCalledWith(1);
     expect(onVisibilityChange).not.toHaveBeenCalled();
+  });
+
+  it("restores with its own glyph instead of the background-tasks one", async () => {
+    const element = await mount();
+    (element.querySelector(".chat-session-rail__hide") as HTMLButtonElement | null)?.click();
+    await element.updateComplete;
+
+    const railGlyph = element.querySelector(".chat-session-rail--restore svg")?.innerHTML;
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(renderBackgroundTasksToggle(backgroundTasksToggleProps()), host);
+    const tasksGlyph = host.querySelector(".chat-tasks-toggle svg")?.innerHTML;
+
+    expect(railGlyph?.trim()).toBeTruthy();
+    expect(tasksGlyph?.trim()).toBeTruthy();
+    expect(railGlyph).not.toBe(tasksGlyph);
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {

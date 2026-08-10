@@ -316,11 +316,9 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
   </Accordion>
   <Accordion title="Local (GGUF + llama.cpp)">
-    | Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
-    | --------------------- | ------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
-    | `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
-    | `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128-512 tokens) while bounding non-weight VRAM. Lower to 1024-2048 on constrained hosts. `"auto"` uses the model's trained maximum -- not recommended for 8B+ models (Qwen3-Embedding-8B: up to 40 960 tokens can push VRAM to ~32 GB). |
+    | Key               | Type     | Default         | Description             |
+    | ----------------- | -------- | --------------- | ----------------------- |
+    | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
     Install the official llama.cpp provider first: `openclaw plugins install @openclaw/llama-cpp-provider`.
     Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
@@ -332,7 +330,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     openclaw memory index --force --agent main
     ```
 
-    Numeric `local.contextSize` values also inform node-llama-cpp's automatic GPU-layer placement so model weights and the requested embedding context are fitted together. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
+    Cache placement and embedding context sizing are provider-owned. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
 
     Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs (via node-llama-cpp's model resolution), but they do not change the default provider.
 
@@ -435,14 +433,13 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ## Batch indexing
 
-| Key                          | Type      | Default | Description                |
-| ---------------------------- | --------- | ------- | -------------------------- |
-| `remote.nonBatchConcurrency` | `number`  | `4`     | Parallel inline embeddings |
-| `remote.batch.enabled`       | `boolean` | `false` | Enable batch embedding API |
+| Key                    | Type      | Default | Description                |
+| ---------------------- | --------- | ------- | -------------------------- |
+| `remote.batch.enabled` | `boolean` | `false` | Enable batch embedding API |
 
 Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-Concurrency, polling, and timeout behavior are provider-owned.
+Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
 

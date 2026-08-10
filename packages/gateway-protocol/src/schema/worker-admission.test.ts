@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
+import { FAILOVER_REASONS } from "../failover-reasons.js";
 import {
   type WorkerAdmissionHandshake,
   WorkerAdmissionResponseFrameSchema,
@@ -162,12 +163,22 @@ const approval = (phase: string, status: string) =>
   event("approval", { phase, kind: "exec", status, title: "x" });
 const lifecycle = (phase: string, payload: Record<string, unknown> = {}) =>
   event("lifecycle", { phase, ...payload });
-const fallbackStep = (outcome: string) =>
+const fallbackStep = (outcome: string, reason?: string) =>
   lifecycle("fallback_step", {
     fallbackStepType: "fallback_step",
     fallbackStepFromModel: "p/m",
+    ...(reason === undefined ? {} : { fallbackStepFromFailureReason: reason }),
     fallbackStepFinalOutcome: outcome,
   });
+const fallbackReasonEvents = (reason: string) => [
+  lifecycle("fallback", {
+    ...models,
+    reasonSummary: "x",
+    attemptSummaries: ["x"],
+    attempts: [{ provider: "p", model: "m", error: "x", reason }],
+  }),
+  fallbackStep("next_fallback", reason),
+];
 const assistant = event("assistant", { text: "x", delta: "x" });
 const validateLive = validateWorkerLiveEventParams;
 const liveError = (details: Record<string, unknown>) => ({
@@ -413,6 +424,18 @@ describe("worker protocol schemas", () => {
     ] as const) {
       expect(validateLive(params(tool("update", { partialResult: value })))).toBe(false);
       expect(validateLive.errors?.[0]).toMatchObject({ keyword });
+    }
+  });
+
+  it("keeps both worker fallback reason fields aligned with the canonical vocabulary", () => {
+    for (const reason of FAILOVER_REASONS) {
+      for (const fallbackEvent of fallbackReasonEvents(reason)) {
+        expect(validateLive(params(fallbackEvent))).toBe(true);
+      }
+    }
+
+    for (const fallbackEvent of fallbackReasonEvents("not-a-reason")) {
+      expect(validateLive(params(fallbackEvent))).toBe(false);
     }
   });
 

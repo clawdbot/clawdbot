@@ -326,4 +326,16 @@ describe("package scripts", () => {
     expect(script).toContain("extensions/msteams/src/media-helpers.test.ts");
     expect(script).toContain("extensions/msteams/src/messenger.test.ts");
   });
+
+  it("runs native usage footer home-path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+    );
+  });
+
+  it("runs native media-understanding file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+    );
+  });
 });

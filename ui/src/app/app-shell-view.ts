@@ -125,7 +125,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
-  const settingsTakeover = isSettingsNavigationRoute(activeRoute);
+  // Onboarding renders without any navigation chrome, so the settings takeover
+  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  const settingsTakeover = isSettingsNavigationRoute(activeRoute) && !host.onboardingMode;
   const runtimeConfig = context.runtimeConfig.state;
   const settingsSearchBlocks = findSettingsSearchBlocks({
     query: host.settingsSearchQuery,
@@ -233,6 +235,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       onPairMobile: () => void context.overlays.openDevicePairSetup(),
       onNavigate: (routeId: string, options?: ApplicationNavigationOptions) =>
         host.navigate(routeId, options),
+      onCloseNavDrawer: () => host.closeNavDrawer({ restoreFocus: true }),
       onPreloadRoute: (routeId: string) =>
         isRouteId(routeId) ? context.preload(routeId) : Promise.resolve(),
     });
@@ -466,6 +469,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .available=${terminalAvailable}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
+        .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}

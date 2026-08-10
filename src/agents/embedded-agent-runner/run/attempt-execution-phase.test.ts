@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./attempt-stream-runtime-prepare.js", () => ({
   prepareEmbeddedAttemptStreamRuntime: mocks.prepareStreamRuntime,
 }));
-vi.mock("./attempt-execution-settle.js", () => ({
+vi.mock("./attempt-settle.js", () => ({
   runEmbeddedAttemptSettledPhase: mocks.runSettledPhase,
 }));
 
