@@ -4497,11 +4497,14 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
-    expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: objectUrl, title: "Generated image 1" }),
+    await vi.waitFor(() =>
+      expect(onOpenImage).toHaveBeenCalledWith(
+        expect.objectContaining({ src: objectUrl, title: "Generated image 1" }),
+      ),
     );
     const activeItem = onOpenImage.mock.calls[0]?.[0];
     activeItem?.release?.();
@@ -4516,7 +4519,7 @@ describe("grouped chat rendering", () => {
       expiresAt: "2026-07-28T05:00:00.000Z",
     }));
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe(ticketedUrl);
+      expect(url).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
@@ -4540,6 +4543,59 @@ describe("grouped chat rendering", () => {
       sessionKey: "agent:main:main",
       artifactId,
     });
+    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(3);
+  });
+
+  it("reuses one full-image fetch for download and copy actions", async () => {
+    const attachmentId = crypto.randomUUID();
+    const artifactId = `artifact_managed_image_${attachmentId}`;
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const ticketedUrl = `${source}?mediaTicket=ticket`;
+    const thumbnailUrl = ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail");
+    const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
+    const objectUrls = ["blob:thumbnail", "blob:full", "blob:download"];
+    const NativeUrl = URL;
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => objectUrls.shift() ?? "blob:extra");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const imageBlob = new Blob(["png"], { type: "image/png" });
+    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => imageBlob }));
+    vi.stubGlobal("fetch", fetchMock);
+    let copiedBlob: Blob | undefined;
+    class ClipboardItemMock {
+      constructor(readonly values: Record<string, Promise<Blob>>) {}
+    }
+    const write = vi.fn(async (items: ClipboardItemMock[]) => {
+      copiedBlob = await items[0]?.values["image/png"];
+    });
+    vi.stubGlobal("ClipboardItem", ClipboardItemMock);
+    vi.stubGlobal("navigator", { clipboard: { write } });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    const container = document.body.appendChild(document.createElement("div"));
+    renderAssistantMessage(
+      container,
+      createAssistantImageMessage(source, "Ticketed image", { artifactId }),
+      { showToolCalls: false, resolveArtifactDownload },
+    );
+    await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
+
+    expectElement(container, 'button[aria-label="Download image"]', HTMLButtonElement).click();
+    await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(click.mock.instances[0]?.download).toBe("Ticketed image.png");
+
+    expectElement(container, 'button[aria-label="Copy image"]', HTMLButtonElement).click();
+    await vi.waitFor(() => expect(copiedBlob?.type).toBe("image/png"));
+    await vi.waitFor(() => expect(toastHost.textContent).toContain("Copied!"));
+    expect(fetchMock.mock.calls.filter(([url]) => url === ticketedUrl)).toHaveLength(1);
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    toastHost.remove();
+    container.remove();
   });
 
   it("aborts a stalled managed outgoing image fetch after the deadline", async () => {
@@ -4571,7 +4627,10 @@ describe("grouped chat rendering", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
+      managedChatImageUrl.replace(/\/full$/u, "/thumbnail"),
+    );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
@@ -4614,7 +4673,10 @@ describe("grouped chat rendering", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
+      managedChatImageUrl.replace(/\/full$/u, "/thumbnail"),
+    );
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
 
@@ -4666,7 +4728,7 @@ describe("grouped chat rendering", () => {
       | undefined;
     const response = { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
     const fetchMock = vi.fn((url: string) => {
-      if (deferEvictedRefetch && url === imageUrls[1]) {
+      if (deferEvictedRefetch && url === imageUrls[1]?.replace(/\/full$/u, "/thumbnail")) {
         return new Promise<typeof response>((resolve) => {
           resolveEvictedRefetch = resolve;
         });
@@ -4676,29 +4738,15 @@ describe("grouped chat rendering", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const container = document.createElement("div");
-    let activeRequestVersion = 0;
-    const acceptedImageOpen = vi.fn();
-    const onRequestOpenImage = vi.fn(() => ++activeRequestVersion);
-    const onOpenImage = vi.fn((item: { release?: () => void }, requestVersion?: number) => {
-      if (requestVersion === activeRequestVersion) {
-        acceptedImageOpen(item);
-      } else {
-        item.release?.();
-      }
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: imageUrls.slice(0, 64).map((url, index) => ({
+        type: "image",
+        url,
+        alt: `Generated image ${index + 1}`,
+      })),
+      timestamp: Date.now(),
     });
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: imageUrls.slice(0, 64).map((url, index) => ({
-          type: "image",
-          url,
-          alt: `Generated image ${index + 1}`,
-        })),
-        timestamp: Date.now(),
-      },
-      { onOpenImage, onRequestOpenImage },
-    );
     await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(64));
 
     const recentContainer = document.createElement("div");
@@ -4722,26 +4770,20 @@ describe("grouped chat rendering", () => {
     expect(revokeObjectURL).toHaveBeenCalled();
 
     deferEvictedRefetch = true;
-    const evictedImage = container.querySelector<HTMLImageElement>('img[alt="Generated image 2"]');
-    const newestCurrentImage = container.querySelector<HTMLImageElement>(
-      'img[alt="Generated image 3"]',
-    );
-    expect(evictedImage).toBeInstanceOf(HTMLImageElement);
-    expect(newestCurrentImage).toBeInstanceOf(HTMLImageElement);
-    evictedImage!.click();
+    const evictedContainer = document.createElement("div");
+    renderAssistantMessage(evictedContainer, {
+      role: "assistant",
+      content: [{ type: "image", url: imageUrls[1], alt: "Refetched image" }],
+      timestamp: Date.now(),
+    });
     await vi.waitFor(() => expect(resolveEvictedRefetch).toBeTypeOf("function"));
 
-    newestCurrentImage!.click();
-    expect(acceptedImageOpen).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Generated image 3" }),
-    );
-
+    const createsBeforeRefetch = createObjectURL.mock.calls.length;
     resolveEvictedRefetch?.(response);
     await vi.waitFor(() =>
-      expect(createObjectURL.mock.calls.length).toBeGreaterThan(createsBeforeOverflow),
+      expect(createObjectURL.mock.calls.length).toBeGreaterThan(createsBeforeRefetch),
     );
-    expect(acceptedImageOpen).toHaveBeenCalledTimes(1);
-    (acceptedImageOpen.mock.calls[0]?.[0] as { release?: () => void } | undefined)?.release?.();
+    expect(evictedContainer.querySelector(".chat-message-image")).not.toBeNull();
   });
 
   it("bounds managed outgoing image miss retention", async () => {

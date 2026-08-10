@@ -18,6 +18,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -301,33 +302,36 @@ function createToolEventBridge(params: {
  */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";
+  commandDetailsVisible: boolean;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
 }) {
-  const metaByCallId = new Map<string, string | undefined>();
+  const toolByCallId = new Map<string, { meta?: string; commandBearing: boolean }>();
   return {
-    noteToolEvent: async (payload: CliToolEventPayload): Promise<void> => {
+    noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
-          metaByCallId.set(
-            payload.toolCallId,
-            inferToolMetaFromArgs(payload.name, payload.args, {
+          toolByCallId.set(payload.toolCallId, {
+            meta: inferToolMetaFromArgs(payload.name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
-          );
+            commandBearing: isCommandBearingToolCall(payload.name, payload.args),
+          });
         }
-        return;
+        return false;
       }
       if (payload.phase !== "result") {
-        return;
+        return false;
       }
-      const meta = payload.toolCallId ? metaByCallId.get(payload.toolCallId) : undefined;
+      const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+      const meta =
+        params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
-        metaByCallId.delete(payload.toolCallId);
+        toolByCallId.delete(payload.toolCallId);
       }
       if (!params.shouldEmitToolResult()) {
-        return;
+        return storedTool?.commandBearing === true;
       }
       const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
         markdown: true,
@@ -340,9 +344,10 @@ export function createCliToolSummaryTracker(params: {
         }
       }
       if (!text.trim()) {
-        return;
+        return storedTool?.commandBearing === true;
       }
       await params.deliver({ text, ...(payload.isError === true ? { isError: true } : {}) });
+      return storedTool?.commandBearing === true;
     },
   };
 }

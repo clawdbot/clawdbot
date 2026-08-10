@@ -495,19 +495,28 @@ as shown above. See [CLI backends](/gateway/cli-backends) for operations and
 [building CLI backend plugins](/plugins/cli-backend-plugins) for command,
 session, image, and parser registration.
 
-### GPT-5 prompt overlay
+### OpenAI GPT-5 personality
 
-The GPT-5 prompt overlay is provider-owned, not an agent default. GPT-5-family
-model ids on OpenAI-family providers receive a tagged behavior contract on
-OpenClaw-assembled prompts, and the OpenAI plugin's
-`plugins.entries.openai.config.personality` setting (`"friendly"`/`"on"` or
-`"off"`) toggles only the friendly interaction-style layer. Native Codex
-app-server routes keep Codex-owned base/model instructions instead of this
-overlay. See [GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution).
+The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 contribution, and OpenClaw disables Codex's built-in personality for native threads.
 
-The retired `agents.defaults.promptOverlays` key is rejected by config
-validation; `openclaw doctor --fix` migrates its personality value into
-`plugins.entries.openai.config.personality` when that key is unset.
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        config: {
+          personality: "friendly", // friendly | on | off
+        },
+      },
+    },
+  },
+}
+```
+
+- `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
+- `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
+
+See [OpenAI GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution) for provider and native Codex behavior.
 
 ### `agents.defaults.heartbeat`
 
@@ -1332,6 +1341,8 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
 - `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
+
+Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 ### Inbound debounce
 

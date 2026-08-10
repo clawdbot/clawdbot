@@ -384,7 +384,7 @@ describe("cron batch outcome finalization", () => {
           job: structuredClone(job),
           activeJobMarker: markCronJobActive(job.id),
           status: "error",
-          error: "provider remained unavailable",
+          error: "cron: job execution timed out at /private/agent/work",
           startedAt: dueAt,
           endedAt: dueAt + 10,
         },
@@ -404,7 +404,8 @@ describe("cron batch outcome finalization", () => {
       expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain("Recurring report");
       expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain(job.id);
       expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain("10 consecutive run failures");
-      expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain("provider remained unavailable");
+      expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain("Cause: timeout");
+      expect(enqueueSystemEvent.mock.calls[0]?.[0]).not.toContain("/private/agent/work");
       expect(resolveOriginDeliveryContext).toHaveBeenCalledWith({
         agentId: "main",
         sessionKey: undefined,
@@ -416,6 +417,7 @@ describe("cron batch outcome finalization", () => {
         enabled: false,
         state: {
           consecutiveErrors: 10,
+          lastError: "cron: job execution timed out at /private/agent/work",
           autoDisabled: {
             reason: "consecutive-failures",
             atMs: dueAt + 10,
@@ -488,6 +490,9 @@ describe("cron batch outcome finalization", () => {
       expect(order).toEqual(["persist", "notify", "heartbeat"]);
       expect(enqueueSystemEvent).toHaveBeenCalledOnce();
       expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain(
+        "Check automation history for details.",
+      );
+      expect(enqueueSystemEvent.mock.calls[0]?.[0]).not.toContain(
         "next run is outside the supported Date range",
       );
       expect(requestHeartbeat).toHaveBeenCalledOnce();

@@ -114,11 +114,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 ```json5
 {
-  web: {
-    enabled: true,
-  },
   channels: {
     whatsapp: {
+      enabled: true,
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000,
@@ -197,12 +195,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 100,
-      retry: {
-        attempts: 3,
-        minDelayMs: 400,
-        maxDelayMs: 30000,
-        jitter: 0.1,
-      },
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "ipv4first",

@@ -230,6 +230,7 @@ export type GetReplyOptions = {
     summary?: string;
     progressText?: string;
     meta?: string;
+    commandBearing?: boolean;
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;

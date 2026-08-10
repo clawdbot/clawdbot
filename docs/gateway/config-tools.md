@@ -210,7 +210,7 @@ Controls elevated exec access outside the sandbox:
   tools: {
     exec: {
       backgroundMs: 10000,
-      timeoutSec: 1800,
+      timeoutSeconds: 1800,
       cleanupMs: 1800000,
       approvalRunningNoticeMs: 10000,
       notifyOnExit: true,
@@ -607,7 +607,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
 
     ```json5
     {
-      env: { CEREBRAS_API_KEY: "sk-..." },
+      env: { vars: { CEREBRAS_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: {
@@ -643,7 +643,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Kimi Coding">
     ```json5
     {
-      env: { KIMI_API_KEY: "sk-..." },
+      env: { vars: { KIMI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "kimi/kimi-for-coding" },
@@ -738,7 +738,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Moonshot AI (Kimi)">
     ```json5
     {
-      env: { MOONSHOT_API_KEY: "sk-..." },
+      env: { vars: { MOONSHOT_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "moonshot/kimi-k2.6" },
@@ -792,7 +792,7 @@ Interactive custom-provider onboarding infers image input for known vision-model
   <Accordion title="Synthetic (Anthropic-compatible)">
     ```json5
     {
-      env: { SYNTHETIC_API_KEY: "sk-..." },
+      env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },

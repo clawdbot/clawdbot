@@ -329,7 +329,6 @@ export function applyJobResult(
         state,
         job,
         atMs: result.endedAt,
-        error: result.error ?? "unknown run failure",
         deferredNotifications: opts?.deferredNotifications,
       })
     ) {

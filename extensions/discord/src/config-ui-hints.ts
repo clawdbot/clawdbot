@@ -33,7 +33,7 @@ export const discordChannelConfigUiHints = {
       "preview.toolProgress":
         "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
       "preview.commandText":
-        'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
     },
     progress: { includeCommentary: true },
   }),

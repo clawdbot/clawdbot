@@ -46,7 +46,6 @@ type ToolExecutionUpdateEvent = {
   partialResult?: unknown;
   hideFromChannelProgress?: boolean;
 };
-type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
 
 function startTool(ctx: ToolHandlerContext, event: ToolExecutionStartEvent) {
   return handleToolExecutionStart(ctx, { type: "tool_execution_start", ...event });
@@ -226,19 +225,6 @@ function requireEvent(
     throw new Error(`expected ${label} event`);
   }
   return event;
-}
-
-function requirePayloadToolMetas(
-  toolMetas: ToolHandlerContext["state"]["toolMetas"],
-): PayloadToolMetas {
-  return toolMetas.map((toolMeta) => {
-    if (!toolMeta.toolName) {
-      throw new Error("expected tool metadata to include toolName");
-    }
-    return toolMeta.meta === undefined
-      ? { toolName: toolMeta.toolName }
-      : { toolName: toolMeta.toolName, meta: toolMeta.meta };
-  });
 }
 
 function requireString(value: unknown, label: string): string {
@@ -1499,6 +1485,26 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("PTY_PLANTED_SECRET");
   });
 
+  it("records command sensitivity on namespaced tool results", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    await executeTool(ctx, {
+      toolName: "server.exec",
+      toolCallId: "tool-namespaced-exec",
+      args: { command: "echo private-sentinel" },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        commandBearing: true,
+        isError: false,
+      }),
+    });
+  });
+
   it("does not export a validation-lookalike error from an executed tool", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =
@@ -2345,41 +2351,36 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
   it.each([
     {
-      name: "uses raw exec metadata for failed tool payload warnings",
+      name: "records raw exec metadata without exposing it in default payload warnings",
       toolCallId: "tool-exec-raw-command",
       args: { command: "python3 /tmp/audit.py" },
       meta: "run python3 /tmp/audit.py, `python3 /tmp/audit.py`",
-      warning: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)",
     },
     {
-      name: "uses raw exec metadata for payload warnings when commands contain backticks",
+      name: "records backtick commands without exposing them in default payload warnings",
       toolCallId: "tool-exec-raw-command-backticks",
       args: { command: "node -e 'console.log(1, `x`)'" },
       meta: "run node inline script, ``node -e 'console.log(1, `x`)'``",
-      warning: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)",
     },
     {
-      name: "preserves node context in raw exec metadata payload warnings",
+      name: "records node context without exposing it in default payload warnings",
       toolCallId: "tool-exec-node-raw-command",
       args: { command: "python3 /tmp/audit.py", host: "node", node: "mac-1" },
       meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
-      warning: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
     },
     {
-      name: "preserves cwd context in raw exec metadata payload warnings",
+      name: "records cwd context without exposing it in default payload warnings",
       toolCallId: "tool-exec-cwd-raw-command",
       args: { command: "python3 audit.py", workdir: "/tmp/build" },
       meta: "run python3 audit.py (in /tmp/build), `python3 audit.py`",
-      warning: "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
     },
     {
-      name: "preserves compact cwd labels in semantic raw exec metadata payload warnings",
+      name: "records compact cwd labels without exposing them in default payload warnings",
       toolCallId: "tool-exec-repo-raw-command",
       args: { command: "git status", workdir: "/Users/agent/Projects/OpenClaw" },
       meta: "check git status (repo), `git status`",
-      warning: "⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)",
     },
-  ])("$name", async ({ toolCallId, args, meta, warning }) => {
+  ])("$name", async ({ toolCallId, args, meta }) => {
     const { ctx } = createTestContext();
     ctx.params.toolProgressDetail = "raw";
     await executeTool(ctx, {
@@ -2396,14 +2397,12 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expectRecordFields(ctx.state.lastToolError, "last tool error", { toolName: "exec", meta });
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
       lastAssistant: undefined,
       lastToolError: ctx.state.lastToolError,
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
-      inlineToolResultsAllowed: false,
     });
-    expect(payloads[0]?.text).toBe(warning);
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {
@@ -2732,14 +2731,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     });
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
       lastAssistant: undefined,
       lastToolError: ctx.state.lastToolError,
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
-      inlineToolResultsAllowed: false,
     });
-    expect(payloads[0]?.text).toContain("approval prompt delivery");
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {

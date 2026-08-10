@@ -124,8 +124,10 @@ export async function runCliFallbackCandidate(params: {
   const cliCurrentMessageId = isRestartSentinelContinuation
     ? turn.sessionCtx.ReplyToId
     : (turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid);
+  const commandDetailsVisible = turn.resolvedVerboseLevel === "full";
   const cliToolSummaryTracker = createCliToolSummaryTracker({
     detailMode: turn.toolProgressDetail,
+    commandDetailsVisible,
     shouldEmitToolResult: turn.shouldEmitToolResult,
     shouldEmitToolOutput: turn.shouldEmitToolOutput,
     deliver: async (payload) => {
@@ -136,21 +138,24 @@ export async function runCliFallbackCandidate(params: {
   // so the terminal fact has to be projected here. The embedded path gets this
   // from the shared agent-event handler; without it a failed CLI command renders
   // exactly like one that succeeded.
-  const deliverCliCommandOutcome = async (payload: {
-    name: string | undefined;
-    phase: "start" | "update" | "result";
-    args: Record<string, unknown> | undefined;
-    toolCallId?: string;
-    isError?: boolean;
-    result?: unknown;
-  }) => {
+  const deliverCliCommandOutcome = async (
+    payload: {
+      name: string | undefined;
+      phase: "start" | "update" | "result";
+      args: Record<string, unknown> | undefined;
+      toolCallId?: string;
+      isError?: boolean;
+      result?: unknown;
+    },
+    commandBearing: boolean,
+  ) => {
     const onCommandOutput = turn.opts?.onCommandOutput;
     if (!onCommandOutput) {
       return;
     }
     const commandOutput = buildCommandOutputFromToolResultEvent({
       stream: "tool",
-      data: { ...payload },
+      data: { ...payload, commandBearing },
     });
     if (commandOutput) {
       await onCommandOutput(commandOutput);
@@ -244,9 +249,9 @@ export async function runCliFallbackCandidate(params: {
           },
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
-              await cliToolSummaryTracker.noteToolEvent(payload);
+              const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
               if (payload.phase === "result") {
-                await deliverCliCommandOutcome(payload);
+                await deliverCliCommandOutcome(payload, commandBearing);
                 return;
               }
               const { name, phase, args, toolCallId } = payload;
@@ -264,8 +269,8 @@ export async function runCliFallbackCandidate(params: {
             }
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
-              await summaryPromise;
-              await deliverCliCommandOutcome(payload);
+              const commandBearing = await summaryPromise;
+              await deliverCliCommandOutcome(payload, commandBearing);
               return;
             }
             const { name, phase, args, toolCallId } = payload;

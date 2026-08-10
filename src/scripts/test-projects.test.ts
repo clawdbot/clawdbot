@@ -701,6 +701,16 @@ describe("test-projects args", () => {
     ).toStrictEqual([]);
   });
 
+  it("routes bundled plugin manifest changes through the docs config audit", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/voice-call/openclaw.plugin.json"])).toEqual({
+      mode: "targets",
+      targets: [
+        "extensions/voice-call/openclaw.plugin.json",
+        "src/config/docs-config-examples.test.ts",
+      ],
+    });
+  });
+
   it("routes auth setup script changes to the focused auth monitor test", () => {
     const changedPaths = ["scripts/setup-auth-system.sh"];
 
