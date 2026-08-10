@@ -29,6 +29,11 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+// The Workboard card element arrives via a lazy chunk; a cold transform can
+// exceed vi.waitFor's 1s default on loaded machines, so these waits get a
+// real budget instead of flaking.
+const CHUNK_LOAD_WAIT = { timeout: 10_000 };
+
 describe("plugin board widget cells", () => {
   it("renders a removable placeholder when the owning plugin is inactive", async () => {
     const widget: BoardWidget = {
@@ -97,8 +102,9 @@ describe("plugin board widget cells", () => {
     cell.callbacks = callbacks();
     provider.append(cell);
     document.body.append(provider);
-    await vi.waitFor(() =>
-      expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+    await vi.waitFor(
+      () => expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
     );
 
     Reflect.set(cell, "pluginRenderer", null);
@@ -111,8 +117,9 @@ describe("plugin board widget cells", () => {
     expect(retry?.textContent?.trim()).toBe("Retry");
     retry?.click();
 
-    await vi.waitFor(() =>
-      expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+    await vi.waitFor(
+      () => expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
     );
     expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
@@ -154,8 +161,9 @@ describe("plugin board widget cells", () => {
     provider.append(cell);
     document.body.append(provider);
 
-    await vi.waitFor(() =>
-      expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+    await vi.waitFor(
+      () => expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
     );
     const retained = cell.querySelector("openclaw-workboard-card-widget");
     expect(retained?.active).toBe(true);
@@ -230,10 +238,12 @@ describe("plugin board widget cells", () => {
     provider.append(cell);
     document.body.append(provider);
 
-    await vi.waitFor(() =>
-      expect(cell.querySelector("openclaw-workboard-card-widget")?.textContent).toContain(
-        "Read-only embedded card",
-      ),
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector("openclaw-workboard-card-widget")?.textContent).toContain(
+          "Read-only embedded card",
+        ),
+      CHUNK_LOAD_WAIT,
     );
     const select = cell.querySelector<HTMLSelectElement>("openclaw-workboard-card-widget select");
     expect(select).not.toBeNull();
