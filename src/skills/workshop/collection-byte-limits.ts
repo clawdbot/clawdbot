@@ -57,28 +57,16 @@ export async function assertResultCollectionBytes(
   }
 }
 
-export async function readCollectionTreeHashes(
-  current: readonly WritableSkillCollectionEntry[],
-): Promise<Map<string, string>> {
-  return new Map(
-    await Promise.all(
-      current.map(
-        async (skill) =>
-          [skill.baseDir, await readSkillProposalTargetTreeSha256(skill.baseDir)] as const,
-      ),
-    ),
-  );
-}
-
 export async function assertCollectionMutationCurrent(
   current: readonly WritableSkillCollectionEntry[],
   expectedTreeHashes: ReadonlyMap<string, string>,
   prepared: readonly PreparedWorkspaceSkillMutation[],
 ): Promise<void> {
   for (const skill of current) {
+    const expectedTreeHash = expectedTreeHashes.get(skill.name);
     if (
-      (await readSkillProposalTargetTreeSha256(skill.baseDir)) !==
-      expectedTreeHashes.get(skill.baseDir)
+      !expectedTreeHash ||
+      (await readSkillProposalTargetTreeSha256(skill.baseDir)) !== expectedTreeHash
     ) {
       throw new Error(`Skill tree changed before collection mutation: ${skill.name}`);
     }

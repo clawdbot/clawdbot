@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   listAgentIds,
+  resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -60,12 +64,14 @@ export function startSkillCollectionMaintenance(options: {
 
 export async function runSkillCollectionReview(params: {
   agentId: string;
+  agentIds?: readonly string[];
   config: OpenClawConfig;
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionReconcileResult | null> {
   const skills = listWritableSkillCollection(params.workspaceDir, {
     agentId: params.agentId,
+    agentIds: params.agentIds,
     config: params.config,
   });
   if (skills.length === 0) {
@@ -88,7 +94,17 @@ export async function runSkillCollectionReview(params: {
   const sessionId = randomUUID();
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const collectionReconcile: SkillCollectionReconcileContext = {
+    agentIds: [...(params.agentIds ?? [params.agentId])],
     approvedSkillNames: new Set(skills.map((skill) => skill.name)),
+    approvedSkillNamesByAgent: (params.agentIds ?? [params.agentId]).map(
+      (agentId) =>
+        new Set(
+          listWritableSkillCollection(params.workspaceDir, {
+            agentId,
+            config: params.config,
+          }).map((skill) => skill.name),
+        ),
+    ),
   };
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
@@ -114,6 +130,7 @@ export async function runSkillCollectionReview(params: {
     timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
     runId: `${COLLECTION_REVIEW_SESSION_SEGMENT}:${randomUUID()}`,
     toolsAllow: ["skill_workshop"],
+    skillWorkshopProposalOnly: true,
     disableMessageTool: true,
     disableTrajectory: true,
     skillWorkshopCollectionReconcile: collectionReconcile,
@@ -162,11 +179,22 @@ export async function runScheduledSkillCollectionReviews(params: {
           if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
             return;
           }
-          if (agentIds.length !== 1) {
-            throw new Error("Shared workspaces are not eligible for automatic skill cleanup.");
+          const reviewModels = agentIds.map((id) =>
+            resolveCollectionReviewIdentity(params.config, id, params.env),
+          );
+          const reviewModel = reviewModels[0]!;
+          if (
+            reviewModels.some(
+              (candidate) =>
+                candidate.provider !== reviewModel.provider ||
+                candidate.model !== reviewModel.model ||
+                candidate.authIdentity !== reviewModel.authIdentity,
+            )
+          ) {
+            throw new Error("Shared workspace agents use different collection-review identities.");
           }
           await runWithGatewayIndependentRootWorkAdmission(async () => {
-            await runSkillCollectionReview({ ...params, agentId, workspaceDir });
+            await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
           });
         },
         stateOptions,
@@ -183,6 +211,29 @@ function resolveCollectionReviewModel(config: OpenClawConfig, agentId: string) {
     resolveAgentEffectiveModelPrimary(config, agentId) ?? "",
   ).profile;
   return { ...model, authProfileId };
+}
+
+function resolveCollectionReviewIdentity(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+) {
+  const model = resolveCollectionReviewModel(config, agentId);
+  if (!model.authProfileId) {
+    return { ...model, authIdentity: `ambient:${model.provider}` };
+  }
+  const credential = loadAuthProfileStoreForRuntime(resolveAgentDir(config, agentId, env), {
+    allowKeychainPrompt: false,
+    config,
+    readOnly: true,
+    syncExternalCli: false,
+  }).profiles[model.authProfileId];
+  return {
+    ...model,
+    authIdentity: credential
+      ? sha256Hex(stableStringify(credential))
+      : `missing:${agentId}:${model.authProfileId}`,
+  };
 }
 
 function buildCollectionReviewPrompt(

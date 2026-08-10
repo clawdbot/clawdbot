@@ -55,6 +55,7 @@ describe("skill collection review", () => {
         config: params.config,
         agentId: params.agentId,
         env: params.skillWorkshopProposalEnv,
+        proposalOnly: params.skillWorkshopProposalOnly,
         collectionReconcile: params.skillWorkshopCollectionReconcile,
       });
       await tool.execute("read", { action: "read", skill_name: "useful" });
@@ -84,6 +85,7 @@ describe("skill collection review", () => {
         authProfileId: "openai:work",
         authProfileIdSource: "user",
         toolsAllow: ["skill_workshop"],
+        skillWorkshopProposalOnly: true,
         disableMessageTool: true,
         disableTrajectory: true,
         skillWorkshopCollectionReconcile: expect.any(Object),
@@ -234,13 +236,49 @@ describe("skill collection review", () => {
     expect(onError).toHaveBeenCalledOnce();
   });
 
-  it("skips automatic cleanup when agents share a workspace", async () => {
+  it("reviews a same-model shared workspace without hiding every agent's skills", async () => {
     const workspaceDir = await tempDirs.make("openclaw-collection-review-shared-");
     await writeWorkspaceSkills(workspaceDir, [
       { name: "alpha", description: "Alpha procedure" },
       { name: "beta", description: "Beta procedure" },
     ]);
-    const onError = vi.fn();
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      expect(params.prompt).toContain("alpha");
+      expect(params.prompt).toContain("beta");
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await tool.execute("read-alpha", { action: "read", skill_name: "alpha" });
+      await tool.execute("read-beta", { action: "read", skill_name: "beta" });
+      await expect(
+        tool.execute("hide-both", {
+          action: "reconcile",
+          collection: [
+            { action: "drop", name: "alpha", reason: "merged" },
+            { action: "drop", name: "beta", reason: "merged" },
+            {
+              action: "write",
+              name: "gamma",
+              description: "Merged procedure",
+              content: "# Gamma\n",
+            },
+          ],
+        }),
+      ).rejects.toThrow("Every sharing agent must retain a visible skill");
+      await tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [
+          { action: "keep", name: "alpha" },
+          { action: "keep", name: "beta" },
+        ],
+      });
+      return {};
+    });
 
     await runScheduledSkillCollectionReviews({
       config: {
@@ -253,10 +291,46 @@ describe("skill collection review", () => {
         skills: { workshop: { autonomous: { mode: "auto" } } },
       },
       env: testState.env,
+    });
+
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
+
+  it("skips a shared workspace whose agents use different models", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-collection-review-shared-models-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "alpha", description: "Alpha procedure" },
+      { name: "beta", description: "Beta procedure" },
+    ]);
+    const onError = vi.fn();
+
+    await runScheduledSkillCollectionReviews({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "alpha-agent",
+              default: true,
+              workspace: workspaceDir,
+              skills: ["alpha"],
+              model: "openai/gpt-5.5",
+            },
+            {
+              id: "beta-agent",
+              workspace: workspaceDir,
+              skills: ["beta"],
+              model: "openai/gpt-5.6-sol",
+            },
+          ],
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      },
+      env: testState.env,
       onError,
     });
 
-    expect(String(onError.mock.calls[0]?.[0])).toContain("Shared workspaces are not eligible");
+    expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review identities");
     expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });

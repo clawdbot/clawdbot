@@ -9,6 +9,7 @@ export function validateSkillCollectionPlan(
   current: readonly WritableSkillCollectionEntry[],
   readSkillHashes: ReadonlyMap<string, string>,
   maxDecisions: number,
+  approvedSkillNamesByAgent?: readonly ReadonlySet<string>[],
 ): SkillCollectionPlanEntry[] {
   if (input.length > maxDecisions) {
     throw new Error(`A skill collection can contain at most ${maxDecisions} decisions.`);
@@ -41,6 +42,14 @@ export function validateSkillCollectionPlan(
   const missing = current.map((skill) => skill.name).filter((name) => !seen.has(name));
   if (missing.length > 0) {
     throw new Error(`Every current skill needs one decision: ${missing.join(", ")}`);
+  }
+  for (const approvedNames of approvedSkillNamesByAgent ?? []) {
+    if (
+      approvedNames.size > 0 &&
+      !input.some((entry) => entry.action !== "drop" && approvedNames.has(entry.name))
+    ) {
+      throw new Error("Every sharing agent must retain a visible skill after reconciliation.");
+    }
   }
   return [...input];
 }

@@ -45,6 +45,7 @@ import {
 import {
   executeSkillCollectionReconcile,
   executeSkillCollectionRestore,
+  recordSkillCollectionReadReceipt,
   SKILL_COLLECTION_ACTION_DESCRIPTION,
   skillCollectionPlanSchema,
 } from "./skill-workshop-tool-collection.js";
@@ -260,6 +261,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     new Map<string, string>();
   if (options.collectionReconcile) {
     options.collectionReconcile.readSkillHashes = readSkillHashes;
+    options.collectionReconcile.readSkillTreeHashes ??= new Map();
   }
   if (options.proposalMutationBudget) {
     options.proposalMutationBudget.readSkillHashes = readSkillHashes;
@@ -293,7 +295,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("this Skill Workshop session can only read and reconcile skills");
       }
 
-      if (options.proposalOnly === true && !proposalActions.includes(action)) {
+      if (
+        options.proposalOnly === true &&
+        !options.collectionReconcile &&
+        !proposalActions.includes(action)
+      ) {
         throw new ToolInputError("this Skill Workshop session can only inspect or draft proposals");
       }
 
@@ -315,7 +321,11 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "read") {
-        if (options.proposalOnly === true && options.updateProposals !== true) {
+        if (
+          options.proposalOnly === true &&
+          !options.collectionReconcile &&
+          options.updateProposals !== true
+        ) {
           throw new ToolInputError("this Skill Workshop session cannot read live skills");
         }
         const skill = await readWritableWorkspaceSkill(
@@ -333,25 +343,17 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           ? MAX_RECONCILED_SKILL_BYTES
           : SKILL_WORKSHOP_READ_MAX_CHARS;
         const truncated = skill.content.length > readMaxChars;
-        if (options.collectionReconcile) {
-          const bytes = Buffer.byteLength(skill.content);
-          const readSkillBytes = options.collectionReconcile.readSkillBytes ?? new Map();
-          const previousBytes = readSkillBytes.get(skill.skillKey) ?? 0;
-          const readByteCount =
-            (options.collectionReconcile.readByteCount ?? 0) - previousBytes + bytes;
-          if (readByteCount > MAX_RECONCILED_SKILL_BYTES) {
-            throw new ToolInputError(
-              `skill collection exceeds the ${MAX_RECONCILED_SKILL_BYTES}-byte review limit`,
-            );
-          }
-          readSkillBytes.set(skill.skillKey, bytes);
-          options.collectionReconcile.readSkillBytes = readSkillBytes;
-          options.collectionReconcile.readByteCount = readByteCount;
-        }
         // A truncated read is context, not sight of the whole skill: it earns no
         // receipt, so oversized skills cannot be patched by a reviewer that never
         // saw their later content.
-        if (truncated) {
+        if (options.collectionReconcile) {
+          await recordSkillCollectionReadReceipt({
+            context: options.collectionReconcile,
+            readSkillHashes,
+            skill,
+            truncated,
+          });
+        } else if (truncated) {
           readSkillHashes.delete(skill.skillKey);
         } else {
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));

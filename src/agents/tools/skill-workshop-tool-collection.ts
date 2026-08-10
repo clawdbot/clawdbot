@@ -1,15 +1,49 @@
+import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   MAX_RECONCILED_SKILLS,
+  MAX_RECONCILED_SKILL_BYTES,
   reconcileSkillCollection,
   restoreLatestSkillCollectionBackup,
   type SkillCollectionPlanEntry,
   type SkillCollectionReconcileContext,
 } from "../../skills/workshop/collection-reconcile.js";
+import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";
 import { readStringParam, ToolInputError } from "./common.js";
+
+export async function recordSkillCollectionReadReceipt(params: {
+  context: SkillCollectionReconcileContext;
+  readSkillHashes: Map<string, string>;
+  skill: { skillKey: string; skillFile: string; content: string };
+  truncated: boolean;
+}): Promise<void> {
+  const bytes = Buffer.byteLength(params.skill.content);
+  const readSkillBytes = params.context.readSkillBytes ?? new Map();
+  const previousBytes = readSkillBytes.get(params.skill.skillKey) ?? 0;
+  const readByteCount = (params.context.readByteCount ?? 0) - previousBytes + bytes;
+  if (readByteCount > MAX_RECONCILED_SKILL_BYTES) {
+    throw new ToolInputError(
+      `skill collection exceeds the ${MAX_RECONCILED_SKILL_BYTES}-byte review limit`,
+    );
+  }
+  readSkillBytes.set(params.skill.skillKey, bytes);
+  params.context.readSkillBytes = readSkillBytes;
+  params.context.readByteCount = readByteCount;
+  if (params.truncated) {
+    params.readSkillHashes.delete(params.skill.skillKey);
+    params.context.readSkillTreeHashes?.delete(params.skill.skillKey);
+    return;
+  }
+  params.readSkillHashes.set(params.skill.skillKey, sha256Hex(params.skill.content));
+  params.context.readSkillTreeHashes?.set(
+    params.skill.skillKey,
+    await readSkillProposalTargetTreeSha256(path.dirname(params.skill.skillFile)),
+  );
+}
 
 export const skillCollectionPlanSchema = Type.Optional(
   Type.Array(
@@ -47,8 +81,11 @@ export async function executeSkillCollectionReconcile(params: {
     workspaceDir: params.workspaceDir,
     plan: readCollectionPlanParam(params.toolParams),
     readSkillHashes: params.readSkillHashes,
+    readSkillTreeHashes: params.context?.readSkillTreeHashes ?? new Map(),
     config: params.config,
     agentId: params.agentId,
+    agentIds: params.context?.agentIds,
+    approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
     env: params.env,
   });
   if (params.context) {

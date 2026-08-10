@@ -59,8 +59,9 @@ second approval; `propose` and `off` do not run collection review.
 
 Every eligible writable skill must be read and receive exactly one `keep`,
 `write`, or `drop` decision. Disabled and agent-filtered skills stay untouched.
-Shared workspaces are skipped; assign each agent a distinct workspace to enable
-automatic cleanup.
+Shared workspaces use the union of each agent's allowed skills only when
+provider, model, and resolved auth identity match. Reconciliation must leave
+every sharing agent at least one visible skill.
 OpenClaw validates and scans every write before changing the workspace,
 serializes collection edits with a workspace lease, and retains one backup
 under the state directory. The changed collection appears in new agent runs;

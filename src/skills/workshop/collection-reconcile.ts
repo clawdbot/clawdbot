@@ -24,7 +24,6 @@ import {
   assertCollectionMutationCurrent,
   assertCollectionReadsCurrent,
   assertResultCollectionBytes,
-  readCollectionTreeHashes,
 } from "./collection-byte-limits.js";
 import { validateSkillCollectionPlan } from "./collection-plan.js";
 import { recordSkillCollectionReviewSuccess } from "./collection-review-state.js";
@@ -60,8 +59,11 @@ export type SkillCollectionRestoreResult = {
 };
 
 export type SkillCollectionReconcileContext = {
+  agentIds?: string[];
   approvedSkillNames?: Set<string>;
+  approvedSkillNamesByAgent?: Array<Set<string>>;
   readSkillHashes?: Map<string, string>;
+  readSkillTreeHashes?: Map<string, string>;
   readSkillBytes?: Map<string, number>;
   readByteCount?: number;
   result?: SkillCollectionReconcileResult;
@@ -86,29 +88,32 @@ type CollectionBackupManifest = {
 
 export function listWritableSkillCollection(
   workspaceDir: string,
-  options: { agentId?: string; config?: OpenClawConfig } = {},
+  options: { agentId?: string; agentIds?: readonly string[]; config?: OpenClawConfig } = {},
 ): WritableSkillCollectionEntry[] {
   const byFile = new Map<string, WritableSkillCollectionEntry>();
-  const status = buildWorkspaceSkillStatus(workspaceDir, {
-    config: options.config,
-    ...(options.agentId ? { agentId: options.agentId } : {}),
-  });
-  for (const skill of status.skills) {
-    if (!skill.eligible || skill.blockedByAgentFilter) {
-      continue;
-    }
-    try {
-      assertWritableSkillTarget(workspaceDir, skill);
-    } catch {
-      continue;
-    }
-    const filePath = path.resolve(skill.filePath);
-    byFile.set(filePath, {
-      name: skill.skillKey,
-      baseDir: path.resolve(skill.baseDir),
-      filePath,
-      ...(skill.description ? { description: skill.description } : {}),
+  const agentIds = options.agentIds?.length ? options.agentIds : [options.agentId];
+  for (const agentId of agentIds) {
+    const status = buildWorkspaceSkillStatus(workspaceDir, {
+      config: options.config,
+      ...(agentId ? { agentId } : {}),
     });
+    for (const skill of status.skills) {
+      if (!skill.eligible || skill.blockedByAgentFilter) {
+        continue;
+      }
+      try {
+        assertWritableSkillTarget(workspaceDir, skill);
+      } catch {
+        continue;
+      }
+      const filePath = path.resolve(skill.filePath);
+      byFile.set(filePath, {
+        name: skill.skillKey,
+        baseDir: path.resolve(skill.baseDir),
+        filePath,
+        ...(skill.description ? { description: skill.description } : {}),
+      });
+    }
   }
   return [...byFile.values()].toSorted((left, right) => left.name.localeCompare(right.name));
 }
@@ -117,8 +122,11 @@ export async function reconcileSkillCollection(params: {
   workspaceDir: string;
   plan: readonly SkillCollectionPlanEntry[];
   readSkillHashes: ReadonlyMap<string, string>;
+  readSkillTreeHashes: ReadonlyMap<string, string>;
   config?: OpenClawConfig;
   agentId?: string;
+  agentIds?: readonly string[];
+  approvedSkillNamesByAgent?: readonly ReadonlySet<string>[];
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionReconcileResult> {
   const workspaceDir = path.resolve(params.workspaceDir);
@@ -128,6 +136,7 @@ export async function reconcileSkillCollection(params: {
       const current = listWritableSkillCollection(workspaceDir, {
         config: params.config,
         agentId: params.agentId,
+        agentIds: params.agentIds,
       });
       const currentByName = new Map(current.map((skill) => [skill.name, skill]));
       if (currentByName.size !== current.length) {
@@ -138,13 +147,13 @@ export async function reconcileSkillCollection(params: {
         current,
         params.readSkillHashes,
         MAX_RECONCILED_SKILLS,
+        params.approvedSkillNamesByAgent,
       );
       await assertCollectionReadsCurrent(
         current,
         params.readSkillHashes,
         MAX_RECONCILED_SKILL_BYTES,
       );
-      const currentTreeHashes = await readCollectionTreeHashes(current);
       if (plan.every((entry) => entry.action === "keep")) {
         const backupRoot = collectionBackupRoot(workspaceDir, params.env);
         let backupId = await latestCommittedBackupId(backupRoot);
@@ -156,7 +165,7 @@ export async function reconcileSkillCollection(params: {
             env: params.env,
           });
           try {
-            await assertCollectionMutationCurrent(current, currentTreeHashes, []);
+            await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, []);
             await commitCollectionBackup(workspaceDir, backup);
           } catch (error) {
             await discardPendingCollectionBackup(backup);
@@ -164,7 +173,7 @@ export async function reconcileSkillCollection(params: {
           }
           backupId = backup.manifest.id;
         } else {
-          await assertCollectionMutationCurrent(current, currentTreeHashes, []);
+          await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, []);
         }
         clearCuratedSkillLifecycle(
           current.map((skill) => skill.filePath),
@@ -194,7 +203,7 @@ export async function reconcileSkillCollection(params: {
       await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
       const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
       try {
-        await assertCollectionMutationCurrent(current, currentTreeHashes, prepared);
+        await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, prepared);
       } catch (error) {
         await discardPendingCollectionBackup(backup);
         throw error;

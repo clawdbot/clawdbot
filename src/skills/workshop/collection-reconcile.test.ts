@@ -16,6 +16,7 @@ import {
   restoreLatestSkillCollectionBackup,
 } from "./collection-reconcile.js";
 import { getArchivedSkillFiles } from "./curator.js";
+import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 
 const dispatchCommittedSkillChangeBestEffort = vi.hoisted(() =>
@@ -53,12 +54,12 @@ describe("skill collection reconciliation", () => {
       { name: "deploy-two", description: "Second deploy notes", body: "# Deploy two\n" },
       { name: "tiny-fragment", description: "One narrow fact", body: "# Tiny\n" },
     ]);
-    const readSkillHashes = await readCollectionHashes();
+    const receipt = await readCollectionReceipt();
 
     const result = await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
-      readSkillHashes,
+      ...receipt,
       plan: [
         {
           action: "write",
@@ -104,7 +105,7 @@ describe("skill collection reconciliation", () => {
     const noOp = await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
-      readSkillHashes: await readCollectionHashes(),
+      ...(await readCollectionReceipt()),
       plan: [{ action: "keep", name: "deploy-one" }],
     });
     expect(noOp.backupId).toBe(result.backupId);
@@ -120,7 +121,7 @@ describe("skill collection reconciliation", () => {
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        readSkillHashes: await readCollectionHashes(),
+        ...(await readCollectionReceipt()),
         plan: [
           {
             action: "write",
@@ -146,6 +147,7 @@ describe("skill collection reconciliation", () => {
         workspaceDir,
         env: testState.env,
         readSkillHashes: new Map([["first", "read"]]),
+        readSkillTreeHashes: new Map(),
         plan: [{ action: "keep", name: "first" }],
       }),
     ).rejects.toThrow("Read every current skill before reconciling: second");
@@ -154,13 +156,13 @@ describe("skill collection reconciliation", () => {
       "second",
     ]);
 
-    const staleReads = await readCollectionHashes();
+    const staleReceipt = await readCollectionReceipt();
     await fs.appendFile(path.join(workspaceDir, "skills", "second", "SKILL.md"), "Changed.\n");
     await expect(
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        readSkillHashes: staleReads,
+        ...staleReceipt,
         plan: [
           { action: "keep", name: "first" },
           { action: "keep", name: "second" },
@@ -177,7 +179,7 @@ describe("skill collection reconciliation", () => {
     const supportFile = path.join(skillDir, "references", "live.md");
     await fs.mkdir(path.dirname(supportFile), { recursive: true });
     await fs.writeFile(supportFile, "Before\n", "utf8");
-    const readSkillHashes = await readCollectionHashes();
+    const receipt = await readCollectionReceipt();
     const copy = fs.cp.bind(fs);
     const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
       await copy(source, destination, options);
@@ -188,7 +190,7 @@ describe("skill collection reconciliation", () => {
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        readSkillHashes,
+        ...receipt,
         plan: [
           {
             action: "write",
@@ -211,7 +213,7 @@ describe("skill collection reconciliation", () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "obsolete", description: "Obsolete procedure" },
     ]);
-    const readSkillHashes = await readCollectionHashes();
+    const receipt = await readCollectionReceipt();
     let releaseLock: (() => void) | undefined;
     let markAcquired: (() => void) | undefined;
     const acquired = new Promise<void>((resolve) => {
@@ -233,7 +235,7 @@ describe("skill collection reconciliation", () => {
     const reconcile = reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
-      readSkillHashes,
+      ...receipt,
       plan: [{ action: "drop", name: "obsolete", reason: "obsolete" }],
     }).finally(() => {
       settled = true;
@@ -257,7 +259,7 @@ describe("skill collection reconciliation", () => {
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        readSkillHashes: await readCollectionHashes(),
+        ...(await readCollectionReceipt()),
         plan: [
           {
             action: "write",
@@ -281,7 +283,7 @@ describe("skill collection reconciliation", () => {
     await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
-      readSkillHashes: await readCollectionHashes(),
+      ...(await readCollectionReceipt()),
       plan: [
         {
           action: "write",
@@ -311,7 +313,7 @@ describe("skill collection reconciliation", () => {
     await reconcileSkillCollection({
       workspaceDir,
       env: testState.env,
-      readSkillHashes: await readCollectionHashes(),
+      ...(await readCollectionReceipt()),
       plan: [{ action: "drop", name: "project-procedure", reason: "cleanup test" }],
     });
     await expect(fs.access(skillDir)).rejects.toThrow();
@@ -342,7 +344,7 @@ describe("skill collection reconciliation", () => {
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        readSkillHashes: await readCollectionHashes(),
+        ...(await readCollectionReceipt()),
         plan,
       }),
     ).rejects.toThrow("Resulting skill collection exceeds");
@@ -376,7 +378,7 @@ describe("skill collection reconciliation", () => {
       reconcileSkillCollection({
         workspaceDir,
         env: testState.env,
-        readSkillHashes: await readCollectionHashes(),
+        ...(await readCollectionReceipt()),
         plan: [
           {
             action: "write",
@@ -394,13 +396,24 @@ describe("skill collection reconciliation", () => {
   });
 });
 
-async function readCollectionHashes(): Promise<Map<string, string>> {
-  return new Map(
-    await Promise.all(
-      listWritableSkillCollection(workspaceDir).map(
-        async (skill) =>
-          [skill.name, sha256Hex(await fs.readFile(skill.filePath, "utf8"))] as const,
+async function readCollectionReceipt() {
+  const skills = listWritableSkillCollection(workspaceDir);
+  return {
+    readSkillHashes: new Map(
+      await Promise.all(
+        skills.map(
+          async (skill) =>
+            [skill.name, sha256Hex(await fs.readFile(skill.filePath, "utf8"))] as const,
+        ),
       ),
     ),
-  );
+    readSkillTreeHashes: new Map(
+      await Promise.all(
+        skills.map(
+          async (skill) =>
+            [skill.name, await readSkillProposalTargetTreeSha256(skill.baseDir)] as const,
+        ),
+      ),
+    ),
+  };
 }
