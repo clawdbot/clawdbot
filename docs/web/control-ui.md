@@ -417,6 +417,9 @@ Connection-owned sessions survive disconnects: a page reload, laptop sleep, or n
 
 Agent-owned sessions are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing a viewer tab detaches only that browser. Conversation-owned PTYs remain until the agent closes them, their process exits, policy disables them, or the Gateway shuts down. PTYs opened by a detached task close automatically when that task succeeds, fails, times out, is cancelled, or is lost. `terminal.list` marks each entry as connection- or agent-owned.
 
+All Gateway terminal PTYs are process-local. A Gateway restart ends them; the
+PTY sessions and their scrollback are not recovered after the new process starts.
+
 The terminal is also available as a [full-screen terminal document](/web/urls#special-documents-and-startup-modes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal.
 
 ## Browser panel
