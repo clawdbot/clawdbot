@@ -49,13 +49,25 @@ export type {
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
 
+export function rebindOwnerConfigGeneration(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  agentId: string | undefined,
+  config: OpenClawConfig,
+): void {
+  for (const owner of owners.values()) {
+    if (owner.input.agentId === agentId && owner.snapshot) {
+      owner.input = { ...owner.input, config };
+      owner.snapshot = { ...owner.snapshot, config };
+    }
+  }
+}
+
 export function isOwnerInRefreshScope(
   agentId: string | undefined,
   agentIds?: ReadonlySet<string>,
 ): boolean {
   return !agentIds || !agentId || agentIds.has(agentId);
 }
-
 export function createPreparedModelRuntimeOwner(
   input: PreparedModelRuntimeInput,
   provenance: PreparedModelRuntimeOwner["provenance"],

@@ -96,10 +96,8 @@ describe("prepared model runtime snapshots", () => {
 
     await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
     expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-    const proSnapshot = getPreparedModelRuntimeSnapshot(proInput);
-    const freeSnapshot = getPreparedModelRuntimeSnapshot(freeInput);
-    expect(proSnapshot?.agentId).toBe("pro");
-    expect(freeSnapshot?.agentId).toBe("free");
+    expect(getPreparedModelRuntimeSnapshot(proInput)?.agentId).toBe("pro");
+    expect(getPreparedModelRuntimeSnapshot(freeInput)?.agentId).toBe("free");
 
     // A scoped refresh only invalidates/rebuilds "pro"; "free" keeps its committed owner.
     // Changing the config object still rebuilds only the in-scope target.
@@ -110,10 +108,11 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-    const freeAfter = getPreparedModelRuntimeSnapshot(freeInput);
-    const proAfter = getPreparedModelRuntimeSnapshot(proInput);
-    expect(freeAfter).toBe(freeSnapshot);
-    expect(proAfter).toBeDefined();
+    expect(getPreparedModelRuntimeSnapshot(proInput)).toBeDefined();
+    // The untouched owner must observe the accepted config generation, not the prior one.
+    expect(getPreparedModelRuntimeSnapshot({ ...freeInput, config: scopedConfig })?.config).toBe(
+      scopedConfig,
+    );
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {

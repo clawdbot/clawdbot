@@ -14,6 +14,7 @@ import {
   effectiveEnvironmentFingerprint,
   hasConfiguredOwnerMatching,
   hasSameLifecycleInput,
+  isOwnerInRefreshScope,
   listConfiguredOwnerInputs,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -22,6 +23,7 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  rebindOwnerConfigGeneration,
   resolvePublishedOwner,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
@@ -38,10 +40,7 @@ import {
 } from "./prepared-model-runtime.publication-events.js";
 import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
-export {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  preparedModelRuntimeConfigsMatch,
-} from "./prepared-model-runtime.owner.js";
+export { PreparedModelRuntimeOwnerNotPublishedError, preparedModelRuntimeConfigsMatch };
 export type { PreparedModelRuntimeReplacementGateId } from "./prepared-model-runtime.owner.js";
 export { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 export type {
@@ -51,7 +50,6 @@ export type {
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.owner.js";
-import { isOwnerInRefreshScope } from "./prepared-model-runtime.owner.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 // This bound only detects hung builds; overlap safety comes from the completion
@@ -542,8 +540,6 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
       continue;
     }
-    // Invalidate every prior generation before starting any replacement. A failed reload must
-    // never leave an old-config snapshot available beside partially published new owners.
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = staleError;
@@ -554,6 +550,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
     let input = normalizePreparedModelRuntimeInput(rawInput);
     if (!isOwnerInRefreshScope(input.agentId, options.agentIds)) {
+      rebindOwnerConfigGeneration(owners, input.agentId, config);
       continue;
     }
     const preservedOwner = [...owners.values()].find(
