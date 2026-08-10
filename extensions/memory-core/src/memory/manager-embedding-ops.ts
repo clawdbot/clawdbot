@@ -1208,18 +1208,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     // Managers in the gateway and CLI share this SQLite index. These probes
     // must run for every plan; process-local cache state cannot prove parity.
-    if (this.fts.enabled && this.fts.available) {
-      const ftsRows = this.db
-        .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
-        .all(entry.path, source) as Array<{ id: string }>;
-      const ftsIds = new Set(ftsRows.map((row) => row.id));
-      if (
-        ftsRows.length !== existing.length ||
-        ftsIds.size !== existing.length ||
-        existing.some((row) => !ftsIds.has(row.id))
-      ) {
-        return null;
-      }
+    const existingIds = existing.map((row) => row.id);
+    if (!this.hasExactFtsRows(entry.path, source, existingIds)) {
+      return null;
     }
     if (
       !this.hasSessionKeepDerivedRows({
@@ -1242,18 +1233,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     requireVectors: boolean;
     requireExactFts: boolean;
   }): boolean {
-    if (params.requireExactFts && this.fts.enabled && this.fts.available) {
-      const ftsRows = this.db
-        .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
-        .all(params.path, params.source) as Array<{ id: string }>;
-      const ftsIds = new Set(ftsRows.map((row) => row.id));
-      if (
-        ftsRows.length !== params.keepIds.length ||
-        ftsIds.size !== params.keepIds.length ||
-        params.keepIds.some((id) => !ftsIds.has(id))
-      ) {
-        return false;
-      }
+    if (
+      params.requireExactFts &&
+      !this.hasExactFtsRows(params.path, params.source, params.keepIds)
+    ) {
+      return false;
     }
     if (params.keepIds.length === 0) {
       return true;
@@ -1270,6 +1254,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       this.hasDerivedRows(MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE, "chunk_id", params.keepIds) &&
       this.hasDerivedRows(MEMORY_INDEX_CHUNK_PROVENANCE_TABLE, "chunk_id", params.keepIds)
     );
+  }
+
+  private hasExactFtsRows(path: string, source: MemorySource, ids: string[]): boolean {
+    if (!this.fts.enabled || !this.fts.available) {
+      return true;
+    }
+    const rows = this.db
+      .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+      .all(path, source) as Array<{ id: string }>;
+    const actualIds = new Set(rows.map((row) => row.id));
+    return rows.length === ids.length && ids.every((id) => actualIds.has(id));
   }
 
   private hasDerivedRows(tableName: string, idColumn: string, ids: string[]): boolean {
