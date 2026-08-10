@@ -8,5 +8,6 @@ export * from "./event-loop-ready.js";
 export * from "./gateway-origin-scope.js";
 export * from "./readiness.js";
 export * from "./session-projection.js";
+export * from "./session-projection-run-event.js";
 export * from "./session-subscriptions.js";
 export * from "./timeouts.js";
