@@ -66,10 +66,6 @@ type PendingFinalDeliveryState = {
   createdAt: number;
   context?: DeliveryContext;
   intentId?: string;
-  deliveries?: Array<{
-    id: string;
-    state: "prepared" | "queued" | "delivered" | "suppressed" | "unknown";
-  }>;
 } & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
 /**

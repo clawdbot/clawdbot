@@ -320,7 +320,7 @@ async function failInterruptedLegacyPreparation(params: {
   }
   if (params.entry.deliveryCompletion) {
     try {
-      await failDurableDelivery(params.entry.deliveryCompletion, params.stateDir);
+      failDurableDelivery(params.entry.deliveryCompletion);
     } catch (error) {
       params.log.warn(
         `Legacy delivery ${params.entry.id} interrupted preparation owner could not be marked unknown: ${String(error)}`,

@@ -38,7 +38,6 @@ type VoiceMessageOpts = Pick<
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"
-  | "onPlatformSendDispatch"
 >;
 
 function toDiscordSendResult(
@@ -123,7 +122,6 @@ export async function sendVoiceMessageDiscord(
 
       const metadata = await getVoiceMessageMetadata(oggPath);
       const audioBuffer = await fs.readFile(oggPath);
-      await opts.onPlatformSendDispatch?.();
       const result = await sendDiscordVoiceMessage(
         rest,
         channelId,

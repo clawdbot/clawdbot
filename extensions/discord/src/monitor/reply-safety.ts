@@ -86,7 +86,9 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
           : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
-      safeText === payload.text ? payload : { ...payload, text: safeText || undefined };
+      safeText === payload.text
+        ? payload
+        : ({ ...payload, text: safeText || undefined } as ReplyPayload);
     const nextParts = resolveSendableOutboundReplyParts(nextPayload);
     if (!nextParts.hasContent && !hasNonTextReplyPayloadContent(nextPayload)) {
       continue;

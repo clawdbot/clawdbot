@@ -32,7 +32,6 @@ type MainSessionRecoveryStoreResult = {
 
 export type MainSessionRecoveryPendingTarget = MainSessionRecoveryStoreTarget & {
   sessionId: string;
-  stateDir?: string;
 };
 
 function matchesReservation(entry: SessionEntry, reservation: MainSessionRecoveryReservation) {
