@@ -73,7 +73,6 @@ export async function sendGatewayHello(
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
-  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
@@ -83,10 +82,10 @@ export async function sendGatewayHello(
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
-  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
+  const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
-  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -114,7 +113,7 @@ export async function sendGatewayHello(
       : {}),
     auth: {
       role,
-      scopes: helloOkAuthScopes,
+      scopes,
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,
@@ -200,7 +199,7 @@ export async function sendGatewayHello(
     authMethod,
     authProvided,
     role,
-    scopes: helloOkAuthScopes,
+    scopes,
     clientMode: connectParams.client.mode,
     deviceId: device?.id,
   });

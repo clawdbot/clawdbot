@@ -15,11 +15,6 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import {
-  detectStaleSessionLocks,
-  sessionLockToHealthFinding,
-  sessionLockToRepairEffect,
-} from "../commands/doctor-session-locks.js";
-import {
   disableUnavailableSkillsInConfig,
   formatMissingSkillSummary,
 } from "../commands/doctor-skills-core.js";
@@ -62,7 +57,6 @@ const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
-const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
@@ -1002,33 +996,6 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckIn
   };
 }
 
-const sessionLocksCheck: SplitHealthCheckInput = {
-  id: SESSION_LOCKS_CHECK_ID,
-  kind: "core",
-  description: "Stale session lock files are represented as structured findings.",
-  source: "doctor",
-  defaultEnabled: false,
-  async detect(ctx) {
-    return (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
-      sessionLockToHealthFinding,
-    );
-  },
-  async repair(ctx) {
-    const effects = (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
-      sessionLockToRepairEffect,
-    );
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor session lock contribution owns cleanup",
-      changes: [],
-      effects,
-    };
-  },
-};
-
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -1321,7 +1288,6 @@ function createConvertedWorkflowChecks(
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
-    sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,

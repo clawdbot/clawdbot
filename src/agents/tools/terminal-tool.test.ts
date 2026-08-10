@@ -1,7 +1,15 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TERMINAL_OPEN_DEADLINE_MS } from "../../gateway/terminal/open-deadline.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
+import {
+  bindAgentRunTaskRunId,
+  claimAgentRunContext,
+  getAgentRunContext,
+  getAgentRunTaskRunId,
+  releaseAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../../infra/agent-run-registry.js";
 import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
@@ -68,6 +76,10 @@ function makeContext(manager: TerminalSessionManager) {
 }
 
 describe("terminal tool", () => {
+  beforeEach(() => {
+    resetAgentRunRegistryForTest();
+  });
+
   it("uses a flat action enum and the owner-only core gate", () => {
     const tool = createTerminalTool();
     expect(tool.parameters).toMatchObject({
@@ -145,22 +157,107 @@ describe("terminal tool", () => {
     expect(backend.killed).toBe(true);
   });
 
-  it("binds a uniquely active task to terminals opened from its child session", async () => {
+  it("binds the exact run when two active tasks share one child session", async () => {
+    const firstBackend = makeBackend();
+    const secondBackend = makeBackend();
+    const persistentBackend = makeBackend();
+    const backends = [firstBackend, secondBackend, persistentBackend];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => backends.shift() ?? makeBackend(),
+    });
+    const agentSessionKey = "agent:main:shared-task-session";
+    const lookupTaskByRunId = vi.fn(async (runId: string) =>
+      runId === "conversation-run"
+        ? undefined
+        : {
+            taskId: runId === "run-1" ? "task-1" : "task-2",
+            status: "running" as const,
+            childSessionKey: agentSessionKey,
+          },
+    );
+    const createTaskTool = (runId: string) =>
+      createTerminalTool({
+        agentId: "main",
+        agentSessionKey,
+        runId,
+        lookupTaskByRunId,
+        getGatewayContext: () => makeContext(manager),
+      });
+
+    await createTaskTool("run-1").execute("open", { action: "open", show: false });
+    await createTaskTool("run-2").execute("open", { action: "open", show: false });
+    await createTaskTool("conversation-run").execute("open", { action: "open", show: false });
+
+    expect(lookupTaskByRunId.mock.calls).toEqual([["run-1"], ["run-2"], ["conversation-run"]]);
+    expect(manager.closeAgentSessions("task-1")).toBe(1);
+    expect(firstBackend.killed).toBe(true);
+    expect(secondBackend.killed).toBe(false);
+    expect(persistentBackend.killed).toBe(false);
+    expect(manager.listAgent(agentSessionKey)).toHaveLength(2);
+  });
+
+  it("maps a cron agent run to its detached task before terminal lookup", async () => {
     const backend = makeBackend();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const resolveTaskOwnerId = vi.fn(async () => "task-1");
+    const agentSessionKey = "agent:main:cron-task-session";
+    const claimId = claimAgentRunContext(
+      "cron-agent-run",
+      { sessionKey: agentSessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    expect(claimId).toBeTruthy();
+    if (!claimId) {
+      throw new Error("expected cron agent run claim");
+    }
+    expect(bindAgentRunTaskRunId("cron-agent-run", claimId, "detached-task-run")).toBe(true);
+    const lookupTaskByRunId = vi.fn(async () => ({
+      taskId: "cron-task",
+      status: "running" as const,
+      childSessionKey: agentSessionKey,
+    }));
     const tool = createTerminalTool({
       agentId: "main",
-      agentSessionKey: "agent:main:task-run",
-      resolveTaskOwnerId,
+      agentSessionKey,
+      runId: "cron-agent-run",
+      lookupTaskByRunId,
       getGatewayContext: () => makeContext(manager),
     });
 
-    await tool.execute("open", { action: "open", show: false });
+    try {
+      await tool.execute("open", { action: "open", show: false });
 
-    expect(resolveTaskOwnerId).toHaveBeenCalledWith("agent:main:task-run");
-    expect(manager.closeAgentSessions("task-1")).toBe(1);
-    expect(backend.killed).toBe(true);
+      expect(lookupTaskByRunId).toHaveBeenCalledWith("detached-task-run");
+      expect(manager.closeAgentSessions("cron-task")).toBe(1);
+      expect(backend.killed).toBe(true);
+    } finally {
+      releaseAgentRunContext("cron-agent-run", claimId);
+    }
+
+    expect(getAgentRunTaskRunId("cron-agent-run")).toBeUndefined();
+    expect(getAgentRunContext("cron-agent-run")).toBeUndefined();
+  });
+
+  it("refuses an open when its exact task is already terminal", async () => {
+    const spawn = vi.fn(async () => makeBackend());
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn });
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:completed-task",
+      runId: "completed-run",
+      lookupTaskByRunId: vi.fn(async () => ({
+        taskId: "task-completed",
+        status: "succeeded" as const,
+        childSessionKey: "agent:main:completed-task",
+      })),
+      getGatewayContext: () => makeContext(manager),
+    });
+
+    await expect(tool.execute("open", { action: "open", show: false })).rejects.toThrow(
+      "terminal task already ended",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.size).toBe(0);
   });
 
   it("fails closed when launch policy blocks the agent", async () => {

@@ -54,9 +54,9 @@ describe("audit-seams cron seam classification", () => {
 describe("audit-seams subagent seam classification", () => {
   it("detects subagent spawn and cleanup handoff boundaries", () => {
     const source = `
-      import { callGateway } from "../gateway/call.js";
-      import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-      import { registerSubagentRun } from "./subagent-registry.js";
+      import { callGateway } from "../../../gateway/call.js";
+      import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+      import { registerSubagentRun } from "../../subagent-registry.js";
 
       export async function spawnSubagentDirect() {
         const response = await callGateway({ method: "agent.run", params: { task: "do it" } });
@@ -67,7 +67,7 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-spawn.ts", source)).toEqual([
+    expect(describeSeamKinds("src/agents/subagents/spawn/subagent-spawn.ts", source)).toEqual([
       "subagent-lifecycle-registry",
       "subagent-session-cleanup",
       "subagent-session-spawn",
@@ -112,9 +112,9 @@ describe("audit-seams subagent seam classification", () => {
 
   it("detects parent-stream seams for ACP spawn relays", () => {
     const source = `
-      import { onAgentEvent } from "../infra/agent-events.js";
-      import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-      import { enqueueSystemEvent } from "../infra/system-events.js";
+      import { onAgentEvent } from "../../../infra/agent-events.js";
+      import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
+      import { enqueueSystemEvent } from "../../../infra/system-events.js";
 
       export function startAcpSpawnParentStreamRelay() {
         onAgentEvent("agent-output", () => {});
@@ -129,9 +129,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/acp-spawn-parent-stream.ts", source)).toEqual([
-      "subagent-parent-stream",
-    ]);
+    expect(
+      describeSeamKinds("src/agents/subagents/spawn/acp-spawn-parent-stream.ts", source),
+    ).toEqual(["subagent-parent-stream"]);
   });
 });
 
@@ -153,7 +153,12 @@ describe("audit-seams status/help", () => {
     expect(
       determineSeamTestStatus(
         ["subagent-session-spawn"],
-        [{ file: "src/agents/subagent-spawn.workspace.test.ts", matchQuality: "direct-import" }],
+        [
+          {
+            file: "src/agents/subagents/spawn/subagent-spawn.workspace.test.ts",
+            matchQuality: "direct-import",
+          },
+        ],
       ),
     ).toEqual({
       status: "partial",

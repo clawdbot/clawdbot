@@ -34,6 +34,22 @@ const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
   "Checkpoint branch and restore are unavailable while model selection is locked.";
 
+function respondCheckpointConflict(
+  key: string,
+  action: "branch" | "restore",
+  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Session ${key} changed before checkpoint ${action}. Retry.`,
+      { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+    ),
+  );
+}
+
 export const sessionCheckpointHandlers: GatewayRequestHandlers = {
   "sessions.compaction.branch": async ({ params, respond, context }) => {
     if (
@@ -89,6 +105,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     const nextKey = buildDashboardSessionKey(target.agentId);
     const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
       agentId: target.agentId,
+      expectedState: {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      },
       storePath,
       sourceKey: canonicalKey,
       sourceStoreKey: sessionStoreKey,
@@ -120,6 +140,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
       );
+      return;
+    }
+    if (branchedSession.status === "conflict") {
+      respondCheckpointConflict(key, "branch", respond);
       return;
     }
     if (branchedSession.status === "failed") {
@@ -364,6 +388,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
 
         const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
           agentId: requestedAgent.agentId,
+          expectedState: {
+            sessionId: current.entry.sessionId,
+            lifecycleRevision: current.entry.lifecycleRevision,
+          },
           storePath,
           sessionKey: current.canonicalKey,
           sessionStoreKey: current.sessionStoreKey,
@@ -394,6 +422,10 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
             undefined,
             errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE),
           );
+          return;
+        }
+        if (restoredSession.status === "conflict") {
+          respondCheckpointConflict(key, "restore", respond);
           return;
         }
         if (restoredSession.status === "failed") {

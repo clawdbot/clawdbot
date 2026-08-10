@@ -7,6 +7,8 @@ import crypto from "node:crypto";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -53,17 +55,26 @@ async function deliverAnnounceReply(params: {
   announceTarget: AnnounceTarget;
   message: string;
   runContextId: string;
+  targetSessionKey: string;
 }) {
-  const message = params.message.trim();
-  if (!message) {
+  // Gateway chooses media roots before its later outbound directive parse, so
+  // project the media and its producing agent at the announcement boundary.
+  const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(params.message.trim());
+  if (!message && !mediaUrls?.length) {
     return;
   }
+  const mediaAgentId = mediaUrls?.length
+    ? parseAgentSessionKey(params.targetSessionKey)?.agentId
+    : undefined;
   try {
     await sessionsSendA2ADeps.callGateway({
       method: "send",
       params: {
         to: params.announceTarget.to,
         message,
+        ...(mediaUrls?.length ? { mediaUrls } : {}),
+        ...(mediaAgentId ? { agentId: mediaAgentId } : {}),
+        ...(audioAsVoice ? { asVoice: true } : {}),
         channel: params.announceTarget.channel,
         accountId: params.announceTarget.accountId,
         threadId: params.announceTarget.threadId,
@@ -167,6 +178,7 @@ export async function runSessionsSendA2AFlow(params: {
         announceTarget,
         message: latestReply,
         runContextId,
+        targetSessionKey: params.targetSessionKey,
       });
       return;
     }
@@ -247,6 +259,7 @@ export async function runSessionsSendA2AFlow(params: {
         announceTarget,
         message: announceReply,
         runContextId,
+        targetSessionKey: params.targetSessionKey,
       });
     }
   } catch (err) {

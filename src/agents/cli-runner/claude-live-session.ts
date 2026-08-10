@@ -31,6 +31,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
   CliBackendConfig,
   CliBackendLiveSessionRequirement,
+  CliBackendParseJsonlEvent,
 } from "../../plugins/cli-backend.types.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -79,6 +80,7 @@ type ProcessSupervisor = ReturnType<
 type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
   /** Enclosing run abort signal; authoritative for tool terminal reason on turn failure. */
   abortSignal?: AbortSignal;
@@ -1410,6 +1412,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       raw,
       backend: turn.backend,
       providerId: session.providerId,
+      parseJsonlEvent: turn.parseJsonlEvent,
       outputMode: "jsonl",
       fallbackSessionId: turn.sessionId,
     });
@@ -1685,6 +1688,7 @@ function createTurn(params: {
 }): ClaudeLiveTurn {
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
+    parseJsonlEvent: params.context.backendResolved.parseJsonlEvent,
     diagnosticRefs: {
       runId: params.context.params.runId,
       sessionId: params.context.params.sessionId,
@@ -1710,6 +1714,7 @@ function createTurn(params: {
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
+      parseJsonlEvent: params.context.backendResolved.parseJsonlEvent,
       onAssistantDelta: params.onAssistantDelta,
       onThinkingDelta: params.onThinkingDelta,
       onThinkingProgress: params.onThinkingProgress,

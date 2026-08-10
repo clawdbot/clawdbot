@@ -606,6 +606,8 @@ describe("abortChatRunById", () => {
       expect(result).toEqual({ aborted: true });
       const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
       expect(payload.agentId).toBe("main");
+      const delivery = { sessionKeys: ["agent:main:global", "global"] };
+      expect(ops.broadcast).toHaveBeenCalledWith("chat", payload, delivery);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
     });

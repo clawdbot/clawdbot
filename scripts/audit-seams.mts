@@ -689,12 +689,16 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     relativePath === "src/agents/subagent-announce-dispatch.ts";
   const importsSpawnRuntime = hasAnyImportSource(source, [
     "./subagent-spawn.js",
-    "../subagent-spawn.js",
     "./acp-spawn.js",
-    "../acp-spawn.js",
+    "./subagents/spawn/subagent-spawn.js",
+    "../subagents/spawn/subagent-spawn.js",
+    "./subagents/spawn/acp-spawn.js",
+    "../subagents/spawn/acp-spawn.js",
     "./subagent-registry.js",
     "../subagent-registry.js",
+    "../../subagent-registry.js",
     "../acp/control-plane/manager.js",
+    "../../../acp/control-plane/manager.js",
   ]);
   const importsLifecycleRegistry = hasAnyImportSource(source, [
     "./subagent-registry-completion.js",
@@ -705,6 +709,9 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     "../context-engine/init.js",
     "../context-engine/registry.js",
     "../sessions/session-lifecycle-events.js",
+    "../../../context-engine/init.js",
+    "../../../context-engine/registry.js",
+    "../../../sessions/session-lifecycle-events.js",
   ]);
   const importsAnnounceDelivery = hasAnyImportSource(source, [
     "./subagent-announce.js",
@@ -713,17 +720,25 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     "../infra/outbound/bound-delivery-router.js",
     "../utils/delivery-context.shared.js",
     "../gateway/call.js",
+    "../../../infra/outbound/bound-delivery-router.js",
+    "../../../utils/delivery-context.shared.js",
+    "../../../gateway/call.js",
   ]);
   const importsCleanup = hasAnyImportSource(source, [
     "../gateway/call.js",
     "./subagent-registry-cleanup.js",
     "../acp/control-plane/spawn.js",
+    "../../../gateway/call.js",
+    "../../../acp/control-plane/spawn.js",
   ]);
   const importsParentStream = hasAnyImportSource(source, [
     "./acp-spawn-parent-stream.js",
     "../infra/heartbeat-wake.js",
     "../infra/system-events.js",
     "../infra/agent-events.js",
+    "../../../infra/heartbeat-wake.js",
+    "../../../infra/system-events.js",
+    "../../../infra/agent-events.js",
   ]);
 
   if (

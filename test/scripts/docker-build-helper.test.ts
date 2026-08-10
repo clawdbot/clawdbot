@@ -536,6 +536,38 @@ print_log_tail "$LOG_PATH"
     );
   });
 
+  it("resolves source and compiled candidate test-state entrypoints", () => {
+    const resolveEntrypoint = (rootDir: string) =>
+      spawnSync(
+        "bash",
+        ["-c", `source "${DOCKER_E2E_IMAGE_HELPER_PATH}"; docker_e2e_test_state_entrypoint`],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, ROOT_DIR: rootDir },
+        },
+      );
+
+    const sourceResult = resolveEntrypoint(process.cwd());
+    expect(sourceResult.status, sourceResult.stderr).toBe(0);
+    expect(sourceResult.stdout.trim()).toBe(
+      join(process.cwd(), "scripts/lib/openclaw-test-state.mts"),
+    );
+
+    const compiledRoot = tempDirs.make("openclaw-compiled-test-state-");
+    const missingResult = resolveEntrypoint(compiledRoot);
+    expect(missingResult.status).toBe(1);
+    expect(missingResult.stderr).toContain("OpenClaw test-state entrypoint not found");
+
+    const compiledDir = join(compiledRoot, "scripts/lib");
+    mkdirSync(compiledDir, { recursive: true });
+    const compiledEntrypoint = join(compiledDir, "openclaw-test-state.mjs");
+    writeFileSync(compiledEntrypoint, "", "utf8");
+    const compiledResult = resolveEntrypoint(compiledRoot);
+    expect(compiledResult.status, compiledResult.stderr).toBe(0);
+    expect(compiledResult.stdout.trim()).toBe(compiledEntrypoint);
+  });
+
   it("rejects malformed Docker E2E resource limits before a suite starts", () => {
     const helper = readFileSync(DOCKER_E2E_IMAGE_HELPER_PATH, "utf8");
     const scripts = [

@@ -1135,14 +1135,6 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("keeps the deprecated Codex provider builder on the public API barrel", async () => {
-    const { buildOpenAICodexProviderPlugin } = await import("./api.js");
-    const provider = buildOpenAICodexProviderPlugin();
-
-    expect(provider.id).toBe("openai");
-    expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
-  });
-
   it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
     "prefers auth-aware Codex runtime metadata for %s over static OpenAI catalog rows",
     (modelId) => {

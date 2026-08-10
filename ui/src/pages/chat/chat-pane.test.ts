@@ -7,9 +7,6 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
-  TaskSuggestion,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -35,17 +32,6 @@ import { openSlot } from "./sidebar-layout.ts";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
-
-const suggestion: TaskSuggestion = {
-  id: "task_123",
-  title: "Remove stale adapter",
-  prompt: "Delete the stale adapter and update tests.",
-  tldr: "The adapter is unreachable and adds maintenance cost.",
-  cwd: "/repo",
-  sessionKey: "agent:main:current",
-  agentId: "main",
-  createdAt: 1,
-};
 
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
@@ -1026,83 +1012,5 @@ describe("chat pane catalog session lifecycle", () => {
 
     expect(pane.loadOlderMessages).toHaveBeenCalledOnce();
     expect(pane.historyAutoLoadBlocked).toBe(false);
-  });
-});
-
-describe("chat pane task suggestion lifecycle", () => {
-  it("keeps accept ownership when the resolved event arrives before the response", async () => {
-    const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn((method: string) =>
-        method === "taskSuggestions.accept"
-          ? accepted.promise
-          : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
-      ),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
-    pane.handleTaskSuggestionEvent({
-      action: "resolved",
-      taskId: suggestion.id,
-      resolution: "accepted",
-    });
-    accepted.resolve({ taskId: suggestion.id, key: "agent:main:task" });
-
-    await pending;
-    expect(navigate).toHaveBeenCalledWith("single", "agent:main:task");
-  });
-
-  it("drops an accept response after a same-client reconnect", async () => {
-    const accepted = createDeferred<TaskSuggestionsAcceptResult>();
-    const client = {
-      request: vi.fn(() => accepted.promise),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
-    pane.connectionGeneration += 1;
-    accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("keeps session-mode acceptance in the source pane", async () => {
-    const request = vi.fn().mockResolvedValue({ taskId: suggestion.id, key: "agent:main:task" });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-
-    await pane.acceptTaskSuggestion(suggestion, "session");
-
-    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
-      taskId: suggestion.id,
-      mode: "session",
-    });
-    expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("drops a list response after a same-client reconnect", async () => {
-    const listed = createDeferred<TaskSuggestionsListResult>();
-    const client = {
-      request: vi.fn(() => listed.promise),
-    } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-
-    const pending = pane.refreshTaskSuggestions();
-    pane.connectionGeneration += 1;
-    listed.resolve({ suggestions: [suggestion] });
-
-    await pending;
-    expect(pane.taskSuggestions).toEqual([]);
   });
 });

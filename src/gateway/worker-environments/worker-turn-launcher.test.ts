@@ -817,18 +817,51 @@ describe("worker turn launcher", () => {
     ).toContainEqual([{ type: "text", text: "Canonical transcript request" }]);
   });
 
-  it("does not replay an already-persisted current user message into worker history", async () => {
+  it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
     seedActivePlacement();
     const manager = openSessionManager();
-    manager.appendMessage(makeAgentUserMessage({ content: "Earlier request", timestamp: 18 }));
     manager.appendMessage(
       makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Earlier reply" }],
+        content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+        timestamp: 16,
+      }),
+    );
+    const firstKeptEntryId = manager.appendMessage(
+      makeAgentUserMessage({ content: "Earlier request", timestamp: 17 }),
+    );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "shared-call",
+      toolName: "read",
+      content: [{ type: "text", text: "Discarded owner result" }],
+      isError: false,
+      timestamp: 18,
+    });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
+        stopReason: "toolUse",
         timestamp: 19,
       }),
     );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "shared-call",
+      toolName: "read",
+      content: [{ type: "text", text: "Kept owner result" }],
+      isError: false,
+      timestamp: 20,
+    });
     manager.appendMessage(
-      makeAgentUserMessage({ content: "Inspect this workspace", timestamp: 20 }),
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Earlier reply" }],
+        timestamp: 21,
+      }),
+    );
+    manager.appendResetBoundary("new", firstKeptEntryId);
+    manager.appendMessage(
+      makeAgentUserMessage({ content: "Inspect this workspace", timestamp: 22 }),
     );
     let descriptor: WorkerLaunchDescriptor | undefined;
     const tunnel: WorkerTunnelHandle = {
@@ -910,8 +943,13 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.initialMessages).toMatchObject([
       { role: "user" },
+      { role: "assistant", content: [{ id: "shared-call" }] },
+      { role: "toolResult", toolCallId: "shared-call" },
       { role: "assistant" },
     ]);
+    expect(JSON.stringify(descriptor?.assignment.initialMessages)).not.toContain(
+      "Discarded owner result",
+    );
     const persistedEntries = openSessionManager().getEntries();
     const persistedCurrentUsers = persistedEntries.filter((entry) => {
       if (typeof entry !== "object" || entry === null || !("message" in entry)) {

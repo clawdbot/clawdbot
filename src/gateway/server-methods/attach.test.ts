@@ -62,6 +62,42 @@ describe("attach gateway methods", () => {
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
   });
 
+  it("preserves explicit ownership only for canonical global sessions", async () => {
+    const respond = vi.fn();
+    await expectDefined(
+      attachHandlers["attach.grant"],
+      'attachHandlers["attach.grant"] test invariant',
+    )({
+      params: { sessionKey: "global", agentId: "ops" },
+      respond,
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const grant = resolveAttachGrant(
+      (expectDefined(respond.mock.calls[0], "respond call invariant")[1] as { token: string })
+        .token,
+    );
+    expect(grant).toMatchObject({ sessionKey: "global", agentId: "ops" });
+
+    const scopedRespond = vi.fn();
+    await expectDefined(
+      attachHandlers["attach.grant"],
+      'attachHandlers["attach.grant"] test invariant',
+    )({
+      params: { sessionKey: "agent:main:attach-method", agentId: "ops" },
+      respond: scopedRespond,
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as GatewayRequestHandlerOptions);
+    const scopedGrant = resolveAttachGrant(
+      (
+        expectDefined(scopedRespond.mock.calls[0], "scoped respond call invariant")[1] as {
+          token: string;
+        }
+      ).token,
+    );
+    expect(scopedGrant?.agentId).toBeUndefined();
+  });
+
   it("rejects attach grants for reserved harness sessions", async () => {
     const respond = vi.fn();
     await expectDefined(

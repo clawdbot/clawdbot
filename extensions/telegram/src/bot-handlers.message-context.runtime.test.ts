@@ -40,18 +40,21 @@ function forumMessage(messageId: number, threadId?: number): Message {
   } as Message;
 }
 
-describe("resolveCachedMessageThreadId", () => {
+describe("resolveCachedMessageThreadSpec", () => {
   beforeEach(() => {
     resetTelegramMessageCacheForTest();
   });
 
   it("recovers the topic of a recorded forum message", async () => {
     const runtime = createRuntime();
-    await runtime.recordMessageForReplyChain(forumMessage(100, TOPIC_ID), TOPIC_ID);
+    await runtime.recordMessageForReplyChain(forumMessage(100, TOPIC_ID), {
+      scope: "forum",
+      id: TOPIC_ID,
+    });
 
     await expect(
-      runtime.resolveCachedMessageThreadId({ chatId: CHAT_ID, messageId: 100 }),
-    ).resolves.toBe(TOPIC_ID);
+      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 100 }),
+    ).resolves.toEqual({ scope: "forum", id: TOPIC_ID });
   });
 
   it("returns undefined for a message that is not in the cache", async () => {
@@ -60,7 +63,7 @@ describe("resolveCachedMessageThreadId", () => {
     // Cache miss must stay unknown; the reaction handler drops rather than
     // attributing the reaction to the General topic.
     await expect(
-      runtime.resolveCachedMessageThreadId({ chatId: CHAT_ID, messageId: 404 }),
+      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 404 }),
     ).resolves.toBeUndefined();
   });
 
@@ -69,7 +72,29 @@ describe("resolveCachedMessageThreadId", () => {
     await runtime.recordMessageForReplyChain(forumMessage(101));
 
     await expect(
-      runtime.resolveCachedMessageThreadId({ chatId: CHAT_ID, messageId: 101 }),
+      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 101 }),
     ).resolves.toBeUndefined();
+  });
+
+  it("recovers a channel Direct Messages scope without reusing raw message_thread_id", async () => {
+    const runtime = createRuntime();
+    const msg = {
+      ...forumMessage(102, 999),
+      chat: {
+        id: CHAT_ID,
+        type: "supergroup",
+        title: "Channel replies",
+        is_direct_messages: true,
+      },
+      direct_messages_topic: { topic_id: TOPIC_ID },
+    } as Message;
+    await runtime.recordMessageForReplyChain(msg, {
+      scope: "direct-messages",
+      id: TOPIC_ID,
+    });
+
+    await expect(
+      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 102 }),
+    ).resolves.toEqual({ scope: "direct-messages", id: TOPIC_ID });
   });
 });

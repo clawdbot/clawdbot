@@ -6,7 +6,6 @@ import type {
   SessionSharingRole,
   SessionSuggestion,
   SessionSuggestionResolution,
-  TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
@@ -56,7 +55,10 @@ import {
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
-import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
+import {
+  renderChatTaskSuggestionTray,
+  type ChatTaskSuggestionTrayProps,
+} from "./components/chat-task-suggestions.ts";
 import {
   type ChatTranscriptController,
   renderChatPinnedMessages,
@@ -81,7 +83,7 @@ type ChatReplyTarget = {
   sourceMessageId?: string | null;
 };
 
-export type ChatProps = {
+export type ChatProps = ChatTaskSuggestionTrayProps & {
   transcript: ChatTranscriptController;
   backgroundTaskTranscript?: ChatTranscriptController;
   paneId: string;
@@ -252,14 +254,6 @@ export type ChatProps = {
   onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
-  taskSuggestions?: TaskSuggestion[];
-  taskSuggestionBusyIds?: ReadonlySet<string>;
-  taskSuggestionCloudProfiles?: Array<{ id: string }>;
-  canAcceptTaskSuggestions?: boolean;
-  canAcceptTaskSuggestionModes?: boolean;
-  canDismissTaskSuggestions?: boolean;
-  onAcceptTaskSuggestion?: Parameters<typeof renderChatTaskSuggestions>[0]["onAccept"];
-  onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   sessionSuggestions?: readonly SessionSuggestion[];
   sessionSuggestionRole?: SessionSharingRole;
   sessionSuggestionBusyIds?: ReadonlySet<string>;
@@ -643,17 +637,7 @@ export function renderChat(props: ChatProps) {
                       })}
                     </div>`
                   : nothing}
-                ${renderChatTaskSuggestions({
-                  suggestions: props.taskSuggestions ?? [],
-                  busyIds: props.taskSuggestionBusyIds ?? new Set(),
-                  cloudProfiles: props.taskSuggestionCloudProfiles ?? [],
-                  canAccept: props.canAcceptTaskSuggestions === true,
-                  canAcceptModes: props.canAcceptTaskSuggestionModes === true,
-                  canDismiss: props.canDismissTaskSuggestions === true,
-                  onAccept: (suggestion, mode, cloudProfileId) =>
-                    props.onAcceptTaskSuggestion?.(suggestion, mode, cloudProfileId),
-                  onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
-                })}
+                ${renderChatTaskSuggestionTray(props)}
                 ${renderChatPullRequests({
                   pullRequests: props.pullRequests ?? [],
                   branch: props.pullRequestsBranch,

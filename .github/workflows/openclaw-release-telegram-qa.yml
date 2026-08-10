@@ -477,7 +477,7 @@ jobs:
             OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm exec node --import tsx scripts/build-all.mts qaRuntime
+            pnpm build qaRuntime
 
       - name: Move built candidate outside trusted workspace
         id: move_candidate
@@ -539,7 +539,7 @@ jobs:
           pnpm_version="$(pnpm --version)"
           jq -n \
             --arg archiveRoot "$archive_root" \
-            --arg buildCommand "node --import tsx scripts/build-all.mts qaRuntime" \
+            --arg buildCommand "pnpm build qaRuntime" \
             --arg candidateSha "$TARGET_SHA" \
             --arg candidateTree "$CANDIDATE_TREE" \
             --arg nodeVersion "$node_version" \
@@ -748,7 +748,7 @@ jobs:
               .candidateSha == $candidateSha and
               .candidateTree == $candidateTree and
               .archiveRoot == "openclaw-telegram-candidate" and
-              .buildCommand == "node --import tsx scripts/build-all.mts qaRuntime" and
+              .buildCommand == "pnpm build qaRuntime" and
               .sourceJob == "build_candidate"
             ' "$manifest_path" >/dev/null
           [[ -d "$candidate_root/node_modules" && -f "$candidate_root/dist/index.js" ]]
@@ -899,7 +899,7 @@ jobs:
         id: build_harness
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node --import tsx scripts/build-all.mts qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Validate candidate artifact metadata
         id: metadata

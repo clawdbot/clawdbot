@@ -3,9 +3,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
@@ -37,7 +38,6 @@ import {
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
-import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";

@@ -5,7 +5,7 @@ import {
   validateChatInjectParams,
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -14,6 +14,7 @@ import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
+import { resolveSessionSubscriptionKeys } from "../session-subscription-keys.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -214,7 +215,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message,
     };
     context.broadcast("chat", chatPayload, {
-      sessionKeys: sessionKey === "global" && agentId ? [`agent:${agentId}:global`] : [sessionKey],
+      sessionKeys: resolveSessionSubscriptionKeys(sessionKey, agentId, resolveDefaultAgentId(cfg)),
     });
     sendGlobalAwareNodeChatPayload({
       context,
