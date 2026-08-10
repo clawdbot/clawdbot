@@ -1,8 +1,8 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import WebSocket from "ws";
 import { formatErrorMessage } from "../infra/errors.js";
-import { rawDataToString } from "../infra/ws.js";
 import { openCdpWebSocket } from "./cdp.helpers.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
 

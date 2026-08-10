@@ -155,6 +155,8 @@ export async function startCodexAttemptThread(params: {
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
+  /** OpenClaw owns configured MCP dynamically for this scheduled turn. */
+  configuredMcpOwnershipVersion?: 1;
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
@@ -195,7 +197,9 @@ export async function startCodexAttemptThread(params: {
       },
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(
-          params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
+          params.configuredMcpOwnershipVersion === 1
+            ? undefined
+            : (params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined),
         );
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
@@ -471,9 +475,18 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.nativeToolSurfaceEnabled,
-                mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
-                mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
+                userMcpServersEnabled:
+                  params.configuredMcpOwnershipVersion === 1
+                    ? false
+                    : params.nativeToolSurfaceEnabled,
+                mcpServersFingerprint:
+                  params.configuredMcpOwnershipVersion === 1
+                    ? undefined
+                    : params.bundleMcpThreadConfig.fingerprint,
+                mcpServersFingerprintEvaluated:
+                  params.configuredMcpOwnershipVersion === 1 ||
+                  params.bundleMcpThreadConfig.evaluated,
+                configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,

@@ -1,41 +1,24 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
-import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext } from "playwright";
+import { afterEach, expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI native-nav sidebar toggle E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
 let context: BrowserContext | undefined;
 
-describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   afterEach(async () => {
     await context?.close();
     context = undefined;
@@ -47,7 +30,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     webChrome?: boolean;
     width?: number;
   }) {
-    context = await browser.newContext({
+    context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: options.width ?? 1280 },
@@ -110,7 +93,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
       ...options.scenario,
     });
-    const response = await page.goto(server.baseUrl);
+    const response = await page.goto(suite.server.baseUrl);
     expect(response?.status()).toBe(200);
     // The brand row only becomes visible on desktop widths; drawer widths keep
     // the sidebar hidden, so wait for DOM attachment instead of visibility.
@@ -213,7 +196,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
     const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newThread = toolbar.getByRole("button", { name: "New thread" });
+    const newThread = toolbar.getByRole("button", { name: "New session" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
@@ -257,7 +240,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
 
   it("keeps only history controls in the Settings titlebar", async () => {
     const page = await openPage({ webChrome: true });
-    const response = await page.goto(`${server.baseUrl}settings/general`);
+    const response = await page.goto(`${suite.server.baseUrl}settings/general`);
     expect(response?.status()).toBe(200);
 
     const toolbar = page.locator(".macos-titlebar-controls");
@@ -273,12 +256,12 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New thread" }).count()).toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
     const page = await openPage({ webChrome: true });
-    const response = await page.goto(`${server.baseUrl}settings/general`);
+    const response = await page.goto(`${suite.server.baseUrl}settings/general`);
     expect(response?.status()).toBe(200);
     await page.locator(".settings-sidebar").waitFor({ state: "visible" });
 
@@ -370,7 +353,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
 
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
-    await row.getByRole("button", { name: "Open thread menu" }).click();
+    await row.getByRole("button", { name: "Open session menu" }).click();
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");

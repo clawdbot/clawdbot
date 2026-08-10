@@ -1,4 +1,5 @@
 // Supervisor adapter test support builds mock process handles for adapter tests.
+import fs from "node:fs";
 import { expect, vi } from "vitest";
 
 /**
@@ -10,6 +11,22 @@ type WaitResult = {
   code: number | null;
   signal: number | NodeJS.Signals | null;
 };
+
+/** Keep Linux adapter wiring tests deterministic on hosts without `/bin/sh`. */
+export function mockLinuxOomWrapperShell(): () => void {
+  const statSync = fs.statSync.bind(fs);
+  const fileStats = statSync(process.execPath);
+  const statSyncMock = vi
+    .spyOn(fs, "statSync")
+    .mockImplementation((target, options) =>
+      String(target) === "/bin/sh" ? fileStats : statSync(target, options as never),
+    );
+  return () => {
+    statSyncMock.mockRestore();
+    // The production helper memoizes shell availability; clear it for later tests.
+    vi.resetModules();
+  };
+}
 
 /** Assert fallback SIGKILL resolves only after the grace timer expires. */
 export async function expectWaitStaysPendingUntilSigkillFallback(

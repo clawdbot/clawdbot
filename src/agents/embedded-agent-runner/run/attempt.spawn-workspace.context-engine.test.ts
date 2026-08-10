@@ -1,8 +1,9 @@
-// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import {
@@ -17,13 +18,6 @@ import {
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import {
-  addSubagentRunForTests,
-  leasePendingAgentSteeringItems,
-  releasePendingAgentSteeringItems,
-  resetSubagentRegistryForTests,
-} from "../../subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   type AttemptContextEngine,
@@ -80,12 +74,7 @@ async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEven
   return hoisted.trajectoryEvents.filter((event) => event.workspaceDir === workspaceDir);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
   expect(value, label).toBeInstanceOf(Array);
@@ -323,68 +312,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const availableTools = assembleParams.availableTools;
     expect(availableTools).toBeInstanceOf(Set);
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
-  });
-
-  it("keeps pending parent steering queued during commitment-only runs", async () => {
-    const childRunId = "queued-child-run";
-    const frozenResultText = "queued child result for the next normal turn";
-    const endedAt = Date.now() - 1_000;
-    const pendingRun: SubagentRunRecord = {
-      runId: childRunId,
-      childSessionKey: `agent:main:subagent:${childRunId}`,
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "inspect the parent flow",
-      cleanup: "delete",
-      createdAt: endedAt - 1_000,
-      execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: frozenResultText },
-      delivery: {
-        status: "pending",
-        createdAt: endedAt + 1,
-        payload: {
-          requesterSessionKey: sessionKey,
-          requesterDisplayKey: sessionKey,
-          childSessionKey: `agent:main:subagent:${childRunId}`,
-          childRunId,
-          task: "inspect the parent flow",
-          endedAt,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: true,
-        },
-      },
-    };
-    let submittedPrompt = "";
-    resetSubagentRegistryForTests({ persist: false });
-    addSubagentRunForTests(pendingRun);
-
-    try {
-      await createContextEngineAttemptRunner({
-        contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey,
-        tempPaths,
-        attemptOverrides: {
-          bootstrapContextRunKind: "commitment-only",
-          trigger: "heartbeat",
-        },
-        sessionPrompt: async (_session, prompt) => {
-          submittedPrompt = prompt;
-        },
-      });
-
-      expect(submittedPrompt).not.toContain(frozenResultText);
-      const leaseId = "next-normal-turn";
-      const retained = leasePendingAgentSteeringItems({
-        requesterSessionKey: sessionKey,
-        leaseId,
-      });
-      expect(retained?.runIds).toEqual([childRunId]);
-      expect(retained?.prompt).toContain(frozenResultText);
-      releasePendingAgentSteeringItems({ runIds: [childRunId], leaseId });
-    } finally {
-      resetSubagentRegistryForTests({ persist: false });
-    }
   });
 
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
@@ -3237,8 +3164,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(false);
   });
 
-  it("releases the session lock even when teardown cleanup throws", async () => {
-    const releaseMock = vi.fn(async () => {});
+  it("disposes the session even when teardown cleanup throws", async () => {
     const disposeMock = vi.fn();
     const flushMock = vi.fn(async () => {
       throw new Error("flush failed");
@@ -3250,12 +3176,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
       bundleLspRuntime: undefined,
-      sessionLock: { release: releaseMock },
     });
 
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
-    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });
 

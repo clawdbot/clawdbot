@@ -18,6 +18,7 @@ import {
   setupDraftStreams,
   telegramProgressPreview,
 } from "./bot-message-dispatch.test-harness.js";
+import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 
 const draftWarn = vi.hoisted(() => vi.fn());
 
@@ -80,36 +81,72 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   });
 
   it.each([
-    { label: "direct chat", createSessionPayload: createDirectSessionPayload },
+    {
+      label: "direct chat",
+      createMessageContext: () =>
+        createContext({
+          ctxPayload: createDirectSessionPayload(),
+        }),
+    },
     {
       label: "group chat",
-      createSessionPayload: () => ({
-        ...createDirectSessionPayload(),
-        SessionKey: "agent:test:telegram:group:-100123",
-        ChatType: "group" as const,
-      }),
+      createMessageContext: () =>
+        createContext({
+          chatId: -100123,
+          isGroup: true,
+          ctxPayload: {
+            ...createDirectSessionPayload(),
+            SessionKey: "agent:test:telegram:group:-100123",
+            ChatType: "group",
+          },
+          primaryCtx: {
+            ...createContext().primaryCtx,
+            message: {
+              chat: { id: -100123, type: "supergroup", title: "Test group" },
+              date: 0,
+              message_id: 456,
+            },
+          },
+          msg: {
+            chat: { id: -100123, type: "supergroup", title: "Test group" },
+            date: 0,
+            message_id: 456,
+            message_thread_id: undefined,
+          },
+          threadSpec: { id: undefined, scope: "none" },
+          replyThreadId: undefined,
+        }),
     },
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
-    async ({ createSessionPayload }) => {
-      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    async ({ createMessageContext }) => {
+      const answerDraftStream = createTestDraftStream({
+        onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
+      });
+      const reasoningDraftStream = createTestDraftStream();
+      createTelegramDraftStream
+        .mockImplementationOnce(() => answerDraftStream)
+        .mockImplementationOnce(() => reasoningDraftStream);
+      let partialAccepted: boolean | void = undefined;
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(true);
         return await dispatchReplyWithBufferedBlockDispatcherRuntime({
           ...params,
           replyResolver: async (_ctx, opts) => {
-            await opts?.onPartialReply?.({ text: "partial answer" });
+            partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
             throw new Error("unexpected model failure");
           },
         });
       });
 
       await dispatchWithContext({
-        context: createContext({ ctxPayload: createSessionPayload() }),
+        context: createMessageContext(),
         streamMode: "partial",
         telegramCfg: { streaming: { mode: "partial" } },
       });
 
+      expect(partialAccepted).toBeUndefined();
+      expect(answerDraftStream.waitForInFlight).toHaveBeenCalledOnce();
       expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
       expect(answerDraftStream.update).toHaveBeenCalledTimes(2);
       expect(answerDraftStream.update).toHaveBeenLastCalledWith(
@@ -121,6 +158,35 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect(deliverReplies).not.toHaveBeenCalled();
     },
   );
+
+  it("clears a pending partial and sends one fallback after an unexpected reply failure", async () => {
+    const { answerDraftStream } = setupDraftStreams();
+    let partialAccepted: boolean | void = undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+      return await dispatchReplyWithBufferedBlockDispatcherRuntime({
+        ...params,
+        replyResolver: async (_ctx, opts) => {
+          partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
+          throw new Error("unexpected model failure");
+        },
+      });
+    });
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload: createDirectSessionPayload() }),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(partialAccepted).toBe(false);
+    expect(answerDraftStream.update).toHaveBeenCalledOnce();
+    expect(answerDraftStream.update).toHaveBeenCalledWith("partial answer");
+    expect(answerDraftStream.clear).toHaveBeenCalledOnce();
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expectDeliveredReply(0, {
+      text: "Something went wrong while processing your request. Please try again.",
+    });
+  });
 
   it("returns retryable when dispatch fails after partial output and the fallback is not delivered", async () => {
     deliverReplies.mockResolvedValueOnce({ delivered: true });

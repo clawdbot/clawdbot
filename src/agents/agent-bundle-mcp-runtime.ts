@@ -13,6 +13,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,7 +55,10 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
-import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import {
+  normalizeMcpCodexToolAnnotations,
+  resolveMcpCodexToolApprovalMode,
+} from "./mcp-codex-tool-approval.js";
 import {
   applyMcpConnectionOverride,
   type McpServerConnectionResolved,
@@ -149,7 +153,7 @@ async function connectWithTimeout(
       }),
     ]);
   } catch (error) {
-    if (deadlineExpired || (isMcpConfigRecord(error) && error.code === ErrorCode.RequestTimeout)) {
+    if (deadlineExpired || (isRecord(error) && error.code === ErrorCode.RequestTimeout)) {
       if (transport instanceof OpenClawStdioClientTransport) {
         await transport.forceClose();
       }
@@ -195,7 +199,7 @@ async function listAllTools(client: Client, timeoutMs: number, signal: AbortSign
 }
 
 function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isMcpConfigRecord(error) && error.code === ErrorCode.MethodNotFound) {
+  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
     return true;
   }
   const message = String(error);
@@ -293,7 +297,7 @@ function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | und
 }
 
 function getMcpToolSelection(rawServer: unknown): McpToolSelection {
-  if (!isMcpConfigRecord(rawServer) || !isMcpConfigRecord(rawServer.toolFilter)) {
+  if (!isRecord(rawServer) || !isRecord(rawServer.toolFilter)) {
     return {};
   }
   return {
@@ -684,9 +688,13 @@ export function createSessionMcpRuntime(params: {
           const transportSource = override
             ? applyMcpConnectionOverride(rawServer, override)
             : rawServer;
+          const dataDirOwnership = Object.hasOwn(loaded.prepareDataDirsByServer ?? {}, serverName)
+            ? loaded.prepareDataDirsByServer?.[serverName]
+            : undefined;
           const resolved = resolveMcpTransport(serverName, transportSource, {
             cfg: params.cfg,
             agentDir: params.agentDir,
+            prepareDataDir: dataDirOwnership?.dataDir,
           });
           if (!resolved) {
             continue;
@@ -869,6 +877,7 @@ export function createSessionMcpRuntime(params: {
                   ...(deniedToolNames.size > 0
                     ? { deniedToolNames: [...deniedToolNames].toSorted() }
                     : {}),
+                  codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
                 };
                 const toolEntries: McpCatalogTool[] = [];
                 for (const tool of policyEligibleTools) {
@@ -898,6 +907,7 @@ export function createSessionMcpRuntime(params: {
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
                     ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
+                    codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
                   });
                 }
                 return {
@@ -1064,6 +1074,10 @@ export function createSessionMcpRuntime(params: {
     peekCatalog() {
       return catalog;
     },
+    /** Session-owned timeout that survives catalog invalidation. */
+    getServerRequestTimeoutMs(serverName: string) {
+      return sessions.get(serverName)?.requestTimeoutMs;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },
@@ -1079,7 +1093,7 @@ export function createSessionMcpRuntime(params: {
             session.client.callTool(
               {
                 name: toolName,
-                arguments: isMcpConfigRecord(input) ? input : {},
+                arguments: isRecord(input) ? input : {},
               },
               undefined,
               { timeout: session.requestTimeoutMs, signal },

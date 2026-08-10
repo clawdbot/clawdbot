@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Shared MCP config coercion helpers.
  *
@@ -42,11 +43,6 @@ function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
   return isDangerousHostInheritedEnvVarName(key);
 }
 
-/** Returns whether a value is a plain MCP config record. */
-export function isMcpConfigRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function toMcpFilteredStringRecord(
   value: unknown,
   options?: {
@@ -55,7 +51,7 @@ function toMcpFilteredStringRecord(
     shouldDropKey?: (key: string) => boolean;
   },
 ): Record<string, string> | undefined {
-  if (!isMcpConfigRecord(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   let droppedByKey = false;

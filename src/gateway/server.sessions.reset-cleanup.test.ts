@@ -429,6 +429,7 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     key: "main",
     reason: "reset",
     commandSource: "gateway:agent",
+    workerPlacementContext: {},
     assertCurrent,
   });
   releaseMutation();
@@ -565,6 +566,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
     key: "main",
     reason: "new",
     commandSource: "gateway:agent",
+    workerPlacementContext: {},
     assertCurrent: () => {
       if (!lifecycleCurrent) {
         throw new Error("stale lifecycle");
@@ -604,6 +606,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
     key: sessionKey,
     reason: "new",
     commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
   });
   await hookStarted;
   const archivePromise = directSessionReq("sessions.patch", {
@@ -616,7 +619,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   expect(reset.ok).toBe(true);
   expect(archived).toMatchObject({
     ok: false,
-    error: { message: "Cannot archive a session with an active run." },
+    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
   });
   const entry = loadSessionEntry({ storePath, sessionKey });
   expect(entry?.archivedAt).toBeUndefined();
@@ -719,6 +722,7 @@ test("sessions.reset preserves a newer session after lifecycle rotation", async 
       key: "main",
       reason: "new",
       commandSource: "gateway:agent",
+      workerPlacementContext: {},
       assertCurrent: () => {
         if (!lifecycleCurrent) {
           throw new Error("stale lifecycle");
@@ -1042,7 +1046,6 @@ test("sessions.reset preserves explicit responseUsage preference across session 
       main: sessionStoreEntry("sess-main", {
         responseUsage: "tokens",
         pinnedAt: 123,
-        icon: "name:spark",
       }),
     },
   });
@@ -1050,11 +1053,10 @@ test("sessions.reset preserves explicit responseUsage preference across session 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number; icon?: string };
+    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number };
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.responseUsage).toBe("tokens");
   expect(reset.payload?.entry.pinnedAt).toBe(123);
-  expect(reset.payload?.entry.icon).toBe("name:spark");
 });

@@ -131,6 +131,19 @@ export const XAI_REALTIME_VOICES = [
   "leo",
 ] as const satisfies readonly XaiRealtimeVoice[];
 
+export function serializeXaiRealtimeToolResult(result: unknown): string {
+  const message = "xAI realtime voice tool result is not JSON-serializable";
+  try {
+    const serialized = JSON.stringify(result);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch (cause) {
+    throw new Error(message, { cause });
+  }
+  throw new Error(message);
+}
+
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }

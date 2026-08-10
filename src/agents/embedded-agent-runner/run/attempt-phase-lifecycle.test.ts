@@ -17,7 +17,7 @@ vi.mock("./attempt.async-tasks.js", () => ({
   waitForCompletionRequiredAsyncTasks: hoisted.waitForCompletionRequiredAsyncTasks,
 }));
 
-import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
+import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
 describe("embedded attempt phase lifecycle state", () => {
@@ -57,8 +57,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
         waitForCompactionRetry: async () => {
@@ -138,8 +137,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [{ toolName: "exec", asyncStarted: true }],
         waitForCompactionRetry: async () => {},
@@ -224,8 +222,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [
           { toolName: "read", isError: true },
@@ -292,6 +289,72 @@ describe("embedded attempt phase lifecycle state", () => {
     });
   });
 
+  it("records embedded turn facts for the outer fallback owner", async () => {
+    const afterTurn = vi.fn(async () => {});
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const onContextEngineTurnCandidate = vi.fn();
+    await completeEmbeddedAttemptAfterTurn({
+      attempt: {
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        provider: "test",
+        modelId: "model",
+        model: { api: "openai-responses" },
+        onContextEngineTurnCandidate,
+      } as never,
+      activeContextEngine: {
+        info: { id: "test", name: "Test" },
+        assemble: vi.fn(),
+        compact: vi.fn(),
+        ingest: vi.fn(),
+        afterTurn,
+        maintain,
+      } as never,
+      activeSession: {} as never,
+      sessionManager: { appendCustomEntry: vi.fn(), getLeafId: vi.fn(() => "terminal") } as never,
+      withOwnedTranscriptWrite: async (operation) => await operation(),
+      state: {
+        promptError: null,
+        yieldAborted: false,
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
+        prePromptMessageCount: 0,
+        contextEngineAfterTurnCheckpoint: null,
+        compactionOccurredThisAttempt: false,
+      },
+      readLifecycleState: () => ({
+        aborted: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+      }),
+      runtime: {
+        effectiveWorkspace: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        sessionAgentId: "main",
+        resolveActiveContextEnginePluginId: () => "test",
+        shouldRecordCompletedBootstrapTurn: false,
+        cacheTrace: null,
+        anthropicPayloadLogger: null,
+        hookAgentId: "main",
+        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+        skillWorkshopAvailable: false,
+        hookRunner: null,
+        promptStartedAt: Date.now(),
+      },
+    });
+
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
+    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+  });
+
   it("emits an abort-classified agent_end event when a teardown error races the abort", async () => {
     const abortError = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
@@ -304,8 +367,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: abortError,
         yieldAborted: false,
@@ -353,8 +415,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => {
+      withOwnedTranscriptWrite: async (operation) => {
         aborted = true;
         return await operation();
       },
@@ -406,8 +467,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: {} as never,
       sessionManager: { appendCustomEntry: vi.fn() } as never,
-      sessionLockController: {} as never,
-      withOwnedSessionWriteLock: async (operation) => await operation(),
+      withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
         yieldAborted: false,

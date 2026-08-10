@@ -1,11 +1,10 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
 
@@ -33,7 +32,7 @@ function isExpandableWorkspaceResult(result: SearchResult): boolean {
     normalizedPath.split("/").every((segment) => segment && segment !== "." && segment !== "..");
   const workspaceMemoryPath =
     normalizedPath === "MEMORY.md" || normalizedPath.startsWith("memory/");
-  // workspace.get is workspace-contained; sessions/* and qmd/* are logical manager paths.
+  // workspace.get is workspace-contained; sessions/* are logical manager paths.
   return result.source === "memory" && safeRelativePath && workspaceMemoryPath;
 }
 
@@ -114,7 +113,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       this.searchState = {
         kind: "error",
         query: normalizedQuery,
-        message: formatErrorMessage(error, { redact: redactToolDetail }),
+        message: formatUiError(error),
       };
     }
   }
@@ -159,7 +158,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       }
       this.details = new Map(this.details).set(key, {
         kind: "error",
-        message: formatErrorMessage(error, { redact: redactToolDetail }),
+        message: formatUiError(error),
       });
     } finally {
       if (this.detailRequests.get(key) === request) {

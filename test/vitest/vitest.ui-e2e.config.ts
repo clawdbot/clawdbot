@@ -4,6 +4,10 @@ import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pa
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
+const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+  "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+];
 
 function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
@@ -11,7 +15,10 @@ function createUiE2eVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
-  const exclude = (baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts");
+  const exclude = [
+    ...(baseTest.exclude ?? []).filter((pattern) => pattern !== "**/*.e2e.test.ts"),
+    ...(env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY === "1" ? uiE2eRealGatewayTestFiles : []),
+  ];
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const include =
     includeFromEnv ??

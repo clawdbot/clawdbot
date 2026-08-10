@@ -21,6 +21,7 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -383,32 +384,58 @@ export function prepareEmbeddedAttemptStream(input: {
     }
   };
 
+  let externalAbortAccepted = false;
   const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+    // Reply cancellation can synchronously re-enter through this same backend.
+    // Latch before callbacks so the first reason owns every abort side effect.
+    if (externalAbortAccepted) {
+      return;
+    }
+    externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onAttemptAbort?.();
-    input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
+    const abortReason =
+      reason === "restart"
+        ? createAgentRunRestartAbortError()
+        : reason === "superseded"
+          ? createAgentRunSupersededAbortError()
+          : undefined;
+    input.abortRun(false, abortReason);
+  };
+  const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
+    const canInject = () =>
+      acceptingSteerMessages &&
+      !input.getRunState().aborted &&
+      !input.runAbortController.signal.aborted;
+    if (!canInject()) {
+      throw new Error("active session is finalizing");
+    }
+    activeQueueAdmissions++;
+    try {
+      if (options?.steeringMode) {
+        input.activeSession.agent.steeringMode = options.steeringMode;
+      }
+      return await steerActiveSessionWithOptionalDeliveryWait(
+        input.activeSession,
+        text,
+        options,
+        attempt.sessionKey,
+        canInject,
+      );
+    } finally {
+      activeQueueAdmissions--;
+    }
   };
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
-    queueMessage: async (text: string, options) => {
-      if (!acceptingSteerMessages) {
-        throw new Error("active session is finalizing");
-      }
-      activeQueueAdmissions++;
-      try {
-        if (options?.steeringMode) {
-          input.activeSession.agent.steeringMode = options.steeringMode;
-        }
-        return await steerActiveSessionWithOptionalDeliveryWait(
-          input.activeSession,
-          text,
-          options,
-          attempt.sessionKey,
-        );
-      } finally {
-        activeQueueAdmissions--;
-      }
+    queueMessage,
+    messageInjection: {
+      isAvailable: () =>
+        acceptingSteerMessages &&
+        !input.getRunState().aborted &&
+        !input.runAbortController.signal.aborted,
+      queueMessage,
     },
     isStreaming: () => input.activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,

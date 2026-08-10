@@ -8,19 +8,20 @@ import {
   evaluateToleratedKovaReport,
   evaluateToleratedPartialKovaReport,
   evaluateToleratedProfiledKovaReport,
-} from "../../scripts/lib/kova-report-gate.mjs";
+} from "../../scripts/lib/kova-report-gate.mts";
 
 type JsonObject = Record<string, unknown>;
 type PathPart = number | string;
 type ReportMutation = [string, (report: JsonObject) => void];
 
 const tempRoots: string[] = [];
+const tsxImport = import.meta.resolve("tsx");
 const malformedViolationLists: Array<[string, unknown]> = [
   ["null", null],
   ["object", {}],
   ["string", "none"],
 ];
-const SCRIPT_PATH = "scripts/lib/kova-report-gate.mjs";
+const SCRIPT_PATH = "scripts/lib/kova-report-gate.mts";
 const SCENARIO = "agent-cold-warm-message";
 const STATE = "mock-openai-provider";
 const SURFACE = "agent-cli-local-turn";
@@ -588,7 +589,7 @@ afterEach(() => {
   }
 });
 
-describe("scripts/lib/kova-report-gate.mjs", () => {
+describe("scripts/lib/kova-report-gate.mts", () => {
   it("accepts omitted violations on a filtered PARTIAL PASS record", () => {
     expect(evaluateToleratedPartialKovaReport(partialReport())).toEqual({ ok: true });
     expect(evaluateToleratedKovaReport(partialReport())).toEqual({
@@ -1380,15 +1381,19 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     tempRoots.push(root);
     const scriptDir = join(root, "script dir");
     mkdirSync(scriptDir);
-    const scriptPath = join(scriptDir, "kova-report-gate.mjs");
+    const scriptPath = join(scriptDir, "kova-report-gate.mts");
     copyFileSync(SCRIPT_PATH, scriptPath);
     const report = partialReport();
     setAt(report, ["summary", "total"], 2);
 
-    const result = spawnSync(process.execPath, [scriptPath, writeReport(report)], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", tsxImport, scriptPath, writeReport(report)],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Kova verdict is not tolerable");

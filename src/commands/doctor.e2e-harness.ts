@@ -267,7 +267,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       preview: [],
     },
-    worktrees: { hasLegacy: false },
+    worktrees: { hasLegacy: false, pathRewrites: [] },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
@@ -301,10 +301,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     tuiLastSessions: {
       sourcePath: "/tmp/state/tui/last-session.json",
-      hasLegacy: false,
-    },
-    commitments: {
-      sourcePath: "/tmp/state/commitments/commitments.json",
       hasLegacy: false,
     },
     auditLogs: {
@@ -351,10 +347,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       defaultAccountIds: {},
       accountIds: {},
       hasLegacy: false,
-    },
-    channelPlans: {
-      hasLegacy: false,
-      plans: [],
     },
     warnings: [],
     notices: [],

@@ -16,7 +16,6 @@ import {
   executeActAction,
   executeConsoleAction,
   executeDownloadAction,
-  executeExtractAction,
   executeTabsAction,
   formatBrowserExternalToolResult,
 } from "./browser-tool.actions.js";
@@ -32,7 +31,6 @@ import {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
-  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -41,18 +39,13 @@ import {
   browserStart,
   browserStatus,
   browserStop,
-  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
-  extractAssistantText,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
-  htmlToMarkdown,
   jsonResult,
   listNodes,
   normalizeOptionalString,
-  normalizeWhitespace,
-  prepareSimpleCompletionModelForAgent,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
@@ -61,12 +54,10 @@ import {
   resolveRuntimeImageSanitization,
   resolveProfile,
   saveMediaBuffer,
-  sanitizeHtml,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  validateJsonSchemaValue,
 } from "./browser-tool.runtime.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
 import { resolveBrowserNavigationTimeoutMs } from "./browser/act-policy.js";
@@ -86,7 +77,6 @@ const browserToolDeps = {
   browserFocusTab,
   browserImportProfile,
   browserNavigate,
-  browserPageContent,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
@@ -95,23 +85,16 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
-  completeWithPreparedSimpleCompletionModel,
   describeImageFile,
-  extractAssistantText,
   getRuntimeConfig,
   imageResultFromFile,
-  htmlToMarkdown,
   listNodes,
-  normalizeWhitespace,
   normalizeBrowserScreenshot,
   saveMediaBuffer,
-  sanitizeHtml,
-  prepareSimpleCompletionModelForAgent,
   stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-  validateJsonSchemaValue,
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -378,7 +361,6 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -697,18 +679,6 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
-            onTabActivity: sessionTabs.touch,
-          });
-        case "extract":
-          return await executeExtractAction({
-            input: params,
-            baseUrl,
-            profile,
-            proxyRequest,
-            agentId: opts?.agentId ?? "main",
-            agentDir: opts?.agentDir,
-            signal,
-            deps: browserToolDeps,
             onTabActivity: sessionTabs.touch,
           });
         case "screenshot": {

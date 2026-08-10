@@ -368,9 +368,9 @@ describe("pw-session connection scoping", () => {
       new Error("Browser service rate limit reached. Do NOT retry the browser tool."),
     );
 
-    await expect(
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-    ).rejects.toThrow("rate limit");
+    await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
+      "rate limit",
+    );
 
     expect(getChromeWebSocketEndpointSpy).toHaveBeenCalledOnce();
     expect(connectOverCdpSpy).not.toHaveBeenCalled();

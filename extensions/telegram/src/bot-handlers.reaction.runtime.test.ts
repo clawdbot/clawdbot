@@ -6,6 +6,7 @@ import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
 import { registerTelegramReactionHandler } from "./bot-handlers.reaction.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import type { TelegramThreadSpec } from "./bot/helpers.js";
 
 const FIRE_EMOJI = "\u{1F525}";
 const FORUM_CHAT_ID = 5678;
@@ -17,8 +18,11 @@ type ReactionHandler = (ctx: Record<string, unknown>) => Promise<void>;
 const enqueueSystemEvent = vi.fn();
 const runtimeLog = vi.fn();
 const runtimeError = vi.fn();
-const resolveCachedMessageThreadId = vi.fn<
-  (params: { chatId: number | string; messageId: number | string }) => Promise<number | undefined>
+const resolveCachedMessageThreadSpec = vi.fn<
+  (params: {
+    chatId: number | string;
+    messageId: number | string;
+  }) => Promise<TelegramThreadSpec | undefined>
 >(async () => undefined);
 
 function buildTelegramConfig(overrides?: {
@@ -104,7 +108,7 @@ function registerHandler(cfg: OpenClawConfig): ReactionHandler {
 
   registerTelegramReactionHandler(
     params,
-    { resolveCachedMessageThreadId },
+    { resolveCachedMessageThreadSpec },
     createTelegramHandlerAuthorizationRuntime(params),
   );
   const handler = handlers.get("message_reaction");
@@ -118,6 +122,7 @@ function forumReactionContext(overrides?: {
   oldReaction?: Array<{ type: string; emoji: string }>;
   newReaction?: Array<{ type: string; emoji: string }>;
   isForum?: boolean;
+  isDirectMessages?: boolean;
   chatType?: string;
 }) {
   return {
@@ -127,6 +132,7 @@ function forumReactionContext(overrides?: {
         id: FORUM_CHAT_ID,
         type: overrides?.chatType ?? "supergroup",
         ...(overrides?.isForum === false ? {} : { is_forum: true }),
+        ...(overrides?.isDirectMessages ? { is_direct_messages: true } : {}),
       },
       message_id: REACTED_MESSAGE_ID,
       user: { id: 10, first_name: "Bob", username: "bob_user" },
@@ -149,19 +155,19 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     enqueueSystemEvent.mockClear();
     runtimeLog.mockClear();
     runtimeError.mockClear();
-    resolveCachedMessageThreadId.mockReset();
-    resolveCachedMessageThreadId.mockResolvedValue(undefined);
+    resolveCachedMessageThreadSpec.mockReset();
+    resolveCachedMessageThreadSpec.mockResolvedValue(undefined);
   });
 
   it("recovers the cached topic before authorization and routes to that topic", async () => {
-    resolveCachedMessageThreadId.mockResolvedValue(FORUM_TOPIC_ID);
+    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
     const handler = registerHandler(
       buildTelegramConfig({ topics: { [String(FORUM_TOPIC_ID)]: { enabled: true } } }),
     );
 
     await handler(forumReactionContext());
 
-    expect(resolveCachedMessageThreadId).toHaveBeenCalledWith({
+    expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
       chatId: FORUM_CHAT_ID,
       messageId: REACTED_MESSAGE_ID,
     });
@@ -172,7 +178,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   });
 
   it("routes a recovered topic through its configured topic agent", async () => {
-    resolveCachedMessageThreadId.mockResolvedValue(FORUM_TOPIC_ID);
+    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
     const handler = registerHandler(
       buildTelegramConfig({
         topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "topicbot" } },
@@ -186,7 +192,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   });
 
   it("applies the recovered topic's disabled config instead of the General topic's", async () => {
-    resolveCachedMessageThreadId.mockResolvedValue(FORUM_TOPIC_ID);
+    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
     const handler = registerHandler(
       buildTelegramConfig({
         topics: { "1": { enabled: true }, [String(FORUM_TOPIC_ID)]: { enabled: false } },
@@ -199,7 +205,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   });
 
   it("drops a forum reaction with an unknown topic instead of guessing General", async () => {
-    resolveCachedMessageThreadId.mockResolvedValue(undefined);
+    resolveCachedMessageThreadSpec.mockResolvedValue(undefined);
     const handler = registerHandler(buildTelegramConfig({ topics: { "1": { enabled: true } } }));
 
     await handler(forumReactionContext());
@@ -215,12 +221,46 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(logged).not.toContain(FIRE_EMOJI);
   });
 
+  it("routes channel Direct Messages reactions through topic config and agent", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      scope: "direct-messages",
+      id: FORUM_TOPIC_ID,
+    });
+    const handler = registerHandler(
+      buildTelegramConfig({
+        topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "direct-topic-agent" } },
+      }),
+    );
+
+    await handler(forumReactionContext({ isForum: false, isDirectMessages: true }));
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(String(systemEventOptions().sessionKey)).toContain("direct-topic-agent");
+    expect(String(systemEventOptions().sessionKey)).toContain(
+      `telegram:group:${FORUM_CHAT_ID}:topic:${FORUM_TOPIC_ID}`,
+    );
+  });
+
+  it.each([
+    { name: "cache miss", recovered: undefined },
+    { name: "scope mismatch", recovered: { scope: "forum" as const, id: FORUM_TOPIC_ID } },
+  ])("drops a channel Direct Messages reaction on $name", async ({ recovered }) => {
+    resolveCachedMessageThreadSpec.mockResolvedValue(recovered);
+    const handler = registerHandler(buildTelegramConfig());
+
+    await handler(forumReactionContext({ isForum: false, isDirectMessages: true }));
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(runtimeLog).toHaveBeenCalledTimes(1);
+    expect(String(runtimeLog.mock.calls[0]?.[0])).toContain("thread-context-unavailable");
+  });
+
   it("never consults the message cache for non-forum groups", async () => {
     const handler = registerHandler(buildTelegramConfig());
 
     await handler(forumReactionContext({ isForum: false }));
 
-    expect(resolveCachedMessageThreadId).not.toHaveBeenCalled();
+    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(String(systemEventOptions().sessionKey)).not.toContain(":topic:");
   });
@@ -230,7 +270,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
     await handler(forumReactionContext({ isForum: false, chatType: "private" }));
 
-    expect(resolveCachedMessageThreadId).not.toHaveBeenCalled();
+    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(String(systemEventOptions().sessionKey)).not.toContain(":topic:");
     expect(String(systemEventOptions().sessionKey)).not.toContain(":group:");
@@ -250,7 +290,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       }),
     );
 
-    expect(resolveCachedMessageThreadId).not.toHaveBeenCalled();
+    expect(resolveCachedMessageThreadSpec).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(runtimeLog).not.toHaveBeenCalled();
   });

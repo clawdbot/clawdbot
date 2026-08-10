@@ -11,7 +11,11 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import type { RealtimeTalkCameraDevice, RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
+import type {
+  RealtimeTalkCameraDevice,
+  RealtimeTalkDeviceIssue,
+  RealtimeTalkInputDevice,
+} from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -20,6 +24,18 @@ import type {
   ChatComposerPlusMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.ts";
+
+export type CapabilityMenuProps = Omit<
+  ChatComposerPlusMenuProps,
+  | "attachments"
+  | "disabled"
+  | "open"
+  | "view"
+  | "toolOverrides"
+  | "onOpenChange"
+  | "onViewChange"
+  | "showCapabilities"
+>;
 
 type ChatComposerDisabledBannerContent = {
   text: string;
@@ -56,17 +72,7 @@ export type ChatComposerProps = {
   draft: string;
   sessions: SessionsListResult | null;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: Omit<
-    ChatComposerPlusMenuProps,
-    | "attachments"
-    | "disabled"
-    | "open"
-    | "view"
-    | "toolOverrides"
-    | "onOpenChange"
-    | "onViewChange"
-    | "showCapabilities"
-  >;
+  capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
@@ -96,7 +102,7 @@ export type ChatComposerProps = {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  typingLabel?: string | null;
+  typingActors?: readonly { id: string; label: string }[];
   onTypingChange?: (typing: boolean) => void;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
@@ -118,6 +124,7 @@ export type ChatComposerProps = {
   onNewSession: () => void;
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onRemoveAttachment?: (attachment: ChatAttachment) => void;
   onGoalCommand?: (command: string) => void;
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
@@ -169,7 +176,9 @@ export type ChatComposerState = {
   microphonePickerOpen: boolean;
   microphonePickerLoading: boolean;
   microphoneDevices: RealtimeTalkInputDevice[];
-  microphoneWarning: string | null;
+  microphoneIssue: RealtimeTalkDeviceIssue | null;
+  /** Unsubscribe for the devicechange watch; non-null only while the picker is open. */
+  microphoneDeviceWatch: (() => void) | null;
   microphoneDiscoveryRequest: number;
   capabilityMenuOpen: boolean;
   capabilityMenuView: ChatComposerPlusMenuView;

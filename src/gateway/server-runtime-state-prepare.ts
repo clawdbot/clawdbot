@@ -127,7 +127,8 @@ export async function prepareGatewayRuntimeState(params: {
           });
         })
       : {};
-  const { workerEnvironmentService, workerLiveEvents } = workerEnvironmentRuntime;
+  const { workerEnvironmentService, workerLiveEvents, workerTunnelManager } =
+    workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
     revoke: (_params: { sessionId: string; sessionKeys: readonly string[] }): void => {
@@ -152,6 +153,8 @@ export async function prepareGatewayRuntimeState(params: {
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
     ? workerPlacementControlAvailable
     : undefined;
+  const workerDesktopObserveAvailable =
+    Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -172,7 +175,8 @@ export async function prepareGatewayRuntimeState(params: {
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
+        (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (workerDesktopObserveAvailable || method !== "worker.desktop.observe"),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -407,6 +411,7 @@ export async function prepareGatewayRuntimeState(params: {
       handleWatchNodeRequest: async (req, res) =>
         (await watchNodeRequestHandler.current?.(req, res)) ?? false,
       workerIngressEnabled: Boolean(workerEnvironmentService),
+      workerDesktopTunnels: workerTunnelManager?.desktop,
     }),
   );
 
@@ -420,6 +425,7 @@ export async function prepareGatewayRuntimeState(params: {
     workerPlacementRuntime,
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
+    workerDesktopObserveAvailable,
     channelLogs,
     channelRuntimeEnvs,
     listStartupChannelGatewayMethods,

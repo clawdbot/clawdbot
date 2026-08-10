@@ -26,7 +26,7 @@ import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
-  TELEGRAM_PRESENTATION_CAPABILITIES,
+  resolveTelegramPresentationCapabilities,
 } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import {
@@ -125,6 +125,24 @@ async function resolveTelegramOutboundSendContext(
   const outboundTo = normalizeTelegramOutboundTarget(params.to);
   const { send, baseOpts } = await resolveTelegramSendContext(params);
   return { outboundTo, send, baseOpts };
+}
+
+// Native table rendering requires the account's rich markdown funnel; HTML-mode
+// text stays on the legacy parse_mode sender where table islands never convert.
+function telegramRichTablesEnabled(params: {
+  cfg: NonNullable<TelegramSendOpts>["cfg"];
+  accountId?: string | null;
+  htmlTextMode: boolean;
+}): boolean {
+  if (params.htmlTextMode) {
+    return false;
+  }
+  return (
+    mergeTelegramAccountConfig(
+      params.cfg,
+      params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+    ).richMessages === true
+  );
 }
 
 type CreateTelegramOutboundAdapterOptions = {
@@ -274,6 +292,11 @@ export async function sendTelegramPayloadMessages(params: {
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const payload = canonicalizeTelegramPresentationPayload(params.payload, {
     allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
+    richTables: telegramRichTablesEnabled({
+      cfg: params.baseOpts.cfg,
+      accountId: params.baseOpts.accountId,
+      htmlTextMode: params.baseOpts.textMode === "html",
+    }),
   });
   const telegramData = payload.channelData?.telegram as
     | {
@@ -434,7 +457,15 @@ export function createTelegramOutboundAdapter(
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
     normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
     normalizePayloadBatch: ({ payloads }) => normalizeTelegramFallbackPayloadBatch(payloads),
-    presentationCapabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
+    presentationCapabilities: resolveTelegramPresentationCapabilities({ richMessages: false }),
+    resolvePresentationCapabilities: ({ cfg, accountId, formatting }) =>
+      resolveTelegramPresentationCapabilities({
+        richMessages: telegramRichTablesEnabled({
+          cfg,
+          accountId,
+          htmlTextMode: formatting?.parseMode === "HTML",
+        }),
+      }),
     deliveryCapabilities: {
       pin: true,
       durableFinal: {
@@ -452,7 +483,14 @@ export function createTelegramOutboundAdapter(
     renderPresentation: ({ payload, presentation, ctx }) =>
       canonicalizeTelegramPresentationPayload(
         { ...payload, presentation },
-        { allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct" },
+        {
+          allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct",
+          richTables: telegramRichTablesEnabled({
+            cfg: ctx.cfg,
+            accountId: ctx.accountId,
+            htmlTextMode: ctx.formatting?.parseMode === "HTML",
+          }),
+        },
       ),
     afterDeliverPayload: ({ cfg, target, payload, results }) => {
       const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);

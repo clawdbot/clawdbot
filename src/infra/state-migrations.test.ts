@@ -9,10 +9,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/runtime-doctor-migrations.js";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-registry.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -37,12 +39,12 @@ import {
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { acquireStartupMigrationLease } from "./startup-migration-checkpoint.js";
 import {
-  autoMigrateLegacyState,
+  autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
   autoMigrateLegacyPluginDoctorState,
-  detectLegacyStateMigrations,
+  detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyStateForTest,
-  runLegacyStateMigrations,
+  runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./state-migrations.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import {
@@ -51,6 +53,45 @@ import {
 } from "./state-migrations.runtime-state.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
+
+type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWithSurfaces>[0];
+type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
+type AutoMigrateLegacyStateParams = Parameters<typeof autoMigrateLegacyStateWithSurfaces>[0];
+
+// This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
+// Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
+function detectLegacyStateMigrations(
+  params: Omit<DetectLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return detectLegacyStateMigrationsWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
+
+function runLegacyStateMigrations(
+  params: Omit<RunLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: RunLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return runLegacyStateMigrationsWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
+
+function autoMigrateLegacyState(
+  params: Omit<AutoMigrateLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: AutoMigrateLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return autoMigrateLegacyStateWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
 
 const pluginDoctorStateMigrationEntries = vi.hoisted(
   () =>
@@ -112,68 +153,18 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     },
 );
 
-vi.mock("../channels/plugins/bundled.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
-    "../channels/plugins/bundled.js",
-  );
-  function fileExists(filePath: string): boolean {
-    try {
-      return fsSync.statSync(filePath).isFile();
-    } catch {
-      return false;
-    }
-  }
-
-  return {
-    ...actual,
-    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
-      {
-        isLegacyGroupSessionKey: (key: string) => /^group:mobile-/i.test(key.trim()),
-        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) => {
-          if (key === "legacy-prototype") {
-            return "__proto__";
-          }
-          return /^group:mobile-/i.test(key.trim())
-            ? `agent:${agentId}:mobileauth:${key.trim().toLowerCase()}`
-            : null;
-        },
-      },
-    ]),
-    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
-      ({ oauthDir }: { oauthDir: string }) => {
-        let entries: fsSync.Dirent[];
-        try {
-          entries = fsSync.readdirSync(oauthDir, { withFileTypes: true });
-        } catch {
-          return [];
-        }
-        return entries.flatMap((entry) => {
-          if (!entry.isFile() || !/^(creds|pre-key-1)\.json$/u.test(entry.name)) {
-            return [];
-          }
-          const sourcePath = path.join(oauthDir, entry.name);
-          const targetPath = path.join(oauthDir, "mobileauth", "default", entry.name);
-          return fileExists(targetPath)
-            ? []
-            : [
-                {
-                  kind: "move" as const,
-                  label: `MobileAuth auth ${entry.name}`,
-                  sourcePath,
-                  targetPath,
-                },
-              ];
-        });
-      },
-    ]),
-  };
-});
+const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
+  entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,
+}));
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
   return {
     ...actual,
-    listPluginDoctorStateMigrationEntries: vi.fn(() => pluginDoctorStateMigrationEntries.entries),
+    listPluginDoctorStateMigrationEntries: vi.fn(() => [
+      ...pluginDoctorStateMigrationEntries.entries,
+      ...legacyChannelStateMigrationEntries.entries,
+    ]),
   };
 });
 
@@ -212,6 +203,41 @@ function failArchiveRenameOnce(sourcePath: string) {
     actualRenameSync(from, to);
   });
 }
+
+legacyChannelStateMigrationEntries.entries = [
+  {
+    pluginId: "mobileauth",
+    migration: definePluginDoctorMigrationFromPlans({
+      id: "mobileauth-legacy-state",
+      label: "MobileAuth legacy state",
+      resolvePlans: ({ oauthDir }) => {
+        let entries: fsSync.Dirent[];
+        try {
+          entries = fsSync.readdirSync(oauthDir, { withFileTypes: true });
+        } catch {
+          return [];
+        }
+        return entries.flatMap((entry) => {
+          if (!entry.isFile() || !/^(creds|pre-key-1)\.json$/u.test(entry.name)) {
+            return [];
+          }
+          const sourcePath = path.join(oauthDir, entry.name);
+          const targetPath = path.join(oauthDir, "mobileauth", "default", entry.name);
+          return fsSync.existsSync(targetPath)
+            ? []
+            : [
+                {
+                  kind: "move" as const,
+                  label: `MobileAuth auth ${entry.name}`,
+                  sourcePath,
+                  targetPath,
+                },
+              ];
+        });
+      },
+    }),
+  },
+];
 
 function failNextStateDbCommit(env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
@@ -1043,10 +1069,10 @@ describe("state migrations", () => {
     expect(detectionCase.sessions.hasLegacy).toBe(true);
     expect(detectionCase.sessions.legacyKeys).toEqual(["group:mobile-room", "group:legacy-room"]);
     expect(detectionCase.agentDir.hasLegacy).toBe(true);
-    expect(detectionCase.channelPlans.hasLegacy).toBe(true);
-    expect(detectionCase.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
-      path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json"),
-    ]);
+    expect(detectionCase.pluginPlans?.hasLegacy).toBe(true);
+    expect(detectionCase.pluginPlans?.plans.map((plan) => plan.migration.id)).toContain(
+      "mobileauth-legacy-state",
+    );
     expect(detectionCase.channelPairing.hasLegacy).toBe(true);
     expect(detectionCase.preview).toEqual([
       `- Sessions: ${path.join(detectionCase.stateDir, "sessions")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions")}`,
@@ -1124,14 +1150,14 @@ describe("state migrations", () => {
     ]);
     expect(result.changes).toEqual([
       "Migrated 2 chatapp/alpha allowFrom entries → shared SQLite state",
+      `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
+      `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Canonicalized 3 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
-      `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
-      `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
     ]);
 
     const mergedStore = JSON.parse(
@@ -1143,7 +1169,7 @@ describe("state migrations", () => {
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["group:mobile-room"]).toBeUndefined();
     expect(mergedStore["group:legacy-room"]).toBeUndefined();
-    expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]?.sessionId).toBe(
+    expect(mergedStore["agent:worker-1:unknown:group:mobile-room"]?.sessionId).toBe(
       "group-session",
     );
     expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
@@ -1154,13 +1180,8 @@ describe("state migrations", () => {
     expect(mergedStore["voice:15550001111"]).toBeUndefined();
     expect(mergedStore["agent:worker-1:voice:15550001111"]?.sessionId).toBe("shared-voice");
     expect(mergedStore["agent:worker-1:voice:15550001111"]?.acp).toBeUndefined();
-    expect(Object.hasOwn(mergedStore, "__proto__")).toBe(true);
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
-      "prototype-row",
-    );
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value).not.toHaveProperty(
-      "sessionFile",
-    );
+    expect(mergedStore["agent:worker-1:legacy-prototype"]?.sessionId).toBe("prototype-row");
+    expect(mergedStore["agent:worker-1:legacy-prototype"]).not.toHaveProperty("sessionFile");
     expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 
     await expect(

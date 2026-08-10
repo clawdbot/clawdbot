@@ -30,20 +30,6 @@ vi.mock("../../logging/subsystem.js", async () => {
   };
 });
 
-// Sticky-model tests own persistence policy; session-utils.test.ts owns the thinking
-// projection that otherwise materializes provider policy for every mutation here.
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    resolveGatewaySessionThinkingProjection: vi.fn(() => ({
-      agentRuntime: { id: "openclaw", source: "implicit" },
-      effectiveThinkingLevel: "off",
-      thinkingLevels: [],
-    })),
-  };
-});
-
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const cfg = {
@@ -133,7 +119,7 @@ describe("sessions.patch sticky model persistence", () => {
     },
   );
 
-  it("keeps a non-admin model switch session-scoped", async () => {
+  it("keeps a write-scoped model switch session-only without persisting the configured default", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dm:non-admin";
       await upsertSessionEntry(

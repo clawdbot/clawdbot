@@ -237,7 +237,6 @@ export default definePluginEntry({
                       voiceId: chosen.id,
                     },
                   },
-                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
                 },
               };
               Object.assign(draft, nextConfig);

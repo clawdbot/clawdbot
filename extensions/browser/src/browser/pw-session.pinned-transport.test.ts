@@ -1,9 +1,9 @@
 // Browser tests cover pinned Playwright CDP transport behavior.
 import { createServer } from "node:http";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
 

@@ -66,7 +66,6 @@ suite.define(() => {
       const picker = main.locator('[data-chat-model-select="true"]').first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
-      await main.locator('[data-chat-model-provider="anthropic"]').click();
 
       const opus = main.locator(
         '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
@@ -84,7 +83,6 @@ suite.define(() => {
         });
       }
 
-      await main.locator('[data-chat-model-provider="nvidia"]').click();
       const nvidia = main.locator(
         '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );

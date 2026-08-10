@@ -1,13 +1,25 @@
-import type { SessionCreateParams } from "../../lib/sessions/create.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import {
   clearCloudSessionRecovery,
+  listCloudSessionRecoveries,
   parseCloudSessionCreateParams,
-  readCloudSessionRecovery,
+  promoteCloudSessionRecovery,
   type CloudSessionCreateParams,
   type CloudSessionRecovery,
   writeCloudSessionRecovery,
-} from "./cloud-recovery.ts";
+} from "../../lib/sessions/cloud-recovery.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+
+export type SubmissionOutcomeReason = "gateway-changed" | "cloud-interrupted";
+
+export function resolveSubmissionOutcomeReason(params: {
+  gatewayIdentityChanged: boolean;
+  cloudDraftOwned: boolean;
+}): SubmissionOutcomeReason {
+  return params.gatewayIdentityChanged || !params.cloudDraftOwned
+    ? "gateway-changed"
+    : "cloud-interrupted";
+}
 
 export function resolveScope(
   snapshot: {
@@ -54,6 +66,8 @@ export class PendingCloudRecoveryState {
     }
   }
 
+  // Concurrent same-key replacement pages may double-clear recovery; that rare multi-tab flow is
+  // accepted in favor of ownership based only on gateway URL, recovery scope, and session key.
   owns(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
     return (
       this.gatewayUrl === gatewayUrl &&
@@ -79,7 +93,9 @@ export class PendingCloudRecoveryState {
   }
 
   restore(gatewayUrl: string, recoveryScope: string): CloudSessionRecovery | null {
-    const recovery = readCloudSessionRecovery(gatewayUrl, recoveryScope);
+    const recovery = listCloudSessionRecoveries(gatewayUrl, recoveryScope).find(
+      (candidate) => candidate.phase === "creating",
+    );
     if (!recovery) {
       return null;
     }
@@ -134,8 +150,12 @@ export class PendingCloudRecoveryState {
   }
 
   promoteToDispatching(sessionKey: string): boolean {
+    const previousSessionKey = this.sessionKey;
     const recovery = this.snapshot(sessionKey, "dispatching");
-    if (!recovery || (this.persistent && !writeCloudSessionRecovery(recovery))) {
+    if (
+      !recovery ||
+      (this.persistent && !promoteCloudSessionRecovery(previousSessionKey, recovery))
+    ) {
       return false;
     }
     this.sessionKey = sessionKey;

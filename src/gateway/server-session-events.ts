@@ -16,6 +16,7 @@ import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -27,6 +28,7 @@ import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
 } from "./session-event-payload.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessageCountAsync,
@@ -90,23 +92,6 @@ function readTranscriptUpdateLifecycleOwner(
   return lifecycleRevision ? { lifecycleRevision } : {};
 }
 
-function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
-  // Global sessions can be subscribed through either the raw global key or the
-  // default-agent scoped key; non-default agent global sessions stay scoped.
-  const normalizedAgentId = normalizeOptionalString(agentId);
-  if (sessionKey === "global") {
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
-    if (normalizedAgentId) {
-      const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
-      return normalizeAgentId(normalizedAgentId) === defaultAgentId
-        ? [scopedKey, sessionKey]
-        : [scopedKey];
-    }
-    return [`agent:${defaultAgentId}:global`, sessionKey];
-  }
-  return [sessionKey];
-}
-
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
@@ -163,7 +148,10 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   sessionMessageSubscribers: SessionMessageSubscribers;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
-  let broadcastQueue = Promise.resolve();
+  // Ordering is a per-transcript contract: subscribers merge each session's
+  // updates independently, so lanes keyed by transcript identity keep message
+  // order without one session's async seq reads stalling every other session.
+  const broadcastQueues = new Map<string, Promise<void>>();
   return (update: InternalSessionTranscriptUpdate): Promise<void> => {
     // Capture legacy ownership before the async queue can cross a same-id reset;
     // committed producer ownership always wins over a later session-store read.
@@ -173,10 +161,26 @@ export function createTranscriptUpdateBroadcastHandler(params: {
         ? readTranscriptUpdateLifecycleOwner(update)?.lifecycleRevision
         : undefined);
     const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
-    // Preserve transcript update order even when counting messages requires an
-    // async read from the session file.
-    const task = broadcastQueue.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate));
-    broadcastQueue = task.catch(() => undefined);
+    const laneKey =
+      normalizeOptionalString(update.target?.sessionKey) ??
+      normalizeOptionalString(update.sessionKey) ??
+      normalizeOptionalString(update.sessionFile) ??
+      "";
+    // Preserve transcript update order within the lane even when counting
+    // messages requires an async read from the session file.
+    const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
+    const task = tail.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate));
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    broadcastQueues.set(laneKey, settled);
+    void settled.then(() => {
+      // Drop drained lanes so idle sessions do not accumulate map entries.
+      if (broadcastQueues.get(laneKey) === settled) {
+        broadcastQueues.delete(laneKey);
+      }
+    });
     return task;
   };
 }
@@ -260,7 +264,16 @@ async function handleTranscriptUpdateBroadcast(
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, routingAgentId)) {
+  let broadcastKeys = [sessionKey];
+  if (sessionKey === "global") {
+    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+    broadcastKeys = resolveSessionSubscriptionKeys(
+      sessionKey,
+      routingAgentId ?? defaultAgentId,
+      defaultAgentId,
+    );
+  }
+  for (const broadcastKey of broadcastKeys) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
     }
@@ -319,6 +332,8 @@ async function handleTranscriptUpdateBroadcast(
       return;
     }
   }
+  // Message frames must keep transcript-derived live usage (dashboard API
+  // contract from #50101); the 64KB cap bounds the per-message tail read.
   const sessionRow = loadGatewaySessionRow(sessionKey, {
     agentId: routingAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
@@ -363,7 +378,7 @@ async function handleTranscriptUpdateBroadcast(
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
-  const message = projectChatDisplayMessage(rawMessage);
+  const message = projectChatDisplayMessage(rawMessage, { resolveCurrentUserProfileDisplay });
   if (message) {
     params.broadcastToConnIds(
       "session.message",

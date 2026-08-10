@@ -1,18 +1,12 @@
 // Browser CDP snapshot tests cover bounded snapshot assertions.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs";
-const tempDirs: string[] = [];
-
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-browser-cdp-snapshot-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runAssertSnapshot(snapshotPath: string, env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [SCRIPT_PATH, snapshotPath], {
@@ -21,15 +15,9 @@ function runAssertSnapshot(snapshotPath: string, env: Record<string, string> = {
   });
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
-
 describe("browser CDP snapshot assertions", () => {
   it("rejects oversized snapshots before reading them into diagnostics", () => {
-    const root = makeTempRoot();
+    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
     const snapshotPath = path.join(root, "snapshot.txt");
     writeFileSync(snapshotPath, "x".repeat(33), "utf8");
 
@@ -43,7 +31,7 @@ describe("browser CDP snapshot assertions", () => {
   });
 
   it("bounds missing-needle snapshot diagnostics", () => {
-    const root = makeTempRoot();
+    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
     const snapshotPath = path.join(root, "snapshot.txt");
     writeFileSync(snapshotPath, `${"old snapshot line\n".repeat(6 * 1024)}recent tail`, "utf8");
 

@@ -17,7 +17,6 @@ import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
 import { connectOverCdpPinnedTransport } from "./pw-session-cdp-transport.js";
-import { isBrowserRateLimitError } from "./rate-limit-message.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -40,6 +39,7 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
+import { isBrowserRateLimitError } from "./rate-limit-message.js";
 
 const { chromium } = playwrightCore;
 type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;

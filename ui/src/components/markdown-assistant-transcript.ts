@@ -85,6 +85,7 @@ export function installAssistantTranscriptRoleImageRenderer(
     assistantLabel: () => string;
     openImageLabel: (alt: string, hasAlt: boolean) => string;
     interactiveImages: (env: unknown) => boolean;
+    allowRemoteImages: (env: unknown) => boolean;
   },
 ): void {
   md.renderer.rules.image = (tokens, index, _rendererOptions, env) => {
@@ -97,7 +98,7 @@ export function installAssistantTranscriptRoleImageRenderer(
     const alt = options.normalizeLabel(token.content);
     const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
       ?.assistantTranscriptRoleImage;
-    if (!options.isInlineDataImage(src)) {
+    if (!options.isInlineDataImage(src) && !options.allowRemoteImages(env)) {
       return roleMeta
         ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans, options.escapeHtml)
         : options.escapeHtml(alt);

@@ -220,10 +220,6 @@ describe("config help copy quality", () => {
       ],
     },
     {
-      name: "includes a concrete example on memory path fields",
-      fields: [["memory.qmd.paths.pattern", ["**/*.md"]]],
-    },
-    {
       name: "documents cron retention formats",
       fields: [
         ["cron.sessionRetention", ["24h", "7d", "1h30m", /false/i]],

@@ -11,7 +11,6 @@ const SCENARIO_ID = "browser-plugin-profiles-packaged";
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/browser-plugin-profiles-packaged.ts";
 const SCRIPT_PATH = "scripts/e2e/browser-plugin-profiles-docker.sh";
 const SUCCESS_MARKER = "BROWSER_PLUGIN_PROFILES_PACKAGED_OK";
-const PRIMARY_COVERAGE_IDS = ["tools.browser-plugin-service", "tools.profiles"] as const;
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
 type DockerOutcome = {
@@ -89,7 +88,6 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     codeRefs: [SOURCE_PATH, SCRIPT_PATH, "extensions/browser/src/gateway/browser-request.ts"],
     docsRefs: ["docs/tools/browser.md", "docs/help/testing.md"],
     id: SCENARIO_ID,
-    primaryCoverageIds: PRIMARY_COVERAGE_IDS,
     sourcePath: SOURCE_PATH,
     title: "Packaged browser plugin profiles",
   };

@@ -167,9 +167,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
   ["worktrees.branches", "worktrees", "operator.write", "2026.7"],
-  // Arbitrary host-path directory listing backs the new-session folder picker;
-  // same trust bar as sessions.create with an explicit cwd.
-  ["fs.listDir", "fs", "operator.admin", "<=2026.7"],
+  // Params-aware: Gateway paths start at write scope and are containment-checked
+  // by the handler; node browsing remains admin-only.
+  ["fs.listDir", "fs", "dynamic", "<=2026.7"],
   ["worktrees.create", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.remove", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.restore", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
@@ -239,13 +239,14 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
-  // Params-aware: explicit cwd can point at any host checkout and requires admin.
+  // Params-aware plus state-aware: the handler permits write-scoped cwd only
+  // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
-  // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/icon/pinned/archived/unread); every other patch field stays
-  // admin-only. Policy lives in shared/session-method-scopes.ts.
+  // Dynamic mutation scope policy, including write-scoped model overrides, lives
+  // in shared/session-method-scopes.ts. The admin-only sticky configured-default
+  // persistence guard lives in server-methods/sessions-mutations.ts.
   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
   ["sessions.cleanup", "sessions-read", "operator.admin", "<=2026.7"],
@@ -486,6 +487,12 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
   // Additive audit inspection appends so older advertised method indices stay stable.
   ["audit.run.inspect", "audit", "operator.read", "2026.7"],
+  ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
+  // Update campaign mutations share update.run's admin and control-plane write policy.
+  ["update.hold", "update", "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  // Additive catalog terminal start appends so older advertised indices stay stable.
+  ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
+  ["worker.desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

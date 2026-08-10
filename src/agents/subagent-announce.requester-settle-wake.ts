@@ -8,7 +8,10 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { logWarn } from "../logger.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  type DeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import {
@@ -254,6 +257,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   let settledBatch: SubagentRunRecord[];
   if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
+    // Retired rows no longer own completion, but every surviving frozen member
+    // must be terminal before this batch can wake its requester.
     settledBatch = frozenBatchRunIds
       .map((runId) => runsById.get(runId))
       .filter(
@@ -261,9 +266,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
           Boolean(entry?.requesterSettleWake) &&
           entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
       );
+    if (
+      settledBatch.some(
+        (entry) => entry.execution.status === "running" || !hasSubagentRunEnded(entry),
+      )
+    ) {
+      return false;
+    }
   } else {
     settledBatch = buildConnectedSettledWave(
-      requesterRuns.filter((entry) => entry.requesterSettleWake && hasSubagentRunEnded(entry)),
+      requesterRuns.filter(
+        (entry) =>
+          entry.requesterSettleWake &&
+          entry.execution.status !== "running" &&
+          hasSubagentRunEnded(entry),
+      ),
       currentSettledEntry,
     );
   }

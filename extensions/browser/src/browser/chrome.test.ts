@@ -4,9 +4,9 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
   parseBrowserMajorVersion,
@@ -354,9 +354,9 @@ describe("browser chrome helpers", () => {
 
     try {
       const addr = server.address() as AddressInfo;
-      await expect(
-        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000),
-      ).rejects.toThrow("Do NOT retry the browser tool");
+      await expect(getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000)).rejects.toThrow(
+        "Do NOT retry the browser tool",
+      );
       expect(requests).toEqual(["/json/version"]);
     } finally {
       await new Promise<void>((resolve) => {
@@ -390,9 +390,9 @@ describe("browser chrome helpers", () => {
 
       try {
         const addr = server.address() as AddressInfo;
-        await expect(
-          getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000),
-        ).rejects.toThrow("Do NOT retry the browser tool");
+        await expect(getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000)).rejects.toThrow(
+          "Do NOT retry the browser tool",
+        );
         expect(requests).toEqual(["/json/version", "/json/version/"]);
       } finally {
         await new Promise<void>((resolve) => {

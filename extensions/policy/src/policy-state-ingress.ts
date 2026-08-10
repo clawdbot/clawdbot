@@ -60,13 +60,13 @@ export function scanPolicyIngress(cfg: Record<string, unknown>): readonly Policy
       });
     }
     for (const [accountId, account] of activeAccounts) {
-      const inheritsNestedContainers = channel !== "telegram" || configuredAccounts.length <= 1;
       pushChannelIngress(entries, {
         channel,
         accountId,
         config: account,
         inheritedConfig: value,
-        inheritNestedContainers: inheritsNestedContainers,
+        inheritNestedContainers: true,
+        inheritEmptyNestedContainers: channel === "telegram" && configuredAccounts.length <= 1,
         sourceBase: `${channelSource}/accounts/${ocPathSegment(accountId)}`,
         inheritedSourceBase: channelSource,
         fallbackConfig: inheritedChannelDefaults,
@@ -140,6 +140,7 @@ type ChannelIngressParams = {
   readonly config: Record<string, unknown>;
   readonly inheritedConfig: Record<string, unknown>;
   readonly inheritNestedContainers?: boolean;
+  readonly inheritEmptyNestedContainers?: boolean;
   readonly sourceBase: string;
   readonly inheritedSourceBase: string;
   readonly fallbackConfig?: Record<string, unknown>;
@@ -212,22 +213,15 @@ function channelImplicitGroupPolicy(params: ChannelIngressParams): {
   readonly source: string;
   readonly value: "allowlist" | "open";
 } {
-  for (const [config, sourceBase] of [
-    [params.config, params.sourceBase],
-    ...(params.inheritNestedContainers === true
-      ? ([[params.inheritedConfig, params.inheritedSourceBase]] as const)
-      : []),
-    [params.fallbackConfig, params.fallbackSourceBase],
-  ] as const) {
-    if (config === undefined || sourceBase === undefined) {
-      continue;
-    }
-    for (const key of ["groups"] as const) {
-      const container = isRecord(config[key]) ? config[key] : undefined;
-      if (container !== undefined && Object.keys(container).length > 0) {
-        return { source: `${sourceBase}/${key}`, value: "allowlist" };
-      }
-    }
+  const groups = effectiveNestedIngressContainer(params, "groups");
+  if (groups !== undefined) {
+    return { source: `${groups.sourceBase}/groups`, value: "allowlist" };
+  }
+  const fallbackGroups = isRecord(params.fallbackConfig?.groups)
+    ? params.fallbackConfig.groups
+    : undefined;
+  if (fallbackGroups !== undefined && Object.keys(fallbackGroups).length > 0) {
+    return { source: `${params.fallbackSourceBase}/groups`, value: "allowlist" };
   }
   return {
     source: `${params.sourceBase}/groupPolicy`,
@@ -306,24 +300,28 @@ function channelDefaultRequireMention(params: ChannelIngressParams): boolean {
 function channelWildcardRequireMention(
   params: ChannelIngressParams,
 ): { readonly source: string; readonly value: boolean } | undefined {
-  for (const [config, sourceBase] of [
-    [params.config, params.sourceBase],
-    [params.inheritedConfig, params.inheritedSourceBase],
-    [params.fallbackConfig, params.fallbackSourceBase],
-  ] as const) {
-    if (config === undefined || sourceBase === undefined) {
-      continue;
+  for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
+    const effective = effectiveNestedIngressContainer(params, key);
+    const wildcard = isRecord(effective?.container["*"]) ? effective.container["*"] : undefined;
+    const requireMention = readBoolean(wildcard?.requireMention);
+    if (wildcard?.enabled !== false && requireMention !== undefined && effective !== undefined) {
+      return {
+        source: `${effective.sourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
+        value: requireMention,
+      };
     }
-    for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
-      const container = isRecord(config[key]) ? config[key] : undefined;
-      const wildcard = isRecord(container?.["*"]) ? container["*"] : undefined;
-      const requireMention = readBoolean(wildcard?.requireMention);
-      if (wildcard?.enabled !== false && requireMention !== undefined) {
-        return {
-          source: `${sourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
-          value: requireMention,
-        };
-      }
+    const fallbackContainer = isRecord(params.fallbackConfig?.[key])
+      ? params.fallbackConfig[key]
+      : undefined;
+    const fallbackWildcard = isRecord(fallbackContainer?.["*"])
+      ? fallbackContainer["*"]
+      : undefined;
+    const fallbackRequireMention = readBoolean(fallbackWildcard?.requireMention);
+    if (fallbackWildcard?.enabled !== false && fallbackRequireMention !== undefined) {
+      return {
+        source: `${params.fallbackSourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
+        value: fallbackRequireMention,
+      };
     }
   }
   return undefined;
@@ -340,23 +338,29 @@ function nestedIngressContainers(params: ChannelIngressParams): readonly {
     readonly sourceBase: string;
   }[] = [];
   for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
-    const local = isRecord(params.config[key]) ? params.config[key] : undefined;
-    const inherited = isRecord(params.inheritedConfig[key])
-      ? params.inheritedConfig[key]
-      : undefined;
-    if (local !== undefined) {
-      if (Object.keys(local).length > 0) {
-        containers.push({ containerKey: key, container: local, sourceBase: params.sourceBase });
-      }
-    } else if (params.inheritNestedContainers === true && inherited !== undefined) {
-      containers.push({
-        containerKey: key,
-        container: inherited,
-        sourceBase: params.inheritedSourceBase,
-      });
+    const effective = effectiveNestedIngressContainer(params, key);
+    if (effective !== undefined) {
+      containers.push({ containerKey: key, ...effective });
     }
   }
   return containers;
+}
+
+function effectiveNestedIngressContainer(
+  params: ChannelIngressParams,
+  key: "groups" | "guilds" | "channels" | "rooms" | "teams",
+): { readonly container: Record<string, unknown>; readonly sourceBase: string } | undefined {
+  const local = isRecord(params.config[key]) ? params.config[key] : undefined;
+  const inherited = isRecord(params.inheritedConfig[key]) ? params.inheritedConfig[key] : undefined;
+  if (local !== undefined && Object.keys(local).length > 0) {
+    return { container: local, sourceBase: params.sourceBase };
+  }
+  const inheritsEmpty = local !== undefined && params.inheritEmptyNestedContainers === true;
+  const inheritsMissing = local === undefined && params.inheritNestedContainers === true;
+  if ((inheritsEmpty || inheritsMissing) && inherited !== undefined) {
+    return { container: inherited, sourceBase: params.inheritedSourceBase };
+  }
+  return undefined;
 }
 
 function pushNestedRequireMentionIngress(

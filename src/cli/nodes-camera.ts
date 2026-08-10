@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { toErrorObject } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { resolveCliName } from "./cli-name.js";
@@ -34,13 +35,16 @@ type CameraSnapTarget = {
 
 type CameraClipTarget = CameraSnapTarget;
 
-/** Resolve one or two snap requests without inventing a facing for Linux V4L2 devices. */
+/** Resolve snap requests without inventing a facing when the CLI or node cannot select one. */
 export function resolveCameraSnapTargets(params: {
-  facing: CameraFacing | "both";
+  facing?: CameraFacing | "both";
   platform?: string;
   deviceId?: string;
 }): CameraSnapTarget[] {
   if (params.platform?.toLowerCase() === "linux") {
+    return [{ artifactFacing: "unknown" }];
+  }
+  if (!params.facing) {
     return [{ artifactFacing: "unknown" }];
   }
   const facings: CameraFacing[] = params.facing === "both" ? ["front", "back"] : [params.facing];
@@ -77,12 +81,6 @@ type CameraClipPayload = {
   durationMs: number;
   hasAudio: boolean;
 };
-
-async function cancelIgnoredResponseBody(response: Response | undefined): Promise<void> {
-  if (response?.bodyUsed !== true) {
-    await response?.body?.cancel().catch(() => undefined);
-  }
-}
 
 /** Validate and normalize an unknown camera still-image payload. */
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
@@ -167,13 +165,13 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
     const res = guarded.response;
     const finalUrl = new URL(guarded.finalUrl);
     if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
-      await cancelIgnoredResponseBody(res);
+      await cancelUnreadResponseBody(res);
       throw new Error(
         `writeUrlToFile: redirect host ${finalUrl.hostname} must match node host ${opts.expectedHost}`,
       );
     }
     if (!res.ok) {
-      await cancelIgnoredResponseBody(res);
+      await cancelUnreadResponseBody(res);
       throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
     }
 
@@ -181,11 +179,11 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
     try {
       contentLength = parseMediaContentLength(res.headers.get("content-length"));
     } catch (err) {
-      await cancelIgnoredResponseBody(res);
+      await cancelUnreadResponseBody(res);
       throw err;
     }
     if (contentLength !== null && contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
-      await cancelIgnoredResponseBody(res);
+      await cancelUnreadResponseBody(res);
       throw new Error(
         `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
       );
@@ -193,7 +191,7 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
 
     const body = res.body;
     if (!body) {
-      await cancelIgnoredResponseBody(res);
+      await cancelUnreadResponseBody(res);
       throw new Error(`failed to download ${url}: empty response body`);
     }
 

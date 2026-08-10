@@ -1,4 +1,5 @@
-import { formatCliOutputError, type CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
+import { formatCliOutputError } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 

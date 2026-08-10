@@ -9,6 +9,7 @@ import {
   isOpenClawStateDatabaseOpen,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import {
   compactDoctorSqliteFile,
   type DoctorSqliteCompactSnapshot,
@@ -60,6 +61,7 @@ export async function runDoctorStateSqliteCompact(
   if (!stat.isFile()) {
     throw new Error(`Canonical OpenClaw state database is not a regular file: ${sqlitePath}`);
   }
+  assertOpenClawStateWriteAllowed({ databasePath: sqlitePath, env });
   const withMaintenanceLock = deps.withMaintenanceLock ?? withDoctorSqliteMaintenanceLock;
   return await withMaintenanceLock({
     env,
@@ -84,8 +86,10 @@ export async function runDoctorStateSqliteCompact(
         },
         ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
         sqlitePath,
-        validateBeforeMutation: (database) =>
-          assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath }),
+        validateBeforeMutation: (database) => {
+          assertOpenClawStateWriteAllowed({ database, databasePath: sqlitePath, env });
+          assertOpenClawStateDatabaseForMaintenance(database, { pathname: sqlitePath });
+        },
       });
       return {
         ...compact,

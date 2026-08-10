@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
-import type { CodexAppServerClient } from "./client.js";
-import type { CodexServerNotification, JsonValue } from "./protocol.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -108,8 +108,7 @@ function createClientFactory(
   } = {},
 ) {
   const methods: string[] = [];
-  const notificationHandlers: Array<(notification: CodexServerNotification) => void> = [];
-  const request = vi.fn(async (method: string, _params?: unknown) => {
+  const fixture = createFakeCodexAppServerClient(async (method: string, _params?: unknown) => {
     methods.push(method);
     if (method === "model/list") {
       return modelList();
@@ -127,15 +126,27 @@ function createClientFactory(
       return threadStartResult();
     }
     if (method === "mcpServerStatus/list") {
-      return { data: options.mcpServers ?? [], nextCursor: null };
+      return {
+        data: options.mcpServers ?? [
+          {
+            name: "inherited",
+            serverInfo: null,
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported",
+          },
+        ],
+        nextCursor: null,
+      };
     }
     if (method === "thread/inject_items") {
       return {};
     }
     if (method === "turn/interrupt") {
       queueMicrotask(() => {
-        for (const handler of notificationHandlers) {
-          handler({
+        for (const handler of fixture.notifications) {
+          void handler({
             method: "turn/completed",
             params: {
               threadId: "thread-finalizer",
@@ -151,9 +162,9 @@ function createClientFactory(
         return inProgressTurnResult();
       }
       queueMicrotask(() => {
-        for (const handler of notificationHandlers) {
+        for (const handler of fixture.notifications) {
           if (options.errorBeforeCompletion) {
-            handler({
+            void handler({
               method: "error",
               params: {
                 threadId: "thread-finalizer",
@@ -164,7 +175,7 @@ function createClientFactory(
             });
           }
           if (options.assistantDelta) {
-            handler({
+            void handler({
               method: "item/agentMessage/delta",
               params: {
                 threadId: "thread-finalizer",
@@ -174,7 +185,7 @@ function createClientFactory(
               },
             });
           }
-          handler({
+          void handler({
             method: "rawResponse/completed",
             params: {
               threadId: "thread-finalizer",
@@ -186,11 +197,11 @@ function createClientFactory(
                 cachedInputTokens: 2,
                 cacheWriteInputTokens: 1,
                 outputTokens: 4,
-                reasoningOutputTokens: 0,
+                reasoningOutputTokens: 3,
               },
             },
           });
-          handler({
+          void handler({
             method: "turn/completed",
             params: {
               threadId: "thread-finalizer",
@@ -208,21 +219,8 @@ function createClientFactory(
     }
     throw new Error(`unexpected request: ${method}`);
   });
-  const client = {
-    request,
-    addNotificationHandler: vi.fn((handler) => {
-      notificationHandlers.push(handler);
-      return () => {
-        const index = notificationHandlers.indexOf(handler);
-        if (index >= 0) {
-          notificationHandlers.splice(index, 1);
-        }
-      };
-    }),
-    addRequestHandler: vi.fn(() => () => undefined),
-    addCloseHandler: vi.fn(() => () => undefined),
-    close: vi.fn(),
-  } as unknown as CodexAppServerClient;
+  const request = fixture.request;
+  const client = Object.assign(fixture.client, { close: vi.fn() });
   const factory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
   return { factory, methods, request };
 }
@@ -401,6 +399,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         output: 4,
         cacheRead: 2,
         cacheWrite: 1,
+        reasoningTokens: 3,
         total: 12,
       },
     });
@@ -443,7 +442,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   });
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
-    const fake = createClientFactory({ mcpServers: [{ name: "unexpected" }] });
+    const fake = createClientFactory({
+      mcpServers: [{ name: "unexpected", serverInfo: null, tools: {} }],
+    });
 
     await expect(
       runBoundedCodexAppServerTurn({
@@ -458,7 +459,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,
       }),
-    ).rejects.toThrow("Codex ring-zero MCP attestation found server unexpected");
+    ).rejects.toThrow(
+      "Codex restricted-tool-surface MCP attestation found unexpected server unexpected",
+    );
     expect(fake.methods).not.toContain("thread/inject_items");
     expect(fake.methods).not.toContain("turn/start");
   });

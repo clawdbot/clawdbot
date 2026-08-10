@@ -101,7 +101,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
     return "plugin_subagent";
   }
   // A confirmed ACP manual-spawn child turn already owns its requester-visible
-  // `acp` task row from the spawn control plane (src/agents/acp-spawn.ts). The
+  // `acp` task row from the spawn control plane (src/agents/subagents/spawn/acp-spawn.ts). The
   // Gateway CLI path runs that same childRunId, so tracking it here would emit a
   // duplicate row for one run. Suppress only the CLI branch; plugin-subagent and
   // normal CLI tracking stay intact.
@@ -168,7 +168,24 @@ export async function registerPluginSubagentRunFromGateway(params: {
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
-  const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
+  const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
+    await import("../../agents/subagent-registry.js");
+  // A follow-up aimed at a session paused by sessions_yield continues that run.
+  // Registering a sibling row here would reassign the requester to this agent's
+  // own main session and leave the original requester waiting behind a row that
+  // can no longer announce. A follow-up that names its own requester is opting
+  // into its own delivery, so it registers normally rather than silently
+  // inheriting the paused row's audience.
+  if (
+    !params.requester &&
+    adoptPausedSubagentRunForFollowUp({
+      childSessionKey,
+      runId: params.runId,
+      task: params.task,
+    })
+  ) {
+    return;
+  }
   registerSubagentRun({
     runId: params.runId,
     childSessionKey,

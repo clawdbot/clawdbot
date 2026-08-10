@@ -9,13 +9,17 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { hasControlCommand } from "../command-detection.js";
+import {
+  isNativeCommandTurn,
+  isTextSlashCommandTurn,
+  resolveCommandTurnContext,
+} from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -81,7 +85,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
   let { sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
-  const heartbeatRunScope = resolveHeartbeatRunScope(opts);
   const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const effectiveQueueMode = opts?.queueModeOverride ?? perMessageQueueMode;
   const traceAttributes = {
@@ -229,12 +232,20 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
+  const commandTurn = resolveCommandTurnContext(ctx);
+  const isRegisteredWholeMessageCommand =
+    isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
+  const isActiveCommandTurn =
+    isNativeCommandTurn(commandTurn) ||
+    (allowTextCommands &&
+      ctx.CommandInterpretationSuppressed !== true &&
+      (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand));
   if (
-    allowTextCommands &&
+    isActiveCommandTurn &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
-    isWholeMessageCommand &&
-    (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand)
+    isRegisteredWholeMessageCommand
   ) {
+    opts?.onDeliberateSilentTerminalReply?.();
     typing.cleanup();
     return { kind: "reply", reply: undefined } as const;
   }
@@ -352,21 +363,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     inboundEventKind,
     sourceReplyDeliveryMode,
   });
-  // A commitment-only wake must not consume the one-shot aborted-run hint;
-  // that recovery context belongs to the next normal conversation turn.
-  const prefixedBodyBase =
-    heartbeatRunScope === "commitment-only"
-      ? promptEnvelopeBase.effectiveBaseBody
-      : await applySessionHints({
-          baseBody: promptEnvelopeBase.effectiveBaseBody,
-          abortedLastRun,
-          sessionEntry,
-          sessionEntryHandle,
-          sessionStore,
-          sessionKey,
-          storePath,
-          abortKey: command.abortKey,
-        });
+  const prefixedBodyBase = await applySessionHints({
+    baseBody: promptEnvelopeBase.effectiveBaseBody,
+    abortedLastRun,
+    sessionEntry,
+    sessionEntryHandle,
+    sessionStore,
+    sessionKey,
+    storePath,
+    abortKey: command.abortKey,
+  });
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -376,7 +382,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     params,
     runtimePolicySessionKey,
     isHeartbeat,
-    heartbeatRunScope,
     explicitThinkingLevelOverride,
     effectiveQueueMode,
     traceRunPhase,

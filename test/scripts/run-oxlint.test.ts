@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mjs";
+import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -17,18 +17,18 @@ import {
   resolveWindowsExtensionChunkSize,
   runShard,
   shouldRunOxlintShardsSerial,
-} from "../../scripts/run-oxlint-shards.mjs";
+} from "../../scripts/run-oxlint-shards.mts";
 import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
-} from "../../scripts/run-oxlint.mjs";
+} from "../../scripts/run-oxlint.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const CONSTRAINED_HOST = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
 const ROOMY_HOST = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
 const RUN_OXLINT_SHARDS_URL = pathToFileURL(
-  join(process.cwd(), "scripts/run-oxlint-shards.mjs"),
+  join(process.cwd(), "scripts/run-oxlint-shards.mts"),
 ).href;
 type SignalScenario = "forward" | "group" | "ignore";
 
@@ -140,7 +140,9 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
     if (predicate()) {
       return;
     }
-    await new Promise((resolvePoll) => setTimeout(resolvePoll, 5));
+    await new Promise<void>((resolvePoll) => {
+      setTimeout(resolvePoll, 5);
+    });
   }
   throw new Error("condition was not met before timeout");
 }
@@ -203,17 +205,17 @@ describe("run-oxlint", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
 
-    expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
+    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node scripts/run-oxlint-shards.mjs --only=core --split-core",
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
     );
     expect(packageJson.scripts.check).not.toContain(
-      "node scripts/prepare-extension-package-boundary-artifacts.mjs",
+      "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
     );
-    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mjs");
+    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 
@@ -221,20 +223,20 @@ describe("run-oxlint", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
-    const lintRunner = readFileSync("scripts/run-lint.mjs", "utf8");
+    const lintRunner = readFileSync("scripts/run-lint.mts", "utf8");
 
-    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
     expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
     expect(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
     ).toBeGreaterThan(lintRunner.indexOf("ensureRepoToolNodeModulesLink("));
-    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mjs")')).toBeGreaterThan(
+    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mts")')).toBeGreaterThan(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
     );
   });
 
   it("holds one parent heavy-check lock for sharded lint runs", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
     const skipLockIndex = shardedLintRunner.indexOf('env.OPENCLAW_OXLINT_SKIP_LOCK === "1"');
     const lockIndex = shardedLintRunner.indexOf("acquireLocalHeavyCheckLockSync({");
     const childSkipIndex = shardedLintRunner.indexOf('OPENCLAW_OXLINT_SKIP_LOCK: "1"');
@@ -495,6 +497,13 @@ describe("run-oxlint", () => {
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
   });
 
+  it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(
+    "rejects shard selectors without a name: %s",
+    (...args) => {
+      expect(() => parseShardRunnerArgs(args)).toThrow("--only requires a shard name");
+    },
+  );
+
   it("filters split core shards by shard family", () => {
     const shards = filterOxlintShards(
       createOxlintShards({
@@ -510,6 +519,44 @@ describe("run-oxlint", () => {
       "core:ui",
       "core:packages",
     ]);
+  });
+
+  it.each([
+    { selectors: ["wat"], message: "Unknown oxlint shard selector: wat" },
+    {
+      selectors: ["core", "wat"],
+      message: "Unknown oxlint shard selector: wat",
+    },
+  ])("rejects unmatched shard selectors: $selectors", ({ selectors, message }) => {
+    expect(() =>
+      filterOxlintShards(createOxlintShards({ cwd: "/repo" }), new Set(selectors)),
+    ).toThrow(message);
+  });
+
+  it.each([
+    ["--only"],
+    ["--only", "--split-core"],
+    ["--only="],
+    ["--only=-h"],
+    ["--only=wat"],
+    ["--only=core", "--only=wat"],
+  ])("rejects invalid shard CLI input before starting work: %s", (...args) => {
+    const tempDir = createTempDir("openclaw-oxlint-selector-");
+    const result = spawnSync(process.execPath, [RUN_OXLINT_SHARDS_URL, ...args], {
+      cwd: tempDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "worktree",
+        OPENCLAW_LOCAL_CHECK: "1",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("[oxlint:");
+    expect(existsSync(join(tempDir, ".artifacts/openclaw-local-checks/heavy-check.lock"))).toBe(
+      false,
+    );
   });
 
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {

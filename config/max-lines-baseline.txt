@@ -154,9 +154,6 @@ extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
 extensions/memory-core/src/memory/manager.ts
-extensions/memory-core/src/memory/qmd-manager.test.ts
-extensions/memory-core/src/memory/search-manager.test.ts
-extensions/memory-core/src/memory/search-manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
@@ -322,11 +319,8 @@ packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
-src/acp/event-ledger.ts
-src/acp/translator.ts
-src/agents/acp-spawn-parent-stream.test.ts
-src/agents/acp-spawn-parent-stream.ts
-src/agents/acp-spawn.test.ts
+src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
+src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
@@ -355,8 +349,6 @@ src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
-src/agents/cli-output.test.ts
-src/agents/cli-output.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner.ts
@@ -372,8 +364,6 @@ src/agents/command/cli-compaction.ts
 src/agents/command/delivery.test.ts
 src/agents/command/delivery.ts
 src/agents/command/session-store.test.ts
-src/agents/embedded-agent-helpers.isbillingerrormessage.test.ts
-src/agents/embedded-agent-helpers/errors.ts
 src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
 src/agents/embedded-agent-runner.e2e.test.ts
@@ -438,7 +428,6 @@ src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
-src/agents/provider-local-service.ts
 src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
 src/agents/provider-transport-fetch.ts
@@ -461,7 +450,7 @@ src/agents/subagent-registry-lifecycle.test.ts
 src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
-src/agents/subagent-spawn.test.ts
+src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
@@ -536,7 +525,6 @@ src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
-src/channels/turn/kernel.test.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
@@ -787,9 +775,6 @@ src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
-src/infra/outbound/message-action-runner.media.test.ts
-src/infra/outbound/message-action-runner.plugin-dispatch.test.ts
-src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts
@@ -889,7 +874,6 @@ src/plugins/update.test.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts
-src/scripts/test-projects.test.ts
 src/secrets/apply.test.ts
 src/secrets/apply.ts
 src/secrets/configure.ts
@@ -901,7 +885,6 @@ src/secrets/runtime-web-tools.ts
 src/security/audit-extra.async.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/security/install-policy.ts
 src/sessions/session-state-events.ts
 src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts
@@ -965,7 +948,6 @@ ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/components/chat-model-controls.ts
 ui/src/pages/chat/components/chat-session-workspace.ts
 ui/src/pages/chat/components/chat-sidebar.ts
 ui/src/pages/chat/components/chat-thread.ts

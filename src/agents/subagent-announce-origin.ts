@@ -39,7 +39,7 @@ import {
   getGlobalHookRunner,
   resolveConversationIdFromTargets,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
 export type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {

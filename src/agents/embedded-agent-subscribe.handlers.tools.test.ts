@@ -1,6 +1,7 @@
+import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 // Tool handler tests cover tool lifecycle events, read-path diagnostics,
 // messaging tool capture, approvals, and emitted summaries.
-import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onAgentEvent as registerAgentEventListener,
@@ -247,10 +248,6 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 describe("update_plan progress events", () => {
   it("emits the typed full plan snapshot after a successful result", async () => {
     const { ctx, onAgentEvent } = createTestContext();
@@ -296,12 +293,7 @@ describe("update_plan progress events", () => {
   });
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
   const record = requireRecord(value, label);
@@ -1443,6 +1435,46 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 
+  it("clears a failed multi-file patch after every target is recovered", async () => {
+    const { ctx } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "apply_patch",
+      toolCallId: "tool-patch-failed",
+      args: {
+        input: [
+          " *** Begin Patch",
+          " *** Add File: /tmp/day-1.md",
+          "+new",
+          " *** Add File: /tmp/day-2.md",
+          "+new",
+          " *** End Patch",
+        ].join("\n"),
+      },
+      isError: true,
+      result: { error: "Path escapes sandbox root" },
+    });
+
+    await executeTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-recovery",
+      args: { path: "/tmp/day-2.md", content: "new" },
+      isError: false,
+      result: { ok: true },
+    });
+    expect(ctx.state.lastToolError?.toolName).toBe("apply_patch");
+
+    await executeTool(ctx, {
+      toolName: "edit",
+      toolCallId: "tool-edit-recovery",
+      args: { path: "/tmp/day-1.md", edits: [{ oldText: "old", newText: "new" }] },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
   it("emits a prepared validation diagnostic without model arguments", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =
@@ -1985,6 +2017,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it("marks every finalized built-in call with its explicit outcome", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-complete",
+      isError: false,
+      result: { content: "ok" },
+    });
+    await endTool(ctx, {
+      toolName: "process",
+      toolCallId: "tool-process-running",
+      isError: false,
+      result: { details: { status: "running" } },
+    });
+    await endTool(ctx, {
+      toolName: "image_generate",
+      toolCallId: "tool-image-async-started",
+      isError: false,
+      result: { details: { async: true, status: "started" } },
+    });
+    await endTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-failed",
+      isError: true,
+      result: { error: "failed" },
+    });
+
+    expect(
+      ctx.state.toolMetas.map(({ toolName, isError }) => ({
+        toolName,
+        isError,
+      })),
+    ).toEqual([
+      { toolName: "read", isError: false },
+      { toolName: "process", isError: false },
+      { toolName: "image_generate", isError: false },
+      { toolName: "write", isError: true },
+    ]);
+    expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
+  });
+
   it("retains every failed call after later successes change the last-error slot", async () => {
     const { ctx } = createTestContext();
 
@@ -2003,7 +2077,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     expect(ctx.state.toolMetas.map(({ toolName, isError }) => ({ toolName, isError }))).toEqual([
       { toolName: "read", isError: true },
-      { toolName: "read", isError: undefined },
+      { toolName: "read", isError: false },
       { toolName: "exec", isError: true },
     ]);
   });
@@ -2040,6 +2114,177 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       expect.objectContaining({ toolName: "exec", isError: true }),
     ]);
   });
+
+  async function executeProcessResult(
+    ctx: ToolHandlerContext,
+    params: {
+      action?: string;
+      details?: Record<string, unknown>;
+      isError?: boolean;
+      output?: string;
+    } = {},
+  ) {
+    const action = params.action ?? "poll";
+    const output = params.output ?? "SAFE_PROCESS_STDERR";
+    await executeTool(ctx, {
+      toolName: "process",
+      toolCallId: `tool-process-${action}`,
+      args: { action, sessionId: "wild-lagoon" },
+      isError: params.isError ?? true,
+      result: {
+        content: [{ type: "text", text: output }],
+        details: {
+          status: "completed",
+          sessionId: "wild-lagoon",
+          exitReason: "exit",
+          aggregated: output,
+          ...params.details,
+        },
+      },
+    });
+  }
+
+  it.each(["poll", "log"])(
+    "projects a structured terminal process diagnostic from %s",
+    async (action) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
+
+      expect(ctx.state.lastToolError).toMatchObject({
+        toolName: "process",
+        terminalDiagnostic: {
+          kind: "process",
+          sessionId: "wild-lagoon",
+          reason: { kind: "exit", exitCode: 7 },
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "signal",
+      details: { exitCode: 0, exitSignal: "SIGKILL", exitReason: "signal" },
+      reason: { kind: "signal", signal: "SIGKILL" },
+    },
+    {
+      label: "overall timeout",
+      details: {
+        exitCode: 0,
+        exitSignal: "SIGTERM",
+        exitReason: "overall-timeout",
+        timedOut: true,
+      },
+      reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+    },
+    {
+      label: "no-output timeout",
+      details: {
+        exitCode: 0,
+        exitSignal: "SIGTERM",
+        exitReason: "no-output-timeout",
+        timedOut: true,
+      },
+      reason: { kind: "timeout", timeoutKind: "no-output-timeout" },
+    },
+  ])(
+    "preserves a typed process $label without fabricating exit status",
+    async ({ details, reason }) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, { details });
+
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toMatchObject({ reason });
+      expect(ctx.state.lastToolError?.terminalDiagnostic?.reason).not.toHaveProperty("exitCode");
+    },
+  );
+
+  it("keeps child output out of the terminal diagnostic while retaining a safe full-verbosity error", async () => {
+    const { ctx } = createTestContext();
+    const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
+    await executeProcessResult(ctx, {
+      output: `${dummyTelegramToken} ${"x".repeat(500)}`,
+      details: { exitCode: 7 },
+    });
+
+    const diagnostic = ctx.state.lastToolError?.terminalDiagnostic;
+    expect(diagnostic).toEqual({
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason: { kind: "exit", exitCode: 7 },
+    });
+    expect(ctx.state.lastToolError?.error?.length).toBeLessThanOrEqual(401);
+    expect(ctx.state.lastToolError?.error).toMatch(/…$/u);
+    expect(JSON.stringify(ctx.state.lastToolError)).not.toContain(dummyTelegramToken);
+  });
+
+  it("omits full-verbosity process output containing terminal control characters", async () => {
+    const { ctx } = createTestContext();
+    await executeProcessResult(ctx, {
+      output: "SAFE\u001b[31m_PROCESS_STDERR",
+      details: { exitCode: 7 },
+    });
+
+    expect(ctx.state.lastToolError?.terminalDiagnostic).toEqual({
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason: { kind: "exit", exitCode: 7 },
+    });
+    expect(ctx.state.lastToolError?.error).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "running poll",
+      isError: false,
+      details: { status: "running", exitReason: undefined, exitCode: undefined },
+    },
+    {
+      label: "failed process operation",
+      details: { status: "failed", exitReason: undefined, exitCode: undefined },
+    },
+    {
+      label: "missing session",
+      details: { status: "failed", sessionId: undefined, exitReason: undefined, exitCode: 7 },
+    },
+    {
+      label: "successful poll",
+      isError: false,
+      details: { exitCode: 0 },
+    },
+    {
+      label: "log without terminal provenance",
+      action: "log",
+      details: { exitReason: undefined, exitCode: 7, exitSignal: "SIGKILL" },
+    },
+    {
+      label: "non-observing process action",
+      action: "write",
+      details: { status: "failed", sessionId: "wild-lagoon", exitCode: 7 },
+    },
+    {
+      label: "kill result",
+      action: "kill",
+      details: {
+        status: "failed",
+        sessionId: undefined,
+        exitReason: undefined,
+        name: "node command.js",
+      },
+    },
+  ])(
+    "does not project a terminal diagnostic for a $label",
+    async ({ label, action, details, isError }) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, {
+        action,
+        details,
+        isError,
+        output: `No terminal process result for ${label}.`,
+      });
+
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toBeUndefined();
+    },
+  );
 
   it("projects outcome-unknown exec results as errors with typed details", async () => {
     resetAgentEventsForTest();
@@ -2367,6 +2612,64 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       }),
       isError: true,
     });
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+    const [
+      { normalizeAgentRunTerminalReceipt },
+      { createUsageAccumulator },
+      { createEmbeddedRunContextRecoveryState },
+      { prepareEmbeddedRunTerminal },
+    ] = await Promise.all([
+      import("./agent-run-terminal-receipt.js"),
+      import("./embedded-agent-runner/usage-accumulator.js"),
+      import("./embedded-agent-runner/run/context-recovery-state.js"),
+      import("./embedded-agent-runner/run/terminal-preparation.js"),
+    ]);
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        sessionId: "session-test-id",
+        runId: "run-test",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "run",
+        trigger: "user",
+        timeoutMs: 60_000,
+      },
+      attempt: {
+        terminal: { kind: "ok" },
+        sessionIdUsed: "session-test-id",
+        messagesSnapshot: [],
+        assistantTexts: [],
+        toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
+          toolName ? [{ ...entry, toolName }] : [],
+        ),
+        lastAssistant: undefined,
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        cloudCodeAssistFormatError: false,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-test-id",
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+    expect(
+      normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
+        ?.successfulToolNames,
+    ).toEqual([]);
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 

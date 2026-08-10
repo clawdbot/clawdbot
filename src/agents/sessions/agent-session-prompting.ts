@@ -16,6 +16,7 @@ import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
+import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
@@ -58,7 +59,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       // External delivery owns the next run after a deliberate turn handoff.
       return "handoff";
     }
-    if (!msg) {
+    if (!msg || msg.stopReason === "aborted") {
       return "settled";
     }
 
@@ -323,8 +324,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /**
    * Queue a steering message while the agent is running.
-   * Delivered after the current assistant turn finishes executing its tool calls,
-   * before the next LLM call.
+   * Delivered before the next unstarted tool launch or model call. Running tools
+   * continue; suppressed calls receive paired synthetic results.
    * Expands skill commands and prompt templates. Errors on extension commands.
    * @param images Optional image attachments to include with the message
    * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
@@ -336,6 +337,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
+    canInject?: () => boolean,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -347,6 +350,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    // Transcript preparation may outlive the captured attempt. Recheck its owner
+    // fence immediately before enqueue so a successor cannot inherit this steer.
+    if (canInject && !canInject()) {
+      throw new Error("active session is finalizing");
+    }
     await this.queueSteer(
       expandedText,
       images,
@@ -355,6 +363,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         : undefined,
       media,
       imageOrder,
+      queueIdentity,
     );
   }
 
@@ -390,6 +399,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     },
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
@@ -397,6 +407,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
+    setSteeringMessageIdentity(promptMessage, queueIdentity);
     this.agent.steer(
       transcriptContext
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)

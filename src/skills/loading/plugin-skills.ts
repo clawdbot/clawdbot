@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isMissingPathError } from "../../infra/errors.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -10,6 +11,7 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
@@ -18,6 +20,20 @@ import { CONFIG_DIR } from "../../utils.js";
 const log = createSubsystemLogger("skills");
 
 type PluginSkillLinkType = "dir" | "junction";
+
+// Plugin metadata is process-stable while the gateway runs, but this resolver sits on the
+// per-turn skills-refresh path. The single-slot memo keeps repeat turns from re-walking and
+// re-publishing every plugin skill dir; lifecycle clears evict it on plugin reload/install.
+let pluginSkillDirsMemo: {
+  workspaceDir: string;
+  config: OpenClawConfig | undefined;
+  snapshot: unknown;
+  dirs: string[];
+} | null = null;
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  pluginSkillDirsMemo = null;
+});
 
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
@@ -39,6 +55,16 @@ export function resolvePluginSkillDirs(params: {
     env: process.env,
     allowWorkspaceScopedCurrent: true,
   });
+  const canMemoize = params.pluginSkillsDir === undefined;
+  if (
+    canMemoize &&
+    pluginSkillDirsMemo &&
+    pluginSkillDirsMemo.workspaceDir === workspaceDir &&
+    pluginSkillDirsMemo.config === params.config &&
+    pluginSkillDirsMemo.snapshot === metadataSnapshot
+  ) {
+    return pluginSkillDirsMemo.dirs;
+  }
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     publishPluginSkills([], {
@@ -100,11 +126,15 @@ export function resolvePluginSkillDirs(params: {
         log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
-      if (seen.has(candidate)) {
-        continue;
+      const candidates =
+        record.bundleFormat === "agent" ? collectAgentSkillTargets(candidate) : [candidate];
+      for (const resolvedCandidate of candidates) {
+        if (seen.has(resolvedCandidate)) {
+          continue;
+        }
+        seen.add(resolvedCandidate);
+        resolved.push(resolvedCandidate);
       }
-      seen.add(candidate);
-      resolved.push(candidate);
     }
   }
 
@@ -112,7 +142,32 @@ export function resolvePluginSkillDirs(params: {
     pluginSkillsDir: params.pluginSkillsDir,
   });
 
+  if (canMemoize) {
+    pluginSkillDirsMemo = {
+      workspaceDir,
+      config: params.config,
+      snapshot: metadataSnapshot,
+      dirs: resolved,
+    };
+  }
   return resolved;
+}
+
+function collectAgentSkillTargets(skillsRoot: string): string[] {
+  const targets: string[] = [];
+  const entries = walkDirectorySync(skillsRoot, {
+    maxDepth: 1,
+    symlinks: "skip",
+    include: (entry) => entry.kind === "directory",
+  }).entries;
+  for (const entry of entries) {
+    if (hasPublishableSkillFile({ skillDir: entry.path, rootDir: skillsRoot })) {
+      targets.push(entry.path);
+      continue;
+    }
+    log.warn(`agent plugin skill skipped because SKILL.md is missing or invalid: ${entry.path}`);
+  }
+  return targets;
 }
 
 function resolveDefaultPluginSkillsDir(): string {
@@ -231,7 +286,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
         continue;
       }
     } catch (err) {
-      if (!isNotFoundError(err)) {
+      if (!isMissingPathError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
         continue;
       }
@@ -279,7 +334,7 @@ function removeGeneratedPluginSkillEntry(linkPath: string): void {
       return;
     }
   } catch (err) {
-    if (isNotFoundError(err)) {
+    if (isMissingPathError(err)) {
       return;
     }
   }
@@ -288,12 +343,4 @@ function removeGeneratedPluginSkillEntry(linkPath: string): void {
   } catch {
     // best-effort cleanup
   }
-}
-
-function isNotFoundError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as Record<string, unknown>).code;
-  return code === "ENOENT" || code === "ENOTDIR";
 }

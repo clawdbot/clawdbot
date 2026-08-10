@@ -496,35 +496,31 @@ describe("resolveAllowAlwaysPatterns", () => {
       const scriptPath = path.join(dir, "script.ps1");
       fs.writeFileSync(scriptPath, "");
       fs.chmodSync(scriptPath, 0o755);
-      try {
-        const env = makePathEnv(dir);
-        const analysis = analyzeArgvCommand({
-          argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
-          cwd: dir,
-          env,
-        });
-        expect(analysis.ok).toBe(true);
+      const env = makePathEnv(dir);
+      const analysis = analyzeArgvCommand({
+        argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
+        cwd: dir,
+        env,
+      });
+      expect(analysis.ok).toBe(true);
 
-        const entries = resolveAllowAlwaysPatternEntries({
-          segments: analysis.segments,
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
+      const entries = resolveAllowAlwaysPatternEntries({
+        segments: analysis.segments,
+        cwd: dir,
+        env,
+        platform: "win32",
+      });
+      expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
 
-        const result = evaluateExecAllowlist({
-          analysis,
-          allowlist: [...entries],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(result.allowlistSatisfied).toBe(true);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      const result = evaluateExecAllowlist({
+        analysis,
+        allowlist: [...entries],
+        safeBins: new Set(),
+        cwd: dir,
+        env,
+        platform: "win32",
+      });
+      expect(result.allowlistSatisfied).toBe(true);
     },
   );
 
@@ -1304,7 +1300,28 @@ $0 \\"$1\\"" touch {marker}`,
     expect(scriptResult.allowlistSatisfied).toBe(true);
   });
 
-  it("prevents allow-always bypass for caffeinate wrapper chains", async () => {
+  it.each([
+    {
+      title: "prevents allow-always bypass for caffeinate wrapper chains",
+      allowedCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -c 'echo warmup-ok'",
+      mutatedCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -c 'id > marker'",
+    },
+    {
+      title: "prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains",
+      allowedCommand: "/usr/bin/nice /bin/zsh -c 'echo warmup-ok'",
+      mutatedCommand: "/usr/bin/nice /bin/zsh -c 'id > marker'",
+    },
+    {
+      title: "prevents allow-always bypass for time wrapper chains",
+      allowedCommand: "/usr/bin/time -p /bin/zsh -c 'echo warmup-ok'",
+      mutatedCommand: "/usr/bin/time -p /bin/zsh -c 'id > marker'",
+    },
+    {
+      title: "prevents allow-always bypass for flock wrapper chains",
+      allowedCommand: "/usr/bin/flock lockfile /bin/zsh -c 'echo warmup-ok'",
+      mutatedCommand: "/usr/bin/flock lockfile /bin/zsh -c 'id > marker'",
+    },
+  ])("$title", async ({ allowedCommand, mutatedCommand }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -1314,26 +1331,8 @@ $0 \\"$1\\"" touch {marker}`,
     const env = makePathEnv(dir);
     await expectAllowAlwaysBypassBlocked({
       dir,
-      firstCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -c 'echo warmup-ok'",
-      secondCommand: "/usr/bin/caffeinate -d -w 42 /bin/zsh -c 'id > marker'",
-      env,
-      persistedPattern: null,
-      allowlistPattern: echo,
-    });
-  });
-
-  it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    await expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand: "/usr/bin/nice /bin/zsh -c 'echo warmup-ok'",
-      secondCommand: "/usr/bin/nice /bin/zsh -c 'id > marker'",
+      firstCommand: allowedCommand,
+      secondCommand: mutatedCommand,
       env,
       persistedPattern: null,
       allowlistPattern: echo,
@@ -2067,42 +2066,6 @@ $0 \\"$1\\"" touch {marker}`,
         allowlistSatisfied: result.allowlistSatisfied,
       }),
     ).toBe(true);
-  });
-
-  it("prevents allow-always bypass for time wrapper chains", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    await expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand: "/usr/bin/time -p /bin/zsh -c 'echo warmup-ok'",
-      secondCommand: "/usr/bin/time -p /bin/zsh -c 'id > marker'",
-      env,
-      persistedPattern: null,
-      allowlistPattern: echo,
-    });
-  });
-
-  it("prevents allow-always bypass for flock wrapper chains", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
-    makeExecutable(dir, "id");
-    const env = makePathEnv(dir);
-    await expectAllowAlwaysBypassBlocked({
-      dir,
-      firstCommand: "/usr/bin/flock lockfile /bin/zsh -c 'echo warmup-ok'",
-      secondCommand: "/usr/bin/flock lockfile /bin/zsh -c 'id > marker'",
-      env,
-      persistedPattern: null,
-      allowlistPattern: echo,
-    });
   });
 
   it("keeps ambiguous flock command strings out of allow-always", async () => {

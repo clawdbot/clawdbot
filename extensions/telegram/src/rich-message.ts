@@ -74,7 +74,7 @@ type TelegramSendRichMessageParams = {
 
 export type TelegramRichMessageContextParams = Pick<
   TelegramSendRichMessageParams,
-  "disable_notification" | "message_thread_id" | "reply_parameters"
+  "disable_notification" | "direct_messages_topic_id" | "message_thread_id" | "reply_parameters"
 >;
 
 export type TelegramEditRichMessageTextParams = {
@@ -129,9 +129,14 @@ export function toTelegramRichMessageContextParams(
   params: Record<string, unknown> | undefined,
 ): TelegramRichMessageContextParams {
   const richParams: TelegramRichMessageContextParams = {};
-  const messageThreadId = finiteInteger(params?.message_thread_id);
-  if (messageThreadId !== undefined) {
-    richParams.message_thread_id = messageThreadId;
+  const directMessagesTopicId = finiteInteger(params?.direct_messages_topic_id);
+  if (directMessagesTopicId !== undefined) {
+    richParams.direct_messages_topic_id = directMessagesTopicId;
+  } else {
+    const messageThreadId = finiteInteger(params?.message_thread_id);
+    if (messageThreadId !== undefined) {
+      richParams.message_thread_id = messageThreadId;
+    }
   }
   if (params?.disable_notification === true) {
     richParams.disable_notification = true;

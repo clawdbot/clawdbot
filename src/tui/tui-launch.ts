@@ -3,15 +3,8 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import { filterTuiExecArgv } from "./tui-exec-argv.js";
 import type { TuiOptions } from "./tui.js";
-
-// Relaunch helper used when setup wants to hand control to an inherited-stdio TUI process.
-type TuiLaunchOptions = {
-  authSource?: "config";
-  gatewayUrl?: string;
-};
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) {
@@ -48,22 +41,9 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   return args;
 }
 
-/** Launches a child TUI process with inherited stdio and setup-specific environment hints. */
-export async function launchTuiCli(
-  opts: TuiOptions,
-  launchOptions: TuiLaunchOptions = {},
-): Promise<void> {
+/** Launches a child TUI process with inherited stdio. */
+export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   const args = buildTuiCliArgs(opts);
-  const env =
-    launchOptions.gatewayUrl || launchOptions.authSource
-      ? {
-          ...process.env,
-          ...(launchOptions.gatewayUrl ? { OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl } : {}),
-          ...(launchOptions.authSource === "config"
-            ? { [TUI_SETUP_AUTH_SOURCE_ENV]: TUI_SETUP_AUTH_SOURCE_CONFIG }
-            : {}),
-        }
-      : process.env;
   // Pause parent stdin while the inherited-stdio child owns the terminal.
   // Keep it paused afterward so setup/container parents with stdin_open can exit.
   process.stdin.pause();
@@ -71,7 +51,7 @@ export async function launchTuiCli(
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       stdio: "inherit",
-      env,
+      env: process.env,
     });
     const { detach } = attachChildProcessBridge(child);
 

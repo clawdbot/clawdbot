@@ -53,12 +53,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
   return { ...context, sessionId: scope.sessionId };
 }
 
-/** Read-only resolution shares the same identity without persisting metadata locators. */
-export async function resolveSessionTranscriptRuntimeReadTarget(
-  scope: SessionTranscriptRuntimeScope,
-): Promise<SessionTranscriptRuntimeTarget> {
-  return await resolveSessionTranscriptRuntimeTarget(scope);
-}
+export { resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget };
 
 export function resolveSessionTranscriptReadTarget(
   scope: SessionTranscriptReadScope,

@@ -258,7 +258,7 @@ function isBase64DataCharCode(code: number): boolean {
   );
 }
 
-function isValidBase64(value: string): boolean {
+export function isValidAttachmentBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
@@ -401,7 +401,7 @@ export async function parseMessageWithAttachments(
       if (b64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);
       }
-      if (!isValidBase64(b64)) {
+      if (!isValidAttachmentBase64(b64)) {
         throw new Error(`attachment ${label}: invalid base64 content`);
       }
 

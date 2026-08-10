@@ -1,8 +1,10 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   actionOpacity,
   activateMenuItem,
   captureUiProof,
+  captureUiProofEnabled,
   collapsedSessionSectionsStorageKey,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
@@ -10,6 +12,7 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -76,9 +79,11 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open thread menu" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
+      await row.getByRole("button", { name: "Open session menu" }).click();
       await page.getByRole("menuitem", { name: "Rename…" }).click();
+      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
+      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
+      await dialog.getByRole("button", { name: "Save" }).click();
       await gateway.waitForRequest("sessions.patch");
       await gateway.rejectDeferred("sessions.patch", {
         code: "INVALID_REQUEST",
@@ -98,6 +103,62 @@ suite.define(() => {
       await expect.poll(() => error.count()).toBe(0);
     } finally {
       await context.close();
+    }
+  });
+
+  it("renames a sidebar session through an in-app dialog", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:rename-me", "Original name", Date.now()),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:rename-me",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator('[data-session-key="agent:main:rename-me"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await page.getByRole("menuitem", { name: "Rename…" }).click();
+
+      await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
+      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
+      const name = dialog.getByRole("textbox", { name: "Rename session" });
+      await name.waitFor({ state: "visible" });
+      await expect.poll(() => name.inputValue()).toBe("Original name");
+      await captureUiProof(page, "sidebar-session-rename-dialog.png");
+      await name.fill("Renamed session");
+      await dialog.getByRole("button", { name: "Save" }).click();
+
+      const patch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:rename-me" && params.label === "Renamed session",
+      );
+      expect(patch.params).toMatchObject({
+        key: "agent:main:rename-me",
+        label: "Renamed session",
+      });
+      await expect.poll(() => row.textContent()).toContain("Renamed session");
+      await captureUiProof(page, "sidebar-session-renamed.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-rename.webm"));
+      }
     }
   });
 
@@ -218,12 +279,12 @@ suite.define(() => {
 
       // Hover-revealed management actions on sidebar rows.
       const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
-      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin thread" });
+      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
       await page.mouse.move(900, 500);
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
-        .getByRole("button", { name: "Unpin thread" });
+        .getByRole("button", { name: "Unpin session" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
@@ -241,17 +302,20 @@ suite.define(() => {
         pinned: false,
       });
 
-      // The current-main full context menu remains intact: active rows cannot
-      // archive, while an idle row can.
+      // Active rows can archive through the Gateway's stop-and-drain lifecycle,
+      // while Delete keeps its separate active-run guard.
       await sidebarMigration.hover();
-      await sidebarMigration.getByRole("button", { name: "Open thread menu" }).click();
+      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
       await expect
-        .poll(() => page.getByRole("menuitem", { name: "Archive thread" }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
+        .toBe(false);
+      await expect
+        .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearch.getByRole("button", { name: "Open thread menu" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Archive thread" }));
+      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -382,8 +446,8 @@ suite.define(() => {
       await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
       expect(await keyHeader.getAttribute("aria-sort")).toBe("ascending");
 
-      await table.getByRole("checkbox", { name: "Select thread: agent:main:alpha" }).waitFor();
-      await table.getByRole("checkbox", { name: "Select thread: agent:main:zulu" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select session: agent:main:alpha" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select session: agent:main:zulu" }).waitFor();
     } finally {
       await context.close();
     }
@@ -690,7 +754,7 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await page.getByRole("button", { name: "Show more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(13);
-      await expect.poll(() => page.getByText("All threads", { exact: true }).count()).toBe(0);
+      await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
 
       // New groups are created from a session's menu (Move to group → New group…),
@@ -699,7 +763,7 @@ suite.define(() => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-      await sessionTen.getByRole("button", { name: "Open thread menu" }).click();
+      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
       const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
       await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
       const moveToGroupIndex = await moveToGroup.evaluate((element) =>
@@ -815,7 +879,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const sortSessionsButton = page.getByRole("button", { name: "Sort threads" });
+      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
       await sortSessionsButton.locator("..").hover();
       await sortSessionsButton.click();
       await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));

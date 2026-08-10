@@ -67,6 +67,8 @@ interface McpAttachGrant {
   readonly token: string;
   /** The openclaw session this grant is bound to; tool scope is resolved for this key. */
   readonly sessionKey: string;
+  /** Explicit agent owner for canonical global sessions, whose key cannot encode one. */
+  readonly agentId?: string;
   /** Absolute expiry (ms epoch). */
   readonly expiresAtMs: number;
   /** Absolute mint time (ms epoch). */
@@ -119,6 +121,7 @@ function clampTtlMs(ttlMs: number | undefined): number {
 
 export function mintAttachGrant(params: {
   sessionKey: string;
+  agentId?: string;
   ttlMs?: number;
   nowMs?: number;
 }): McpAttachGrant {
@@ -126,12 +129,14 @@ export function mintAttachGrant(params: {
   if (!sessionKey) {
     throw new Error("mintAttachGrant: sessionKey is required");
   }
+  const agentId = sessionKey === "global" ? params.agentId?.trim() || undefined : undefined;
   const nowMs = params.nowMs ?? Date.now();
   // Mint sweeps stale entries so abandoned grants do not accumulate.
   sweepExpiredAttachGrants(nowMs);
   const grant: McpAttachGrant = {
     token: crypto.randomBytes(32).toString("hex"),
     sessionKey,
+    ...(agentId ? { agentId } : {}),
     issuedAtMs: nowMs,
     expiresAtMs: nowMs + clampTtlMs(params.ttlMs),
   };

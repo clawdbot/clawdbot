@@ -43,6 +43,7 @@ test("decodes every ws raw-data shape", () => {
   expect(rawDataToString(Buffer.from("buffer"))).toBe("buffer");
   expect(rawDataToString(Uint8Array.from(Buffer.from("array-buffer")).buffer)).toBe("array-buffer");
   expect(rawDataToString([Buffer.from("frag"), Buffer.from("ments")])).toBe("fragments");
+  expect(rawDataToString(Buffer.from([0xe9]), "latin1")).toBe("é");
 });
 
 type ProtocolHarness = {

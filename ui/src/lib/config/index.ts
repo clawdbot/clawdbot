@@ -1,6 +1,9 @@
 // Control UI runtime config capability and shared config-domain mutations.
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableRecord as asConfigRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -420,13 +423,6 @@ function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse) {
   state.configSchema = res.schema ?? null;
   state.configUiHints = res.uiHints ?? {};
   state.configSchemaVersion = res.version ?? null;
-}
-
-function asConfigRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 export function resolveEditableSnapshotConfig(

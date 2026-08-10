@@ -2299,7 +2299,10 @@ describe("legacy migrate sandbox scope aliases", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
         list: [
@@ -2327,7 +2330,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       models: {
         "anthropic/claude-opus-4-7": {
           alias: "Opus",
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "claude-cli", mode: "strict" },
         },
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },

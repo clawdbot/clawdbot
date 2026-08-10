@@ -20,6 +20,7 @@ import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from ".
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
 const SECOND_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5faw";
+const THIRD_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fax";
 
 type LlmCompleteMock = ReturnType<
   typeof vi.fn<
@@ -138,8 +139,10 @@ function createAgentAccount(
     toolsAllow: [],
     defaultTo: "channel:general",
     allowFrom: ["*"],
+    allowBots: false,
     reconnectMs: 1_500,
     agentActivity: false,
+    nativeProgress: false,
     commandMenu: true,
     discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
     requireMention: false,
@@ -211,6 +214,7 @@ describe("handleClickClackInbound", () => {
       toolsAllow: [],
       defaultTo: "channel:general",
       allowFrom: ["*"],
+      allowBots: false,
       reconnectMs: 1_500,
       agentActivity: false,
       commandMenu: true,
@@ -382,7 +386,7 @@ describe("handleClickClackInbound", () => {
     expect(dispatchParams?.toolsAllow).toEqual(["message"]);
   });
 
-  it("wires durable activity reply options only when the account opts in", async () => {
+  it("keeps native progress opt-in and durable activity independent", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const cfg = {
@@ -402,40 +406,36 @@ describe("handleClickClackInbound", () => {
       }),
     });
     await handleClickClackInbound({
-      account: createAgentAccount({ agentActivity: true }),
+      account: createAgentAccount({ nativeProgress: true }),
       config: cfg,
       message: createMessage({
         id: SECOND_VALID_MESSAGE_ID,
         thread_root_id: SECOND_VALID_MESSAGE_ID,
       }),
     });
+    await handleClickClackInbound({
+      account: createAgentAccount({ agentActivity: true }),
+      config: cfg,
+      message: createMessage({
+        id: THIRD_VALID_MESSAGE_ID,
+        thread_root_id: THIRD_VALID_MESSAGE_ID,
+      }),
+    });
 
     const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
-    expect(dispatchTurn).toHaveBeenCalledTimes(2);
-    const withoutOptIn = dispatchTurn.mock.calls[0]?.[0] as {
-      replyOptions?: { runId?: unknown; onItemEvent?: unknown; onModelSelected?: unknown };
-    };
-    const withOptIn = dispatchTurn.mock.calls[1]?.[0] as {
-      replyOptions?: {
-        onItemEvent?: unknown;
-        onModelSelected?: unknown;
-        runId?: unknown;
-        commentaryProgressEnabled?: unknown;
-        suppressDefaultToolProgressMessages?: unknown;
-        allowProgressCallbacksWhenSourceDeliverySuppressed?: unknown;
-      };
-    };
-    expect(withoutOptIn.replyOptions).toEqual({
-      runId: `clickclack:${VALID_MESSAGE_ID}`,
-    });
-    expect(withOptIn.replyOptions?.runId).toBe(`clickclack:${SECOND_VALID_MESSAGE_ID}`);
-    expect(typeof withOptIn.replyOptions?.onModelSelected).toBe("function");
-    expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
-    // Channel-owned progress rendering: item events must flow even when
-    // session verbose mode is off and source delivery is handled by ClickClack.
-    expect(withOptIn.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(withOptIn.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
-    expect(typeof withOptIn.replyOptions?.onItemEvent).toBe("function");
+    expect(dispatchTurn).toHaveBeenCalledTimes(3);
+    const [withoutOptIn, withNativeOnly, withActivityOnly] = dispatchTurn.mock.calls.map(
+      ([call]) => call as { replyOptions?: Record<string, unknown> },
+    );
+    expect(withoutOptIn?.replyOptions?.runId).toBe(`clickclack:${VALID_MESSAGE_ID}`);
+    expect(withoutOptIn?.replyOptions?.onItemEvent).toBeUndefined();
+    expect(withoutOptIn?.replyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(withNativeOnly?.replyOptions?.runId).toBe(`clickclack:${SECOND_VALID_MESSAGE_ID}`);
+    expect(typeof withNativeOnly?.replyOptions?.onItemEvent).toBe("function");
+    expect(withNativeOnly?.replyOptions?.commentaryProgressEnabled).toBe(true);
+    expect(withActivityOnly?.replyOptions?.runId).toBe(`clickclack:${THIRD_VALID_MESSAGE_ID}`);
+    expect(typeof withActivityOnly?.replyOptions?.onItemEvent).toBe("function");
+    expect(typeof withActivityOnly?.replyOptions?.onModelSelected).toBe("function");
   });
 
   it("maps the authoritative message id to the agent run and correlates the final reply", async () => {
@@ -507,14 +507,16 @@ describe("handleClickClackInbound", () => {
     setClickClackRuntime(runtime);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account: createAgentAccount({ nativeProgress: true }),
       config: {} as CoreConfig,
       message: createMessage({ id: "msg_invalid" }),
     });
 
-    expect(vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].replyOptions).toBe(
-      undefined,
-    );
+    const replyOptions = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0]
+      .replyOptions;
+    expect(replyOptions?.runId).toBeUndefined();
+    expect(replyOptions?.onModelSelected).toBeUndefined();
+    expect(typeof replyOptions?.onItemEvent).toBe("function");
   });
 
   it("accepts ClickClack DM target syntax in allowFrom", async () => {

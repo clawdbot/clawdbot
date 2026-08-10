@@ -1,7 +1,4 @@
-import {
-  installSessionPlacementAdmissionProvider,
-  installSessionPlacementResetGuard,
-} from "../agents/session-placement-admission.js";
+import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
@@ -48,13 +45,19 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
   };
 });
 
+const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
+  const { preflightWorkerWorkspace } =
+    await import("./worker-environments/workspace-sync-preflight.js");
+  return preflightWorkerWorkspace;
+});
+
 class WorkerDispatchTargetChangedError extends Error {
   readonly code = "invalid_state";
 }
 
 /** Serializes reconciliation sweeps against in-flight dispatches so a sweep never
  * observes a placement mid-transition. Dispatches wait out any pending sweep. */
-function coordinateWorkerPlacementDispatch(
+export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
 ): WorkerPlacementDispatchService {
   let activeDispatchCount = 0;
@@ -128,14 +131,18 @@ function coordinateWorkerPlacementDispatch(
     }
   };
   return {
-    dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
+    dispatch: async (request, onTransition) =>
+      await runPlacementOperation(() => service.dispatch(request, onTransition)),
     forceDestroyEnvironment: (environmentId, onCleanupError) =>
       runExclusivePlacementOperation(() =>
         service.forceDestroyEnvironment(environmentId, onCleanupError),
       ),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
-    reconcileActive: () => runReconciliation(service.reconcileActive),
+    reconcileActive: (environmentId) =>
+      environmentId === undefined
+        ? runReconciliation(() => service.reconcileActive())
+        : runExclusivePlacementOperation(() => service.reconcileActive(environmentId)),
   };
 }
 
@@ -264,6 +271,8 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
               );
             }
+            const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
+            await preflightWorkerWorkspace({ localPath: worktree.path });
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({
@@ -522,13 +531,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     registerSidecar: (sidecar: WorkerPlacementSidecar) => void;
   }): Promise<WorkerPlacementSidecar | null> => {
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
-    const uninstallPlacementResetGuard = installSessionPlacementResetGuard((sessionId) => {
-      const placement = params.placements.get(sessionId);
-      if (!placement || placement.state === "local") {
-        return undefined;
-      }
-      return `cloud worker placement is ${placement.state}`;
-    });
     let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
     let placementReconcileInFlight: Promise<void> | undefined;
     let stopped = false;
@@ -561,7 +563,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         clearInterval(placementReconcileInterval);
         placementReconcileInterval = undefined;
         uninstallPlacementAdmission();
-        uninstallPlacementResetGuard();
         const environmentStop = params.environments.stop();
         const stopResults = await Promise.allSettled([
           ...(placementReconcileInFlight ? [placementReconcileInFlight] : []),

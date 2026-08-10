@@ -8,6 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   jsonResult,
+  readFiniteNumberParam,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -36,6 +37,7 @@ const NODE_READ_ACTION_COMMANDS = {
 
 export type NodeCommandAction =
   | keyof typeof NODE_READ_ACTION_COMMANDS
+  | "camera_ptz"
   | "notifications_action"
   | "location_get"
   | "which"
@@ -53,6 +55,47 @@ export async function executeNodeCommandAction(params: {
   | { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }
 > {
   switch (params.action) {
+    case "camera_ptz": {
+      const node = readStringParam(params.input, "node", { required: true });
+      const deviceId = readStringParam(params.input, "deviceId", { required: true });
+      const ptzOperation = normalizeLowercaseStringOrEmpty(params.input.ptzOperation);
+      if (
+        ptzOperation !== "status" &&
+        ptzOperation !== "set" &&
+        ptzOperation !== "move" &&
+        ptzOperation !== "home"
+      ) {
+        throw new Error("ptzOperation must be status|set|move|home");
+      }
+      const panDegrees = readFiniteNumberParam(params.input, "panDegrees");
+      const tiltDegrees = readFiniteNumberParam(params.input, "tiltDegrees");
+      const zoomPercent = readFiniteNumberParam(params.input, "zoomPercent");
+      const hasAxes =
+        panDegrees !== undefined || tiltDegrees !== undefined || zoomPercent !== undefined;
+      if ((ptzOperation === "status" || ptzOperation === "home") && hasAxes) {
+        throw new Error(`${ptzOperation} does not accept axis values`);
+      }
+      if ((ptzOperation === "set" || ptzOperation === "move") && !hasAxes) {
+        throw new Error(`${ptzOperation} requires at least one PTZ axis`);
+      }
+      const axes = { panDegrees, tiltDegrees, zoomPercent };
+      const payload = await invokeNodeCommandPayload({
+        gatewayOpts: params.gatewayOpts,
+        node,
+        command: ptzOperation === "status" ? "camera.ptz.status" : "camera.ptz.control",
+        commandParams:
+          ptzOperation === "status"
+            ? { deviceId }
+            : ptzOperation === "home"
+              ? { deviceId, operation: "home" }
+              : {
+                  deviceId,
+                  operation: ptzOperation,
+                  [ptzOperation === "set" ? "target" : "delta"]: axes,
+                },
+      });
+      return jsonResult(payload);
+    }
     case "camera_list":
     case "notifications_list":
     case "device_status":
