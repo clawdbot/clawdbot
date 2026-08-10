@@ -300,7 +300,7 @@ suite.define(() => {
       await page.locator("#new-session-place-trigger").click();
       const placePopover = page.locator("wa-popover.new-session-page__place-popover");
       await placePopover.getByRole("button", { name: "Worktree" }).click();
-      await placePopover.getByLabel("Base branch").fill("main");
+      await expect.poll(() => placePopover.getByLabel("Base branch").inputValue()).toBe("main");
       await placePopover.getByLabel("Worktree name").fill("terminal-task");
       await page.locator("#new-session-place-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");

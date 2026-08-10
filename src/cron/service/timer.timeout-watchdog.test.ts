@@ -786,7 +786,9 @@ describe("cron service timer regressions", () => {
           channel: "telegram",
           to: "12345",
           payload: expect.objectContaining({
-            text: expect.stringContaining("Check automation history for details."),
+            text:
+              'Automation "before agent reply unhandled regression" failed 1 times\n' +
+              "Check automation history for details.",
           }),
         }),
       );

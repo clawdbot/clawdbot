@@ -4497,6 +4497,7 @@ describe("Codex app-server thread lifecycle timing", () => {
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
     it.each([
+      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
@@ -4512,6 +4513,7 @@ describe("resolveReasoningEffort (#71946)", () => {
     );
 
     it.each([
+      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",

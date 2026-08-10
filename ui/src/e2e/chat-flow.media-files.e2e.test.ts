@@ -656,7 +656,10 @@ suite.define(() => {
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
       const evictedPath = new URL(
-        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
+        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL").replace(
+          /\/full$/u,
+          "/thumbnail",
+        ),
         suite.server.baseUrl,
       ).pathname;
       const fetchesBeforeRevisit = fetchedMedia.filter(
