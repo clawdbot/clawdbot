@@ -2,10 +2,8 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
-import {
-  cleanupFailedAcpSpawn,
-  type AcpSpawnRuntimeCloseHandle,
-} from "../../../acp/control-plane/spawn.js";
+import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spawn.js";
+import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
