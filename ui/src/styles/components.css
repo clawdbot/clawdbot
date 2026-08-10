@@ -591,12 +591,14 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
+/* Passive notification, so it sits in the trailing bottom corner rather than
+ * centered over the composer. The host shows one toast at a time (`show()`
+ * replaces the active one), so there is no stack to offset against. */
 .app-toast {
   position: fixed;
-  left: 50%;
-  bottom: calc(20px + var(--safe-area-bottom));
+  right: calc(20px + var(--safe-area-right));
+  bottom: calc(var(--app-toast-inset-bottom, 20px) + var(--safe-area-bottom));
   z-index: 2000;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -607,6 +609,27 @@ openclaw-session-owner-chip {
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
+}
+
+/* Chat routes anchor a composer to the bottom of the content column, and its
+ * send/mic controls sit exactly where a corner toast lands. Lift the toast above
+ * a default-height composer: one value that clears both the 1440x900 desktop
+ * composer (99px over a 14px gap) and the taller phone one (103px over 26px), so
+ * the offset does not have to be retuned per breakpoint. A composer grown by a
+ * multi-line draft can still reach under the toast's top edge; that trades a
+ * cosmetic overlap for never occluding an action, which is the right way round. */
+.shell--chat {
+  --app-toast-inset-bottom: 140px;
+}
+
+/* A corner toast degenerates at phone widths, where it would span nearly the
+ * whole viewport anyway. Use the full-width bottom idiom instead. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .app-toast {
+    left: max(12px, var(--safe-area-left));
+    right: max(12px, var(--safe-area-right));
+    max-width: none;
+  }
 }
 
 /* Toasts carry recovery instructions ("Undo", where to re-enable), so a message
