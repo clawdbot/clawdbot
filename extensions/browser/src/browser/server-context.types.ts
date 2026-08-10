@@ -55,6 +55,8 @@ export type BrowserOperationOptions = {
 export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
+  /** Create an about:blank tab when the browser is running but has no selectable tabs. */
+  createIfMissing?: boolean;
 };
 
 type BrowserProfileActions = {

@@ -3,23 +3,20 @@
  */
 import type { Command } from "commander";
 import {
+  formatCliCommand,
+  formatHelpExamples,
   registerCommandGroups,
   shouldEagerRegisterSubcommands,
+  theme,
   type CommandGroupEntry,
   type CommandGroupPlaceholder,
 } from "openclaw/plugin-sdk/cli-runtime";
+import { addGatewayClientOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
-import {
-  addGatewayClientOptions,
-  danger,
-  defaultRuntime,
-  formatCliCommand,
-  formatDocsLink,
-  formatHelpExamples,
-  theme,
-} from "./core-api.js";
 
 type BrowserCommandRegistrar = (args: {
   browser: Command;

@@ -39,6 +39,156 @@ describe("pw-session page-scoped CDP client", () => {
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
+  it("detaches the exact page session when its caller aborts", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("doctor request cancelled");
+    const sessionSend = vi.fn(() => new Promise<never>(() => {}));
+    const sessionDetach = vi.fn(async () => {});
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: sessionDetach })),
+      }),
+    };
+
+    const pending = withPageScopedCdpClient({
+      cdpUrl: "http://127.0.0.1:9222",
+      page: page as never,
+      targetId: "tab-1",
+      signal: controller.signal,
+      fn: async (send) => await send("Accessibility.getFullAXTree"),
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(sessionSend).toHaveBeenCalledOnce());
+
+    controller.abort(abortError);
+
+    await expect(pending).rejects.toBe(abortError);
+    expect(sessionDetach).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts while page-session creation is pending and detaches a late session", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("doctor request cancelled during session creation");
+    const sessionDetach = vi.fn(async () => {});
+    let resolveSession!: (session: {
+      send: ReturnType<typeof vi.fn>;
+      detach: typeof sessionDetach;
+    }) => void;
+    const newCDPSession = vi.fn(
+      () =>
+        new Promise<{ send: ReturnType<typeof vi.fn>; detach: typeof sessionDetach }>((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    const page = { context: () => ({ newCDPSession }) };
+    const callback = vi.fn(async () => "unexpected");
+
+    const pending = withPageScopedCdpClient({
+      cdpUrl: "http://127.0.0.1:9222",
+      page: page as never,
+      targetId: "tab-1",
+      signal: controller.signal,
+      fn: callback,
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(newCDPSession).toHaveBeenCalledOnce());
+    controller.abort(cancellation);
+
+    try {
+      await expect(
+        Promise.race([
+          pending,
+          new Promise<never>((_resolve, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error("session creation ignored cancellation")),
+              300,
+            );
+            timer.unref?.();
+          }),
+        ]),
+      ).rejects.toBe(cancellation);
+    } finally {
+      resolveSession({ send: vi.fn(), detach: sessionDetach });
+    }
+
+    await vi.waitFor(() => expect(sessionDetach).toHaveBeenCalledOnce());
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("does not await a stalled detach before rejecting an aborted page operation", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("doctor request cancelled during page command");
+    const sessionSend = vi.fn(() => new Promise<never>(() => {}));
+    const sessionDetach = vi.fn(() => new Promise<void>(() => {}));
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: sessionDetach })),
+      }),
+    };
+
+    const pending = withPageScopedCdpClient({
+      cdpUrl: "http://127.0.0.1:9222",
+      page: page as never,
+      targetId: "tab-1",
+      signal: controller.signal,
+      fn: async (send) => await send("Accessibility.getFullAXTree"),
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(sessionSend).toHaveBeenCalledOnce());
+    controller.abort(cancellation);
+
+    await expect(
+      Promise.race([
+        pending,
+        new Promise<never>((_resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("stalled detach blocked cancellation")),
+            300,
+          );
+          timer.unref?.();
+        }),
+      ]),
+    ).rejects.toBe(cancellation);
+    expect(sessionDetach).toHaveBeenCalledOnce();
+  });
+
+  it("lets a detached session's precise command error win the abort fallback", async () => {
+    const controller = new AbortController();
+    const relayError = new Error(
+      "extension relay page session detached: cdp (tabId=1, method=Accessibility.enable)",
+    );
+    let rejectSend!: (error: Error) => void;
+    const sessionSend = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectSend = reject;
+        }),
+    );
+    const sessionDetach = vi.fn(async () => {
+      setImmediate(() => rejectSend(relayError));
+    });
+    const page = {
+      context: () => ({
+        newCDPSession: vi.fn(async () => ({ send: sessionSend, detach: sessionDetach })),
+      }),
+    };
+
+    const pending = withPageScopedCdpClient({
+      cdpUrl: "http://127.0.0.1:9222",
+      page: page as never,
+      targetId: "tab-1",
+      signal: controller.signal,
+      fn: async (send) => await send("Accessibility.enable"),
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(sessionSend).toHaveBeenCalledOnce());
+
+    controller.abort(new Error("deep doctor deadline"));
+
+    await expect(pending).rejects.toBe(relayError);
+    expect(sessionDetach).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the main-frame loader identity through the existing page session", async () => {
     const sessionSend = vi.fn(async (method: string) =>
       method === "Page.getFrameTree"

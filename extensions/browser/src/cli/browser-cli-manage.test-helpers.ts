@@ -2,10 +2,10 @@
  * Test helpers for Browser CLI manage command suites.
  */
 import type { Command } from "commander";
+import * as cliRuntimeModule from "openclaw/plugin-sdk/cli-runtime";
+import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
-import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 type BrowserRequest = {
   path?: string;
@@ -46,7 +46,7 @@ const browserManageMocks = vi.hoisted(() => ({
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
   browserManageMocks.callBrowserRequest,
 );
-vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliRuntimeModule, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();
@@ -58,12 +58,12 @@ vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
 const { createBrowserProgram, getBrowserCliRuntime } =
   await import("./browser-cli.test-support.js");
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
+vi.spyOn(runtimeEnvModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(runtimeEnvModule.defaultRuntime, "writeJson").mockImplementation(
   browserCliRuntime.writeJson,
 );
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(runtimeEnvModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(runtimeEnvModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
 

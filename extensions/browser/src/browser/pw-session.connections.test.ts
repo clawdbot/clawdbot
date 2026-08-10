@@ -719,6 +719,9 @@ describe("pw-session connection scoping", () => {
       listed = pages;
     });
     await vi.advanceTimersByTimeAsync(2_000);
+    // Cancellation deliberately yields one event-loop turn so a detached
+    // page session's precise relay error can beat the generic deadline.
+    await vi.runAllTimersAsync();
 
     expect(listed).toEqual([
       [

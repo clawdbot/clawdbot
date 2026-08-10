@@ -3,7 +3,22 @@
  * checks.
  */
 import type { Command } from "commander";
-import type { BrowserDoctorCheck, BrowserDoctorReport } from "../browser-runtime.js";
+import { danger, defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
+import type {
+  BrowserCreateProfileResult,
+  BrowserDeleteProfileResult,
+  BrowserDoctorCheck,
+  BrowserDoctorReport,
+  BrowserImportProfileResult,
+  BrowserResetProfileResult,
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  ProfileStatus,
+  SystemProfileInfo,
+} from "../browser-runtime.js";
+import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -14,22 +29,6 @@ import {
   runBrowserCliCommand as runBrowserCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import {
-  danger,
-  defaultRuntime,
-  info,
-  redactCdpUrl,
-  shortenHomePath,
-  type BrowserCreateProfileResult,
-  type BrowserDeleteProfileResult,
-  type BrowserImportProfileResult,
-  type BrowserResetProfileResult,
-  type BrowserStatus,
-  type BrowserTab,
-  type BrowserTransport,
-  type ProfileStatus,
-  type SystemProfileInfo,
-} from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
 
@@ -151,7 +150,7 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   try {
-    return await callBrowserRequest<BrowserDoctorReport>(
+    const report = await callBrowserRequest<BrowserDoctorReport>(
       parent,
       {
         method: "GET",
@@ -160,6 +159,55 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       },
       { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
     );
+    const checks = [...report.checks];
+    if (!report.status.running) {
+      checks.push({
+        id: "browser",
+        label: "Browser",
+        status: "fail",
+        summary: "not running; run `openclaw browser start`",
+      });
+    } else if (!deep || report.ok) {
+      try {
+        const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
+          parent,
+          {
+            method: "GET",
+            path: "/tabs",
+            query: resolveProfileQuery(profile),
+          },
+          { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        );
+        const tabs = result.tabs ?? [];
+        checks.push(
+          result.running === false
+            ? {
+                id: "tabs",
+                label: "Tabs",
+                status: "fail",
+                summary: "tab enumeration reports that the browser is not running",
+              }
+            : {
+                id: "tabs",
+                label: "Tabs",
+                status: "pass",
+                summary: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use tab reference ${tabs[0].suggestedTargetId}` : ""}`,
+              },
+        );
+      } catch (err) {
+        checks.push({
+          id: "tabs",
+          label: "Tabs",
+          status: "fail",
+          summary: String(err),
+        });
+      }
+    }
+    return {
+      ...report,
+      checks,
+      ok: report.ok && checks.every((check) => check.status !== "fail"),
+    };
   } catch (err) {
     return {
       ok: false,

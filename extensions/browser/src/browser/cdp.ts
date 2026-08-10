@@ -422,6 +422,7 @@ export async function snapshotAria(opts: {
   wsUrl: string;
   limit?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   return await withCdpSocket(
@@ -434,7 +435,7 @@ export async function snapshotAria(opts: {
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, signal: opts.signal },
   );
 }
 

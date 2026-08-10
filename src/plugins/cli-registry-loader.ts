@@ -109,6 +109,19 @@ function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: str
   );
 }
 
+function canUseBundledPluginCliMetadataRegistry(
+  registry: PluginRegistry,
+  primaryCommand: string,
+): boolean {
+  const ownerIds = listPluginCliRootOwnerIds(registry, primaryCommand);
+  if (ownerIds.length === 0) {
+    return false;
+  }
+  return ownerIds.every((pluginId) =>
+    registry.plugins.some((plugin) => plugin.id === pluginId && plugin.origin === "bundled"),
+  );
+}
+
 async function resolvePrimaryCommandPluginIds(
   context: PluginCliLoadContext,
   primaryCommand: string | undefined,
@@ -161,15 +174,43 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   primaryCommand?: string;
   loaderOptions?: PluginCliLoaderOptions;
 }): Promise<PluginCliRegistryLoadResult> {
+  let metadataResult: PluginCliRegistryLoadResult | null = null;
+  if (normalizePluginCliRootName(params.primaryCommand)) {
+    try {
+      metadataResult = await loadPluginCliMetadataRegistryWithContext(
+        params.context,
+        { primaryCommand: params.primaryCommand },
+        params.loaderOptions,
+      );
+      if (
+        canUseBundledPluginCliMetadataRegistry(metadataResult.registry, params.primaryCommand ?? "")
+      ) {
+        return metadataResult;
+      }
+    } catch {
+      metadataResult = null;
+    }
+  }
   let onlyPluginIds: string[] | undefined;
-  try {
-    onlyPluginIds = await resolvePrimaryCommandPluginIds(
+  if (metadataResult) {
+    const manifestPluginIds = resolvePrimaryCommandManifestPluginIds(
       params.context,
       params.primaryCommand,
-      params.loaderOptions,
     );
-  } catch {
-    onlyPluginIds = resolvePrimaryCommandManifestPluginIds(params.context, params.primaryCommand);
+    onlyPluginIds =
+      manifestPluginIds && manifestPluginIds.length > 0
+        ? manifestPluginIds
+        : listPluginCliRootOwnerIds(metadataResult.registry, params.primaryCommand ?? "");
+  } else {
+    try {
+      onlyPluginIds = await resolvePrimaryCommandPluginIds(
+        params.context,
+        params.primaryCommand,
+        params.loaderOptions,
+      );
+    } catch {
+      onlyPluginIds = resolvePrimaryCommandManifestPluginIds(params.context, params.primaryCommand);
+    }
   }
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return {

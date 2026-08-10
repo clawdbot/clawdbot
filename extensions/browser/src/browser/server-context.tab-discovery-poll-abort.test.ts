@@ -48,6 +48,32 @@ function makeProfileRuntime(): ProfileRuntimeState {
 }
 
 describe("browser tab discovery poll abort", () => {
+  it("does not create a blank tab when selection is diagnostic-only", async () => {
+    vi.useFakeTimers();
+    const runtime = makeProfileRuntime();
+    const openTab = vi.fn(async () => ({
+      targetId: "CREATED",
+      title: "",
+      url: "about:blank",
+      type: "page" as const,
+    }));
+    const ops = createProfileSelectionOps({
+      profile: runtime.profile,
+      runtime,
+      getCdpControlPolicy: () => undefined,
+      ensureBrowserAvailable: async () => {},
+      listTabs: vi.fn(async () => []),
+      openTab,
+    });
+
+    const ensurePromise = ops.ensureTabAvailable(undefined, { createIfMissing: false });
+    void ensurePromise.catch(() => {});
+    await vi.runAllTimersAsync();
+
+    await expect(ensurePromise).rejects.toThrow(/tab not found/i);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
   it("cancels the selection discovery timer", async () => {
     vi.useFakeTimers();
     const runtime = makeProfileRuntime();

@@ -173,11 +173,15 @@ async function prepareSnapshotPageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<Page> {
+  opts.signal?.throwIfAborted();
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    signal: opts.signal,
   });
+  opts.signal?.throwIfAborted();
   ensurePageState(page);
   if (opts.ssrfPolicy) {
     await assertPageNavigationCompletedSafely({
@@ -197,60 +201,73 @@ type AriaSnapshotViaPlaywrightOptions = {
   limit?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 };
 
 async function captureAriaSnapshotWithPageViaPlaywright(
   opts: AriaSnapshotViaPlaywrightOptions,
+  ignoreAccessibilityEnableErrors: boolean,
 ): Promise<{ nodes: AriaSnapshotNode[]; page: Page }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
-  const page = await prepareSnapshotPageViaPlaywright({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
-  });
   const ariaTimeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
       ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
       : undefined;
-  const collectAxTree = withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      await send("Accessibility.enable").catch(() => {});
-      return (await send("Accessibility.getFullAXTree")) as {
-        nodes?: RawAXNode[];
-      };
-    },
-  });
-  const res = (await (ariaTimeoutMs === undefined
-    ? collectAxTree
-    : (() => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error(`Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`));
-          }, ariaTimeoutMs);
-          timer.unref?.();
-        });
-        return Promise.race([collectAxTree, timeout]).finally(() => {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        });
-      })())) as {
-    nodes?: RawAXNode[];
-  };
-  const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  const formatted = formatAriaSnapshot(nodes, limit);
-  return { nodes: formatted, page };
+  const timeoutController = ariaTimeoutMs === undefined ? undefined : new AbortController();
+  const timer =
+    timeoutController && ariaTimeoutMs !== undefined
+      ? setTimeout(() => {
+          timeoutController.abort(
+            new Error(`Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`),
+          );
+        }, ariaTimeoutMs)
+      : undefined;
+  timer?.unref?.();
+  const signal =
+    opts.signal && timeoutController
+      ? AbortSignal.any([opts.signal, timeoutController.signal])
+      : (opts.signal ?? timeoutController?.signal);
+  try {
+    signal?.throwIfAborted();
+    const page = await prepareSnapshotPageViaPlaywright({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+      signal,
+    });
+    const res = (await withPageScopedCdpClient({
+      cdpUrl: opts.cdpUrl,
+      page,
+      targetId: opts.targetId,
+      signal,
+      fn: async (send) => {
+        const enable = send("Accessibility.enable");
+        if (ignoreAccessibilityEnableErrors) {
+          await enable.catch(() => {});
+        } else {
+          await enable;
+        }
+        signal?.throwIfAborted();
+        return (await send("Accessibility.getFullAXTree")) as {
+          nodes?: RawAXNode[];
+        };
+      },
+    })) as { nodes?: RawAXNode[] };
+    signal?.throwIfAborted();
+    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+    return { nodes: formatAriaSnapshot(nodes, limit), page };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /** Captures a raw accessibility tree without publishing interaction refs. */
 export async function captureAriaSnapshotViaPlaywright(
   opts: AriaSnapshotViaPlaywrightOptions,
 ): Promise<{ nodes: AriaSnapshotNode[] }> {
-  const { nodes } = await captureAriaSnapshotWithPageViaPlaywright(opts);
+  const { nodes } = await captureAriaSnapshotWithPageViaPlaywright(opts, false);
   return { nodes };
 }
 
@@ -258,7 +275,7 @@ export async function captureAriaSnapshotViaPlaywright(
 export async function snapshotAriaViaPlaywright(
   opts: AriaSnapshotViaPlaywrightOptions,
 ): Promise<{ nodes: AriaSnapshotNode[] }> {
-  const { nodes, page } = await captureAriaSnapshotWithPageViaPlaywright(opts);
+  const { nodes, page } = await captureAriaSnapshotWithPageViaPlaywright(opts, true);
   await storeAriaSnapshotRefsViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,

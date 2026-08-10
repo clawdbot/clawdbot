@@ -231,6 +231,8 @@ export async function ensureConfigReady(
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  // Browser commands are remote Gateway clients and must not migrate local legacy state.
+  const skipBrowserCommandStateMigration = commandName === "browser";
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration =
     commandName !== "config" &&
@@ -277,6 +279,7 @@ export async function ensureConfigReady(
   };
   if (
     !didRunDoctorConfigFlow &&
+    !skipBrowserCommandStateMigration &&
     shouldConsiderStateMigration &&
     (!requiresLegacyStateInput || hasLegacyStateMigrationInputs())
   ) {
@@ -296,6 +299,7 @@ export async function ensureConfigReady(
   if (
     !preflightSnapshot &&
     !didRunDoctorConfigFlow &&
+    !skipBrowserCommandStateMigration &&
     shouldConsiderStateMigration &&
     requiresLegacyStateInput &&
     snapshot.valid &&

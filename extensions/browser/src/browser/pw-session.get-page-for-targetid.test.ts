@@ -21,6 +21,7 @@ type MockPageSpec = {
   url?: string;
   title?: string;
   targetLookupError?: string;
+  targetLookupStallError?: string;
   navigateDuringTargetLookup?: boolean;
   subframeNavigationDuringTargetLookup?: boolean;
 };
@@ -69,10 +70,16 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
     on: vi.fn(),
     newCDPSession: vi.fn(async (page: import("playwright-core").Page) => {
       const spec = specByPage.get(page);
+      let rejectTargetLookup: ((err: Error) => void) | undefined;
       return {
         send: vi.fn(async (method: string) => {
           if (method !== "Target.getTargetInfo") {
             return {};
+          }
+          if (spec?.targetLookupStallError) {
+            return await new Promise<never>((_resolve, reject) => {
+              rejectTargetLookup = reject;
+            });
           }
           if (spec?.targetLookupError) {
             throw new Error(spec.targetLookupError);
@@ -89,7 +96,11 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
           }
           return { targetInfo: { targetId: spec?.targetId } };
         }),
-        detach: vi.fn(async () => {}),
+        detach: vi.fn(async () => {
+          if (spec?.targetLookupStallError) {
+            rejectTargetLookup?.(new Error(spec.targetLookupStallError));
+          }
+        }),
       };
     }),
   } as unknown as import("playwright-core").BrowserContext;
@@ -135,6 +146,172 @@ describe("pw-session getPageForTargetId", () => {
     ).rejects.toBeInstanceOf(BrowserTabNotFoundError);
     expect(pageActions[0]?.close).not.toHaveBeenCalled();
     expect(pageActions[0]?.bringToFront).not.toHaveBeenCalled();
+  });
+
+  it("preserves relay attribution when a target lookup times out", async () => {
+    vi.useFakeTimers();
+    try {
+      installBrowser([
+        {
+          targetLookupStallError:
+            "extension relay page session detached: cdp (tabId=1, method=Target.getTargetInfo)",
+        },
+      ]);
+
+      const pending = getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "TARGET_A",
+      });
+      void pending.catch(() => {});
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(pending).rejects.toThrow(
+        "extension relay page session detached: cdp (tabId=1, method=Target.getTargetInfo)",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds an exclusive cold connection wait and closes a late browser", async () => {
+    const late = makeBrowser([{ targetId: "LATE" }]);
+    const successor = makeBrowser([{ targetId: "SUCCESSOR" }]);
+    let resolveLate: ((browser: import("playwright-core").Browser) => void) | undefined;
+    connectOverCdpSpy
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<import("playwright-core").Browser>((resolve) => {
+            resolveLate = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(successor.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const controller = new AbortController();
+    const abortReason = new Error("doctor connection deadline elapsed");
+    const pending = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "LATE",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
+
+    controller.abort(abortReason);
+    await expect(pending).rejects.toBe(abortReason);
+
+    const recovered = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "SUCCESSOR",
+    });
+    await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledTimes(2));
+    await expect(recovered).resolves.toBe(successor.pages[0]);
+
+    resolveLate?.(late.browser);
+    await vi.waitFor(() => expect(late.browserClose).toHaveBeenCalledOnce());
+    expect(successor.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("lets one caller abort without cancelling a shared pending connection", async () => {
+    const shared = makeBrowser([{ targetId: "SHARED" }]);
+    let resolveShared: ((browser: import("playwright-core").Browser) => void) | undefined;
+    connectOverCdpSpy.mockImplementationOnce(
+      async () =>
+        await new Promise<import("playwright-core").Browser>((resolve) => {
+          resolveShared = resolve;
+        }),
+    );
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const controller = new AbortController();
+    const abortReason = new Error("doctor caller stopped waiting");
+    const doctor = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "SHARED",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
+
+    const owner = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "SHARED",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.abort(abortReason);
+    await expect(doctor).rejects.toBe(abortReason);
+    expect(shared.browserClose).not.toHaveBeenCalled();
+    expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+
+    resolveShared?.(shared.browser);
+    await expect(owner).resolves.toBe(shared.pages[0]);
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "SHARED",
+      }),
+    ).resolves.toBe(shared.pages[0]);
+    expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+    expect(shared.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("stops retry delays when the final connection waiter aborts", async () => {
+    vi.useFakeTimers();
+    try {
+      connectOverCdpSpy.mockRejectedValue(new Error("connect failed"));
+      getChromeWebSocketUrlSpy.mockResolvedValue(null);
+      const controller = new AbortController();
+      const abortReason = new Error("doctor retry deadline elapsed");
+      const pending = getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
+
+      controller.abort(abortReason);
+      await expect(pending).rejects.toBe(abortReason);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start CDP after discovery is cancelled", async () => {
+    let resolveDiscovery: ((value: string | null) => void) | undefined;
+    getChromeWebSocketUrlSpy.mockImplementationOnce(
+      async () =>
+        await new Promise<string | null>((resolve) => {
+          resolveDiscovery = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const pending = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9222",
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(getChromeWebSocketUrlSpy).toHaveBeenCalledOnce());
+    controller.abort(new Error("doctor deadline"));
+    resolveDiscovery?.("ws://127.0.0.1:9222/devtools/browser/discovered");
+
+    await expect(pending).rejects.toThrow("doctor deadline");
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not start normalized fallback after the discovered handshake is cancelled", async () => {
+    const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/original";
+    const discoveredUrl = "ws://127.0.0.1:9222/devtools/browser/discovered";
+    const controller = new AbortController();
+    getChromeWebSocketUrlSpy.mockResolvedValueOnce(discoveredUrl);
+    connectOverCdpSpy.mockImplementationOnce(async () => {
+      controller.abort(new Error("doctor deadline"));
+      throw new Error("stale discovered endpoint");
+    });
+
+    await expect(getPageForTargetId({ cdpUrl, signal: controller.signal })).rejects.toThrow(
+      "doctor deadline",
+    );
+    expect(connectOverCdpSpy).toHaveBeenCalledOnce();
   });
 
   it("does not infer target identity from duplicate URL ordering", async () => {

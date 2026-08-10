@@ -374,6 +374,50 @@ describe("cdp internal", () => {
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
       expect(snap.nodes).toStrictEqual([]);
     });
+
+    it("aborts a stalled snapshot command with the caller signal", async () => {
+      const controller = new AbortController();
+      const cancellation = new Error("deep doctor deadline expired");
+      let markSnapshotStarted!: () => void;
+      const snapshotStarted = new Promise<void>((resolve) => {
+        markSnapshotStarted = resolve;
+      });
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Accessibility.getFullAXTree") {
+          markSnapshotStarted();
+        }
+        return undefined;
+      });
+      wss = server.wss;
+      const pending = snapshotAria({
+        wsUrl: server.wsUrl,
+        timeoutMs: 5_000,
+        signal: controller.signal,
+      });
+      void pending.catch(() => {});
+      await snapshotStarted;
+      controller.abort(cancellation);
+
+      try {
+        await expect(
+          Promise.race([
+            pending,
+            new Promise<never>((_resolve, reject) => {
+              const timer = setTimeout(
+                () => reject(new Error("snapshot command ignored cancellation")),
+                300,
+              );
+              timer.unref?.();
+            }),
+          ]),
+        ).rejects.toBe(cancellation);
+      } finally {
+        for (const socket of server.wss.clients) {
+          socket.terminate();
+        }
+        await pending.catch(() => {});
+      }
+    });
   });
 
   describe("snapshotRoleViaCdp", () => {

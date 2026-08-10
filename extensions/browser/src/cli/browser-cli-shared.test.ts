@@ -1,6 +1,6 @@
+import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 // Browser tests cover browser cli shared plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { callGatewayFromCli } from "./core-api.js";
 
 type CallGatewayFromCliArgs = Parameters<typeof callGatewayFromCli>;
 
@@ -8,7 +8,8 @@ const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("./core-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
   callGatewayFromCli: gatewayMocks.callGatewayFromCli,
 }));
 

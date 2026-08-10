@@ -593,10 +593,16 @@ describe("browser control server", () => {
     expect(report.ok).toBe(true);
     const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
     expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "pass" });
-    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledOnce();
+    const snapshotOptions = mockFirstArg(cdpMocks.snapshotAria, 0, "snapshotAria");
+    expectRecordFields(snapshotOptions, {
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 25,
     });
+    expect(snapshotOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(snapshotOptions.timeoutMs).toEqual(expect.any(Number));
+    expect(snapshotOptions.timeoutMs).toBeGreaterThan(0);
+    expect(snapshotOptions.timeoutMs).toBeLessThanOrEqual(10_000);
   });
 
   it("agent contract: extension deep doctor uses capture-only Playwright diagnostics", async () => {
@@ -634,9 +640,54 @@ describe("browser control server", () => {
         targetId: "extension-target-1",
         limit: 25,
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        signal: expect.any(AbortSignal),
       }),
     );
     expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
+  });
+
+  it("agent contract: cancelling extension deep doctor promptly releases its profile lease", async () => {
+    pwMocks.listPagesViaPlaywright = vi.fn(async () => [
+      {
+        targetId: "extension-target-1",
+        title: "Extension tab",
+        url: "https://example.com",
+        type: "page",
+      },
+    ]);
+    let captureStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    pwMocks.captureAriaSnapshotViaPlaywright = vi.fn(async (rawOpts?: unknown) => {
+      const opts = rawOpts as { signal?: AbortSignal };
+      return await new Promise<never>((_resolve, reject) => {
+        captureStarted();
+        opts.signal?.addEventListener("abort", () => reject(opts.signal?.reason), {
+          once: true,
+        });
+      });
+    });
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+    const controller = new AbortController();
+    const doctor = realFetch(`${base}/doctor?profile=chrome&deep=true`, {
+      signal: controller.signal,
+    });
+    void doctor.catch(() => {});
+    await started;
+
+    controller.abort(new Error("doctor client disconnected"));
+    await expect(doctor).rejects.toThrow("doctor client disconnected");
+
+    const stop = realFetch(`${base}/stop?profile=chrome`, { method: "POST" });
+    const response = await Promise.race([
+      stop,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("profile lease was not released promptly")), 1_000);
+      }),
+    ]);
+    expect(response.status).toBe(200);
   });
 
   it.each(NAVIGATION_TIMEOUT_CASES)(

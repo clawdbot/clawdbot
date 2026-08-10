@@ -8,6 +8,7 @@ const withPageScopedCdpClient = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
 const gotoPageWithNavigationGuard = vi.fn();
+const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 const createDownloadCaptureForPage = vi.fn(() => ({
   armed: true,
   promise: new Promise(() => {}),
@@ -18,7 +19,7 @@ vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
   closeBlockedNavigationTarget: vi.fn(),
   ensurePageState,
-  forceDisconnectPlaywrightForTarget: vi.fn(),
+  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
   isDownloadStartingNavigationError: vi.fn(() => false),
@@ -43,6 +44,7 @@ type ScopedCdpClientOptions = {
   cdpUrl?: unknown;
   fn?: unknown;
   page?: unknown;
+  signal?: AbortSignal;
   targetId?: unknown;
 };
 
@@ -137,12 +139,73 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 
-  it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
+  it("propagates Accessibility.enable failures from capture-only diagnostics", async () => {
+    const page = { id: "page-1" };
+    const send = vi.fn(async (method: string) => {
+      if (method === "Accessibility.enable") {
+        throw new Error("relay command timed out");
+      }
+      return { nodes: [{ backendDOMNodeId: 42 }] };
+    });
+
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockImplementation(async (options: ScopedCdpClientOptions) => {
+      return await (options.fn as (cdpSend: typeof send) => Promise<unknown>)(send);
+    });
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await expect(
+      mod.captureAriaSnapshotViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+      }),
+    ).rejects.toThrow("relay command timed out");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("Accessibility.enable");
+  });
+
+  it("keeps Accessibility.enable best-effort for interaction snapshots", async () => {
+    const page = { id: "page-1" };
+    const rawNodes = [{ backendDOMNodeId: 42 }];
+    const formattedNodes = [{ ref: "ax1", role: "button", name: "OK", backendDOMNodeId: 42 }];
+    const send = vi.fn(async (method: string) => {
+      if (method === "Accessibility.enable") {
+        throw new Error("unsupported");
+      }
+      return { nodes: rawNodes };
+    });
+
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockImplementation(async (options: ScopedCdpClientOptions) => {
+      return await (options.fn as (cdpSend: typeof send) => Promise<unknown>)(send);
+    });
+    formatAriaSnapshot.mockReturnValue(formattedNodes);
+    markBackendDomRefsOnPage.mockResolvedValue(new Set());
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await expect(
+      mod.snapshotAriaViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+      }),
+    ).resolves.toEqual({ nodes: formattedNodes });
+    expect(send).toHaveBeenNthCalledWith(1, "Accessibility.enable");
+    expect(send).toHaveBeenNthCalledWith(2, "Accessibility.getFullAXTree");
+  });
+
+  it("cancels the page-scoped CDP session at an explicit timeoutMs", async () => {
     vi.useFakeTimers();
     try {
       const page = { id: "page-1" };
       getPageForTargetId.mockResolvedValue(page);
-      withPageScopedCdpClient.mockImplementation(() => new Promise(() => {}));
+      withPageScopedCdpClient.mockImplementation(
+        async (options: ScopedCdpClientOptions) =>
+          await new Promise<never>((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+              once: true,
+            });
+          }),
+      );
 
       const mod = await import("./pw-tools-core.snapshot.js");
       const promise = mod.snapshotAriaViaPlaywright({
@@ -155,9 +218,46 @@ describe("pw-tools-core aria snapshot storage", () => {
       await vi.advanceTimersByTimeAsync(750);
 
       await expect(promise).rejects.toThrow(/Aria snapshot via Playwright timed out/);
+      expect(getPageForTargetId).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(requireScopedCdpClientOptions().signal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the shared adapter cached after page-scoped capture cancellation", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("deep doctor disconnected");
+    const page = { id: "page-1" };
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockImplementation(
+      async (options: ScopedCdpClientOptions) =>
+        await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pending = mod.captureAriaSnapshotViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      signal: controller.signal,
+    });
+    void pending.catch(() => {});
+    await vi.waitFor(() => expect(withPageScopedCdpClient).toHaveBeenCalledOnce());
+
+    controller.abort(cancellation);
+
+    await expect(pending).rejects.toBe(cancellation);
+    expect(getPageForTargetId).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(requireScopedCdpClientOptions().signal).toBe(controller.signal);
+    expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
   });
 
   it("uses the default aria node limit for non-finite limits", async () => {

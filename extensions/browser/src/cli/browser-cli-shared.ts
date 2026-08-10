@@ -1,3 +1,5 @@
+import { runCommandWithRuntime } from "openclaw/plugin-sdk/cli-runtime";
+import { callGatewayFromCli, type GatewayRpcOpts } from "openclaw/plugin-sdk/gateway-runtime";
 /**
  * Shared Browser CLI option parsing and gateway request helpers.
  */
@@ -5,14 +7,13 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
-import { danger, defaultRuntime, runCommandWithRuntime } from "../core-api.js";
-import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 /** Parent Browser CLI options inherited by subcommands. */
 export type BrowserParentOpts = GatewayRpcOpts & {

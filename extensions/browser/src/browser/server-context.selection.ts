@@ -109,7 +109,13 @@ export function createProfileSelectionOps({
     };
 
     const openWhenConfirmedEmpty = async (tabs: BrowserTab[]): Promise<void> => {
-      if (!openedTab && sawSuccessfulList && lastNonEmptyTabs.length === 0 && tabs.length === 0) {
+      if (
+        options?.createIfMissing !== false &&
+        !openedTab &&
+        sawSuccessfulList &&
+        lastNonEmptyTabs.length === 0 &&
+        tabs.length === 0
+      ) {
         openedTab = await openTab("about:blank", options);
       }
     };

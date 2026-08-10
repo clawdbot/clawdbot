@@ -783,47 +783,59 @@ export async function withCdpSocket<T>(
       ws.once("error", (err) => reject(err));
       ws.once("close", () => reject(new Error("CDP socket closed")));
     });
-    // A stalled HTTP upgrade must release its TCP socket on cancellation.
-    const abortHandshake = () => ws.terminate();
-    opts?.signal?.addEventListener("abort", abortHandshake, { once: true });
+    // Cancellation owns the whole socket attempt: handshake, retry backoff,
+    // and connected commands all reject with the caller's precise reason.
+    const abortSocket = () => {
+      const reason =
+        opts?.signal?.reason instanceof Error
+          ? opts.signal.reason
+          : new Error("CDP socket operation aborted.", { cause: opts?.signal?.reason });
+      closeWithError(reason);
+      ws.terminate();
+    };
+    opts?.signal?.addEventListener("abort", abortSocket, { once: true });
     if (opts?.signal?.aborted) {
-      abortHandshake();
+      abortSocket();
     }
 
     try {
-      await openPromise;
-    } catch (err) {
-      // openPromise is only rejected via `ws.once('error', err => reject(err))`
-      // or the close event's `new Error(...)`; the former always carries an
-      // Error from Node's `ws` library, the latter is already an Error. The
-      // non-Error wrap is defensive and structurally unreachable.
-      /* c8 ignore next */
-      closeWithError(err instanceof Error ? err : new Error(String(err)));
-      // Cancellation on the final attempt must not become a handshake error.
+      try {
+        await openPromise;
+      } catch (err) {
+        // openPromise is only rejected via `ws.once('error', err => reject(err))`
+        // or the close event's `new Error(...)`; the former always carries an
+        // Error from Node's `ws` library, the latter is already an Error. The
+        // non-Error wrap is defensive and structurally unreachable.
+        /* c8 ignore next */
+        closeWithError(err instanceof Error ? err : new Error(String(err)));
+        // Cancellation on the final attempt must not become a handshake error.
+        opts?.signal?.throwIfAborted();
+        if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
+          throw err;
+        }
+        // Retry only handshake failures. Once CDP commands are flowing, callers
+        // own retry semantics because commands may already have side effects.
+        // Cancelled route requests must not keep retrying Chrome handshakes.
+        await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
+          (error: unknown) => {
+            opts?.signal?.throwIfAborted();
+            throw error;
+          },
+        );
+        continue;
+      }
+
       opts?.signal?.throwIfAborted();
-      if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
+      try {
+        const result = await fn(send);
+        opts?.signal?.throwIfAborted();
+        return result;
+      } catch (err) {
+        closeWithError(err instanceof Error ? err : new Error(String(err)));
         throw err;
       }
-      // Retry only handshake failures. Once CDP commands are flowing, callers
-      // own retry semantics because commands may already have side effects.
-      // Cancelled route requests must not keep retrying Chrome handshakes.
-      await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
-        (error: unknown) => {
-          opts?.signal?.throwIfAborted();
-          throw error;
-        },
-      );
-      continue;
     } finally {
-      opts?.signal?.removeEventListener("abort", abortHandshake);
-    }
-
-    try {
-      return await fn(send);
-    } catch (err) {
-      closeWithError(err instanceof Error ? err : new Error(String(err)));
-      throw err;
-    } finally {
+      opts?.signal?.removeEventListener("abort", abortSocket);
       ws.close();
     }
   }

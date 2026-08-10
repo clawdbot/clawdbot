@@ -292,6 +292,16 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
+  it("keeps browser RPC clients from migrating existing local legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["browser", "doctor"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps logs from migrating existing local legacy state", async () => {
     const root = useTempOpenClawHome();
     writeStateMarker(root, "cron/runs/legacy-job.jsonl");

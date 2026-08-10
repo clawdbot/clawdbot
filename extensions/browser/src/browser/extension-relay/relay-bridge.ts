@@ -43,8 +43,10 @@ type CdpRequest = {
 };
 
 type PendingExtensionCommand = {
+  command: RelayCommandBody;
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
+  sessionId?: string;
   timer: NodeJS.Timeout;
 };
 
@@ -82,6 +84,12 @@ function toErrorPayload(
   code = -32000,
 ): string {
   return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
+}
+
+function relayCommandDetail(command: RelayCommandBody): string {
+  return command.type === "cdp"
+    ? `cdp (tabId=${command.tabId}, method=${command.method})`
+    : command.type;
 }
 
 /**
@@ -334,20 +342,22 @@ export class ExtensionRelayBridge {
 
   private callExtension(
     command: RelayCommandBody,
-    timeoutMs = EXTENSION_COMMAND_TIMEOUT_MS,
+    opts: { sessionId?: string; timeoutMs?: number } = {},
   ): Promise<unknown> {
     const seq = this.nextSeq++;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
-        const commandDetail =
-          command.type === "cdp"
-            ? `cdp (tabId=${command.tabId}, method=${command.method})`
-            : command.type;
-        reject(new Error(`extension relay command timed out: ${commandDetail}`));
-      }, timeoutMs);
+        reject(new Error(`extension relay command timed out: ${relayCommandDetail(command)}`));
+      }, opts.timeoutMs ?? EXTENSION_COMMAND_TIMEOUT_MS);
       timer.unref?.();
-      this.pendingExtension.set(seq, { resolve, reject, timer });
+      this.pendingExtension.set(seq, {
+        command,
+        resolve,
+        reject,
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        timer,
+      });
       try {
         this.sendToExtension({ ...command, seq });
       } catch (err) {
@@ -356,6 +366,26 @@ export class ExtensionRelayBridge {
         reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
+  }
+
+  /** Retire one synthetic page session; returns whether a pending command was rejected. */
+  private retireAuxiliaryTabSession(sessionId: string, reason: string): boolean {
+    const auxiliary = this.auxiliaryTabSessions.get(sessionId);
+    if (!auxiliary) {
+      return false;
+    }
+    this.auxiliaryTabSessions.delete(sessionId);
+    let rejectedPendingCommand = false;
+    for (const [seq, pending] of this.pendingExtension) {
+      if (pending.sessionId !== sessionId) {
+        continue;
+      }
+      rejectedPendingCommand = true;
+      this.pendingExtension.delete(seq);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(`${reason}: ${relayCommandDetail(pending.command)}`));
+    }
+    return rejectedPendingCommand;
   }
 
   private syncTabs(tabs: RelayTabInfo[]): void {
@@ -487,6 +517,7 @@ export class ExtensionRelayBridge {
       if (auxiliary.tabId !== tabId) {
         continue;
       }
+      this.retireAuxiliaryTabSession(auxiliarySessionId, "extension relay page target detached");
       auxiliary.client.socket.send(
         JSON.stringify({
           sessionId: auxiliary.parentSessionId,
@@ -494,7 +525,6 @@ export class ExtensionRelayBridge {
           params: { sessionId: auxiliarySessionId, targetId },
         }),
       );
-      this.auxiliaryTabSessions.delete(auxiliarySessionId);
     }
     // Reap this tab's child sessions (iframes/workers) by owner tabId. Callers
     // clear tab.attached before/around this, so matching on the root sessionId
@@ -703,13 +733,16 @@ export class ExtensionRelayBridge {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
       return;
     }
-    const result = await this.callExtension({
-      type: "cdp",
-      tabId: route.tabId,
-      ...(route.child ? { sessionId } : {}),
-      method: request.method,
-      params: request.params,
-    });
+    const result = await this.callExtension(
+      {
+        type: "cdp",
+        tabId: route.tabId,
+        ...(route.child ? { sessionId } : {}),
+        method: request.method,
+        params: request.params,
+      },
+      { sessionId },
+    );
     this.respond(client, request, result);
   }
 
@@ -846,17 +879,31 @@ export class ExtensionRelayBridge {
         const sessionId = request.params?.sessionId as string | undefined;
         if (sessionId && this.browserSessions.get(sessionId) === client) {
           this.browserSessions.delete(sessionId);
+          let rejectedPendingCommand = false;
           for (const [auxiliarySessionId, auxiliary] of this.auxiliaryTabSessions) {
             if (auxiliary.parentSessionId === sessionId && auxiliary.client === client) {
-              this.auxiliaryTabSessions.delete(auxiliarySessionId);
+              rejectedPendingCommand =
+                this.retireAuxiliaryTabSession(
+                  auxiliarySessionId,
+                  "extension relay page session detached",
+                ) || rejectedPendingCommand;
             }
+          }
+          if (rejectedPendingCommand) {
+            await new Promise<void>((resolve) => setImmediate(resolve));
           }
           this.respond(client, request, {});
           return;
         }
         const auxiliary = sessionId ? this.auxiliaryTabSessions.get(sessionId) : undefined;
         if (auxiliary?.client === client) {
-          this.auxiliaryTabSessions.delete(sessionId as string);
+          const rejectedPendingCommand = this.retireAuxiliaryTabSession(
+            sessionId as string,
+            "extension relay page session detached",
+          );
+          if (rejectedPendingCommand) {
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
           this.respond(client, request, {});
           return;
         }

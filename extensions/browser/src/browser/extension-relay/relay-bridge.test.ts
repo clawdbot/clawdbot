@@ -378,6 +378,151 @@ describe("ExtensionRelayBridge", () => {
     expect(client.frames().find((frame) => frame.id === 5)?.result).toEqual({});
   });
 
+  it("responds to a clean auxiliary detach without an error-ordering delay", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { handlers } = wireExtension(bridge);
+    sendHello(handlers);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: {} }));
+    await flush();
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+    await flush();
+    const browserSessionId = (
+      client.frames().find((frame) => frame.id === 2)?.result as { sessionId?: string }
+    )?.sessionId;
+    cdp.onMessage(
+      JSON.stringify({
+        id: 3,
+        sessionId: browserSessionId,
+        method: "Target.attachToTarget",
+        params: { targetId: "target-1", flatten: true },
+      }),
+    );
+    await flush();
+    const pageSessionId = (
+      client.frames().find((frame) => frame.id === 3)?.result as { sessionId?: string }
+    )?.sessionId;
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 4,
+        sessionId: browserSessionId,
+        method: "Target.detachFromTarget",
+        params: { sessionId: pageSessionId },
+      }),
+    );
+
+    expect(client.frames().find((frame) => frame.id === 4)?.result).toEqual({});
+    bridge.dispose();
+  });
+
+  it("retires only the detached auxiliary session's pending command", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const { socket: extSocket, handlers } = wireExtension(bridge, { answerCdp: false });
+    sendHello(handlers, [
+      { tabId: 1, url: "https://one.example", title: "One", active: true },
+      { tabId: 2, url: "https://two.example", title: "Two", active: false },
+    ]);
+
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    cdp.onMessage(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+    await flush();
+    const browserSessionId = (
+      client.frames().find((frame) => frame.id === 2)?.result as { sessionId?: string }
+    )?.sessionId;
+
+    for (const [id, targetId] of [
+      [3, "target-1"],
+      [4, "target-2"],
+    ] as const) {
+      cdp.onMessage(
+        JSON.stringify({
+          id,
+          sessionId: browserSessionId,
+          method: "Target.attachToTarget",
+          params: { targetId, flatten: true },
+        }),
+      );
+      await flush();
+    }
+    const pageSession1 = (
+      client.frames().find((frame) => frame.id === 3)?.result as { sessionId?: string }
+    )?.sessionId;
+    const pageSession2 = (
+      client.frames().find((frame) => frame.id === 4)?.result as { sessionId?: string }
+    )?.sessionId;
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 5,
+        sessionId: pageSession1,
+        method: "Target.getTargetInfo",
+      }),
+    );
+    cdp.onMessage(
+      JSON.stringify({
+        id: 6,
+        sessionId: pageSession2,
+        method: "Runtime.evaluate",
+        params: { expression: "document.title" },
+      }),
+    );
+    await flush();
+
+    cdp.onMessage(
+      JSON.stringify({
+        id: 7,
+        sessionId: browserSessionId,
+        method: "Target.detachFromTarget",
+        params: { sessionId: pageSession1 },
+      }),
+    );
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 5)?.error).toMatchObject({
+      message: "extension relay page session detached: cdp (tabId=1, method=Target.getTargetInfo)",
+    });
+    expect(client.frames().find((frame) => frame.id === 7)?.result).toEqual({});
+    expect(client.frames().findIndex((frame) => frame.id === 5)).toBeLessThan(
+      client.frames().findIndex((frame) => frame.id === 7),
+    );
+    expect(client.frames().find((frame) => frame.id === 6)).toBeUndefined();
+    expect(extSocket.frames().filter((frame) => frame.type === "detach")).toHaveLength(0);
+
+    const siblingCommand = extSocket
+      .frames()
+      .find(
+        (frame) => frame.type === "cdp" && frame.tabId === 2 && frame.method === "Runtime.evaluate",
+      ) as { seq?: number } | undefined;
+    expect(siblingCommand?.seq).toBeTypeOf("number");
+    handlers.onMessage(
+      JSON.stringify({ type: "result", seq: siblingCommand?.seq, result: { ok: true } }),
+    );
+    await flush();
+    expect(client.frames().find((frame) => frame.id === 6)?.result).toEqual({ ok: true });
+
+    const retiredCommand = extSocket
+      .frames()
+      .find(
+        (frame) =>
+          frame.type === "cdp" && frame.tabId === 1 && frame.method === "Target.getTargetInfo",
+      ) as { seq?: number } | undefined;
+    handlers.onMessage(
+      JSON.stringify({ type: "result", seq: retiredCommand?.seq, result: { late: true } }),
+    );
+    await flush();
+    expect(client.frames().filter((frame) => frame.id === 5)).toHaveLength(1);
+
+    bridge.dispose();
+  });
+
   it("identifies the tab and CDP method when a page command times out", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge, { answerCdp: false });

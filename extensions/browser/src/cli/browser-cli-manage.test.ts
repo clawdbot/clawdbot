@@ -588,21 +588,124 @@ describe("browser manage output", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("uses canonical deep doctor without a duplicate snapshot request", async () => {
+  it("fails doctor when the canonical report says a managed browser is stopped", async () => {
     getBrowserManageCallBrowserRequestMock().mockResolvedValue({
       ok: true,
-      profile: "chrome",
-      transport: "extension",
-      status: { enabled: true, profile: "chrome", transport: "extension", running: true },
-      checks: [
-        {
-          id: "live-snapshot",
-          label: "Live snapshot",
-          status: "pass",
-          summary: "CDP accessibility snapshot returned 4 nodes on extension-target-1",
-        },
-      ],
+      profile: "openclaw",
+      transport: "cdp",
+      status: { enabled: true, profile: "openclaw", transport: "cdp", running: false },
+      checks: [{ id: "profile", label: "Profile", status: "pass", summary: "openclaw via cdp" }],
     });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([expect.objectContaining({ id: "browser", status: "fail" })]),
+    });
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails doctor when passive tab enumeration throws", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/tabs") {
+        throw new Error("tab relay unavailable");
+      }
+      return {
+        ok: true,
+        profile: "chrome",
+        transport: "extension",
+        status: { enabled: true, profile: "chrome", transport: "extension", running: true },
+        checks: [],
+      };
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "tabs",
+          status: "fail",
+          summary: "Error: tab relay unavailable",
+        }),
+      ]),
+    });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails doctor when passive tab enumeration reports a stopped browser", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/tabs"
+        ? { running: false, tabs: [] }
+        : {
+            ok: true,
+            profile: "openclaw",
+            transport: "cdp",
+            status: { enabled: true, profile: "openclaw", transport: "cdp", running: true },
+            checks: [],
+          },
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([expect.objectContaining({ id: "tabs", status: "fail" })]),
+    });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("preserves a canonical doctor failure after the readiness overlay passes", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/tabs"
+        ? { running: true, tabs: [] }
+        : {
+            ok: false,
+            profile: "openclaw",
+            transport: "cdp",
+            status: { enabled: true, profile: "openclaw", transport: "cdp", running: true },
+            checks: [{ id: "policy", label: "Policy", status: "warn", summary: "review" }],
+          },
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([expect.objectContaining({ id: "tabs", status: "pass" })]),
+    });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("uses canonical deep doctor without a duplicate snapshot request", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/tabs"
+        ? {
+            running: true,
+            tabs: [{ targetId: "extension-target-1", title: "Tab", url: "https://example.com" }],
+          }
+        : {
+            ok: true,
+            profile: "chrome",
+            transport: "extension",
+            status: { enabled: true, profile: "chrome", transport: "extension", running: true },
+            checks: [
+              {
+                id: "live-snapshot",
+                label: "Live snapshot",
+                status: "pass",
+                summary: "CDP accessibility snapshot returned 4 nodes on extension-target-1",
+              },
+            ],
+          },
+    );
 
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
@@ -610,7 +713,7 @@ describe("browser manage output", () => {
     });
 
     expect(lastRuntimeLog()).toContain("OK live-snapshot: CDP accessibility snapshot returned 4");
-    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledTimes(1);
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledTimes(2);
     expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -624,6 +727,42 @@ describe("browser manage output", () => {
         ([, req]) => req.path === "/snapshot",
       ),
     ).toBe(false);
+    expect(getBrowserManageCallBrowserRequestMock().mock.calls.map(([, req]) => req.path)).toEqual([
+      "/doctor",
+      "/tabs",
+    ]);
+  });
+
+  it("returns a failed canonical deep report without a second relay request", async () => {
+    getBrowserManageCallBrowserRequestMock().mockResolvedValue({
+      ok: false,
+      profile: "chrome",
+      transport: "extension",
+      status: { enabled: true, profile: "chrome", transport: "extension", running: true },
+      checks: [
+        {
+          id: "live-snapshot",
+          label: "Live snapshot",
+          status: "fail",
+          summary: "Accessibility.enable timed out for tab extension-target-1",
+        },
+      ],
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor", "--deep"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toMatchObject({
+      ok: false,
+      checks: [expect.objectContaining({ id: "live-snapshot", status: "fail" })],
+    });
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledTimes(1);
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ path: "/doctor", query: expect.objectContaining({ deep: true }) }),
+      expect.anything(),
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {

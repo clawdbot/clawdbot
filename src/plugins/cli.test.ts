@@ -392,6 +392,120 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 
+  it("uses a bundled plugin's dedicated CLI metadata registrar for its selected primary", async () => {
+    const metadataRegister = vi.fn(({ program }: { program: Command }) => {
+      program.command("browser").description("Browser commands");
+    });
+    const fullRegister = vi.fn(({ program }: { program: Command }) => {
+      program.command("browser").description("Browser commands");
+    });
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["browser"]);
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
+      plugins: [{ id: "browser", origin: "bundled" }],
+      cliRegistrars: [
+        {
+          pluginId: "browser",
+          register: metadataRegister,
+          parentPath: [],
+          commands: ["browser"],
+          descriptors: [
+            {
+              name: "browser",
+              description: "Browser commands",
+              hasSubcommands: true,
+            },
+          ],
+          source: "bundled/browser/index.ts",
+        },
+      ],
+    });
+    mocks.loadOpenClawPlugins.mockReturnValue({
+      plugins: [{ id: "browser", origin: "bundled" }],
+      cliRegistrars: [
+        {
+          pluginId: "browser",
+          register: fullRegister,
+          parentPath: [],
+          commands: ["browser"],
+          descriptors: [
+            {
+              name: "browser",
+              description: "Browser commands",
+              hasSubcommands: true,
+            },
+          ],
+          source: "bundled/browser/index.ts",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "browser",
+    });
+
+    expect(metadataRegister).toHaveBeenCalledTimes(1);
+    expect(fullRegister).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("keeps selected external plugin primaries on the full runtime loader", async () => {
+    const metadataRegister = vi.fn();
+    const fullRegister = vi.fn(({ program }: { program: Command }) => {
+      program.command("external-command").description("External commands");
+    });
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["external-command"]);
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
+      plugins: [{ id: "external-command", origin: "global" }],
+      cliRegistrars: [
+        {
+          pluginId: "external-command",
+          register: metadataRegister,
+          parentPath: [],
+          commands: ["external-command"],
+          descriptors: [
+            {
+              name: "external-command",
+              description: "External commands",
+              hasSubcommands: true,
+            },
+          ],
+          source: "/plugins/external-command/index.ts",
+        },
+      ],
+    });
+    mocks.loadOpenClawPlugins.mockReturnValue({
+      plugins: [{ id: "external-command", origin: "global" }],
+      cliRegistrars: [
+        {
+          pluginId: "external-command",
+          register: fullRegister,
+          parentPath: [],
+          commands: ["external-command"],
+          descriptors: [
+            {
+              name: "external-command",
+              description: "External commands",
+              hasSubcommands: true,
+            },
+          ],
+          source: "/plugins/external-command/index.ts",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "external-command",
+    });
+
+    expect(metadataRegister).not.toHaveBeenCalled();
+    expect(fullRegister).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
   it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {
     const program = createProgram();
     program.exitOverride();

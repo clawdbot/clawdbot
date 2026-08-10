@@ -168,8 +168,9 @@ export const MAX_RECENT_DIALOGS = 20;
 export const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 export type PendingBrowserConnection = {
-  attempt: { cancelled: boolean; retired?: ConnectedBrowser };
+  attempt: { abortController: AbortController; retired?: ConnectedBrowser };
   promise: Promise<ConnectedBrowser>;
+  waiters: number;
 };
 
 export type PlaywrightConnectionRetirement = {

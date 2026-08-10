@@ -26,7 +26,7 @@ export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
 const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
-const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS = 10_000;
+const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS = 20_000;
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 type BrowserClientTimeoutOptions = {

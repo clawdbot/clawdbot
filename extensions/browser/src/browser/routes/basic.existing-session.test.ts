@@ -2,9 +2,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
+const { inspectChromeGraphicsDiagnosticsMock, snapshotAriaMock } = vi.hoisted(() => ({
   inspectChromeGraphicsDiagnosticsMock: vi.fn(),
+  snapshotAriaMock: vi.fn(async () => ({ nodes: [{ role: "RootWebArea" }] })),
 }));
+
+vi.mock("../cdp.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cdp.js")>();
+  return { ...actual, snapshotAria: snapshotAriaMock };
+});
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
@@ -189,6 +195,7 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 describe("basic browser routes", () => {
   beforeEach(() => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
+    snapshotAriaMock.mockClear();
   });
 
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {
@@ -224,6 +231,113 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
+    expect(ensureTabAvailable).toHaveBeenLastCalledWith(undefined, {
+      signal: expect.any(AbortSignal),
+      timeoutMs: 10_000,
+      createIfMissing: false,
+    });
+  });
+
+  it("passes the remaining deep-doctor deadline to a direct CDP snapshot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    inspectChromeGraphicsDiagnosticsMock.mockResolvedValue({
+      status: "unavailable",
+      observedAt: 1_000,
+      reason: "not needed for the live snapshot test",
+    });
+    try {
+      const state = createManagedProfileState(
+        {},
+        { isHttpReachable: async () => true, isTransportAvailable: async () => true },
+      );
+      const profile = (state.forProfile() as { profile: unknown }).profile as never;
+      state.profiles.set("openclaw", {
+        profile,
+        running: {
+          pid: 222,
+          exe: { kind: "chromium", path: "/usr/bin/chromium" },
+          userDataDir: "/tmp/openclaw-profile",
+          cdpPort: 18800,
+          startedAt: Date.now(),
+          proc: {} as never,
+        },
+      });
+      const profileCtx = {
+        ...(state.forProfile() as unknown as Record<string, unknown>),
+        ensureTabAvailable: vi.fn(async () => {
+          vi.setSystemTime(4_000);
+          return {
+            targetId: "7",
+            suggestedTargetId: "7",
+            title: "Example",
+            url: "https://example.com",
+            type: "page",
+            wsUrl: "ws://127.0.0.1:18800/devtools/page/7",
+          };
+        }),
+      };
+      const { app, getHandlers } = createBrowserRouteApp();
+      registerBrowserBasicRoutes(app, {
+        state: () => state,
+        forProfile: () => profileCtx,
+        mapTabError: vi.fn(() => null),
+      } as never);
+      const response = createBrowserRouteResponse();
+
+      await getHandlers.get("/doctor")?.(
+        { params: {}, query: { profile: "openclaw", deep: "true" } },
+        response.res,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(snapshotAriaMock).toHaveBeenCalledWith({
+        wsUrl: "ws://127.0.0.1:18800/devtools/page/7",
+        limit: 25,
+        timeoutMs: 7_000,
+        signal: expect.any(AbortSignal),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a failed unattempted deep probe without starting a stopped browser", async () => {
+    const state = createManagedProfileState();
+    const ensureBrowserAvailable = vi.fn(async () => {});
+    const ensureTabAvailable = vi.fn();
+    const profileCtx = {
+      ...(state.forProfile() as unknown as Record<string, unknown>),
+      ensureBrowserAvailable,
+      ensureTabAvailable,
+    };
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserBasicRoutes(app, {
+      state: () => state,
+      forProfile: () => profileCtx,
+      mapTabError: vi.fn(() => null),
+    } as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/doctor")?.(
+      { params: {}, query: { profile: "openclaw", deep: "true" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: false,
+      status: { running: false },
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "live-snapshot",
+          status: "fail",
+          summary: expect.stringContaining("not attempted"),
+        }),
+      ]),
+    });
+    expect(ensureBrowserAvailable).not.toHaveBeenCalled();
+    expect(ensureTabAvailable).not.toHaveBeenCalled();
   });
 
   it("reports Linux no-display headless fallback for local managed profiles", async () => {

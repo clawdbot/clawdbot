@@ -36,6 +36,7 @@ const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
 const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
+const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = 10_000;
 
 function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
@@ -268,14 +269,29 @@ async function runBrowserLiveProbe(
   signal: AbortSignal,
 ) {
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const deadlineAtMs = Date.now() + LIVE_SNAPSHOT_PROBE_TIMEOUT_MS;
+  const deadline = new AbortController();
+  const timer = setTimeout(() => {
+    deadline.abort(
+      new Error(
+        `Deep browser doctor live snapshot timed out after ${LIVE_SNAPSHOT_PROBE_TIMEOUT_MS}ms.`,
+      ),
+    );
+  }, LIVE_SNAPSHOT_PROBE_TIMEOUT_MS);
+  timer.unref?.();
+  const probeSignal = AbortSignal.any([signal, deadline.signal]);
   try {
-    const tab = await profileCtx.ensureTabAvailable(undefined, { signal });
+    const tab = await profileCtx.ensureTabAvailable(undefined, {
+      signal: probeSignal,
+      timeoutMs: LIVE_SNAPSHOT_PROBE_TIMEOUT_MS,
+      createIfMissing: false,
+    });
     if (capabilities.usesChromeMcp) {
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
         targetId: tab.targetId,
-        signal,
+        signal: probeSignal,
       });
       return {
         id: "live-snapshot",
@@ -285,7 +301,12 @@ async function runBrowserLiveProbe(
       };
     }
     const snap = tab.wsUrl
-      ? await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 })
+      ? await snapshotAria({
+          wsUrl: tab.wsUrl,
+          limit: 25,
+          timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
+          signal: probeSignal,
+        })
       : await (async () => {
           const pw = await getPwAiModule();
           if (!pw) {
@@ -296,9 +317,10 @@ async function runBrowserLiveProbe(
             targetId: tab.targetId,
             limit: 25,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+            signal: probeSignal,
           });
         })();
-    signal.throwIfAborted();
+    probeSignal.throwIfAborted();
     return {
       id: "live-snapshot",
       label: "Live snapshot",
@@ -309,6 +331,7 @@ async function runBrowserLiveProbe(
           : `CDP accessibility snapshot returned no nodes on ${tab.suggestedTargetId ?? tab.targetId}`,
     };
   } catch (err) {
+    signal.throwIfAborted();
     if (isProfileRestartRequiredError(err)) {
       throw err;
     }
@@ -319,6 +342,8 @@ async function runBrowserLiveProbe(
       summary: String(err),
       fixHint: "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -432,8 +457,21 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
           const doctorReport = buildBrowserDoctorReport({ status });
-          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-            doctorReport.checks.push(await runBrowserLiveProbe(ctx, profileCtx, signal));
+          const liveRequested =
+            toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true;
+          if (liveRequested) {
+            doctorReport.checks.push(
+              status.running
+                ? await runBrowserLiveProbe(ctx, profileCtx, signal)
+                : {
+                    id: "live-snapshot",
+                    label: "Live snapshot",
+                    status: "fail",
+                    summary: "not attempted because the browser is not running",
+                    fixHint:
+                      "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
+                  },
+            );
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }
           return doctorReport;
