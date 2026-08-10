@@ -6,6 +6,7 @@ import { createInternalAgentTurnFacade } from "./internal-facade.js";
 const startTurn = vi.hoisted(() => vi.fn());
 
 vi.mock("../server-methods.js", () => ({
+  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
   createRequestGatewayMethodRegistry: () => ({
     isControlPlaneWrite: () => false,
   }),

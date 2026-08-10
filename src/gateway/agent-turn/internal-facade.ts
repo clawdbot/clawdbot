@@ -6,6 +6,7 @@ import {
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
 import {
+  authorizeGatewayRequestPreDispatch,
   createRequestGatewayMethodRegistry,
   runWithGatewayRequestEnvelope,
 } from "../server-methods.js";
@@ -50,6 +51,16 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
     const method = "agent";
     const context = options.getContext();
     const methodRegistry = getMethodRegistry();
+    const authorization = await authorizeGatewayRequestPreDispatch({
+      method,
+      requestParams: request,
+      client: options.client,
+      context,
+      methodRegistry,
+    });
+    if (authorization.error) {
+      return { ok: false, error: authorization.error };
+    }
     let acceptance: GatewayMethodDispatchResponse | undefined;
     let final: GatewayMethodDispatchResponse | undefined;
     let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -181,6 +192,17 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
   ): Promise<T> => {
     const method = "agent.wait";
     const context = options.getContext();
+    const methodRegistry = getMethodRegistry();
+    const authorization = await authorizeGatewayRequestPreDispatch({
+      method,
+      requestParams: params,
+      client: options.client,
+      context,
+      methodRegistry,
+    });
+    if (authorization.error) {
+      return throwEnvelopeRejection(method, authorization.error);
+    }
     const result = runWithGatewayRequestEnvelope(
       method,
       options.client,
@@ -188,7 +210,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
       {
         context,
         isWebchatConnect,
-        methodRegistry: getMethodRegistry(),
+        methodRegistry,
         reject: (error) => throwEnvelopeRejection(method, error),
       },
     );
