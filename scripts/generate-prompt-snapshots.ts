@@ -197,6 +197,11 @@ async function checkSnapshots() {
     }
     if (actual !== file.content) {
       mismatches.push(`${file.path}: differs from generated output`);
+      const marker = "Deferred searchable OpenClaw dynamic tools available:";
+      const markerIndex = file.content.indexOf(marker);
+      if (markerIndex >= 0) {
+        console.error(file.content.slice(markerIndex, markerIndex + 800));
+      }
     }
   }
   for (const snapshotPath of await listCommittedSnapshotArtifactPaths(repoRoot)) {
