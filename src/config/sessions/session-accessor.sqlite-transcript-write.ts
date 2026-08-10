@@ -64,6 +64,10 @@ import {
 } from "./session-transcript-turn-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWriterFence,
+} from "./transcript-write-context.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { mergeSessionEntry } from "./types.js";
 
@@ -156,23 +160,28 @@ export function replaceSqliteTranscriptEventsSync(
   scope: SessionTranscriptWriteScope,
   events: TranscriptEvent[],
 ): boolean {
-  const resolved = resolveSqliteTranscriptScope(scope);
+  // Every sync replacement inherits and enforces the admitted writer claim.
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fencedScope);
   let replaced = false;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (
       !fresh ||
       fresh.entry.sessionId !== resolved.sessionId ||
-      (scope.expectedLifecycleRevision !== undefined &&
-        fresh.entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
-      (scope.expectedWriterRunId !== undefined &&
-        (fresh.entry as InternalSessionEntry).activeWriterRunId !== scope.expectedWriterRunId)
+      (fencedScope.expectedLifecycleRevision !== undefined &&
+        fresh.entry.lifecycleRevision !== fencedScope.expectedLifecycleRevision) ||
+      (fencedScope.expectedWriterRunId !== undefined &&
+        (fresh.entry as InternalSessionEntry).activeWriterRunId !== fencedScope.expectedWriterRunId)
     ) {
       return;
     }
     replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     replaced = true;
   }, toDatabaseOptions(resolved));
+  if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
   return replaced;
 }
 
@@ -276,7 +285,9 @@ export function appendSqliteTranscriptEventSync(
   options: TranscriptEventAppendOptions = {},
 ): Result<boolean, TranscriptEventAppendError> {
   assertNonMessageTranscriptEvent(event);
-  const resolved = resolveSqliteTranscriptScope(scope);
+  // Every sync event append inherits and enforces the admitted writer claim.
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fencedScope);
   let result: Result<boolean, TranscriptEventAppendError> = ok(false);
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
@@ -298,10 +309,10 @@ export function appendSqliteTranscriptEventSync(
       return;
     }
     if (
-      (scope.expectedLifecycleRevision !== undefined &&
-        fresh.entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
-      (scope.expectedWriterRunId !== undefined &&
-        (fresh.entry as InternalSessionEntry).activeWriterRunId !== scope.expectedWriterRunId)
+      (fencedScope.expectedLifecycleRevision !== undefined &&
+        fresh.entry.lifecycleRevision !== fencedScope.expectedLifecycleRevision) ||
+      (fencedScope.expectedWriterRunId !== undefined &&
+        (fresh.entry as InternalSessionEntry).activeWriterRunId !== fencedScope.expectedWriterRunId)
     ) {
       result = err({
         actualSessionId: fresh.entry.sessionId,
@@ -319,6 +330,9 @@ export function appendSqliteTranscriptEventSync(
       ),
     );
   }, toDatabaseOptions(resolved));
+  if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
   return result;
 }
 
@@ -512,22 +526,27 @@ export function appendSqliteTranscriptMessageSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
 ): TranscriptMessageAppendResult<TMessage> | undefined {
-  const resolved = resolveSqliteTranscriptScope(scope);
+  // Every sync message append inherits and enforces the admitted writer claim.
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fencedScope);
   let result: TranscriptMessageAppendResult<TMessage> | undefined;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (
       !fresh ||
       fresh.entry.sessionId !== resolved.sessionId ||
-      (scope.expectedLifecycleRevision !== undefined &&
-        fresh.entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
-      (scope.expectedWriterRunId !== undefined &&
-        (fresh.entry as InternalSessionEntry).activeWriterRunId !== scope.expectedWriterRunId)
+      (fencedScope.expectedLifecycleRevision !== undefined &&
+        fresh.entry.lifecycleRevision !== fencedScope.expectedLifecycleRevision) ||
+      (fencedScope.expectedWriterRunId !== undefined &&
+        (fresh.entry as InternalSessionEntry).activeWriterRunId !== fencedScope.expectedWriterRunId)
     ) {
       return;
     }
     result = appendSqliteTranscriptMessageInTransaction(database, resolved, options);
   }, toDatabaseOptions(resolved));
+  if (fencedScope.expectedWriterRunId !== undefined && result === undefined) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
   return result;
 }
 
