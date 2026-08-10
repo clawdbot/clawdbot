@@ -158,7 +158,7 @@ async function installActiveRunSnapshot(
 }
 
 async function assertActiveTurnVisible(page: Page, streamText: string): Promise<void> {
-  await page.getByText(streamText, { exact: true }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText(streamText, { exact: true })).toHaveCount(1, { timeout: 10_000 });
   await page.locator(".chat-tool-row--running").waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
   await expect
@@ -243,14 +243,11 @@ async function assertSteeredRecoveryOrder(
   texts: { original: string; beforeSteer: string; steer: string; afterSteer: string },
 ): Promise<void> {
   const thread = page.locator(".chat-thread");
-  for (const text of Object.values(texts)) {
-    await thread.getByText(text, { exact: true }).waitFor({ timeout: 10_000 });
-    await expect.poll(() => thread.getByText(text, { exact: true }).count()).toBe(1);
+  await assertActiveTurnVisible(page, texts.afterSteer);
+  for (const text of [texts.original, texts.beforeSteer, texts.steer]) {
+    await expect(thread.getByText(text, { exact: true })).toHaveCount(1, { timeout: 10_000 });
   }
-  const activeTool = thread.locator(".chat-tool-row--running");
-  await activeTool.waitFor({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-  await page.locator(".chat-working-indicator").waitFor({ timeout: 10_000 });
+  await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
 
   const order = await thread.evaluate((element, expected) => {
     const groups = Array.from(element.querySelectorAll<HTMLElement>(".chat-group"));

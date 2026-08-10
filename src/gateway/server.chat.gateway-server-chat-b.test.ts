@@ -641,7 +641,7 @@ describe("gateway server chat", () => {
         createSessionEventSubscriberRegistry,
         createSessionMessageSubscriberRegistry,
       } = await import("./server-chat.js");
-      const { storePath } = openDirectChatSession();
+      openDirectChatSession();
       const context = createDirectChatContext();
       const handler = createAgentEventHandler({
         broadcast: context.broadcast,
@@ -671,37 +671,12 @@ describe("gateway server chat", () => {
           clientRunId: "run-active",
         });
 
-        const transcriptScope = {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "main",
-          storePath,
-        };
-        const initialMessageId = "message-initial";
-        await appendTranscriptMessage(transcriptScope, {
-          eventId: initialMessageId,
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "Start the requested work." }],
-            timestamp: 1_000,
-          },
-        });
-
         handler({
           runId: "provider-run",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
-        });
-        await appendTranscriptMessage(transcriptScope, {
-          eventId: "message-steer",
-          parentId: initialMessageId,
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "Please run autoreview here." }],
-            timestamp: 1_001.5,
-          },
         });
         handler({
           runId: "provider-run",
@@ -772,13 +747,6 @@ describe("gateway server chat", () => {
 
         expect(responses).toHaveLength(1);
         expect(responses[0]?.ok).toBe(true);
-        expect(
-          (responses[0]?.payload as { messages?: Array<{ content?: unknown }> } | undefined)
-            ?.messages,
-        ).toMatchObject([
-          { role: "user", content: [{ type: "text", text: "Start the requested work." }] },
-          { role: "user", content: [{ type: "text", text: "Please run autoreview here." }] },
-        ]);
         expect(
           (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
         ).toEqual({

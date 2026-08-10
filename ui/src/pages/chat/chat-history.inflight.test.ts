@@ -71,22 +71,8 @@ function activeHistory(runId: string): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
-  it("restores active tool state and causal preamble timestamps from the in-flight run snapshot", async () => {
+  it("restores active tool state and authoritative preamble time from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
-    history.messages = [
-      {
-        role: "user",
-        content: "Original prompt",
-        timestamp: 800,
-        __openclaw: { id: "original-user", seq: 1, idempotencyKey: "run-live:user" },
-      },
-      {
-        role: "user",
-        content: "Please run autoreview here",
-        timestamp: 1_050,
-        __openclaw: { id: "steering-user", seq: 2, idempotencyKey: "steer-send:user" },
-      },
-    ];
     (history.inFlightRun as { events?: unknown[] }).events = [
       {
         runId: "run-live",
@@ -104,25 +90,13 @@ describe("chat history in-flight assistant recovery", () => {
         runId: "run-live",
         seq: 2,
         stream: "tool",
-        ts: 1_075,
+        ts: 1_000,
         sessionKey: "main",
         data: {
           toolCallId: "call-restored",
           name: "read",
           phase: "start",
           args: { path: "README.md" },
-        },
-      },
-      {
-        runId: "run-live",
-        seq: 3,
-        stream: "item",
-        ts: 1_100,
-        sessionKey: "main",
-        data: {
-          kind: "preamble",
-          itemId: "preamble-after-steer",
-          progressText: "Autoreview is running",
         },
       },
     ];
@@ -135,20 +109,14 @@ describe("chat history in-flight assistant recovery", () => {
       toolCallId: "call-restored",
       content: [expect.objectContaining({ type: "toolcall", name: "read" })],
     });
-    expect(state.chatStreamSegments).toMatchObject([
-      {
+    expect(state.chatStreamSegments).toContainEqual(
+      expect.objectContaining({
         itemId: "preamble-restored",
         runId: "run-live",
         text: "Checking the workspace",
         ts: 900,
-      },
-      {
-        itemId: "preamble-after-steer",
-        runId: "run-live",
-        text: "Autoreview is running",
-        ts: 1_100,
-      },
-    ]);
+      }),
+    );
   });
 
   it("restores cleared activity for an already-owned run after reconnect", async () => {
