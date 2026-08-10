@@ -635,6 +635,48 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["replayed history", " tail", " live"]);
   });
 
+  it("awaits asynchronous initial replay before flushing live output", async () => {
+    const { client, conn } = makeHarness();
+    const replay = deferred<void>();
+    const order: string[] = [];
+    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+
+    const attachPromise = conn.attach("s1", {
+      onData: (chunk) => order.push(`data:${chunk}`),
+      onReplay: async (snapshot, _newlyObservedFrom, mode) => {
+        order.push(`${mode}:${snapshot}`);
+        await replay.promise;
+        order.push("replay:done");
+      },
+      onExit: () => {},
+    });
+    await vi.waitFor(() => expect(order).toEqual(["initial:snapshot"]));
+
+    emitData(client, 9, "!");
+    expect(order).toEqual(["initial:snapshot"]);
+    replay.resolve();
+
+    await attachPromise;
+    expect(order).toEqual(["initial:snapshot", "replay:done", "data:!"]);
+  });
+
+  it("rejects initial replay failures without retaining a stream", async () => {
+    const { client, conn } = makeHarness();
+    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
+
+    await expect(
+      conn.attach("s1", {
+        onData: () => {},
+        onReplay: async () => {
+          throw new Error("replay failed");
+        },
+        onExit: () => {},
+      }),
+    ).rejects.toThrow("replay failed");
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
+  });
+
   it("discards a detached exit that predates successful session adoption", async () => {
     const { client, conn } = makeHarness();
     const replays: string[] = [];
