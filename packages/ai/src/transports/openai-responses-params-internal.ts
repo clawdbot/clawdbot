@@ -367,7 +367,11 @@ export function buildOpenAIResponsesParams(
     }
   }
   if (model.reasoning) {
-    if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
+    if (
+      options?.reasoningEffort !== undefined ||
+      options?.reasoning !== undefined ||
+      options?.reasoningSummary !== undefined
+    ) {
       const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
       const resolvedReasoningEffort = resolveOpenAIReasoningEffortForModel({
         model,

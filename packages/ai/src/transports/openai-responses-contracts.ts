@@ -206,7 +206,7 @@ export type OpenAIResponsesRequestParams = {
     | { effort: OpenAIApiReasoningEffort }
     | {
         effort: OpenAIApiReasoningEffort;
-        summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
+        summary: Exclude<OpenAIResponsesOptions["reasoningSummary"], undefined>;
       };
   include?: string[];
 };

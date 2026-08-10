@@ -361,6 +361,19 @@ describe("Responses reasoning effort", () => {
     expect(params).toMatchObject({ reasoning: { effort: "medium", summary: null } });
   });
 
+  it("preserves null reasoning summary without explicit effort (defaults effort to medium)", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningSummary: null,
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "medium", summary: null } });
+  });
+
   it("defaults an omitted reasoning summary to auto", () => {
     const params = {} as never;
     applyCommonResponsesParams(

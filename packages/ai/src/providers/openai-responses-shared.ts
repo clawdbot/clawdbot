@@ -212,7 +212,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
 
-  if (options?.reasoningEffort || options?.reasoningSummary) {
+  if (options?.reasoningEffort !== undefined || options?.reasoningSummary !== undefined) {
     const effort = options?.reasoningEffort
       ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
       : "medium";
