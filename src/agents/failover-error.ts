@@ -256,7 +256,7 @@ function readDirectStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-export function getStatusCode(err: unknown): number | undefined {
+function getStatusCode(err: unknown): number | undefined {
   return findErrorProperty(err, readDirectStatusCode);
 }
 

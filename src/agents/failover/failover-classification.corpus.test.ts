@@ -11,7 +11,7 @@ vi.mock("../../logging/node-require.js", () => ({
   resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
 }));
 
-import { mapProviderRequestError } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   classifyFailoverSignal,
   classifyProviderSpecificError,
@@ -32,6 +32,7 @@ import { overflowCases } from "./failover-classification.overflow.cases.js";
 import { rateLimitOverloadCases } from "./failover-classification.rate-limit-overload.cases.js";
 import { structuredMiscCases } from "./failover-classification.structured-misc.cases.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
+import type { FailoverSignal } from "./signal.js";
 
 afterEach(() => {
   providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
@@ -49,6 +50,10 @@ const failoverClassificationCorpus = [
   ...legacyProviderMatcherCases,
 ];
 import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
+
+function classifyReplyRequest(signal: FailoverSignal) {
+  return resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
+}
 
 describe("golden failover classification corpus", () => {
   it("has unique row ids", () => {
@@ -95,9 +100,7 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const facet = classifyProviderRequestFacets({ message });
     // MOVED(refactor-02): reply layer now consumes the single classifier plus substrate facets.
     expect(facet).toBe("provider-internal-503");
-    expect(
-      mapProviderRequestError({ classification, facet, technicalMessage: message }),
-    ).toMatchObject({
+    expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_internal_error",
       technicalMessage: message,
       allowTransientHttpRetry: true,
@@ -138,36 +141,22 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const message = "403 Forbidden: insufficient permissions";
 
     const classification = classifyFailoverSignal({ message });
-    const facet = classifyProviderRequestFacets({ message });
     // MOVED(refactor-02): reply mapping preserves the HTTP-403 copy boundary from typed facts.
     expect(isAuthErrorMessage(message)).toBe(true);
     expect(classification).toEqual({ kind: "reason", reason: "auth" });
-    expect(
-      mapProviderRequestError({
-        classification,
-        facet,
-        status: 403,
-        technicalMessage: message,
-      }),
-    ).toBeUndefined();
+    expect(classifyReplyRequest({ message, status: 403 })).toBeUndefined();
   });
 
   it("preserves quota guidance for generic provider text with HTTP 429 evidence", () => {
     const message = "Something went wrong while processing your request. Please try again.";
     const signal = { message, status: 429 };
-    const classification = classifyFailoverSignal(signal);
     const facet = classifyProviderRequestFacets(signal);
 
     // MOVED(refactor-02): quota-flavored 429 is a substrate facet, not reply text parsing.
     expect(facet).toBe("quota-429");
-    expect(
-      mapProviderRequestError({
-        classification,
-        facet,
-        status: signal.status,
-        technicalMessage: message,
-      }),
-    ).toMatchObject({ code: "provider_rate_limit_or_quota_error" });
+    expect(classifyReplyRequest(signal)).toMatchObject({
+      code: "provider_rate_limit_or_quota_error",
+    });
   });
 
   it("preserves authentication guidance for provider HTTP 401 failures", () => {
@@ -178,28 +167,20 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const facet = classifyProviderRequestFacets(signal);
 
     // MOVED(refactor-02): HTTP status and canonical auth classification select reply copy.
-    expect(
-      mapProviderRequestError({
-        classification,
-        facet,
-        status: signal.status,
-        technicalMessage: message,
-      }),
-    ).toMatchObject({ code: "provider_authentication_error" });
+    expect(classification).toEqual({ kind: "reason", reason: "auth" });
+    expect(facet).toBeNull();
+    expect(classifyReplyRequest(signal)).toMatchObject({ code: "provider_authentication_error" });
   });
 
   it.each([
     "The AI service returned an internal error. Please try again in a moment.",
     "server_error: An error occurred while processing your request. Please include the request ID req_123.",
   ])("preserves provider-internal guidance for %s", (message) => {
-    const classification = classifyFailoverSignal({ message });
     const facet = classifyProviderRequestFacets({ message });
 
     // MOVED(refactor-02): provider-internal copy selection now consumes a substrate facet.
     expect(facet).toBe("provider-internal");
-    expect(
-      mapProviderRequestError({ classification, facet, technicalMessage: message }),
-    ).toMatchObject({ code: "provider_internal_error" });
+    expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_internal_error" });
   });
 
   it("preserves model-unavailable guidance from the canonical reason", () => {
@@ -208,9 +189,9 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     const facet = classifyProviderRequestFacets({ message });
 
     // MOVED(refactor-02): model availability copy consumes the canonical typed reason.
-    expect(
-      mapProviderRequestError({ classification, facet, technicalMessage: message }),
-    ).toMatchObject({ code: "provider_model_unavailable" });
+    expect(classification).toEqual({ kind: "reason", reason: "model_not_found" });
+    expect(facet).toBeNull();
+    expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_model_unavailable" });
   });
 
   it.each([
@@ -222,14 +203,13 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     "invalid_replay_transcript: OpenAI Responses replay contains dangling_tool_call toolCallId=call_1 at message index 4",
     "messages.1: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01A09q90qw90lq917835lq9.",
   ])("preserves conversation-state guidance for %s", (message) => {
-    const classification = classifyFailoverSignal({ message });
     const facet = classifyProviderRequestFacets({ message });
 
     // MOVED(refactor-02): conversation-state copy selection now consumes a substrate facet.
     expect(facet).toBe("conversation-state");
-    expect(
-      mapProviderRequestError({ classification, facet, technicalMessage: message }),
-    ).toMatchObject({ code: "provider_conversation_state_error" });
+    expect(classifyReplyRequest({ message })).toMatchObject({
+      code: "provider_conversation_state_error",
+    });
   });
 
   it.each([

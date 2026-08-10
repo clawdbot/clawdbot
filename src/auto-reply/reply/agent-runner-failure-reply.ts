@@ -14,16 +14,13 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
+  describeFailoverError,
   findCliMaxTurnsError,
   findCliTimeoutError,
-  getStatusCode,
   isFailoverError,
   type FallbackAttemptRecord,
 } from "../../agents/failover-error.js";
-import {
-  classifyFailoverSignal,
-  isPeriodicUsageLimitErrorMessage,
-} from "../../agents/failover/classify.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/failover/classify.js";
 import {
   classifyProviderRequestFacets,
   type ProviderRequestFacet,
@@ -52,20 +49,19 @@ const RATE_LIMIT_RETRY_MESSAGE =
   "⚠️ The model request was rate-limited. Please try again in a few minutes.";
 
 export function resolveReplyFailoverFacts(error: unknown, message: string) {
-  const typed = isFailoverError(error) ? error : undefined;
-  const status = typed?.status ?? getStatusCode(error);
-  const classification = typed
-    ? { kind: "reason" as const, reason: typed.reason }
-    : classifyFailoverSignal({ message });
+  const described = describeFailoverError(error);
+  const classification = described.reason
+    ? ({ kind: "reason", reason: described.reason } as const)
+    : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
     providerRequestError: mapProviderRequestError({
       classification,
       facet: classifyProviderRequestFacets({
-        status,
-        message: typed?.rawError ?? message,
+        status: described.status,
+        message: described.rawError ?? message,
       }),
-      status,
+      status: described.status,
       technicalMessage: message,
     }),
   };
@@ -80,7 +76,7 @@ type ProviderRequestErrorCode =
   | "provider_model_unavailable"
   | "provider_rate_limit_or_quota_error";
 
-export function mapProviderRequestError(params: {
+function mapProviderRequestError(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
@@ -387,7 +383,7 @@ function buildMissingApiKeyFailureText(input: { message: string; error?: unknown
   if (!provider) {
     return null;
   }
-  if (provider === "openai" && authError.providerGuidance) {
+  if (provider === "openai" && authError?.providerGuidance) {
     return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
