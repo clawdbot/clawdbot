@@ -20,6 +20,7 @@ import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
+import { isDesktopPanelAvailable } from "../components/desktop/desktop-panel-action.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -44,7 +45,6 @@ import { selectShellRouteState, type ShellRouteState } from "./app-host-route-st
 import { OpenClawApp } from "./app-root.ts";
 import {
   isBrowserPanelAvailable,
-  isDesktopPanelAvailable,
   ShellChromeOwner,
   type ShellChromeHost,
 } from "./app-shell-chrome.ts";

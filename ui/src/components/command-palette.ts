@@ -4,7 +4,6 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { RouteId } from "../app-route-paths.ts";
-import { isDesktopPanelAvailable } from "../app/app-shell-chrome.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -14,8 +13,8 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
+import { openDesktopPanel } from "./desktop/desktop-panel-action.ts";
 import { icons, type IconName } from "./icons.ts";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./modal-dialog.ts";
 
 type PaletteItem = {
@@ -175,7 +174,7 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
   } else if (item.action === "panel:desktop") {
-    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    openDesktopPanel();
   } else {
     props.onSlashCommand?.(item.action);
   }
@@ -360,6 +359,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
+  @property({ attribute: false }) desktopAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
@@ -570,9 +570,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeIndex: this.activeIndex,
       sessionItems: this.sessionItems,
-      desktopAvailable: this.context
-        ? isDesktopPanelAvailable(this.context.gateway.snapshot)
-        : false,
+      desktopAvailable: this.desktopAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;

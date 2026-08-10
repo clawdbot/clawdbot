@@ -9,6 +9,7 @@ import {
   type CommandPaletteTargetDetail,
   type ShellNavDrawerToggleDetail,
 } from "../components/command-palette-contract.ts";
+import { isDesktopPanelAvailable } from "../components/desktop/desktop-panel-action.ts";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -50,16 +51,6 @@ export function isBrowserPanelAvailable(
     snapshot.phase === "connected" &&
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     isGatewayMethodAdvertised(snapshot, "browser.request") === true
-  );
-}
-
-export function isDesktopPanelAvailable(
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-): boolean {
-  return (
-    snapshot.phase === "connected" &&
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "worker.desktop.observe") === true
   );
 }
 
