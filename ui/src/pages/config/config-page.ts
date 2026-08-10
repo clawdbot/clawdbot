@@ -39,7 +39,7 @@ import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-  storeHiddenSessionCatalogIds,
+  setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
@@ -1149,15 +1149,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
-      setSessionCatalogHidden: (catalogId, hidden) => {
-        const next = new Set(this.hiddenSessionCatalogIds);
-        if (hidden) {
-          next.add(catalogId);
-        } else {
-          next.delete(catalogId);
-        }
-        storeHiddenSessionCatalogIds(next);
-      },
+      setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,

@@ -315,6 +315,18 @@ export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
   }
 }
 
+/** Single owner for hide/show of one section: sidebar menu, undo, and Settings all
+ * land here, so no caller re-derives the set from its own possibly stale copy. */
+export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean) {
+  const next = new Set(loadStoredHiddenSessionCatalogIds());
+  if (hidden) {
+    next.add(catalogId);
+  } else {
+    next.delete(catalogId);
+  }
+  storeHiddenSessionCatalogIds(next);
+}
+
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },

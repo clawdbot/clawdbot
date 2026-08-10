@@ -428,8 +428,11 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("opens the catalog view menu from its header and hides that section", async () => {
+  it("opens the catalog view menu from its header and hides that section with undo", async () => {
     vi.useFakeTimers();
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    await toastHost.updateComplete;
     try {
       const { sidebar } = await mountWithCatalog(
         catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
@@ -461,10 +464,20 @@ describe("AppSidebar catalog session rows", () => {
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
 
-      storeHiddenSessionCatalogIds(new Set());
+      // Hiding must announce its own outcome: the section name, undo, and the standing
+      // recovery path for after the toast times out.
+      await toastHost.updateComplete;
+      const message = toastHost.querySelector(".app-toast__message")?.textContent ?? "";
+      expect(message).toContain("Codex");
+      expect(message).toContain("Settings > Appearance > Sidebar");
+
+      toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
       await sidebar.updateComplete;
+      expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(false);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
     } finally {
+      toastHost.remove();
+      storeHiddenSessionCatalogIds(new Set());
       vi.useRealTimers();
     }
   });
