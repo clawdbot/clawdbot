@@ -1,0 +1,91 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { auditConfigMarkdown, auditDocsConfigExamples } from "./docs-config-examples.js";
+
+const fixturePath = "docs/fixture.md";
+
+type SkipStat = "skippedFragment" | "skippedNonObject" | "skippedOptOut" | "skippedParseFailure";
+
+describe("docs config examples", () => {
+  it.each([
+    {
+      name: "reports a retired nested key in a whole config",
+      markdown: "```json5\n{ agents: { defaults: { promptOverlays: {} } } }\n```",
+      findings: 1,
+      skipped: undefined,
+      issuePath: "agents.defaults",
+    },
+    {
+      name: "skips a fragment without a recognized-key majority",
+      markdown: "```json5\n{ agents: {}, payloads: [] }\n```",
+      findings: 0,
+      skipped: "skippedFragment" as SkipStat,
+    },
+    {
+      name: "skips an explicit opt-out",
+      markdown:
+        '```json5 title="legacy config" validate=false\n{ agents: { defaults: { promptOverlays: {} } } }\n```',
+      findings: 0,
+      skipped: "skippedOptOut" as SkipStat,
+    },
+    {
+      name: "skips invalid JSON5",
+      markdown: "```json5\n{ agents: {\n```",
+      findings: 0,
+      skipped: "skippedParseFailure" as SkipStat,
+    },
+    {
+      name: "validates JSON fences",
+      markdown: '```json\n{ "gateway": { "port": 18789 } }\n```',
+      findings: 0,
+      skipped: undefined,
+    },
+    {
+      name: "validates JSONC tilde fences",
+      markdown: '~~~JSONC\n{ // comment\n  "gateway": { "port": 18789 }\n}\n~~~',
+      findings: 0,
+      skipped: undefined,
+    },
+    {
+      name: "skips arrays",
+      markdown: "```json5\n[{ gateway: {} }]\n```",
+      findings: 0,
+      skipped: "skippedNonObject" as SkipStat,
+    },
+    {
+      name: "reports a retired root key beside a recognized key",
+      markdown: "```json5\n{ agents: {}, gateway: {}, promptOverlays: {} }\n```",
+      findings: 1,
+      skipped: undefined,
+      issuePath: "",
+    },
+    {
+      name: "drops nested include directives before validation",
+      markdown:
+        '```json5\n{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }\n```',
+      findings: 0,
+      skipped: undefined,
+    },
+  ])("$name", ({ markdown, findings, skipped, issuePath }) => {
+    const audit = auditConfigMarkdown({ markdown, filePath: fixturePath });
+
+    expect(audit.findings).toHaveLength(findings);
+    expect(audit.stats.candidatesValidated).toBe(skipped ? 0 : 1);
+    if (skipped) {
+      expect(audit.stats[skipped]).toBe(1);
+    }
+    if (issuePath !== undefined) {
+      expect(audit.findings[0]?.issuePath).toBe(issuePath);
+    }
+  });
+
+  it("keeps real docs aligned with the config schema", () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+    // This test is selected when src/config changes, so retiring a key checks docs even
+    // without a docs edit. The check:docs script covers docs-only PRs; together the two
+    // CI lanes leave no change-classification gap.
+    expect(auditDocsConfigExamples({ repoRoot }).findings).toEqual([]);
+  });
+});
