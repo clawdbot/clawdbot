@@ -98,6 +98,7 @@ export type AiTransformTransportMessages = (
   options?: {
     normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
   },
 ) => Context["messages"];
 

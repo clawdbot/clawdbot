@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -9,16 +9,79 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
-import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
-describe("sessions tool", () => {
-  afterEach(() => {
-    sessionsResolutionTesting.setDepsForTest();
-  });
+const overlongUnicode = (unit: string, maxLength: number) => `${unit.repeat(maxLength - 1)}🦞tail`;
 
+const adversarialResolved = {
+  modelProvider: overlongUnicode("界", 48),
+  model: overlongUnicode("模", 96),
+  agentRuntime: {
+    id: overlongUnicode("運", 48),
+    fallback: "openclaw" as const,
+    source: "session-key" as const,
+  },
+  thinkingLevel: overlongUnicode("考", 16),
+  thinkingLevels: Array.from({ length: 12 }, (_, index) => ({
+    id: `${index}:${overlongUnicode("識", 12)}`,
+    label: `${index}:${overlongUnicode("思", 16)}`,
+  })),
+};
+
+const escapedControlText = "\0".repeat(10_000);
+const escapeHeavyResolved = {
+  modelProvider: escapedControlText,
+  model: escapedControlText,
+  agentRuntime: {
+    id: escapedControlText,
+    fallback: "none" as const,
+    source: "provider" as const,
+  },
+  thinkingLevel: escapedControlText,
+  thinkingLevels: Array.from({ length: 12 }, (_, index) => ({
+    id: `${index}:${escapedControlText}`,
+    label: `${index}:${escapedControlText}`,
+  })),
+};
+
+const expectedResolvedOmission = {
+  reason: "response_budget_exceeded",
+} as const;
+
+function expectExactResolvedAcknowledgement(
+  result: {
+    content: Array<{ type: string; text?: string }>;
+    details: unknown;
+  },
+  expectedResolved: unknown,
+) {
+  expect((result.details as { resolved?: unknown }).resolved).toEqual(expectedResolved);
+  const text = result.content[0]?.text ?? "";
+  expect(JSON.parse(text)).toEqual(result.details);
+  expect(text).not.toContain('"entry"');
+  expect(text).not.toContain('"path"');
+  expect(text).not.toContain("skillsSnapshot");
+  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
+}
+
+function expectOmittedResolvedAcknowledgement(result: {
+  content: Array<{ type: string; text?: string }>;
+  details: unknown;
+}) {
+  expect(result.details).toMatchObject({ resolvedOmitted: expectedResolvedOmission });
+  expect((result.details as { resolved?: unknown }).resolved).toBeUndefined();
+  const text = result.content[0]?.text ?? "";
+  expect(JSON.parse(text)).toEqual(result.details);
+  expect(text).not.toContain('"entry"');
+  expect(text).not.toContain('"path"');
+  expect(text).not.toContain("skillsSnapshot");
+  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
+}
+
+describe("sessions tool", () => {
   it("uses the core owner gate", () => {
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
   });
@@ -90,8 +153,8 @@ describe("sessions tool", () => {
     const sessionKey = "agent:main:dashboard:finished";
     const sessionId = "finished-session";
     const lifecycleRevision = "finished-revision";
-    const callGateway = vi.fn(async (method: string) =>
-      method === "sessions.patch"
+    const callGateway = vi.fn(async (request: { method: string }) =>
+      request.method === "sessions.patch"
         ? { ok: true, entry: { sessionId, lifecycleRevision } }
         : { ok: true, deleted: true },
     );
@@ -104,15 +167,17 @@ describe("sessions tool", () => {
     await tool.execute("delete-session", { action: "delete", sessionKey });
 
     expect(callGateway.mock.calls).toEqual([
-      ["sessions.patch", { key: sessionKey, archived: true }],
+      [{ method: "sessions.patch", params: { key: sessionKey, archived: true } }],
       [
-        "sessions.delete",
         {
-          key: sessionKey,
-          archivedOnly: true,
-          expectedSessionId: sessionId,
-          expectedLifecycleRevision: lifecycleRevision,
-          deleteTranscript: true,
+          method: "sessions.delete",
+          params: {
+            key: sessionKey,
+            archivedOnly: true,
+            expectedSessionId: sessionId,
+            expectedLifecycleRevision: lifecycleRevision,
+            deleteTranscript: true,
+          },
         },
       ],
     ]);
@@ -121,8 +186,8 @@ describe("sessions tool", () => {
   it("forwards an explicit transcript-preservation choice on deletion", async () => {
     const sessionKey = "agent:main:dashboard:finished";
     const sessionId = "finished-session";
-    const callGateway = vi.fn(async (method: string) =>
-      method === "sessions.patch"
+    const callGateway = vi.fn(async (request: { method: string }) =>
+      request.method === "sessions.patch"
         ? { ok: true, entry: { sessionId } }
         : { ok: true, deleted: true },
     );
@@ -138,11 +203,14 @@ describe("sessions tool", () => {
       deleteTranscript: false,
     });
 
-    expect(callGateway).toHaveBeenLastCalledWith("sessions.delete", {
-      key: sessionKey,
-      archivedOnly: true,
-      expectedSessionId: sessionId,
-      deleteTranscript: false,
+    expect(callGateway).toHaveBeenLastCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: sessionKey,
+        archivedOnly: true,
+        expectedSessionId: sessionId,
+        deleteTranscript: false,
+      },
     });
   });
 
@@ -160,9 +228,12 @@ describe("sessions tool", () => {
     ).rejects.toThrow("archive did not return its session identity");
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-      key: sessionKey,
-      archived: true,
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: {
+        key: sessionKey,
+        archived: true,
+      },
     });
   });
 
@@ -177,9 +248,12 @@ describe("sessions tool", () => {
 
     await tool.execute("reset-session", { action: "reset", sessionKey });
 
-    expect(callGateway).toHaveBeenCalledWith("sessions.reset", {
-      key: sessionKey,
-      reason: "reset",
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.reset",
+      params: {
+        key: sessionKey,
+        reason: "reset",
+      },
     });
   });
 
@@ -222,38 +296,40 @@ describe("sessions tool", () => {
           thinkingLevel: "high",
         },
       );
-      const callGateway = vi.fn(async (method: string, params: Record<string, unknown>) => {
-        expect(method).toBe("sessions.patch");
-        expect(isAgentSessionModelPatchOrigin()).toBe(true);
-        await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
-          label: params.label as string,
-          model: "bad",
-          modelProvider: "broken",
-          modelOverride: "bad",
-          providerOverride: "broken",
-          modelOverrideSource: "user",
-          modelOverrideFallbackOriginProvider: undefined,
-          modelOverrideFallbackOriginModel: undefined,
-          authProfileOverride: "bad-profile",
-          authProfileOverrideSource: "user",
-          thinkingLevel: "low",
-          modelFallback: {
-            prevModel: "good",
-            prevProvider: "openai",
-            prevModelOverride: "good",
-            prevProviderOverride: "openai",
-            prevModelOverrideSource: "auto",
-            prevModelOverrideFallbackOriginProvider: "openai",
-            prevModelOverrideFallbackOriginModel: "primary",
-            prevAuthProfileOverride: "good-profile",
-            prevAuthProfileOverrideSource: "user",
-            prevThinkingLevel: "high",
-            ts: Date.now(),
-            source: "agent-patch",
-          },
-        }));
-        return { ok: true };
-      });
+      const callGateway = vi.fn(
+        async (request: { method: string; params: Record<string, unknown> }) => {
+          expect(request.method).toBe("sessions.patch");
+          expect(isAgentSessionModelPatchOrigin()).toBe(true);
+          await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+            label: request.params.label as string,
+            model: "bad",
+            modelProvider: "broken",
+            modelOverride: "bad",
+            providerOverride: "broken",
+            modelOverrideSource: "user",
+            modelOverrideFallbackOriginProvider: undefined,
+            modelOverrideFallbackOriginModel: undefined,
+            authProfileOverride: "bad-profile",
+            authProfileOverrideSource: "user",
+            thinkingLevel: "low",
+            modelFallback: {
+              prevModel: "good",
+              prevProvider: "openai",
+              prevModelOverride: "good",
+              prevProviderOverride: "openai",
+              prevModelOverrideSource: "auto",
+              prevModelOverrideFallbackOriginProvider: "openai",
+              prevModelOverrideFallbackOriginModel: "primary",
+              prevAuthProfileOverride: "good-profile",
+              prevAuthProfileOverrideSource: "user",
+              prevThinkingLevel: "high",
+              ts: Date.now(),
+              source: "agent-patch",
+            },
+          }));
+          return { ok: true };
+        },
+      );
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
         config: cfg,
@@ -272,10 +348,13 @@ describe("sessions tool", () => {
         model: "broken/bad",
       });
 
-      expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-        key: sessionKey,
-        label: "Research",
-        model: "broken/bad",
+      expect(callGateway).toHaveBeenCalledWith({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          label: "Research",
+          model: "broken/bad",
+        },
       });
       expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
         label: "Research",
@@ -514,10 +593,7 @@ describe("sessions tool", () => {
   });
 
   it("routes group actions to existing gateway methods", async () => {
-    const callGateway = vi.fn(async (method: string, params: Record<string, unknown>) => ({
-      method,
-      params,
-    }));
+    const callGateway = vi.fn(async (request: { method: string; params: unknown }) => request);
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
       callGateway: callGateway as never,
@@ -529,10 +605,10 @@ describe("sessions tool", () => {
     await tool.execute("delete", { action: "group_delete", name: "Later" });
 
     expect(callGateway.mock.calls).toEqual([
-      ["sessions.groups.list", {}],
-      ["sessions.groups.put", { names: ["Now", "Later"] }],
-      ["sessions.groups.rename", { name: "Now", to: "Next" }],
-      ["sessions.groups.delete", { name: "Later" }],
+      [{ method: "sessions.groups.list", params: {} }],
+      [{ method: "sessions.groups.put", params: { names: ["Now", "Later"] } }],
+      [{ method: "sessions.groups.rename", params: { name: "Now", to: "Next" } }],
+      [{ method: "sessions.groups.delete", params: { name: "Later" } }],
     ]);
     await expect(tool.execute("set-missing", { action: "group_set" })).rejects.toThrow(
       "names required",
@@ -543,21 +619,255 @@ describe("sessions tool", () => {
     expect(callGateway).toHaveBeenCalledTimes(4);
   });
 
-  it("patches and clears a sidebar icon", async () => {
-    const callGateway = vi.fn(async () => ({ ok: true }));
+  it("returns a bounded acknowledgement instead of the patched session entry", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: {
+        skillsSnapshot: "s".repeat(47_469),
+        sessionDiffBaseline: "b".repeat(3_665),
+      },
+      resolved: {
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+      },
+    }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
       config: {},
       callGateway: callGateway as never,
     });
 
-    await tool.execute("patch-icon", { action: "patch", icon: "  name:lobster  " });
-    await tool.execute("clear-icon", { action: "patch", icon: "" });
+    const result = await tool.execute("patch-sidebar", {
+      action: "patch",
+      label: "Movies",
+    });
 
-    expect(callGateway.mock.calls).toEqual([
-      ["sessions.patch", { key: "agent:main:main", icon: "name:lobster" }],
-      ["sessions.patch", { key: "agent:main:main", icon: null }],
-    ]);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: {
+        key: "agent:main:main",
+        label: "Movies",
+      },
+    });
+    expect(result.details).toEqual({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["label"],
+    });
+    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
+    expect(text).not.toContain('"entry"');
+    expect(text).not.toContain('"path"');
+    expect(text).not.toContain('"resolved"');
+    expect(text).not.toContain("skillsSnapshot");
+    expect(text).not.toContain("sessionDiffBaseline");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(512);
+  });
+
+  it("returns authoritative resolved model and thinking metadata without the patched entry", async () => {
+    const resolved = {
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: { id: "codex", fallback: "openclaw" as const, source: "session" as const },
+      thinkingLevel: "medium",
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "medium", label: "Medium" },
+      ],
+    };
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: { skillsSnapshot: "s".repeat(47_469) },
+      resolved,
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-model-thinking", {
+      action: "patch",
+      model: "openai/luna",
+      thinkingLevel: "med",
+    });
+
+    expect(result.details).toEqual({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["model", "thinkingLevel"],
+      resolved,
+    });
+    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
+    expect(text).not.toContain('"entry"');
+    expect(text).not.toContain('"path"');
+    expect(text).not.toContain("skillsSnapshot");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(1_024);
+  });
+
+  it("preserves the complete canonical thinking catalog through ultra", async () => {
+    const thinkingLevels = [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+      "ultra",
+    ].map((id) => ({ id, label: id }));
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: "/sessions/main",
+      key: "agent:main:main",
+      entry: {},
+      resolved: { thinkingLevel: "ultra", thinkingLevels },
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-ultra-thinking", {
+      action: "patch",
+      thinkingLevel: "ultra",
+    });
+
+    expect(result.details).toMatchObject({
+      resolved: { thinkingLevel: "ultra", thinkingLevels },
+    });
+  });
+
+  it("preserves long resolved identifiers and complete catalogs exactly when they fit", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: { skillsSnapshot: "s".repeat(47_469) },
+      resolved: adversarialResolved,
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-adversarial-model-thinking", {
+      action: "patch",
+      model: "openai/luna",
+      thinkingLevel: "med",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["model", "thinkingLevel"],
+    });
+    expectExactResolvedAcknowledgement(result, adversarialResolved);
+  });
+
+  it("omits oversized resolved metadata instead of changing authoritative identifiers", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: { skillsSnapshot: "s".repeat(47_469) },
+      resolved: escapeHeavyResolved,
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-oversized-model-thinking", {
+      action: "patch",
+      model: "openai/luna",
+      thinkingLevel: "med",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["model", "thinkingLevel"],
+      resolvedOmitted: expectedResolvedOmission,
+    });
+    expectOmittedResolvedAcknowledgement(result);
+  });
+
+  it("keeps resolved model and thinking metadata when self-archive is deferred", async () => {
+    await withTempDir({ prefix: "openclaw-sessions-tool-archive-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = "agent:main:subagent:archive-me";
+      const sessionId = "archive-me-session";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId, updatedAt: 1 },
+      );
+      const callGateway = vi.fn(async () => ({
+        ok: true as const,
+        path: storePath,
+        key: sessionKey,
+        entry: { skillsSnapshot: "s".repeat(47_469) },
+        resolved: adversarialResolved,
+      }));
+      const tool = createSessionsTool({
+        agentSessionKey: sessionKey,
+        config: { session: { store: storePath } },
+        callGateway: callGateway as never,
+      });
+      const admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        assertAllowed: () => {},
+      });
+
+      try {
+        const result = await admission.run(
+          async () =>
+            await tool.execute("patch-model-thinking-archive", {
+              action: "patch",
+              archived: true,
+              model: "openai/luna",
+              thinkingLevel: "med",
+            }),
+        );
+        expect(result.details).toEqual({
+          status: "scheduled",
+          sessionKey,
+          message: "Session will be archived after the current agent run finishes.",
+          resolved: adversarialResolved,
+        });
+        expectExactResolvedAcknowledgement(result, adversarialResolved);
+        expect(callGateway).toHaveBeenCalledTimes(1);
+      } finally {
+        admission.release();
+      }
+
+      await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(2));
+      expect(callGateway).toHaveBeenNthCalledWith(1, {
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          model: "openai/luna",
+          thinkingLevel: "med",
+          expectedSessionId: sessionId,
+        },
+      });
+      expect(callGateway).toHaveBeenNthCalledWith(2, {
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          archived: true,
+          expectedSessionId: sessionId,
+        },
+      });
+    });
   });
 
   it("patches and clears title, status, attention, and archive state", async () => {
@@ -580,17 +890,24 @@ describe("sessions tool", () => {
 
     expect(callGateway.mock.calls).toEqual([
       [
-        "sessions.patch",
         {
-          key: "agent:main:main",
-          label: "Waiting on staging",
-          statusNote: "Blocked: need the staging password",
-          attention: "key",
-          ttlMinutes: 45,
-          archived: true,
+          method: "sessions.patch",
+          params: {
+            key: "agent:main:main",
+            label: "Waiting on staging",
+            statusNote: "Blocked: need the staging password",
+            attention: "key",
+            ttlMinutes: 45,
+            archived: true,
+          },
         },
       ],
-      ["sessions.patch", { key: "agent:main:main", label: null, attention: null }],
+      [
+        {
+          method: "sessions.patch",
+          params: { key: "agent:main:main", label: null, attention: null },
+        },
+      ],
     ]);
   });
 
@@ -609,11 +926,11 @@ describe("sessions tool", () => {
   });
 
   it("denies patch targets outside the caller session tree", async () => {
-    sessionsResolutionTesting.setDepsForTest({
-      callGateway: vi.fn(async () => ({ sessions: [] })) as never,
+    const callGateway = vi.fn(async () => ({ sessions: [] }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: callGateway as never,
     });
-    const callGateway = vi.fn();
-    const tool = createSessionsTool({ agentSessionKey: "agent:main:main", callGateway });
 
     await expect(
       tool.execute("patch-other", {
@@ -622,6 +939,9 @@ describe("sessions tool", () => {
         archived: true,
       }),
     ).rejects.toThrow("Session status visibility is restricted");
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: expect.objectContaining({ key: "agent:main:other" }),
+    });
   });
 });

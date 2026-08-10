@@ -95,7 +95,6 @@ type AgentRuntimeProviderHandle = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
 };
 
 type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {

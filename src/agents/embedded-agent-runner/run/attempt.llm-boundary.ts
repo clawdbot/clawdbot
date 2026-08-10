@@ -20,7 +20,7 @@ import {
   splitLeadingTimestampEnvelope,
   type CurrentUserTimestampMatch,
   type UserTranscriptContext,
-} from "./attempt.user-message-boundary.js";
+} from "./attempt-history.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {

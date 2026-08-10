@@ -87,6 +87,36 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
+  it("persists and restores the main content placement without a resizer", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.available = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.renderRoot
+      .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
+      ?.click();
+    await panel.updateComplete;
+
+    expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
+    expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
+      open: true,
+      dock: "main",
+    });
+
+    panel.remove();
+    const restored = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    restored.available = true;
+    document.body.append(restored);
+    await restored.updateComplete;
+    expect(restored.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
+  });
+
   it("opens new sessions for the selected agent", async () => {
     let createOptions: CreateOptions | undefined;
     createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {
@@ -339,6 +369,13 @@ describe("OpenClawTerminalPanel", () => {
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
 
     panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
+    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
+      open: true,
+      dock: "main",
+    });
 
     await waitForFast(() => {
       expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);

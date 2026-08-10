@@ -11,10 +11,10 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
   applyPluginUninstallDirectoryRemoval,
-  removePluginFromConfig,
   planPluginUninstall,
   resolveUninstallChannelConfigKeys,
 } from "./uninstall.js";

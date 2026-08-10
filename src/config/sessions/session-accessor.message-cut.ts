@@ -1,46 +1,37 @@
 import {
   forkSqliteSessionAtMessage,
-  listSqliteSessionBranches,
-  resolveSessionTranscriptActiveLeafEntryId as resolveSqliteSessionTranscriptActiveLeafEntryId,
   rewindSqliteSessionToMessage,
   switchSqliteSessionBranch,
-} from "./session-accessor.sqlite.js";
-import type { TranscriptEvent } from "./session-accessor.types.js";
+} from "./session-accessor.sqlite-message-cut.js";
 import type {
-  SessionBranchListParams,
-  SessionBranchListResult,
   SessionBranchSwitchMutationParams,
   SessionBranchSwitchMutationResult,
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
 
-export async function listSessionBranches(
-  params: SessionBranchListParams,
-): Promise<SessionBranchListResult> {
-  return await listSqliteSessionBranches(params);
-}
-
-export function resolveSessionTranscriptActiveLeafEntryId(
-  events: readonly TranscriptEvent[],
-): string | undefined {
-  return resolveSqliteSessionTranscriptActiveLeafEntryId(events);
-}
+export {
+  listSqliteSessionBranches as listSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId,
+} from "./session-accessor.sqlite-message-cut.js";
 
 export async function rewindSessionToMessage(
   params: SessionMessageCutMutationParams,
 ): Promise<SessionMessageCutMutationResult> {
-  return await rewindSqliteSessionToMessage(params);
+  const result = await rewindSqliteSessionToMessage(params);
+  return result.status === "conflict" ? { status: "failed" } : result;
 }
 
 export async function forkSessionAtMessage(
   params: SessionMessageCutMutationParams & { targetKey: string },
 ): Promise<SessionMessageCutMutationResult> {
-  return await forkSqliteSessionAtMessage(params);
+  const result = await forkSqliteSessionAtMessage(params);
+  return result.status === "conflict" ? { status: "failed" } : result;
 }
 
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
 ): Promise<SessionBranchSwitchMutationResult> {
-  return await switchSqliteSessionBranch(params);
+  const result = await switchSqliteSessionBranch(params);
+  return result.status === "conflict" ? { status: "failed" } : result;
 }

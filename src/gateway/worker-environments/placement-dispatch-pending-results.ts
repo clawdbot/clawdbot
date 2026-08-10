@@ -69,6 +69,25 @@ function sameActiveEnvironment(
   );
 }
 
+function pendingWorkerLossError(
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+  sessionId: string,
+): Error {
+  if (!environment) {
+    return new Error("cloud worker disappeared: environment record missing");
+  }
+  if (
+    environment.state === "destroyed" ||
+    environment.state === "failed" ||
+    environment.state === "orphaned"
+  ) {
+    return new Error(
+      `cloud worker disappeared: ${environment.error ?? `environment state ${environment.state}`}`,
+    );
+  }
+  return new Error(`Pending cloud workspace result lost its worker: ${sessionId}`);
+}
+
 export async function recoverPendingWorkspaceResults(
   deps: PlacementRecoveryDeps,
   cleanupOrphans: boolean,
@@ -114,19 +133,16 @@ export async function recoverPendingWorkspaceResults(
             stagedResultRef: pending.stagedResultRef,
           });
         }
-        placements.abandonWorkspaceResult(pending);
-        if (placement?.state === "active") {
-          await failure.failActive(
-            placement,
+        if (placement?.state === "active" || placement?.state === "draining") {
+          const failed = placements.failWorkspaceResultAndReleaseTurn(
+            pending,
             new Error(`Pending cloud workspace result has no active claim: ${pending.sessionId}`),
-            { forceClaimFence: true },
           );
-        } else if (placement?.state === "draining") {
-          await failure.failDraining(
-            placement,
-            new Error(`Pending cloud workspace result has no draining claim: ${pending.sessionId}`),
-            { forceClaimFence: true },
-          );
+          if (failed.state === "failed") {
+            await failure.retryFailedTeardown(failed);
+          }
+        } else {
+          placements.abandonWorkspaceResult(pending);
         }
         continue;
       }
@@ -335,19 +351,12 @@ export async function recoverPendingWorkspaceResults(
           placements.completeWorkspaceResultAndReleaseTurn(turnClaim, { reclaim: true });
           continue;
         }
-        placements.abandonWorkspaceResult(pending);
-        if (placement.state === "active") {
-          await failure.failActive(
-            placement,
-            new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
-            { forceClaimFence: true },
-          );
-        } else {
-          await failure.failDraining(
-            placement,
-            new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
-            { forceClaimFence: true },
-          );
+        const failed = placements.failWorkspaceResultAndReleaseTurn(
+          pending,
+          pendingWorkerLossError(environment, pending.sessionId),
+        );
+        if (failed.state === "failed") {
+          await failure.retryFailedTeardown(failed);
         }
         continue;
       }

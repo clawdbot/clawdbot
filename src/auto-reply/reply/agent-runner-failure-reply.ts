@@ -16,13 +16,13 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
 } from "../../agents/embedded-agent-helpers.js";
-import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   findCliMaxTurnsError,
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/failover/classify.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";

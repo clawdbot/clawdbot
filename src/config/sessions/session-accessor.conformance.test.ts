@@ -46,25 +46,31 @@ import {
   type TranscriptUpdatePayload,
 } from "./session-accessor.js";
 import {
-  appendSqliteTranscriptEvent,
-  appendSqliteTranscriptMessage,
   branchSqliteCompactionCheckpointSession,
-  cleanupSqliteSessionLifecycleArtifacts,
-  forkSqliteSessionEntryFromParentTarget,
+  restoreSqliteCompactionCheckpointSession,
+} from "./session-accessor.sqlite-checkpoint.js";
+import {
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
-  loadSqliteTranscriptEvents,
-  loadSqliteTranscriptEventsSync,
   patchSqliteSessionEntry,
-  publishSqliteTranscriptUpdate,
   readSqliteSessionUpdatedAt,
   replaceSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
-  replaceSqliteTranscriptEvents,
-  restoreSqliteCompactionCheckpointSession,
   upsertSqliteSessionEntry,
-} from "./session-accessor.sqlite.js";
+} from "./session-accessor.sqlite-entry.js";
+import { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
+import { cleanupSqliteSessionLifecycleArtifacts } from "./session-accessor.sqlite-lifecycle.js";
+import { forkSqliteSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
+import {
+  loadSqliteTranscriptEvents,
+  loadSqliteTranscriptEventsSync,
+} from "./session-accessor.sqlite-read.js";
+import {
+  appendSqliteTranscriptEvent,
+  appendSqliteTranscriptMessage,
+  replaceSqliteTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
@@ -2105,6 +2111,7 @@ describe("sqlite session normalization", () => {
       reason: "manual",
       tokensBefore: 42,
       tokensAfter: 84,
+      tokensVersion: 1,
       preCompaction: {
         sessionId: "pre-compaction-session",
         leafId: "pre-msg",
@@ -2143,6 +2150,7 @@ describe("sqlite session normalization", () => {
     const result = await branchSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
+      expectedState: sourceEntry,
       storePath: paths.sqlitePath,
       sourceKey: sourceEntryScope.sessionKey,
       nextKey: branchKey,
@@ -2172,6 +2180,7 @@ describe("sqlite session normalization", () => {
         parentSessionKey: sourceEntryScope.sessionKey,
         totalTokens: 42,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     );
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
@@ -2205,6 +2214,7 @@ describe("sqlite session normalization", () => {
       reason: "manual",
       tokensBefore: 100,
       tokensAfter: 25,
+      tokensVersion: 1,
       preCompaction: {
         sessionId: "missing-pre-session",
         leafId: "missing-pre-msg",
@@ -2229,6 +2239,7 @@ describe("sqlite session normalization", () => {
     const result = await branchSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
+      expectedState: { sessionId: "source-session", lifecycleRevision: undefined },
       storePath: paths.sqlitePath,
       sourceKey: sourceEntryScope.sessionKey,
       nextKey: "agent:main:checkpoint-post-fallback",
@@ -2249,6 +2260,7 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({ id: "post-msg", type: "message" }),
     ]);
     expect(result.entry.totalTokens).toBe(25);
+    expect(result.entry.totalTokensVersion).toBe(1);
   });
 
   it("restores a checkpoint by copying SQLite rows and replacing the entry transactionally", async () => {
@@ -2278,6 +2290,7 @@ describe("sqlite session normalization", () => {
       reason: "manual",
       tokensBefore: 12,
       tokensAfter: 24,
+      tokensVersion: 1,
       preCompaction: {
         sessionId: "pre-compaction-session",
         leafId: "pre-msg",
@@ -2307,6 +2320,7 @@ describe("sqlite session normalization", () => {
     const result = await restoreSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
+      expectedState: { sessionId: "current-session", lifecycleRevision: undefined },
       storePath: paths.sqlitePath,
       sessionKey: sourceEntryScope.sessionKey,
       checkpointId: checkpoint.checkpointId,
@@ -2326,6 +2340,7 @@ describe("sqlite session normalization", () => {
         compactionCheckpoints: [checkpoint],
         totalTokens: 12,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     );
     await expect(loadSqliteTranscriptEvents(restoredScope)).resolves.toEqual([

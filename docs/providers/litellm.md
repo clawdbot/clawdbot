@@ -104,9 +104,11 @@ LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/ge
   },
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "litellm/gpt-image-2",
-        timeoutMs: 180_000,
+      mediaModels: {
+        image: {
+          primary: "litellm/gpt-image-2",
+          timeoutMs: 180000,
+        },
       },
     },
   },

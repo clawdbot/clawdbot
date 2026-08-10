@@ -43,6 +43,16 @@ const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   },
 ];
 
+/** @typedef {{ write: (chunk: string) => boolean }} AuditOutput */
+/**
+ * @typedef {object} PnpmAuditOptions
+ * @property {string} [rootDir]
+ * @property {typeof fetch} [fetchImpl]
+ * @property {AuditOutput} [stdout]
+ * @property {AuditOutput} [stderr]
+ * @property {string} [minSeverity]
+ */
+
 function normalizeAuditLevel(level) {
   const normalized = String(level ?? "").toLowerCase();
   if (normalized in SEVERITY_RANK) {
@@ -853,6 +863,7 @@ export async function fetchBulkAdvisories({
   });
 }
 
+/** @param {PnpmAuditOptions} [options] */
 export async function runPnpmAuditProd({
   rootDir = process.cwd(),
   fetchImpl = fetch,

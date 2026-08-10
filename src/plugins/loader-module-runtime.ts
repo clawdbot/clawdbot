@@ -20,10 +20,6 @@ import {
 } from "./sdk-alias.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-type PluginModuleLoadAuthority = {
-  trustedInstalledPrivateSdkOwner?: string;
-};
-
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -113,13 +109,12 @@ export function runPluginRegisterSyncInRegistry(
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  aliasOverrides?: Readonly<Record<string, string>>;
   tryNative?: boolean;
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
 }) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-  const createLoaderForModule = (modulePath: string, authority?: PluginModuleLoadAuthority) => {
+  const createLoaderForModule = (modulePath: string) => {
     if (options.installNativeSdkResolver !== false && options.tryNative !== false) {
       installOpenClawPluginSdkNativeResolver({
         argv1: process.argv[1],
@@ -127,24 +122,15 @@ export function createPluginModuleLoader(options: {
         pluginModulePath: modulePath,
         devSourceRoot: options.devSourceRoot,
         pluginSdkResolution: options.pluginSdkResolution,
-        ...(authority?.trustedInstalledPrivateSdkOwner
-          ? {
-              trustedInstalledPrivateSdkOwner: authority.trustedInstalledPrivateSdkOwner,
-            }
-          : {}),
       });
     }
-    const defaultAliasMap = buildPluginLoaderAliasMap(
+    const aliasMap = buildPluginLoaderAliasMap(
       modulePath,
       process.argv[1],
       import.meta.url,
       options.pluginSdkResolution,
       options.devSourceRoot,
-      authority?.trustedInstalledPrivateSdkOwner,
     );
-    const aliasMap = options.aliasOverrides
-      ? { ...defaultAliasMap, ...options.aliasOverrides }
-      : defaultAliasMap;
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,
@@ -156,8 +142,8 @@ export function createPluginModuleLoader(options: {
       ...(options.tryNative !== undefined ? { tryNative: options.tryNative } : {}),
     });
   };
-  return (modulePath: string, authority?: PluginModuleLoadAuthority): unknown =>
-    createLoaderForModule(modulePath, authority)(toSafeImportPath(modulePath));
+  return (modulePath: string): unknown =>
+    createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {

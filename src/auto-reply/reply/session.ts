@@ -45,6 +45,7 @@ import {
 } from "../../config/sessions/terminal-status.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
   type SessionEntry,
   type SessionScope,
@@ -90,6 +91,7 @@ import {
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {
   FinalizedRuntimeMsgContext,
@@ -740,6 +742,7 @@ async function initSessionStateAttemptLocked(
   if (previousSessionEntry) {
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
+      agentId,
     });
   }
 
@@ -837,14 +840,14 @@ async function initSessionStateAttemptLocked(
         accountIdRaw: ctx.AccountId,
         persistedLastAccountId: baseDeliveryContext?.accountId,
       });
-  // Only fall back to persisted threadId for thread sessions. Non-thread
-  // sessions (e.g. DM without topics) must not inherit a stale threadId from a
-  // previous interaction that happened inside a topic/thread.
+  // Internal turns share the established external route and must not erase its
+  // thread. External non-thread turns still clear stale thread routing.
+  const preservePersistedThread = isThread || isInternalMessageChannel(originatingChannelRaw);
   const lastThreadIdRaw = isSystemEvent
     ? baseDeliveryContext?.threadId
     : (ctx.MessageThreadId ??
       ctx.TransportThreadId ??
-      (isThread ? baseDeliveryContext?.threadId : undefined));
+      (preservePersistedThread ? baseDeliveryContext?.threadId : undefined));
   const delivery = isSystemEvent
     ? normalizeSessionDeliveryState({
         route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
@@ -952,6 +955,7 @@ async function initSessionStateAttemptLocked(
     // inherit history without a fresh count, so keep those explicitly unknown.
     sessionEntry.totalTokens = 0;
     sessionEntry.totalTokensFresh = true;
+    sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -65,7 +65,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   activeSessionStore: Record<string, SessionEntry> | undefined;
   admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  beforeAgentReplyDispatchedForSteer: boolean;
   beginBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["beginBeforeAgentReply"];
@@ -74,9 +73,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   checkpointBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["checkpointBeforeAgentReply"];
-  confirmRestartRecoveryArmedAfterLeaseLoss: ReturnType<
-    typeof createReplyRestartRecoveryClaimController
-  >["confirmRestartRecoveryArmedAfterLeaseLoss"];
   getActiveIsNewSession: () => boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   isHeartbeat: boolean;
@@ -109,14 +105,12 @@ export async function executePreparedReplyAgentRun(
     admitUserTurn: admitUserTurnWithRecovery,
     agentCfgContextTokens,
     applyReplyToMode,
-    beforeAgentReplyDispatchedForSteer,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
     blockReplyChunking,
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,
     checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     commandBody,
     defaultModel,
     followupRun,
@@ -301,14 +295,7 @@ export async function executePreparedReplyAgentRun(
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
-        const shouldDispatch = await beginBeforeAgentReply();
-        if (!shouldDispatch || !beforeAgentReplyDispatchedForSteer) {
-          return shouldDispatch;
-        }
-        // The same source fell through from steering. Advance recovery while
-        // preserving the hook decision made before the attempted injection.
-        await checkpointBeforeAgentReply({ state: "continue" });
-        return false;
+        return await beginBeforeAgentReply();
       },
       afterDispatch: async (hookResult) => {
         if (!hookResult?.handled) {
@@ -390,7 +377,6 @@ export async function executePreparedReplyAgentRun(
           resolvedVerboseLevel,
           toolProgressDetail,
           replyMediaContext,
-          confirmRestartRecoveryArmedAfterLeaseLoss,
           isRestartRecoveryArmed,
         }),
       ),
@@ -488,7 +474,6 @@ export function createReplyAgentRestartRecoveryController(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
     admissionRunId:
@@ -557,7 +542,6 @@ export function createReplyAgentRestartRecoveryController(
     admitUserTurn,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
-    confirmRestartRecoveryArmedAfterLeaseLoss,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   };

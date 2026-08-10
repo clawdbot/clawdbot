@@ -224,7 +224,11 @@ vi.mock("../../infra/agent-run-registry.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+// Only the lookup this harness asserts on is stubbed; the rest of the read
+// surface stays real so registry paths reached through the gateway (paused-run
+// adoption, descendant queries) observe the runs these tests seed.
+vi.mock("../../agents/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/subagent-registry-read.js")>()),
   getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
 }));
 
@@ -290,16 +294,6 @@ vi.mock("../../channels/message/runtime.js", async () => {
           >)
         : actual.sendDurableMessageBatch(...args);
     },
-  };
-});
-
-vi.mock("../../utils/delivery-context.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
-    "../../utils/delivery-context.js",
-  );
-  return {
-    ...actual,
-    normalizeSessionDeliveryFields: () => ({}),
   };
 });
 

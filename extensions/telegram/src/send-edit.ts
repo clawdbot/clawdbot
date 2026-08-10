@@ -1,4 +1,6 @@
+import type { Message } from "grammy/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -28,7 +30,7 @@ import {
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
 import { resolveMarkdownTableMode } from "./send.runtime.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<
@@ -296,6 +298,7 @@ async function editMessageTelegramWithContext(
 
   if (editedMessage && editedMessage !== true && typeof editedMessage.message_id === "number") {
     const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
+    const successfulSendThread = resolveTelegramMessageThreadSpec(editedMessage as Message);
     await recordOutboundMessageForPromptContext({
       cfg,
       account,
@@ -303,6 +306,7 @@ async function editMessageTelegramWithContext(
       message: editedMessage,
       messageId: editedMessage.message_id,
       recordGroupHistory: false,
+      successfulSendThread,
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(editedMessage.message_thread_id !== undefined
         ? { messageThreadId: editedMessage.message_thread_id }

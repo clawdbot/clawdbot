@@ -59,8 +59,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     queueKey,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } = state;
@@ -342,6 +342,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
+      conversationToolPolicy: sessionCtx.ConversationToolPolicy,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??
@@ -453,6 +454,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
+    queueAdmissionState,
     isActive,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
@@ -461,7 +463,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         latestSessionState.sessionId;
       return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
-    isStreaming,
     opts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,

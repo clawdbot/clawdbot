@@ -31,29 +31,31 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
   CliBackendConfig,
   CliBackendLiveSessionRequirement,
+  CliBackendParseJsonlEvent,
 } from "../../plugins/cli-backend.types.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
+import type {
+  CliOutput,
+  CliStreamingDelta,
+  CliStreamJsonOutputLimits,
+  CliThinkingDelta,
+  CliThinkingProgress,
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+  CliUsage,
+} from "../cli-output-contracts.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+  CLI_STREAM_JSON_OUTPUT_LIMITS,
   createCliJsonlStreamingParser,
-  extractCliErrorMessage,
   frameBoundedCliJsonlChunk,
   normalizeClaudeCliStreamJsonRecord,
-  parseCliOutput,
-  type CliOutput,
-  type CliUsage,
-  type CliStreamJsonOutputLimits,
-  type CliStreamingDelta,
-  type CliThinkingDelta,
-  type CliThinkingProgress,
-  type CliToolResultDelta,
-  type CliToolUseStartDelta,
-  resolveCliStreamJsonOutputLimits,
-} from "../cli-output.js";
+} from "../cli-output-stream.js";
+import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
   type CliTimeoutContext,
@@ -79,6 +81,7 @@ type ProcessSupervisor = ReturnType<
 type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
   /** Enclosing run abort signal; authoritative for tool terminal reason on turn failure. */
   abortSignal?: AbortSignal;
@@ -1410,6 +1413,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
       raw,
       backend: turn.backend,
       providerId: session.providerId,
+      parseJsonlEvent: turn.parseJsonlEvent,
       outputMode: "jsonl",
       fallbackSessionId: turn.sessionId,
     });
@@ -1685,6 +1689,7 @@ function createTurn(params: {
 }): ClaudeLiveTurn {
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
+    parseJsonlEvent: params.context.backendResolved.parseJsonlEvent,
     diagnosticRefs: {
       runId: params.context.params.runId,
       sessionId: params.context.params.sessionId,
@@ -1692,7 +1697,7 @@ function createTurn(params: {
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
     abortSignal: params.context.params.abortSignal,
-    outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
+    outputLimits: CLI_STREAM_JSON_OUTPUT_LIMITS,
     startedAtMs: Date.now(),
     rawLines: [],
     noOutputTimer: null,
@@ -1710,6 +1715,7 @@ function createTurn(params: {
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
+      parseJsonlEvent: params.context.backendResolved.parseJsonlEvent,
       onAssistantDelta: params.onAssistantDelta,
       onThinkingDelta: params.onThinkingDelta,
       onThinkingProgress: params.onThinkingProgress,
@@ -2175,12 +2181,11 @@ async function runSerializedClaudeLiveSessionTurn(
   void outputPromise.catch(() => undefined);
   const abort = () =>
     abortTurn(liveSession, createAbortError(params.context.params.abortSignal?.reason));
-  let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
     ? {
         kind: "cli",
+        runId: params.context.params.runId,
         cancel: abort,
-        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
@@ -2201,7 +2206,6 @@ async function runSerializedClaudeLiveSessionTurn(
     }
     return { output: await outputPromise };
   } finally {
-    replyBackendCompleted = true;
     params.context.params.abortSignal?.removeEventListener("abort", abort);
     try {
       if (replyBackendHandle) {

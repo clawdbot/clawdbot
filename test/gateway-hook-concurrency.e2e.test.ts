@@ -6,6 +6,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "hook-concurrency/hook-concurrency";
@@ -202,14 +203,6 @@ async function postHook(instance: OpenClawTestInstance, index: number): Promise<
     body: await response.text(),
     status: response.status,
   };
-}
-
-function createDeferred(): Deferred {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 async function startHeldModelServer(): Promise<HeldModelServer> {

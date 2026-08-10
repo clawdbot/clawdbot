@@ -79,14 +79,6 @@ const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentReg
   () => import("./run-subagent-registry.runtime.js"),
 );
 
-async function loadCronEmbeddedRuntime() {
-  return await cronEmbeddedRuntimeLoader.load();
-}
-
-async function loadCronSubagentRegistryRuntime() {
-  return await cronSubagentRegistryRuntimeLoader.load();
-}
-
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
 }
@@ -582,7 +574,7 @@ function createCronPromptExecutor(params: {
           acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
           return result;
         }
-        const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         const promptCacheKey = resolveIsolatedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
@@ -929,7 +921,7 @@ export async function executeCronRun(params: {
     let hasActiveDescendants = false;
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
-        await loadCronSubagentRegistryRuntime();
+        await cronSubagentRegistryRuntimeLoader.load();
       hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
           typeof entry.execution.startedAt === "number"

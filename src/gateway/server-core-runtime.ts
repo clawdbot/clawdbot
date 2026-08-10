@@ -8,6 +8,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -127,10 +128,12 @@ export async function startGatewayCoreRuntime(input: {
     sessionEventSubscribers,
     toolEventRecipients,
     broadcastToConnIds,
+    terminalSessions,
     controlUiBasePath,
     workerEnvironmentService,
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
+    workerDesktopObserveAvailable,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
     pluginHostServices,
@@ -206,6 +209,7 @@ export async function startGatewayCoreRuntime(input: {
         sessionMessageSubscribers,
         chatAbortControllers,
         restartRecoveryCandidates,
+        terminalSessions,
       }),
     );
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
@@ -311,7 +315,8 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
+        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerDesktopObserveAvailable || descriptor.name !== "worker.desktop.observe"),
     );
     return createGatewayMethodRegistry(
       [
@@ -495,7 +500,13 @@ export async function startGatewayCoreRuntime(input: {
       pluginLookUpTable: nextPluginLookUpTable,
       ambientEnvTriggers,
     });
-    setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
+    const nextPluginMetadataSnapshot = completePluginMetadataSnapshot({
+      snapshot: nextPluginLookUpTable,
+      config: params.nextConfig,
+      env: params.env,
+      workspaceDir: defaultWorkspaceDir,
+    });
+    setCurrentPluginMetadataSnapshot(nextPluginMetadataSnapshot, {
       config: params.nextConfig,
       env: params.env,
       workspaceDir: defaultWorkspaceDir,

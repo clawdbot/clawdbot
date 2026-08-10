@@ -66,6 +66,7 @@ function ensureListener() {
           const error = resolveTaskLifecycleTerminalError({
             runtime: current.runtime,
             status: patch.status,
+            terminalReason: terminal.reason,
             error: terminal.error,
           });
           if (error) {
@@ -84,6 +85,7 @@ function ensureListener() {
             resolveTaskLifecycleTerminalError({
               runtime: current.runtime,
               status: patch.status,
+              terminalReason: terminal.reason,
               error: terminal.error,
             }) ?? current.error;
         }

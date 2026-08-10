@@ -12,7 +12,7 @@ import type {
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
 import {
-  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -63,7 +63,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "./subagent-test-fixtures.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
+import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 
 const noop = () => {};
 
@@ -1992,9 +1992,9 @@ describe("subagent registry seam flow", () => {
     const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
       resolveWait = resolve;
     });
-    const staleWriteLock = vi.fn();
-    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      staleWriteLock();
+    const requesterTranscriptWrite = vi.fn();
+    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      requesterTranscriptWrite();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
@@ -2008,16 +2008,16 @@ describe("subagent registry seam flow", () => {
         return {};
       }
       const result = await pendingWait;
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshCompletionWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshCompletionWrite);
       return result;
     });
     mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return true;
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
       async () => {
         mod.registerSubagentRun({
           runId: "run-detached-requester-owner",
@@ -2039,7 +2039,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
@@ -3072,13 +3072,17 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("records explicit agent.wait cancellation before session timing is persisted", async () => {
+  it.each([
+    { label: "cancellation", status: "timeout" as const, stopReason: "rpc" },
+    { label: "supersession", status: "error" as const, stopReason: "superseded" },
+  ])("records explicit agent.wait $label without retrying", async ({ status, stopReason }) => {
+    const runId = `run-terminal-${stopReason}`;
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": {
-        status: "timeout",
+        status,
         startedAt: 111,
         endedAt: 222,
-        stopReason: "rpc",
+        stopReason,
       },
     });
     mocks.loadSessionStore.mockReturnValue(
@@ -3088,15 +3092,15 @@ describe("subagent registry seam flow", () => {
     );
 
     mod.registerSubagentRun({
-      runId: "run-terminal-timeout",
-      task: "time out terminally",
+      runId,
+      task: "terminate without retrying",
     });
 
     // Main defers timed-out lifecycle completion behind a retry grace timer.
     await vi.advanceTimersByTimeAsync(20_000);
 
     await waitForFast(() => {
-      const run = findRequesterRun("run-terminal-timeout");
+      const run = findRequesterRun(runId);
       expect(run?.execution.endedAt).toBe(222);
       expectRecordFields(
         run?.execution.outcome,
@@ -3273,6 +3277,121 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.runId).toBe("run-yield-continuation");
     expect(replacement?.pauseReason).toBeUndefined();
     expect(replacement?.execution.endedAt).toBeUndefined();
+    // The operator is the live audience for a steer, so the requester wake
+    // credential is intentionally dropped rather than re-armed.
+    expect(replacement?.requesterSettleWake).toBeUndefined();
+  });
+
+  describe("sessions_yield follow-up adoption", () => {
+    const CHILD_SESSION_KEY = "agent:main:subagent:yield-followup";
+    const PAUSED_RUN_ID = "run-yield-followup-paused";
+    const FOLLOW_UP_RUN_ID = "run-yield-followup-continued";
+    const SIBLING_RUN_ID = "run-yield-followup-sibling";
+
+    /**
+     * Drives a child run to the paused state a `sessions_yield` produces, then
+     * arms the wake credential that `settleRequesterTurnAfterSessionSpawns`
+     * writes when the parent yields behind its own spawn batch.
+     */
+    const arrangePausedChildWithYieldedRequester = async () => {
+      mockGatewayMethods(mocks.callGateway, {
+        "agent.wait": {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          stopReason: "end_turn",
+          livenessState: "paused",
+          yielded: true,
+        },
+      });
+      mod.registerSubagentRun({
+        runId: PAUSED_RUN_ID,
+        childSessionKey: CHILD_SESSION_KEY,
+        task: "wait for the remote job",
+      });
+      const paused = await waitForFast(() => {
+        const run = expectDefined(findRequesterRun(PAUSED_RUN_ID), "paused subagent run");
+        expect(run.pauseReason).toBe("sessions_yield");
+        return run;
+      });
+      paused.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        afterRequesterYield: true,
+        rearmGeneration: 1,
+        batchRunIds: [SIBLING_RUN_ID, PAUSED_RUN_ID].toSorted(),
+      };
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      return paused;
+    };
+
+    it("announces to the original requester once the adopted follow-up ends normally", async () => {
+      await arrangePausedChildWithYieldedRequester();
+
+      mockGatewayMethods(mocks.callGateway, {
+        "agent.wait": {
+          status: "ok",
+          startedAt: 333,
+          endedAt: 444,
+          stopReason: "end_turn",
+        },
+      });
+      expect(
+        mod.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: CHILD_SESSION_KEY,
+          runId: FOLLOW_UP_RUN_ID,
+          task: "the remote job finished",
+        }),
+      ).toBe(true);
+
+      expect(findRequesterRun(PAUSED_RUN_ID)).toBeUndefined();
+      const adopted = expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run");
+      // Adoption continues the same unit of work: the requester identity that
+      // spawned the paused run must survive, or the announce lands on the
+      // child's own session instead of the waiting parent.
+      expect(adopted.requesterSessionKey).toBe("agent:main:main");
+      expect(adopted.task).toBe("the remote job finished");
+      expect(adopted.pauseReason).toBeUndefined();
+      // The frozen batch is addressed by runId, so the retired id must be
+      // remapped or this row drops out of the batch it still gates.
+      expect(adopted.requesterSettleWake?.batchRunIds).toEqual(
+        [SIBLING_RUN_ID, FOLLOW_UP_RUN_ID].toSorted(),
+      );
+      expect(adopted.requesterSettleWake).toMatchObject({
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      });
+
+      await waitForFast(() => {
+        expect(
+          expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run").execution
+            .endedAt,
+        ).toBe(444);
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
+      });
+    });
+
+    it("stays paused without announcing when the adopted follow-up yields again", async () => {
+      await arrangePausedChildWithYieldedRequester();
+
+      expect(
+        mod.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: CHILD_SESSION_KEY,
+          runId: FOLLOW_UP_RUN_ID,
+          task: "still waiting on the remote job",
+        }),
+      ).toBe(true);
+
+      await waitForFast(() => {
+        const adopted = expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run");
+        expect(adopted.pauseReason).toBe("sessions_yield");
+      });
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      // A yielded row is still unsettled work, so the parent's batch keeps
+      // deferring instead of waking on a run that has not produced a result.
+      expect(mod.countPendingDescendantRuns("agent:main:main")).toBe(1);
+    });
   });
 
   it("ignores a late yield lifecycle event after the paused run is killed", async () => {
@@ -4636,7 +4755,7 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  it("does not restore session-write ownership after a successor is released", async () => {
+  it("does not restore a superseded lifecycle after a successor is released", async () => {
     const childSessionKey = "agent:main:subagent:released-timing-owner";
     mockPendingAgentWait();
     mocks.loadSessionStore.mockReturnValue({

@@ -10,6 +10,10 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
 import {
+  normalizeAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "./agent-run-terminal-reply.js";
+import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   stripInternalRuntimeContext,
@@ -26,6 +30,7 @@ export type SessionActivityNoteState = {
   lastAssistantBufferAt: number;
   lastAssistantNote?: string;
   planProgress?: { completed: number; total: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 const MAX_NOTES = 40;
@@ -211,6 +216,11 @@ export function noteSessionActivityEvent(
         const health = terminalHealthFor(event);
         const error = readString(data.error);
         addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
+        const terminalReply = normalizeAgentRunTerminalReplySnapshot(data.terminalReply);
+        state.terminalReply = terminalReply;
+        if (terminalReply?.disposition === "visible") {
+          addActivityNote(state, `Assistant: ${terminalReply.text}`, noteMaxChars);
+        }
       }
       return;
     }

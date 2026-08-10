@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   createCopilotTokenStore,
   loadOrCreateCopilotIdentity,
@@ -103,6 +105,99 @@ class FakeWebSocket {
       listener(event);
     }
   }
+}
+
+type GatewayFixtureRequest = {
+  id: string;
+  method: string;
+  params?: Record<string, unknown>;
+};
+
+function gatewayHello(tickIntervalMs: number) {
+  return {
+    type: "hello-ok",
+    protocol: 4,
+    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    policy: { tickIntervalMs },
+  };
+}
+
+function rawDataText(data: RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString("utf8");
+  }
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+}
+
+async function startLoopbackGateway(tickIntervalMs = 1_000) {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test Gateway did not bind a loopback port");
+  }
+  const sockets: WebSocket[] = [];
+  const requests: GatewayFixtureRequest[] = [];
+  const closeCodes: number[] = [];
+  server.on("connection", (socket) => {
+    sockets.push(socket);
+    socket.once("close", (code) => closeCodes.push(code));
+    socket.send(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: `copilot-live-${sockets.length}`, ts: Date.now() },
+      }),
+    );
+    socket.on("message", (data) => {
+      const request = JSON.parse(rawDataText(data)) as GatewayFixtureRequest;
+      requests.push(request);
+      if (request.method === "connect") {
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: request.id,
+            ok: true,
+            payload: gatewayHello(tickIntervalMs),
+          }),
+        );
+      }
+    });
+  });
+  return {
+    server,
+    sockets,
+    requests,
+    closeCodes,
+    url: `ws://127.0.0.1:${address.port}/`,
+    async close() {
+      for (const socket of server.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
+
+async function completeFakeGatewayHello(socket: FakeWebSocket, tickIntervalMs = 1_000) {
+  socket.message({
+    type: "event",
+    event: "connect.challenge",
+    payload: { nonce: "copilot-watchdog-nonce", ts: 1_777_777_777_000 },
+  });
+  await vi.waitFor(() => expect(socket.sent).toHaveLength(1), { interval: 1 });
+  socket.message({
+    type: "res",
+    id: socket.sent[0]?.id,
+    ok: true,
+    payload: gatewayHello(tickIntervalMs),
+  });
+  await vi.advanceTimersByTimeAsync(0);
 }
 
 describe("browser copilot Gateway custody", () => {
@@ -418,6 +513,235 @@ describe("browser copilot Gateway custody", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("reconnects a real Gateway-protocol socket when it stops sending heartbeats", async () => {
+    const gateway = await startLoopbackGateway();
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: WebSocket as never,
+    });
+    const states: string[] = [];
+    let resolveReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    client.onStatus((status) => {
+      if (typeof status.state === "string") {
+        states.push(status.state);
+      }
+      if (status.state === "ready") {
+        resolveReady?.();
+      }
+    });
+
+    try {
+      client.start(gateway.url);
+      await ready;
+      expect(gateway.requests[0]).toMatchObject({
+        method: "connect",
+        params: {
+          role: "operator",
+          client: { id: "openclaw-browser-copilot" },
+          device: { nonce: "copilot-live-1", signature: expect.any(String) },
+        },
+      });
+      expect(gateway.sockets[0]?.readyState).toBe(WebSocket.OPEN);
+      await expect(
+        client.request(
+          "chat.send",
+          { sessionKey: "agent:main:main", message: "live proof" },
+          {
+            timeoutMs: 25,
+          },
+        ),
+      ).rejects.toThrow("gateway request timed out after 25ms: chat.send");
+      expect(gateway.requests.map((request) => request.method)).toEqual(["connect", "chat.send"]);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_150);
+      });
+
+      expect({
+        connections: gateway.sockets.length,
+        firstSocketOpen: gateway.sockets[0]?.readyState === WebSocket.OPEN,
+        closeCodes: gateway.closeCodes,
+        statuses: states,
+      }).toEqual({
+        connections: 2,
+        firstSocketOpen: false,
+        closeCodes: [4000],
+        statuses: ["connecting", "ready", "connecting", "ready"],
+      });
+    } finally {
+      client.stop();
+      await gateway.close();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a real Gateway-protocol socket connected while live tick events arrive", async () => {
+    const gateway = await startLoopbackGateway();
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: WebSocket as never,
+    });
+    let resolveReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    client.onStatus((status) => {
+      if (status.state === "ready") {
+        resolveReady?.();
+      }
+    });
+
+    try {
+      client.start(gateway.url);
+      await ready;
+      for (let seq = 1; seq <= 5; seq += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        const observed = new Promise<void>((resolve) => {
+          const unsubscribe = client.onEvent((event) => {
+            if (
+              event &&
+              typeof event === "object" &&
+              "event" in event &&
+              "seq" in event &&
+              event.event === "tick" &&
+              event.seq === seq
+            ) {
+              unsubscribe();
+              resolve();
+            }
+          });
+        });
+        gateway.sockets[0]?.send(JSON.stringify({ type: "event", event: "tick", seq }));
+        await observed;
+      }
+
+      expect(client.ready).toBe(true);
+      expect(gateway.sockets[0]?.readyState).toBe(WebSocket.OPEN);
+      expect(gateway.closeCodes).toEqual([]);
+    } finally {
+      client.stop();
+      await gateway.close();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a replacement Gateway watchdog independent of its retired connection", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    FakeWebSocket.autoOpen = true;
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      await vi.advanceTimersByTimeAsync(0);
+      const retired = FakeWebSocket.instances[0];
+      expect(retired).toBeDefined();
+      await completeFakeGatewayHello(retired!);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      client.start("ws://127.0.0.1:38789/");
+      await vi.advanceTimersByTimeAsync(0);
+      const replacement = FakeWebSocket.instances[1];
+      expect(replacement).toBeDefined();
+      await completeFakeGatewayHello(replacement!);
+      await vi.advanceTimersByTimeAsync(2_000);
+      retired?.message({ type: "event", event: "tick", seq: 1 });
+      expect(replacement?.closeCalls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(replacement?.closeCalls).toEqual([{ code: 4000, reason: "tick timeout" }]);
+    } finally {
+      client.stop();
+      FakeWebSocket.autoOpen = true;
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("removes its heartbeat watchdog when the current Gateway is stopped", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    FakeWebSocket.autoOpen = true;
+    vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+    vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+    const client = new CopilotGatewayClient({
+      storage: storageArea(),
+      WebSocketImpl: FakeWebSocket as never,
+    });
+
+    try {
+      client.start("ws://127.0.0.1:28789/");
+      await vi.advanceTimersByTimeAsync(0);
+      const socket = FakeWebSocket.instances[0];
+      expect(socket).toBeDefined();
+      await completeFakeGatewayHello(socket!);
+
+      client.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(socket?.closeCalls).toEqual([{ code: 1000, reason: "" }]);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      client.stop();
+      FakeWebSocket.autoOpen = true;
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    { advertised: 1, expected: 1_000 },
+    { advertised: Number.MAX_SAFE_INTEGER, expected: 2_147_483_647 },
+  ])(
+    "bounds the Gateway-advertised heartbeat policy ($advertised)",
+    async ({ advertised, expected }) => {
+      vi.useFakeTimers();
+      FakeWebSocket.instances = [];
+      FakeWebSocket.autoOpen = true;
+      vi.stubGlobal("chrome", { runtime: { getManifest: () => ({ version: "test" }) } });
+      vi.stubGlobal("navigator", { language: "en", userAgent: "copilot-test" });
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = new CopilotGatewayClient({
+        storage: storageArea(),
+        WebSocketImpl: FakeWebSocket as never,
+      });
+
+      try {
+        client.start("ws://127.0.0.1:28789/");
+        await vi.advanceTimersByTimeAsync(0);
+        const socket = FakeWebSocket.instances[0];
+        expect(socket).toBeDefined();
+        await completeFakeGatewayHello(socket!, advertised);
+
+        expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), expected);
+      } finally {
+        client.stop();
+        setIntervalSpy.mockRestore();
+        FakeWebSocket.autoOpen = true;
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("distinguishes server rejection from ambiguous transport failure", () => {
     expect(

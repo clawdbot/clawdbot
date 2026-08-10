@@ -1,10 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   onAgentEvent,
   resetAgentEventsForTest,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
-import { createDeferred } from "../../shared/deferred.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedClassifyFailoverReason,

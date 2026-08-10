@@ -348,9 +348,6 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
     },
   ),
 }));
-const sessionWriteLockMocks = vi.hoisted(() => ({
-  acquireSessionWriteLock: vi.fn(),
-}));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -406,20 +403,6 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
-vi.mock("../embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: runEmbeddedAgentMock,
-}));
-
-vi.mock("../session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-write-lock.js")>(
-    "../session-write-lock.js",
-  );
-  sessionWriteLockMocks.acquireSessionWriteLock.mockImplementation(actual.acquireSessionWriteLock);
-  return {
-    ...actual,
-    acquireSessionWriteLock: sessionWriteLockMocks.acquireSessionWriteLock,
-  };
-});
 
 function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
@@ -432,6 +415,13 @@ function makeCliResult(text: string): EmbeddedAgentRunResult {
         provider: "claude-cli",
         model: "opus",
         usage: {
+          input: 12,
+          output: 4,
+          cacheRead: 3,
+          cacheWrite: 0,
+          total: 19,
+        },
+        lastCallUsage: {
           input: 12,
           output: 4,
           cacheRead: 3,
@@ -472,7 +462,13 @@ async function readSessionMessages(target: TranscriptReadTarget) {
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
-        entry.message as { role?: string; content?: unknown; provider?: string; model?: string },
+        entry.message as {
+          role?: string;
+          content?: unknown;
+          provider?: string;
+          model?: string;
+          usage?: unknown;
+        },
     );
 }
 
@@ -655,7 +651,6 @@ describe("CLI attempt execution", () => {
     hasClaudeLiveSessionForOwnerMock.mockReturnValue(false);
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
-    sessionWriteLockMocks.acquireSessionWriteLock.mockClear();
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
@@ -1304,6 +1299,17 @@ describe("CLI attempt execution", () => {
       );
       await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
       sessionStore[sessionKey] = concurrentEntry;
+      const clearBeforeFreshRetry = runArgs.onBeforeFreshCliSessionRetry;
+      expect(clearBeforeFreshRetry).toBeTypeOf("function");
+      await expect(
+        (
+          clearBeforeFreshRetry as (params: {
+            provider: string;
+            reason: "timeout";
+            sessionId: string;
+          }) => Promise<boolean>
+        )({ provider: "claude-cli", reason: "timeout", sessionId: forkedCliSessionId }),
+      ).resolves.toBe(false);
       throw recoveryError;
     });
 
@@ -1987,9 +1993,15 @@ describe("CLI attempt execution", () => {
     });
     let updatedEntry: SessionEntry | undefined;
     try {
+      const result = makeCliResult("hello from cli");
+      if (!result.meta.agentMeta) {
+        throw new Error("expected agent metadata");
+      }
+      result.meta.agentMeta.usage = { input: 12, output: 4, cacheRead: 3, total: 19 };
+      result.meta.agentMeta.lastCallUsage = { input: 7, output: 4, cacheRead: 2, total: 13 };
       updatedEntry = await persistCliTranscriptEntry({
         body: "persist this",
-        result: makeCliResult("hello from cli"),
+        result,
         sessionId: sessionEntry.sessionId,
         sessionKey,
         sessionEntry,
@@ -2037,12 +2049,57 @@ describe("CLI attempt execution", () => {
       model: "opus",
       content: [{ type: "text", text: "hello from cli" }],
     });
+    expectRecordFields(requireRecord(messages[1]?.usage, "assistant usage"), {
+      input: 7,
+      output: 4,
+      cacheRead: 2,
+      totalTokens: 13,
+      contextUsage: { state: "available", promptTokens: 9, totalTokens: 13 },
+    });
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]).not.toHaveProperty("sessionFile");
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThanOrEqual(nowCalls.at(-1) ?? 0);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
+  });
+
+  it("marks CLI transcript context unavailable when only cumulative usage exists", async () => {
+    const sessionKey = "agent:main:subagent:cli-cumulative-only";
+    const sessionEntry = makeSessionEntry("session-cli-cumulative-only");
+    const result = makeCliResult("cumulative reply");
+    if (!result.meta.agentMeta) {
+      throw new Error("expected agent metadata");
+    }
+    result.meta.agentMeta.lastCallUsage = undefined;
+
+    await persistCliTurnTranscript({
+      body: "run tools",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    const assistant = requireRecord(messages.at(-1), "assistant message");
+    expectRecordFields(requireRecord(assistant.usage, "assistant usage"), {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    });
   });
 
   it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
@@ -2134,36 +2191,6 @@ describe("CLI attempt execution", () => {
       role: "assistant",
       content: [{ type: "text", text: "runtime answer" }],
     });
-  });
-
-  it("holds the session-key lease for the embedded assistant gap-fill", async () => {
-    const sessionKey = "agent:main:direct:gap-fill-lease";
-    const sessionEntry = makeSessionEntry("session-gap-fill-lease");
-    await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
-    const release = vi.fn();
-    sessionWriteLockMocks.acquireSessionWriteLock.mockResolvedValueOnce({ release });
-
-    await persistCliTurnTranscript({
-      body: "ignored prompt",
-      result: makeCliResult("runtime answer"),
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-      embeddedAssistantGapFill: true,
-    });
-
-    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledOnce();
-    expect(sessionWriteLockMocks.acquireSessionWriteLock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: expect.any(String),
-        targetKind: "session-key",
-      }),
-    );
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it("persists a media-only ACP user turn when the reply is empty", async () => {

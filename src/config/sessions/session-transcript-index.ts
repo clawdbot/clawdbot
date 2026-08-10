@@ -77,6 +77,23 @@ function readSessionTranscriptProjectionState(
   };
 }
 
+export function sessionTranscriptIndexNeedsReconcile(db: DatabaseSync, sessionId: string): boolean {
+  const latest = executeSqliteQueryTakeFirstSync(
+    db,
+    getIndexKysely(db)
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    return false;
+  }
+  const state = readSessionTranscriptProjectionState(db, sessionId);
+  return !state || state.needsRebuild || state.indexedSeq !== latest.seq;
+}
+
 function writeWatermark(
   db: DatabaseSync,
   sessionId: string,
@@ -371,8 +388,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     deleteSessionTranscriptIndexInTransaction(db, sessionId);
     return false;
   }
-  const state = readSessionTranscriptProjectionState(db, sessionId);
-  if (state && !state.needsRebuild && state.indexedSeq === latest.seq) {
+  if (!sessionTranscriptIndexNeedsReconcile(db, sessionId)) {
     return false;
   }
   const rows = executeSqliteQuerySync(

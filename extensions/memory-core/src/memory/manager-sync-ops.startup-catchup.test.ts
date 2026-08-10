@@ -11,7 +11,7 @@ import {
 import {
   buildSessionEntry,
   statSessionEntrySync,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   MEMORY_CHUNKING_VERSION,
   type MemorySource,

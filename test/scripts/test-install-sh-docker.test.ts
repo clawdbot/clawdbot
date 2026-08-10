@@ -1133,7 +1133,7 @@ printf 'status=%s\\n' "$status"
 
     expect(script).toContain("assert_pack_unpacked_size_budget");
     expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
-    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
+    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mts"');
     expect(script).toContain("install smoke cannot verify pack budget");
   });
 

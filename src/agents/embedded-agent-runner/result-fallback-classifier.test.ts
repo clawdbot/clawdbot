@@ -437,6 +437,89 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it.each([
+    {
+      name: "empty",
+      payloads: [],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "whitespace-only",
+      payloads: [{ text: "   " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "reasoning-only",
+      payloads: [{ isReasoning: true, text: "thinking about the answer" }],
+      code: "reasoning_only_result",
+      suffix: "with reasoning only",
+    },
+    {
+      name: "mixed reasoning-plus-blank",
+      payloads: [{ isReasoning: true, text: "thinking about the answer" }, { text: "   " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "commentary-only",
+      payloads: [{ isCommentary: true, text: "progress only" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "explicitly hidden",
+      payloads: [{ visible: false, text: "internal" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "blank error",
+      payloads: [{ isError: true, text: " " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+  ])("classifies $name non-GPT completions as fallback-worthy", ({ payloads, code, suffix }) => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads,
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `zai/glm-5.2 ended ${suffix}`,
+      reason: "format",
+      code,
+    });
+  });
+
+  it.each([
+    {
+      name: "mixed reasoning-plus-visible text",
+      payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
+    },
+    { name: "media-only", payloads: [{ mediaUrl: "https://example.test/result.png" }] },
+    {
+      name: "rich error",
+      payloads: [{ isError: true, mediaUrl: "https://example.test/error.png" }],
+    },
+  ])("keeps $name completions successful", ({ payloads }) => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads,
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("keeps side-effecting incomplete tool turns out of fallback before harness classification", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",

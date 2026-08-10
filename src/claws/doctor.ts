@@ -145,6 +145,17 @@ function collectInstallFindings(
     );
   }
   for (const pkg of record.packages) {
+    if (pkg.extensionCompatibility && pkg.extensionCompatibility.state !== "compatible") {
+      findings.push(
+        finding({
+          message: `Claw extension ${JSON.stringify(pkg.extension?.id ?? pkg.ref)} has ${pkg.extensionCompatibility.state} host compatibility state${pkg.extensionCompatibility.message ? `: ${pkg.extensionCompatibility.message}` : "."}`,
+          path: `claws.${agentId}.extensions.${pkg.extension?.id ?? pkg.ref}`,
+          target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
+          requirement: "Claw extensions should retain their consented canonical capability mapping",
+          fixHint: "Preview a Claw update before accepting the host's current extension mapping.",
+        }),
+      );
+    }
     if (pkg.state === "present") {
       continue;
     }

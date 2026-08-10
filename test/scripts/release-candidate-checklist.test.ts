@@ -33,7 +33,7 @@ import {
   validatePreflightManifest,
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
-} from "../../scripts/release-candidate-checklist.mjs";
+} from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -62,8 +62,8 @@ describe("release candidate checklist", () => {
 
     expect(
       isDirectReleaseCandidateExecution(
-        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
-        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mts",
+        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mts",
         realpath,
       ),
     ).toBe(true);
@@ -203,11 +203,11 @@ describe("release candidate checklist", () => {
         targetTrackedStatus: "",
         toolingSha: "b".repeat(40),
         trustedToolingSha: "b".repeat(40),
-        toolingTrackedStatus: " M scripts/release-candidate-checklist.mjs",
+        toolingTrackedStatus: " M scripts/release-candidate-checklist.mts",
         workflowRef: "main",
       }),
     ).toThrow("clean tracked tooling checkout");
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
     expect(source).toContain('mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"))');
     expect(source).toContain(
@@ -217,7 +217,7 @@ describe("release candidate checklist", () => {
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(
-      '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
+      '["--import", "tsx", join(toolingRoot, "scripts/release-candidate-checklist.mts"), ...argv]',
     );
     expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
@@ -277,7 +277,7 @@ describe("release candidate checklist", () => {
       repository: "openclaw/openclaw",
       tag: "v2026.7.1-beta.3",
     });
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const validationIndex = source.indexOf(
       "const releaseNotesCheck = validateCandidateReleaseNotes",
     );
@@ -410,7 +410,7 @@ describe("release candidate checklist", () => {
       "",
       "### Complete contribution record",
       "",
-      "This audited record covers the complete base..HEAD history: 1 merged PR.",
+      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
       "",
       "#### Pull requests",
       "",
@@ -418,6 +418,27 @@ describe("release candidate checklist", () => {
     ].join("\n");
 
     expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+  });
+
+  it("rejects duplicate historical contribution record rows without exact provenance", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.6.11",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 1 merged PR.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #2** fix: shipped.",
+      "- **PR #2** fix: duplicate.",
+    ].join("\n");
+
+    expect(() => candidateCumulativeShippedPullRequests(changelog, "test baseline")).toThrow(
+      "test baseline section 2026.6.11 contains duplicate contribution record PR #2",
+    );
   });
 
   it("validates cumulative shipped baseline exclusion metadata", () => {
@@ -873,7 +894,7 @@ describe("release candidate checklist", () => {
     expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
 
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     expect(source).toContain("target_context_ref: targetContextRef");
   });
 
@@ -996,7 +1017,7 @@ describe("release candidate checklist", () => {
   });
 
   it("binds SHA-pinned full validation evidence through its manifest", () => {
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
 
     expect(source).toContain("allowShaPinnedWorkflowRef: true");
     expect(source).toContain(

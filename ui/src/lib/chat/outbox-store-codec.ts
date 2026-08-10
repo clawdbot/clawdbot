@@ -111,6 +111,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (sendRunId) {
     item.sendRunId = sendRunId;
   }
+  const steerTargetRunId = normalizeOptionalString(entry.steerTargetRunId);
+  if (steerTargetRunId) {
+    item.steerTargetRunId = steerTargetRunId;
+  }
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }

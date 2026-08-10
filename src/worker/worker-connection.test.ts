@@ -13,6 +13,7 @@ import type {
   WorkerInferenceEventFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { toError } from "./worker-connection-contract.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
@@ -129,6 +130,138 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
   });
   return { observed, throwingCalls: () => throwingCalls };
 }
+
+describe("worker connection error coercion", () => {
+  it("preserves existing Error identity without invoking custom toString", () => {
+    class ThrowingToStringError extends Error {
+      override toString(): string {
+        throw new Error("unexpected stringification");
+      }
+    }
+    const cause = { code: "ECONNRESET" };
+    const original = new ThrowingToStringError("worker failed", { cause });
+    original.name = "WorkerFailure";
+    const originalStack = original.stack;
+
+    const error = toError(original);
+
+    expect(error).toBe(original);
+    expect(error).toMatchObject({
+      cause,
+      message: "worker failed",
+      name: "WorkerFailure",
+      stack: originalStack,
+    });
+  });
+
+  it("preserves structured non-Error causes", () => {
+    const cause = { code: "ECONNRESET", status: 503 };
+
+    const error = toError(cause);
+
+    expect(error.message).toBe("[object Object]");
+    expect(error.cause).toBe(cause);
+    expect(error).toMatchObject(cause);
+  });
+
+  it("skips structured fields whose getters throw", () => {
+    const cause = {
+      get details(): never {
+        throw new Error("unexpected structured field read");
+      },
+      code: "ECONNRESET",
+    };
+    let error: Error | undefined;
+
+    expect(() => {
+      error = toError(cause);
+    }).not.toThrow();
+    expect(error).toMatchObject({ code: "ECONNRESET" });
+    expect(error).not.toHaveProperty("details");
+  });
+
+  it("preserves the base Error when structured enumeration traps throw", () => {
+    const handlers: ProxyHandler<{ code: string; status: number }>[] = [
+      {
+        ownKeys() {
+          throw new Error("unexpected ownKeys call");
+        },
+      },
+      {
+        ownKeys() {
+          return ["code", "status"];
+        },
+        getOwnPropertyDescriptor(target, key) {
+          if (key === "status") {
+            throw new Error("unexpected descriptor read");
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    ];
+
+    for (const handler of handlers) {
+      const cause = new Proxy({ code: "ECONNRESET", status: 503 }, handler);
+      const error = toError(cause);
+
+      expect(error).toMatchObject({ name: "Error", message: "[object Object]" });
+      expect(error.cause).toBe(cause);
+      expect(error).not.toHaveProperty("code");
+      expect(error).not.toHaveProperty("status");
+    }
+  });
+
+  it("preserves adapter-owned Error fields when structured cause fields collide", () => {
+    const detailKey = Symbol("detail");
+    let reservedReads = 0;
+    const cause = {
+      get name() {
+        reservedReads += 1;
+        return "SpoofedError";
+      },
+      get message() {
+        reservedReads += 1;
+        return "spoofed message";
+      },
+      get cause() {
+        reservedReads += 1;
+        return "spoofed cause";
+      },
+      get stack() {
+        reservedReads += 1;
+        return "spoofed stack";
+      },
+      code: "ECONNRESET",
+      details: { retryable: true },
+      [detailKey]: "symbol detail",
+    };
+
+    const error = toError(cause);
+
+    expect(reservedReads).toBe(0);
+    expect(error.message).toBe("[object Object]");
+    expect(error.cause).toBe(cause);
+    expect(error.name).toBe("Error");
+    expect(error.stack).toContain("Error: [object Object]");
+    expect(error).toMatchObject({ code: "ECONNRESET", details: { retryable: true } });
+    expect(Reflect.get(error, detailKey)).toBe("symbol detail");
+  });
+
+  it("rejects prototype-mutating structured cause fields", () => {
+    const cause = { constructor: { polluted: true }, prototype: { polluted: true } };
+    Object.defineProperty(cause, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+    });
+
+    const error = toError(cause);
+
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(Object.hasOwn(error, "__proto__")).toBe(false);
+    expect(Object.hasOwn(error, "constructor")).toBe(false);
+    expect(Object.hasOwn(error, "prototype")).toBe(false);
+  });
+});
 
 describe("WorkerConnection state listener isolation", () => {
   it("settles stop and reaches later listeners when an earlier listener throws", async () => {

@@ -1,12 +1,12 @@
 // Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
-import { toAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
+import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
+import { type AcpRuntimeError, toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -183,7 +183,7 @@ function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnTh
 export function parseSpawnInput(
   params: HandleCommandsParams,
   tokens: string[],
-): { ok: true; value: ParsedSpawnInput } | { ok: false; error: string } {
+): Result<ParsedSpawnInput, string> {
   const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let mode: AcpRuntimeSessionMode = "persistent";
   let thread = resolveDefaultSpawnThreadMode(params);
@@ -323,9 +323,7 @@ export function parseSpawnInput(
   };
 }
 
-export function parseSteerInput(
-  tokens: string[],
-): { ok: true; value: ParsedSteerInput } | { ok: false; error: string } {
+export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, string> {
   const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
@@ -372,7 +370,7 @@ export function parseSteerInput(
 export function parseSingleValueCommandInput(
   tokens: string[],
   usage: string,
-): { ok: true; value: ParsedSingleValueCommandInput } | { ok: false; error: string } {
+): Result<ParsedSingleValueCommandInput, string> {
   const value = normalizeOptionalString(tokens[0]) ?? "";
   if (!value) {
     return { ok: false, error: usage };
@@ -390,9 +388,7 @@ export function parseSingleValueCommandInput(
   };
 }
 
-export function parseSetCommandInput(
-  tokens: string[],
-): { ok: true; value: ParsedSetCommandInput } | { ok: false; error: string } {
+export function parseSetCommandInput(tokens: string[]): Result<ParsedSetCommandInput, string> {
   const key = normalizeOptionalString(tokens[0]) ?? "";
   const value = normalizeOptionalString(tokens[1]) ?? "";
   if (!key || !value) {

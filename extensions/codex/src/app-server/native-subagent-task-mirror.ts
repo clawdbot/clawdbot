@@ -358,7 +358,9 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const eventAt = this.now();
-    if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
+    if (isNonTerminalAgentStateStatus(normalizedStatus)) {
+      // Codex interrupted agents remain open and can resume; finalizing here
+      // makes cancellation sticky and discards their later successful result.
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -366,7 +368,9 @@ export class CodexNativeSubagentTaskMirror {
           trimOptional(message) ??
           (normalizedStatus === "pendingInit"
             ? "Codex native subagent is initializing."
-            : "Codex native subagent is running."),
+            : normalizedStatus === "interrupted"
+              ? "Codex native subagent was interrupted."
+              : "Codex native subagent is running."),
       });
       return;
     }
@@ -409,10 +413,7 @@ export class CodexNativeSubagentTaskMirror {
     this.terminalRunIds.add(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
-      status:
-        normalizedStatus === "interrupted" || normalizedStatus === "shutdown"
-          ? "cancelled"
-          : "failed",
+      status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
       error: trimOptional(message) ?? `Codex native subagent status: ${normalizedStatus}`,
@@ -544,7 +545,7 @@ function isBlockedOrFailedCollabToolCallStatus(value: string | undefined): boole
 }
 
 function isNonTerminalAgentStateStatus(value: string | undefined): boolean {
-  return value === "pendingInit" || value === "running";
+  return value === "pendingInit" || value === "running" || value === "interrupted";
 }
 
 function isTerminalAgentStateStatus(value: string | undefined): boolean {

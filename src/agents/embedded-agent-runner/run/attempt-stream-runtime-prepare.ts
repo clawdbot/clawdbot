@@ -10,8 +10,8 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import {
   type createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-} from "./attempt-abort.js";
-import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+} from "./attempt-finalize.js";
+import { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
@@ -33,7 +33,6 @@ type StreamGuardPhaseInput = Omit<
   | "onIdleTimeout"
   | "onRejectedThinkingReplayRepaired"
   | "session"
-  | "sessionLockController"
   | "sessionManager"
 >;
 type HistoryPhaseInput = Omit<HistoryInput, "activeSession" | "attempt" | "sessionManager">;
@@ -54,7 +53,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
   activeSession: StreamInput["activeSession"];
   sessionManager: HistoryInput["sessionManager"] &
     NonNullable<ToolResultFlushInput["sessionManager"]>;
-  sessionLockController: StreamGuardInput["sessionLockController"];
   ownedTranscriptWriteContext: Parameters<typeof withOwnedSessionTranscriptWrites>[0];
   runAbortController: AbortController;
   externalAbortController: ExternalAbortController;
@@ -86,7 +84,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     attempt,
     session: activeSession,
     sessionManager,
-    sessionLockController: input.sessionLockController,
     isYieldDetected: input.lifecycle.isYieldDetected,
     onRejectedThinkingReplayRepaired: input.lifecycle.markRejectedThinkingReplayRepaired,
     onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
@@ -123,7 +120,6 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     isProbeSession,
     log,
     runAbortController: input.runAbortController,
-    sessionLockController: input.sessionLockController,
     state: input.abortState,
   });
   input.externalAbortController.setRunAbort(abortRun);

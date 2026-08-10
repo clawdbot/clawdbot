@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
 export type LocalTurnPlacementClaim = {
@@ -9,7 +9,7 @@ export type LocalTurnPlacementClaim = {
   runId: string;
 };
 
-export type SessionPlacementTurnParams = RunEmbeddedAgentInternalParams & { sessionFile: string };
+export type SessionPlacementTurnParams = RunEmbeddedAgentParams & { sessionFile: string };
 
 export type SessionPlacementAdmissionProvider = {
   executeLocalTurn: <T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) => Promise<T>;
@@ -21,11 +21,8 @@ export type SessionPlacementAdmissionProvider = {
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
-type SessionPlacementResetGuard = (sessionId: string) => string | undefined;
-
 type SessionPlacementAdmissionState = {
   provider?: SessionPlacementAdmissionProvider;
-  resetGuard?: SessionPlacementResetGuard;
 };
 
 // Runtime chunks share one provider. The identity guard keeps an older gateway
@@ -44,19 +41,6 @@ export function installSessionPlacementAdmissionProvider(
       state.provider = undefined;
     }
   };
-}
-
-export function installSessionPlacementResetGuard(guard: SessionPlacementResetGuard): () => void {
-  state.resetGuard = guard;
-  return () => {
-    if (state.resetGuard === guard) {
-      state.resetGuard = undefined;
-    }
-  };
-}
-
-export function resolveSessionPlacementResetBlock(sessionId: string): string | undefined {
-  return state.resetGuard?.(sessionId);
 }
 
 export async function withSessionPlacementTurnAdmission(

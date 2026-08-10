@@ -184,7 +184,7 @@ Example: add a new `system.echo` request that returns `{ ok: true, text }`.
 
 1. **Schema (source of truth)**
 
-Add to `packages/gateway-protocol/src/schema/system.ts` (or the closest matching feature module):
+Add to `packages/gateway-protocol/src/schema/system-info.ts` (or the closest matching feature module):
 
 ```ts
 export const SystemEchoParamsSchema = Type.Object(

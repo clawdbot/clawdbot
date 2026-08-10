@@ -26,7 +26,9 @@ const SESSION_KEY = "agent:qa-agent:approval";
 const ALLOWED_DECISIONS = ["allow-once", "deny"] as const;
 
 function flushDiagnostics(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 describe("agent tool safety approvals", () => {

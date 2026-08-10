@@ -84,6 +84,7 @@ export async function installPluginFromManagedNpmRoot(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -170,6 +171,7 @@ export async function installPluginFromManagedNpmRoot(
       ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
   }
+  params.signal?.throwIfAborted();
 
   let rollbackSnapshot: ManagedNpmPluginInstallRollbackSnapshot;
   let preparedDependency: ManagedNpmRootPreparedDependency | undefined;
@@ -199,6 +201,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        signal: params.signal,
         logger,
       });
       if (repairedOpenClawPeer) {
@@ -256,6 +259,7 @@ export async function installPluginFromManagedNpmRoot(
             managedOverrides,
             overrideOmissions: options?.overrideOmissions,
             timeoutMs,
+            signal: params.signal,
           }),
         };
       } catch (error) {
@@ -294,6 +298,8 @@ export async function installPluginFromManagedNpmRoot(
     const npmInstallOptions = {
       cwd: npmRoot,
       timeoutMs: Math.max(timeoutMs, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
         npmConfigCwd: npmRoot,
@@ -488,6 +494,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        signal: params.signal,
         logger,
       });
       if (repairedOpenClawPeer) {

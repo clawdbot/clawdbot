@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { live } from "lit/directives/live.js";
 import { until } from "lit/directives/until.js";
 import {
@@ -30,9 +31,11 @@ export function resolveIdentityAvatarView(identity: IdentityAvatarInput): Identi
   };
 }
 
-/** Reconcile image-event fallback mutations without replacing an existing image. */
+/** Reconcile changed images without overwriting event fallback on unchanged rerenders. */
 export function identityAvatarClass(className: string, view: IdentityAvatarView) {
-  return live(`${className}${view.pending ? " is-fallback" : ""}`);
+  return guard([className, view.imageUrl, view.pending], () =>
+    live(`${className}${view.pending ? " is-fallback" : ""}`),
+  );
 }
 
 function settleIdentityAvatarImage(event: Event, fallbackSelector: string, failed: boolean): void {

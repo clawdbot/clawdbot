@@ -38,7 +38,7 @@ vi.mock("./exec-approval-surface.js", () => ({
 }));
 
 import {
-  buildApprovalPresentation,
+  buildApprovalButtonPresentation,
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
@@ -508,7 +508,7 @@ describe("exec approval reply helpers", () => {
     ]);
 
     expect(
-      buildApprovalPresentation({
+      buildApprovalButtonPresentation({
         approvalId: "req-1",
         allowedDecisions: ["deny"],
       }),

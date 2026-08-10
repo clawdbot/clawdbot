@@ -1,5 +1,9 @@
 {
   "id": "qqbot",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "QQ Bot",
   "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
   "icon": "https://cdn.simpleicons.org/qq",

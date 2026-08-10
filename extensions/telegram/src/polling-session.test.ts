@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Bot } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
@@ -43,7 +45,10 @@ const shouldDeadLetterRetryableSpooledUpdate = (
   now?: number,
 ) => shouldDeadLetterRetryableIngressEvent(update, attempt, undefined, now);
 import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
-import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
+import {
+  TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
+  type TelegramIngressWorkerMessage,
+} from "./telegram-ingress-worker.js";
 
 async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Promise<T> {
   return await vi.waitFor(assertion, { interval: 1 });
@@ -230,13 +235,21 @@ type IsolatedIngressOptions = NonNullable<
 
 const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
 
-function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void {
+function installTelegramIngressQueueRuntime(
+  resolveStateDir: () => string,
+  queueOpenError?: Error,
+): void {
   setTelegramRuntime({
     state: {
       resolveStateDir,
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+      ) => {
+        if (queueOpenError) {
+          throw queueOpenError;
+        }
+        return createChannelIngressQueue({ ...options, channelId: "telegram" });
+      },
     },
   } as TelegramRuntime);
 }
@@ -1203,6 +1216,75 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
+    await withTempSpool(async (spoolDir) => {
+      const abort = new AbortController();
+      const queueOpenError = new Error("Telegram ingress queue could not be opened");
+      const transport = makeTelegramTransport();
+      const bot = makeIsolatedBot();
+      createTelegramBotMock.mockReturnValueOnce(bot);
+      installTelegramIngressQueueRuntime(() => spoolDir, queueOpenError);
+
+      let actualWorker: Worker | undefined;
+      let workerReady: Promise<number> | undefined;
+      const stopWorker = vi.fn(async () => {
+        await actualWorker?.terminate();
+      });
+      const createWorker = vi.fn(() => {
+        actualWorker = new Worker(
+          `
+            const http = require("node:http");
+            const { parentPort } = require("node:worker_threads");
+            const server = http.createServer((_request, response) => {
+              response.end("worker-alive");
+            });
+            server.listen(0, "127.0.0.1", () => {
+              parentPort.postMessage(server.address().port);
+            });
+          `,
+          { eval: true, execArgv: [] },
+        );
+        workerReady = new Promise<number>((resolve, reject) => {
+          actualWorker?.once("message", (port: number) => resolve(port));
+          actualWorker?.once("error", reject);
+        });
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: stopWorker,
+          task: vi.fn(async () => undefined),
+        };
+      });
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        telegramTransport: transport,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir,
+          createWorker,
+        },
+      });
+
+      try {
+        await expect(session.runUntilAbort()).rejects.toBe(queueOpenError);
+        expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+        expect(transport.close).toHaveBeenCalledTimes(1);
+
+        if (workerReady) {
+          const port = await workerReady;
+          const response = await fetch(`http://127.0.0.1:${port}/health`);
+          expect(response.status).toBe(200);
+          expect(await response.text()).toBe("worker-alive");
+          expect(stopWorker).not.toHaveBeenCalled();
+        }
+
+        expect(createWorker).not.toHaveBeenCalled();
+      } finally {
+        abort.abort();
+        await actualWorker?.terminate();
+      }
+    });
+  });
+
   it("initializes the main-thread bot before draining isolated ingress spool", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -1892,6 +1974,244 @@ describe("TelegramPollingSession", () => {
 
     expect(createWorker).toHaveBeenCalledTimes(2);
     expect(computeBackoffMock.mock.calls.map((call) => call[1])).toEqual([1, 1]);
+  });
+
+  it("keeps a real polling worker alive during Telegram's server-directed flood wait", async () => {
+    await withTempSpool(async (spoolDir) => {
+      let requestCount = 0;
+      const server = createServer((_request, response) => {
+        requestCount += 1;
+        response.writeHead(429, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: false,
+            error_code: 429,
+            description: "Too Many Requests: retry after 180",
+            parameters: { retry_after: 180 },
+          }),
+        );
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected a real loopback Bot API listener");
+      }
+
+      const abort = new AbortController();
+      const log = vi.fn();
+      const watchdogHarness = installPollingStallWatchdogHarness([0]);
+      createTelegramBotMock.mockReturnValue(makeIsolatedBot());
+      let actualWorker: Worker | undefined;
+      let reportPollError: ((message: TelegramIngressWorkerMessage) => void) | undefined;
+      const pollErrorReceived = new Promise<TelegramIngressWorkerMessage>((resolve) => {
+        reportPollError = resolve;
+      });
+      const workerStop = vi.fn(async () => {
+        if (actualWorker) {
+          Reflect.apply(
+            Reflect.get(actualWorker, "postMessage") as (message: unknown) => void,
+            actualWorker,
+            [{ type: "stop" }],
+          );
+          await actualWorker.terminate();
+        }
+      });
+      const createWorker = vi.fn(() => {
+        const worker = new Worker(
+          new URL("./telegram-ingress-worker.runtime.ts", import.meta.url),
+          {
+            execArgv: ["--import", "tsx"],
+            workerData: {
+              runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
+              token: "tok",
+              accountId: "default",
+              initialUpdateId: null,
+              spoolDir,
+              apiRoot: `http://127.0.0.1:${address.port}`,
+              timeoutSeconds: 1,
+            },
+          },
+        );
+        actualWorker = worker;
+        const task = new Promise<void>((resolve, reject) => {
+          worker.once("error", reject);
+          worker.once("exit", (code) => {
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`Telegram test worker exited with code ${code}`));
+            }
+          });
+        });
+        return {
+          onMessage: vi.fn((listener: WorkerMessageListener) => {
+            const forwardMessage = (message: TelegramIngressWorkerMessage) => {
+              listener(message);
+              if (message.type === "poll-error") {
+                reportPollError?.(message);
+              }
+            };
+            worker.on("message", forwardMessage);
+            return () => worker.off("message", forwardMessage);
+          }),
+          stop: workerStop,
+          task: () => task,
+        };
+      });
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          createWorker,
+          spoolDir,
+        },
+      });
+      const runPromise = session.runUntilAbort();
+
+      try {
+        const watchdog = await watchdogHarness.waitForWatchdog();
+        const pollError = await pollErrorReceived;
+        expect(pollError).toMatchObject({ type: "poll-error", errorCode: 429 });
+        expect(requestCount).toBe(1);
+
+        for (const elapsedMs of [30_000, 60_000, 90_000, 120_000, 150_000]) {
+          watchdogHarness.setNow(elapsedMs);
+          watchdog();
+        }
+
+        expect(workerStop).not.toHaveBeenCalled();
+        expect(createWorker).toHaveBeenCalledTimes(1);
+        expect(pollError).toMatchObject({ retryAfterMs: 180_000 });
+        expectLogExcludes(log, "Polling stall detected");
+      } finally {
+        abort.abort();
+        await runPromise.catch(() => undefined);
+        await actualWorker?.terminate();
+        watchdogHarness.restore();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
+    });
+  });
+
+  it("caps an untrusted Telegram flood wait at the existing maximum polling threshold", async () => {
+    const abort = new AbortController();
+    const worker = createListeningIngressWorker();
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const { runPromise } = startIsolatedIngressSession({
+      abort,
+      handleUpdate: async () => undefined,
+      createWorker: worker.createWorker,
+    });
+
+    try {
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      worker.emit({
+        type: "poll-error",
+        errorCode: 429,
+        message: "Too Many Requests",
+        finishedAt: 0,
+        retryAfterMs: Number.MAX_VALUE,
+      });
+
+      for (let elapsedMs = 30_000; elapsedMs <= 600_000; elapsedMs += 30_000) {
+        watchdogHarness.setNow(elapsedMs);
+        watchdog();
+        expect(worker.workerStop).not.toHaveBeenCalled();
+      }
+
+      watchdogHarness.setNow(630_000);
+      watchdog();
+      expect(worker.workerStop).toHaveBeenCalledTimes(1);
+    } finally {
+      abort.abort();
+      await runPromise;
+      watchdogHarness.restore();
+    }
+  });
+
+  it.each([
+    { name: "missing flood wait", errorCode: 429, retryAfterMs: undefined },
+    { name: "negative flood wait", errorCode: 429, retryAfterMs: -1 },
+    { name: "zero flood wait", errorCode: 429, retryAfterMs: 0 },
+    { name: "non-finite flood wait", errorCode: 429, retryAfterMs: Number.POSITIVE_INFINITY },
+    { name: "server error", errorCode: 502, retryAfterMs: 180_000 },
+    { name: "unauthorized bot", errorCode: 401, retryAfterMs: 180_000 },
+    { name: "missing bot", errorCode: 404, retryAfterMs: 180_000 },
+    { name: "webhook conflict", errorCode: 409, retryAfterMs: 180_000 },
+  ])("does not disable the polling watchdog for $name", async ({ errorCode, retryAfterMs }) => {
+    const abort = new AbortController();
+    const worker = createListeningIngressWorker();
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const { runPromise } = startIsolatedIngressSession({
+      abort,
+      handleUpdate: async () => undefined,
+      createWorker: worker.createWorker,
+    });
+
+    try {
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      worker.emit({
+        type: "poll-error",
+        errorCode,
+        message: "Telegram polling error",
+        finishedAt: 0,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      });
+
+      watchdogHarness.setNow(150_000);
+      watchdog();
+      expect(worker.workerStop).toHaveBeenCalledTimes(1);
+    } finally {
+      abort.abort();
+      await runPromise;
+      watchdogHarness.restore();
+    }
+  });
+
+  it("restores hung-poll detection when a new request ends a Telegram flood wait", async () => {
+    const abort = new AbortController();
+    const worker = createListeningIngressWorker();
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const { runPromise } = startIsolatedIngressSession({
+      abort,
+      handleUpdate: async () => undefined,
+      createWorker: worker.createWorker,
+    });
+
+    try {
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      worker.emit({
+        type: "poll-error",
+        errorCode: 429,
+        message: "Too Many Requests",
+        finishedAt: 0,
+        retryAfterMs: 180_000,
+      });
+
+      watchdogHarness.setNow(150_000);
+      watchdog();
+      expect(worker.workerStop).not.toHaveBeenCalled();
+
+      worker.emit({ type: "poll-start", offset: null, startedAt: 150_000 });
+      watchdogHarness.setNow(300_001);
+      watchdog();
+      expect(worker.workerStop).toHaveBeenCalledTimes(1);
+    } finally {
+      abort.abort();
+      await runPromise;
+      watchdogHarness.restore();
+    }
   });
 
   it("restarts isolated ingress when worker liveness stalls", async () => {

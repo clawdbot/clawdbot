@@ -320,7 +320,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
   let removedEntries = 0;
   let removedFiles = 0;
   if (usage.totalBytes > highWaterBytes) {
-    // Archive pruning shares the session write lock so a concurrent
+    // Archive pruning shares the SQLite writer queue so a concurrent
     // reset/delete cannot race its archive file against the unlink pass.
     const archiveSweep = await runExclusiveSqliteSessionWrite(resolved, async () =>
       pruneSessionTranscriptArchivesToHighWater({

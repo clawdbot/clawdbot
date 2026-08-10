@@ -1,6 +1,7 @@
 // Discord tests cover message handler.queue plugin behavior.
 import { getEventListeners } from "node:events";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordIngressLifecycle } from "./ingress.js";
 import { createDiscordMessageHandler as createDurableDiscordMessageHandler } from "./message-handler.js";
@@ -30,14 +31,6 @@ function expectStatusPatch(setStatus: MockCallSource, expected: Record<string, u
       Object.entries(expected).every(([key, value]) => patch[key] === value),
     ),
   ).toBe(true);
-}
-
-function createDeferred<T = void>() {
-  let resolve: (value: T | PromiseLike<T>) => void = () => {};
-  const promise = new Promise<T>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
 }
 
 function createIngressLifecycle(): DiscordIngressLifecycle & {
@@ -142,7 +135,7 @@ async function createLifecycleStopScenario(params: {
     async (preflightParams: { data: { channel_id: string } }) =>
       createPreflightContext(preflightParams.data.channel_id),
   );
-  const runInFlight = createDeferred();
+  const runInFlight = createDeferred<void>();
   processDiscordMessageMock.mockImplementation(async () => {
     await runInFlight.promise;
   });
@@ -188,8 +181,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstRun = createDeferred();
-    const secondRun = createDeferred();
+    const firstRun = createDeferred<void>();
+    const secondRun = createDeferred<void>();
     processDiscordMessageMock
       .mockImplementationOnce(async () => {
         await firstRun.promise;
@@ -327,7 +320,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("waits for an active debounce flush and abandons it after shutdown", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
-    const preflightGate = createDeferred();
+    const preflightGate = createDeferred<void>();
     preflightDiscordMessageMock.mockImplementation(async () => {
       await preflightGate.promise;
       return null;
@@ -353,7 +346,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
   });
 
   it("waits for an active durable admission before stopping the drain", async () => {
-    const admissionGate = createDeferred();
+    const admissionGate = createDeferred<void>();
     const accept = vi.fn(() => admissionGate.promise);
     const start = vi.fn();
     const stop = vi.fn(async () => {});
@@ -388,8 +381,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
       preflightDiscordMessageMock.mockReset();
       processDiscordMessageMock.mockReset();
 
-      const firstRun = createDeferred();
-      const secondRun = createDeferred();
+      const firstRun = createDeferred<void>();
+      const secondRun = createDeferred<void>();
       const capturedAbortSignals: Array<AbortSignal | undefined> = [];
       processDiscordMessageMock.mockImplementationOnce(
         async (ctx: { abortSignal?: AbortSignal }) => {
@@ -444,7 +437,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const runInFlight = createDeferred();
+    const runInFlight = createDeferred<void>();
     processDiscordMessageMock.mockImplementation(async () => {
       await runInFlight.promise;
     });
@@ -556,7 +549,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstRun = createDeferred();
+    const firstRun = createDeferred<void>();
     processDiscordMessageMock
       .mockImplementationOnce(async () => {
         await firstRun.promise;
@@ -587,7 +580,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstRun = createDeferred();
+    const firstRun = createDeferred<void>();
     processDiscordMessageMock.mockImplementation(async () => {
       await firstRun.promise;
     });
@@ -651,7 +644,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstPreflight = createDeferred();
+    const firstPreflight = createDeferred<void>();
     const processedMessageIds: string[] = [];
 
     preflightDiscordMessageMock.mockImplementation(
@@ -695,7 +688,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstRun = createDeferred();
+    const firstRun = createDeferred<void>();
     processDiscordMessageMock
       .mockImplementationOnce(async () => {
         await firstRun.promise;

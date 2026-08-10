@@ -4,7 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
@@ -53,7 +53,7 @@ function truncateText(input: string, maxChars: number): string {
   if (maxChars <= 1) {
     return truncateUtf16Safe(input, maxChars);
   }
-  return `${truncateUtf16Safe(input, maxChars - 1)}…`;
+  return truncateWithMarker(input, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function hashText(text: string): string {
@@ -187,15 +187,13 @@ export function createAcpReplyProjector(params: {
     accountId: params.accountId,
     deliveryMode: settings.deliveryMode,
   });
-  const createTurnBlockReplyPipeline = () =>
-    createBlockReplyPipeline({
-      onBlockReply: async (payload) => {
-        await params.deliver("block", payload);
-      },
-      timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
-      coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
-    });
-  let blockReplyPipeline = createTurnBlockReplyPipeline();
+  const blockReplyPipeline = createBlockReplyPipeline({
+    onBlockReply: async (payload) => {
+      await params.deliver("block", payload);
+    },
+    timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
+    coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
+  });
   const chunker = new EmbeddedBlockChunker(streaming.chunking);
   const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
 
@@ -265,23 +263,6 @@ export function createAcpReplyProjector(params: {
         scheduleLiveIdleFlush();
       }
     }, liveIdleFlushMs);
-  };
-
-  const resetTurnState = () => {
-    clearLiveIdleTimer();
-    blockReplyPipeline.stop();
-    blockReplyPipeline = createTurnBlockReplyPipeline();
-    emittedOutputChars = 0;
-    truncationNoticeEmitted = false;
-    lastStatusHash = undefined;
-    lastToolHash = undefined;
-    lastUsageTuple = undefined;
-    lastVisibleOutputTail = undefined;
-    pendingHiddenBoundary = false;
-    liveBufferText = "";
-    finalOnlyOutputText = "";
-    pendingToolDeliveries.length = 0;
-    toolLifecycleById.clear();
   };
 
   const flushBufferedToolDeliveries = async (force: boolean) => {
@@ -434,6 +415,7 @@ export function createAcpReplyProjector(params: {
     );
   };
 
+  // One projector serves one dispatch; terminal settlement belongs to tryDispatchAcpReply.
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
     params.onProgress?.();
     if (event.type === "text_delta") {
@@ -514,12 +496,6 @@ export function createAcpReplyProjector(params: {
         return;
       }
       await emitToolSummary(event);
-      return;
-    }
-
-    if (event.type === "done" || event.type === "error") {
-      await flush(true);
-      resetTurnState();
     }
   };
 

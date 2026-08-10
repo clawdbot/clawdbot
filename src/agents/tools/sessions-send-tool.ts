@@ -13,7 +13,6 @@ import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -37,10 +36,7 @@ import {
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
-import {
-  type GatewayMessageChannel,
-  INTERNAL_MESSAGE_CHANNEL,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
@@ -64,8 +60,10 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
 import {
+  callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
+  type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
@@ -145,7 +143,7 @@ const SessionsSendOutputSchema = Type.Union([
   ),
 ]);
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
 
@@ -439,7 +437,7 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -454,7 +452,7 @@ export function createSessionsSendTool(opts?: {
     prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
-      const gatewayCall = opts?.callGateway ?? callGateway;
+      const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
@@ -580,6 +578,7 @@ export function createSessionsSendTool(opts?: {
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
+        callGateway: gatewayCall,
       });
       if (!resolvedSession.ok) {
         return jsonResult({
@@ -594,6 +593,7 @@ export function createSessionsSendTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKey,
+        callGateway: gatewayCall,
       });
       const unresolvedDisplayKey = sessionKey;
       if (!visibleSession.ok) {
@@ -734,6 +734,7 @@ export function createSessionsSendTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility: sessionVisibility,
         a2aPolicy,
+        callGateway: gatewayCall,
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
@@ -912,6 +913,7 @@ export function createSessionsSendTool(opts?: {
             // Own a fresh root so parent release cannot retire later nested turns.
             void runWithGatewayIndependentRootWorkContinuation(() =>
               runSessionsSendA2AFlow({
+                callGateway: gatewayCall,
                 targetSessionKey: flowTargetSessionKey,
                 displayKey: flowDisplayKey,
                 message,

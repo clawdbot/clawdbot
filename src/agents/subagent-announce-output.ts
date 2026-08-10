@@ -7,6 +7,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { resolveFreshSessionTotalTokens } from "../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
@@ -339,7 +340,11 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so preserve the shared timeout/cancel precedence here.
   if (terminalOutcome?.status === "timeout") {
     outcome = { status: "timeout" };
-  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+  } else if (
+    terminalOutcome?.reason === "aborted" ||
+    terminalOutcome?.reason === "cancelled" ||
+    terminalOutcome?.reason === "superseded"
+  ) {
     outcome = { status: "error", error: "subagent run terminated" };
   } else if (
     terminalOutcome?.reason === "blocked" ||
@@ -648,7 +653,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     const hasTokenData =
       typeof entry?.inputTokens === "number" ||
       typeof entry?.outputTokens === "number" ||
-      typeof entry?.totalTokens === "number";
+      resolveFreshSessionTotalTokens(entry) !== undefined;
     if (hasTokenData) {
       break;
     }
@@ -663,7 +668,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
   const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
   const ioTotal = input + output;
-  const promptCache = typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined;
+  const promptCache = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)

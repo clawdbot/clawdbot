@@ -33,9 +33,19 @@ export function registerCopilotActiveRun(params: {
       embeddedAgentLog.warn("failed to cancel copilot gateway question during shutdown", { error });
     });
   };
-  const activeRunHandle = {
-    kind: "embedded" as const,
-    queueMessage: async (text: string, options?: CopilotQueueMessageOptions) => {
+  const queueMessage = async (text: string, options?: CopilotQueueMessageOptions) => {
+    let acceptanceReported = false;
+    // Acceptance transfers fallback ownership irrevocably. A later transcript
+    // receipt failure must remain accepted-unconfirmed instead of reopening it.
+    const reportAcceptance = (accepted: boolean) => {
+      if (acceptanceReported) {
+        return;
+      }
+      acceptanceReported = true;
+      options?.onQueueAccepted?.(accepted);
+    };
+    let messageId: string;
+    try {
       if (
         options?.isInboundUserMessage === true &&
         (await claimPendingAgentQuestionAnswer({
@@ -48,6 +58,7 @@ export function registerCopilotActiveRun(params: {
             : undefined,
         }))
       ) {
+        reportAcceptance(true);
         return undefined;
       }
       if (params.isSettled() || params.isAborted()) {
@@ -56,24 +67,37 @@ export function registerCopilotActiveRun(params: {
       if (!params.canAcceptSteering()) {
         throw new Error("Copilot steering is unavailable before initial user validation");
       }
-      const messageId = await params.session.send({ prompt: text });
-      if (options?.waitForTranscriptCommit === true) {
-        try {
-          await waitForPersistenceReceipt(
-            params.transcriptJournal.waitForSdkUserPersisted(messageId),
-            options.deliveryTimeoutMs,
-          );
-        } catch (error) {
-          return {
-            transcriptCommit: "unconfirmed" as const,
-            errorMessage:
-              error instanceof Error
-                ? error.message
-                : "Copilot accepted steering but its transcript receipt was not confirmed",
-          };
-        }
+      messageId = await params.session.send({ prompt: text });
+      reportAcceptance(true);
+    } catch (error) {
+      reportAcceptance(false);
+      throw error;
+    }
+    if (options?.waitForTranscriptCommit === true) {
+      try {
+        await waitForPersistenceReceipt(
+          params.transcriptJournal.waitForSdkUserPersisted(messageId),
+          options.deliveryTimeoutMs,
+        );
+      } catch (error) {
+        return {
+          transcriptCommit: "unconfirmed" as const,
+          errorMessage:
+            error instanceof Error
+              ? error.message
+              : "Copilot accepted steering but its transcript receipt was not confirmed",
+        };
       }
-      return undefined;
+    }
+    return undefined;
+  };
+  const activeRunHandle = {
+    kind: "embedded" as const,
+    runId: params.input.runId,
+    queueMessage,
+    messageInjection: {
+      isAvailable: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
+      queueMessage,
     },
     isStreaming: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
     isAborted: params.isAborted,
@@ -82,6 +106,7 @@ export function registerCopilotActiveRun(params: {
     // receipt resolves only after that exact SDK event reaches canonical history.
     supportsTranscriptCommitWait: true,
     sourceReplyDeliveryMode: params.input.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.input.taskSuggestionDeliveryMode,
     cancel: () => {
       cancelGatewayQuestionBestEffort("run-cancel");
       params.userInputBridge.cancelPending();
@@ -99,6 +124,7 @@ export function registerCopilotActiveRun(params: {
     params.input.sessionKey,
     params.input.sessionFile,
   );
+  params.input.replyOperation?.attachBackend(activeRunHandle);
   return activeRunHandle;
 }
 

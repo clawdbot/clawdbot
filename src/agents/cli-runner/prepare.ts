@@ -126,7 +126,6 @@ import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
-import { bindCliRunExecutionAttribution } from "./execution-attribution.js";
 import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
@@ -401,10 +400,7 @@ function buildCliAuthProfileResolutionError(params: {
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  const attributedParams = bindCliRunExecutionAttribution(inputParams);
-  let params = attributedParams.config
-    ? attributedParams
-    : { ...attributedParams, config: getRuntimeConfig() };
+  let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
   const runConfig = params.config!;
   const selectedOwner = normalizeAgentId(
     params.agentId?.trim() ||
@@ -1407,14 +1403,13 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    const heartbeatPrompt =
-      isSideQuestion || params.bootstrapContextRunKind === "commitment-only"
-        ? undefined
-        : resolveHeartbeatPromptForSystemPrompt({
-            config: params.config,
-            agentId: sessionAgentId,
-            defaultAgentId,
-          });
+    const heartbeatPrompt = isSideQuestion
+      ? undefined
+      : resolveHeartbeatPromptForSystemPrompt({
+          config: params.config,
+          agentId: sessionAgentId,
+          defaultAgentId,
+        });
     const openClawReferences = isSideQuestion
       ? { docsPath: null, sourcePath: null }
       : await prepareDeps.resolveOpenClawReferencePaths({
