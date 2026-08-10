@@ -305,6 +305,38 @@ describe("default role materialization authored writes", () => {
     },
   );
 
+  it("refuses to remove an inherited-auth owner with a custom agentDir", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-custom-auth-owner-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const customAgentDir = path.join(root, "custom-ops-agent");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries: { ops: { agentDir: customAgentDir } } } }),
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+
+    await expect(
+      io.writeConfigFile(
+        {
+          ...snapshot.config,
+          agents: { ownership: "explicit", entries: { research: {} } },
+        },
+        { baseSnapshot: snapshot, allowedAgentRosterRemovals: ["ops"] },
+      ),
+    ).rejects.toMatchObject({
+      code: "CONFIG_WRITE_REJECTED",
+      message: expect.stringContaining("set agents.defaults.authInheritance explicitly"),
+    });
+  });
+
   it("preserves migrated legacy ownership during an unrelated write", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-owner-roundtrip-"));
     roots.push(root);

@@ -1,6 +1,9 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentDir, tryResolveSoleAgentId } from "./agent-scope-config.js";
 
 export function resolveLegacyInheritedAuthAgentId(config: OpenClawConfig): string {
@@ -40,4 +43,29 @@ export function pinLegacyInheritedAuthOwnerForRosterTransition(
       },
     },
   };
+}
+
+export function assertSafeLegacyInheritedAuthDirTransition(
+  sourceConfig: OpenClawConfig,
+  targetConfig: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const sourceOwner = resolveLegacyInheritedAuthAgentId(sourceConfig);
+  const sourceDir = resolveAgentDir(sourceConfig, sourceOwner, env);
+  const conventionalDir = path.join(
+    resolveStateDir(env),
+    "agents",
+    normalizeAgentId(sourceOwner),
+    "agent",
+  );
+  const targetDir = resolveAgentDir(targetConfig, sourceOwner, env);
+  if (path.resolve(sourceDir) === path.resolve(conventionalDir) || targetDir === sourceDir) {
+    return;
+  }
+  throw Object.assign(
+    new Error(
+      `Config write refused: inherited auth for agent "${sourceOwner}" is stored in custom agentDir ${JSON.stringify(sourceDir)}, but this roster change removes or changes that directory. Relocate the credentials to ${JSON.stringify(conventionalDir)} or set agents.defaults.authInheritance explicitly for the destination owner, then retry.`,
+    ),
+    { code: "CONFIG_WRITE_REJECTED" },
+  );
 }

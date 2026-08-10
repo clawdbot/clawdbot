@@ -1,4 +1,7 @@
-import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
+import {
+  assertSafeLegacyInheritedAuthDirTransition,
+  pinLegacyInheritedAuthOwnerForRosterTransition,
+} from "../agents/legacy-inherited-auth-dir.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const AUTH_INHERITANCE_PATH = "agents.defaults.authInheritance";
@@ -17,10 +20,12 @@ export function prepareAuthInheritanceOwnerForWrite(params: {
   targetConfig: OpenClawConfig;
   writesOwnershipTopology: boolean;
   explicitSetPaths?: readonly (readonly string[])[];
+  env?: NodeJS.ProcessEnv;
 }): { config: OpenClawConfig; insertedPaths: string[][] } {
   if (!params.writesOwnershipTopology || explicitlySetsAuthInheritance(params.explicitSetPaths)) {
     return { config: params.targetConfig, insertedPaths: [] };
   }
+  assertSafeLegacyInheritedAuthDirTransition(params.currentConfig, params.targetConfig, params.env);
   const config = pinLegacyInheritedAuthOwnerForRosterTransition(
     params.currentConfig,
     params.targetConfig,

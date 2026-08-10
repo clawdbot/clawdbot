@@ -246,8 +246,8 @@ describe("resolveSessionKeyForRequest", () => {
   it("rejects an agent-constrained session id owned by another agent", () => {
     hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
     const sharedStore = {
-      "agent:research:work": { sessionId: "research-session", updatedAt: 20 },
-      "agent:ops:work": { sessionId: "ops-session", updatedAt: 10 },
+      "agent:research:work": { sessionId: "duplicate-session", updatedAt: 20 },
+      "agent:ops:work": { sessionId: "duplicate-session", updatedAt: 10 },
     } satisfies Record<string, SessionEntry>;
     mockSessionStores({ "/stores/shared.sqlite": sharedStore });
     const cfg = {
@@ -258,12 +258,17 @@ describe("resolveSessionKeyForRequest", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(() =>
-      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionId: "research-session" }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
     expect(
-      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionId: "ops-session" }),
+      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionId: "duplicate-session" }),
     ).toMatchObject({ agentId: "ops", sessionKey: "agent:ops:work" });
+    mockSessionStores({
+      "/stores/shared.sqlite": {
+        "agent:research:work": sharedStore["agent:research:work"],
+      },
+    });
+    expect(() =>
+      resolveSessionKeyForRequest({ cfg, agentId: "ops", sessionId: "duplicate-session" }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
 
   it("creates a missing session-id target under the retained owner", () => {

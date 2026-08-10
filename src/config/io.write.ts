@@ -159,10 +159,9 @@ export async function writeConfigFileFromContext(
     );
   const persistOwnership =
     entersMultiAgent || (retainedLegacyDefaultAgentId !== undefined && writesOwnershipTopology);
-  const retainExplicitOwnership =
-    nextEntries.length > 1 && snapshot.config.agents?.ownership === "explicit";
+  const keepOwnership = nextEntries.length > 1 && snapshot.config.agents?.ownership === "explicit";
   const stampOwnership =
-    (persistOwnership || retainExplicitOwnership) && nextConfig.agents?.ownership === undefined;
+    (persistOwnership || keepOwnership) && nextConfig.agents?.ownership === undefined;
   if (stampOwnership) {
     nextConfig = {
       ...nextConfig,
@@ -182,6 +181,7 @@ export async function writeConfigFileFromContext(
     targetConfig: nextConfig,
     writesOwnershipTopology,
     explicitSetPaths: options.explicitSetPaths,
+    env: deps.env,
   });
   nextConfig = authInheritanceOwnership.config;
 
@@ -215,13 +215,13 @@ export async function writeConfigFileFromContext(
     : { config: nextConfig, insertedPaths: [] as string[][] };
   nextConfig = ownershipMaterialization.config;
   const insertedPaths = [
-    ...(persistOwnership || retainExplicitOwnership
+    ...(persistOwnership || keepOwnership
       ? (sourceRosterMigration.insertedPaths ?? []).filter(
           (entry) =>
             sameFixedSessionStore || entry.join(".") !== "agents.defaults.sessionStore.agentId",
         )
       : []),
-    ...((persistOwnership || retainExplicitOwnership) &&
+    ...((persistOwnership || keepOwnership) &&
     retainedLegacyDefaultAgentId &&
     Array.isArray(snapshot.config.bindings) &&
     !isDeepStrictEqual(snapshot.sourceConfigBeforeMigrations?.bindings, snapshot.config.bindings)

@@ -417,18 +417,18 @@ export function resolveSessionKeyForRequestCore(opts: {
       searchOtherAgentStores: requestedAgentId === undefined,
       ...(opts.clone === false ? { clone: false } : {}),
     });
-    if (ownerConflict && requestedAgentId) {
-      throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
-        surface: `session id "${requestedSessionId}"`,
-        hint: `The matching session belongs to a different agent than --agent "${requestedAgentId}".`,
-      });
-    }
     const selectedMatch = selectSessionIdMatchCandidate(
       candidates.filter((candidate) => candidate.resolution.agentId !== undefined),
       requestedSessionId,
     );
     if (selectedMatch) {
       return selectedMatch.resolution;
+    }
+    if (ownerConflict && requestedAgentId) {
+      throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+        surface: `session id "${requestedSessionId}"`,
+        hint: `The matching session belongs to a different agent than --agent "${requestedAgentId}".`,
+      });
     }
   }
 
