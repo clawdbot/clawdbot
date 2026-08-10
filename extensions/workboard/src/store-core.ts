@@ -538,7 +538,7 @@ export class WorkboardCoreStore {
       }
     }
     const status = normalizeStatus(effectivePatch.status, existing.status);
-    const now = Date.now();
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
     const startedAt =
       effectivePatch.startedAt === undefined
         ? status === "running"

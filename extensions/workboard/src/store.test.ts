@@ -1033,6 +1033,43 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("serializes frozen-clock same-card binds across independent SQLite stores", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-bind-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const firstStore = new WorkboardStore(firstStores.cards);
+      const secondStore = new WorkboardStore(secondStores.cards);
+      const card = await firstStore.create({ title: "Bind candidate" });
+
+      const results = await Promise.allSettled([
+        firstStore.bindSession(card.id, { sessionKey: "agent:main:first" }),
+        secondStore.bindSession(card.id, { sessionKey: "agent:main:second" }),
+      ]);
+
+      const fulfilled = results.filter((result) => result.status === "fulfilled");
+      const rejected = results.filter((result) => result.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toEqual([
+        expect.objectContaining({
+          reason: expect.objectContaining({
+            message: expect.stringContaining("changed before persistence"),
+          }),
+        }),
+      ]);
+      const persisted = await firstStore.get(card.id);
+      expect(persisted?.sessionKey).toBe(fulfilled[0]?.value.sessionKey);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
   it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:execution-only";
