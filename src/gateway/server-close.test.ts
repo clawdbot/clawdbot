@@ -418,8 +418,8 @@ describe("createGatewayCloseHandler", () => {
     vi.useFakeTimers();
     let releaseDisposal!: () => void;
     mocks.disposeAcpSessionManagerInstance.mockReturnValue(
-      new Promise<void>((resolve) => {
-        releaseDisposal = resolve;
+      new Promise<undefined>((resolve) => {
+        releaseDisposal = () => resolve(undefined);
       }),
     );
     const pluginServices = { stop: vi.fn(async () => undefined) };
