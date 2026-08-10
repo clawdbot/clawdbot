@@ -7,6 +7,7 @@ import {
   buildHostedOutboundMediaResponseHeaders,
   createHostedOutboundMediaStore,
   type ChunkReadableHostedOutboundMediaStore,
+  type HostedOutboundMediaChunkStream,
   type HostedOutboundMediaChunkRecord,
   type HostedOutboundMediaMetaRecord,
   type HostedOutboundMediaStore,
@@ -32,6 +33,8 @@ const SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS = 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS = 2;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES = 4;
 const SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS = 2 * 60_000;
+const SYNOLOGY_OUTBOUND_MEDIA_POST_EXPIRY_RETENTION_MS =
+  SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS + 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_SERVED_BYTES_WINDOW_MS = 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVED_BYTES_PER_WINDOW = 128 * 1024 * 1024;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_BUDGET_ACCOUNTS = 128;
@@ -187,6 +190,7 @@ function createHostedMediaStore(accountId: string): ChunkReadableHostedOutboundM
     maxEntries: SYNOLOGY_OUTBOUND_MEDIA_MAX_ENTRIES,
     maxChunkRows: SYNOLOGY_OUTBOUND_MEDIA_MAX_CHUNK_ROWS,
     maxTotalBytes: SYNOLOGY_OUTBOUND_MEDIA_MAX_TOTAL_BYTES,
+    postExpiryRetentionMs: SYNOLOGY_OUTBOUND_MEDIA_POST_EXPIRY_RETENTION_MS,
     overflowPolicy: "reject-new",
     resolveExpiresAtMs: (ttlMs) => resolveExpiresAtMsFromDurationMs(ttlMs),
   });
@@ -427,10 +431,11 @@ export async function tryHandleSynologyHostedMediaRequest(
   }
   let responseOwnsServingLease = false;
   let rollbackServedBytes: (() => void) | undefined;
+  let streamedEntry: HostedOutboundMediaChunkStream | null | undefined;
   try {
     const store = getHostedMediaStore(account.accountId);
     const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
-    const streamedEntry = method === "GET" ? await store.readChunks(candidate.id) : undefined;
+    streamedEntry = method === "GET" ? await store.readChunks(candidate.id) : undefined;
     const metadata = streamedEntry?.metadata ?? (await store.readMetadata(candidate.id));
     if (!metadata || metadata.routePath !== routePath) {
       res.statusCode = 404;
@@ -487,9 +492,13 @@ export async function tryHandleSynologyHostedMediaRequest(
     res.end();
     return true;
   } finally {
-    rollbackServedBytes?.();
-    if (!responseOwnsServingLease) {
-      servingLimiter.release(account.accountId);
+    try {
+      await streamedEntry?.close();
+    } finally {
+      rollbackServedBytes?.();
+      if (!responseOwnsServingLease) {
+        servingLimiter.release(account.accountId);
+      }
     }
   }
 }

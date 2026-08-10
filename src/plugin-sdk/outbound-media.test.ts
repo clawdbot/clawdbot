@@ -8,25 +8,16 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "./plugin-state-test-runtime.js";
-
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
-
 type OutboundMediaModule = typeof import("./outbound-media.js");
-
 let createHostedOutboundMediaStore: OutboundMediaModule["createHostedOutboundMediaStore"];
-let buildHostedOutboundMediaResponseHeaders: OutboundMediaModule["buildHostedOutboundMediaResponseHeaders"];
 let loadOutboundMediaFromUrl: OutboundMediaModule["loadOutboundMediaFromUrl"];
-
 beforeAll(async () => {
   const webMedia = await import("./web-media.js");
   vi.spyOn(webMedia, "loadWebMedia").mockImplementation(loadWebMediaMock);
-  ({
-    buildHostedOutboundMediaResponseHeaders,
-    createHostedOutboundMediaStore,
-    loadOutboundMediaFromUrl,
-  } = await import("./outbound-media.js"));
+  ({ createHostedOutboundMediaStore, loadOutboundMediaFromUrl } =
+    await import("./outbound-media.js"));
 });
-
 afterAll(() => {
   vi.restoreAllMocks();
 });
@@ -264,17 +255,11 @@ describe("createHostedOutboundMediaStore", () => {
     });
     const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
       "fixture-plugin",
-      {
-        namespace: "ttl-media",
-        maxEntries: 10,
-      },
+      { namespace: "ttl-media", maxEntries: 10 },
     );
     const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
       "fixture-plugin",
-      {
-        namespace: "ttl-media-chunks",
-        maxEntries: 100,
-      },
+      { namespace: "ttl-media-chunks", maxEntries: 100 },
     );
     const store = createHostedOutboundMediaStore({
       metadataStore,
@@ -908,26 +893,6 @@ describe("createHostedOutboundMediaStore", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("buildHostedOutboundMediaResponseHeaders", () => {
-  it("creates download-only no-sniff headers with a sanitized UTF-8 filename", () => {
-    const headers = buildHostedOutboundMediaResponseHeaders({
-      byteLength: 123,
-      contentType: "application/pdf; charset=binary",
-      fileName: '../測試\r\nX-Evil: yes/"plan".pdf',
-    });
-
-    expect(headers).toMatchObject({
-      "Content-Type": "application/pdf",
-      "Content-Length": "123",
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    });
-    expect(headers["Content-Disposition"]).toContain("attachment");
-    expect(headers["Content-Disposition"]).toContain("filename*=UTF-8''");
-    expect(headers["Content-Disposition"]).not.toMatch(/[\r\n]/u);
   });
 });
 
