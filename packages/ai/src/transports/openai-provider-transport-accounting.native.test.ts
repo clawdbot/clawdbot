@@ -15,6 +15,7 @@ import {
   context,
   coverageEvents,
   createJwt,
+  invocationEvents,
   fallbackEvents,
   providerFallbackEvents,
   resetOpenAITransportAccountingTestState,
@@ -49,6 +50,14 @@ describe("OpenAI native transport accounting", () => {
     }).result();
 
     expect(result.stopReason).toBe("stop");
+    expect(invocationEvents(events)).toMatchObject([
+      {
+        callId: "call-native-sse-authority",
+        transport: "native-codex-sse",
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      },
+    ]);
     expect(result.responseModel).toBe("gpt-5.5-edge-b");
     expect(providerFallbackEvents(events)).toMatchObject([
       {
@@ -216,7 +225,7 @@ describe("OpenAI native transport accounting", () => {
       throw new Error("ambient fetch must not run");
     });
     configureTransportObserver(events, undefined, () => async () => {
-      throw new Error("blocked before physical dispatch");
+      throw new Error("blocked before fetch invocation");
     });
     vi.stubGlobal("fetch", ambientFetch);
 
@@ -241,8 +250,9 @@ describe("OpenAI native transport accounting", () => {
     configureTransportObserver(events, undefined, (options) => async () => {
       guardedFetchCalls += 1;
       if (guardedFetchCalls === 1) {
-        throw new Error("blocked before physical dispatch");
+        throw new Error("blocked before fetch invocation");
       }
+      options.onFetchInvocation?.();
       options.onFetchDispatch?.();
       return completedSseResponse();
     });
@@ -518,6 +528,14 @@ describe("OpenAI native transport accounting", () => {
     }).result();
 
     expect(result.stopReason).toBe("stop");
+    expect(invocationEvents(events)).toMatchObject([
+      {
+        callId: "call-ws-authority",
+        transport: "native-codex-websocket",
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      },
+    ]);
     expect(providerFallbackEvents(events)).toMatchObject([
       {
         transport: "native-codex-websocket",

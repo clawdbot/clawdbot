@@ -4,6 +4,7 @@ import {
   buildGuardedModelFetchResult,
   snapshotProviderEndpointResolver,
 } from "../transports/host-policy.js";
+import { createFetchInvocationCompatibilityObservers } from "../transports/model-transport-accounting-internal.js";
 import { isCanonicalAnthropicPublicUrl } from "./anthropic-server-fallback.js";
 import {
   createAnthropicEndpointAuthority,
@@ -31,20 +32,21 @@ export function buildAnthropicGuardedFetch(params: {
   });
   endpointAuthority.observeProvisional(params.model.baseUrl);
   let fetchAuthorityResolved = false;
-  let physicalDispatchAttested = false;
-  const pendingDispatchUrls: string[] = [];
+  let invocationEndpointAttested = false;
+  const pendingInvocationUrls: string[] = [];
+  const invocationObservers = params.transportAccounting
+    ? createFetchInvocationCompatibilityObservers(params.transportAccounting.onFetchDispatch)
+    : undefined;
   const guardedFetch = buildGuardedModelFetchResult(params.model, undefined, {
     ...(params.sanitizeSse === undefined ? {} : { sanitizeSse: params.sanitizeSse }),
-    ...(params.transportAccounting
-      ? { onFetchDispatch: params.transportAccounting.onFetchDispatch }
-      : {}),
+    ...invocationObservers,
     observeFetchDispatch: ({ url }) => {
       if (!fetchAuthorityResolved) {
-        pendingDispatchUrls.push(url);
+        pendingInvocationUrls.push(url);
         return;
       }
-      endpointAuthority.observePhysicalDispatch(url, {
-        attested: physicalDispatchAttested,
+      endpointAuthority.observeEndpointInvocation(url, {
+        attested: invocationEndpointAttested,
       });
     },
     ...(params.serverSideFallback
@@ -59,11 +61,11 @@ export function buildAnthropicGuardedFetch(params: {
         }
       : {}),
   });
-  physicalDispatchAttested = guardedFetch.physicalDispatchAttested === true;
+  invocationEndpointAttested = guardedFetch.invocationEndpointAttested === true;
   fetchAuthorityResolved = true;
-  for (const url of pendingDispatchUrls) {
-    endpointAuthority.observePhysicalDispatch(url, {
-      attested: physicalDispatchAttested,
+  for (const url of pendingInvocationUrls) {
+    endpointAuthority.observeEndpointInvocation(url, {
+      attested: invocationEndpointAttested,
     });
   }
   return {

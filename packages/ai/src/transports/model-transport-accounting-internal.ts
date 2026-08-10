@@ -1,6 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import {
   getAiTransportHost,
+  type AiModelFetchOptions,
   type AiModelTransportEvent,
   type AiModelTransportAttemptReason,
   type AiModelTransportConnectionReason,
@@ -35,6 +36,24 @@ export type PendingTransportEvent = {
   finish(outcome: ModelTransportOutcome, statusCode?: number): void;
 };
 
+export function createFetchInvocationCompatibilityObservers(
+  onInvocation: () => void,
+): Pick<AiModelFetchOptions, "onFetchDispatch" | "onFetchInvocation"> {
+  let invocationObserved = false;
+  return {
+    onFetchInvocation() {
+      invocationObserved = true;
+      onInvocation();
+    },
+    onFetchDispatch() {
+      if (!invocationObserved) {
+        onInvocation();
+      }
+      invocationObserved = false;
+    },
+  };
+}
+
 export type ModelTransportAttemptAuthority = {
   observeServingModel(model: unknown): void;
   readServingModel(): string | undefined;
@@ -42,6 +61,11 @@ export type ModelTransportAttemptAuthority = {
 };
 
 export type ModelTransportEventScope = {
+  observeInvocation(params: {
+    attemptKey: object;
+    transport: string;
+    reason: ModelTransportAttemptReason;
+  }): number;
   startAttempt(params: {
     transport: string;
     reason: ModelTransportAttemptReason;
@@ -95,7 +119,7 @@ export function createModelTransportAttemptAuthority(params: {
         return;
       }
       finished = true;
-      // Coverage is only valid after the physical attempt closes its route phase.
+      // Coverage is valid only after the provider-request attempt closes its route phase.
       params.pendingAttempt.finish(outcome, statusCode);
       if (!authorityObserved) {
         params.events.observeCoverage({
@@ -153,6 +177,10 @@ export function createModelTransportEventScope(params: {
     `${params.model.provider}\0${params.model.api}\0${params.model.id}\0${params.scopeId}`,
   );
   let attemptOrdinal = 0;
+  let invocationOrdinal = 0;
+  let invocationAttemptKey: object | undefined;
+  let invocationAttemptOrdinal = 0;
+  let invocationHopOrdinal = 0;
   let connectionOrdinal = 0;
   let fallbackOrdinal = 0;
   let coverageOrdinal = 0;
@@ -162,6 +190,31 @@ export function createModelTransportEventScope(params: {
   const observeEvent = params.observeEvent ?? observeModelTransportEventSafely;
 
   return {
+    observeInvocation({ attemptKey, transport, reason }) {
+      if (invocationAttemptKey !== attemptKey) {
+        invocationAttemptKey = attemptKey;
+        invocationAttemptOrdinal += 1;
+        invocationHopOrdinal = 0;
+      }
+      const ordinal = ++invocationOrdinal;
+      invocationHopOrdinal += 1;
+      if (callId) {
+        observeEvent({
+          type: "invocation",
+          eventId: `${eventIdPrefix}:${routeHash}:invocation:${ordinal}`,
+          callId,
+          provider: params.model.provider,
+          model: params.model.id,
+          api: params.model.api,
+          transport,
+          ordinal,
+          attemptOrdinal: invocationAttemptOrdinal,
+          hopOrdinal: invocationHopOrdinal,
+          reason,
+        });
+      }
+      return ordinal;
+    },
     startAttempt({ transport, reason }) {
       const ordinal = ++attemptOrdinal;
       const startedAt = nowMs();

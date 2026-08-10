@@ -173,6 +173,36 @@ export function normalizeTransportEvent(
   }
   const callBase = { ...eventBase, callId };
   switch (event.type) {
+    case "invocation": {
+      const transport = requireIdentity(event.transport, reject, "event");
+      const ordinal = normalizeOrdinal(event.ordinal);
+      const attemptOrdinal = normalizeOrdinal(event.attemptOrdinal);
+      const hopOrdinal = normalizeOrdinal(event.hopOrdinal);
+      if (
+        !transport ||
+        !ordinal ||
+        !attemptOrdinal ||
+        !hopOrdinal ||
+        !isKnownValue(event.reason, AI_MODEL_TRANSPORT_ATTEMPT_REASONS)
+      ) {
+        return rejectValue(
+          reject,
+          ordinal && attemptOrdinal && hopOrdinal
+            ? "transport_invalid_fact"
+            : "transport_invalid_ordinal",
+          "event",
+        );
+      }
+      return {
+        ...callBase,
+        type: "invocation",
+        transport,
+        ordinal,
+        attemptOrdinal,
+        hopOrdinal,
+        reason: event.reason,
+      };
+    }
     case "attempt": {
       const transport = requireIdentity(event.transport, reject, "event");
       const ordinal = normalizeOrdinal(event.ordinal);

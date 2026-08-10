@@ -877,6 +877,7 @@ export function buildGuardedModelFetch(
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(policy ? { policy } : {}),
+      ...(options?.onFetchInvocation ? { onFetchInvocation: options.onFetchInvocation } : {}),
     };
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     const fetchStartedAt = Date.now();

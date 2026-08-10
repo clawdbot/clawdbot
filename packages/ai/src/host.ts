@@ -154,19 +154,24 @@ export type AiModelFetchResult = {
 export type AiModelFetchOptions = {
   sanitizeSse?: boolean;
   /**
-   * Observes every physical fetch hop after network preflight and a normal
-   * fetch invocation return. Observer failures must never alter provider traffic.
+   * Observes each admitted fetch invocation and its endpoint after synchronous
+   * preflight. This does not attest byte-level network egress.
    */
   observeFetchDispatch?: AiBeforeFetchDispatch;
   /**
-   * Fires after the underlying fetch invocation returns normally. Synchronous
-   * preflight rejection therefore remains an attested zero-dispatch outcome.
+   * Observes each fetch invocation admitted past synchronous preflight. It
+   * receives no request material and does not attest byte-level network egress.
+   */
+  onFetchInvocation?: () => void;
+  /**
+   * Legacy once-per-attempt callback after the first admitted fetch invocation.
+   * New hosts should prefer `onFetchInvocation` for per-invocation accounting.
    */
   onFetchDispatch?: () => void;
 };
 
 export type AiBlockingModelFetchOptions = AiModelFetchOptions & {
-  /** Blocks every physical fetch hop after network preflight and before dispatch. */
+  /** Blocks each network invocation after SSRF/DNS preflight and before fetch. */
   beforeFetchDispatch: AiBeforeFetchDispatch;
 };
 
@@ -216,17 +221,27 @@ type AiModelTransportCallEventBase = AiModelTransportEventBase & {
 /**
  * Provider transport facts for one model call.
  *
- * An attempt is one dispatched provider request. Its ordinal starts at one and
- * advances within one call; connection setup and run-scoped prewarm never count
- * as attempts. A transport fallback remains pending until a matching
+ * An attempt is one provider-request lifecycle. An invocation is one admitted
+ * fetch or WebSocket write within that attempt; it does not claim byte-level
+ * network egress. Connection setup and run-scoped prewarm never count as
+ * attempts. A transport fallback remains pending until a matching
  * `transport_fallback` attempt or zero-submission phase consumes it. Retries stay
  * on the current transport. Zero-submission facts describe one route phase that
- * ended before the dispatch boundary, including a pending fallback target after
+ * ended before the invocation boundary, including a pending fallback target after
  * earlier failed attempts. Server-side provider fallback records an in-request
  * serving model transition without changing the requested provider, model, API,
  * or active transport.
  */
 export type AiModelTransportEvent =
+  | (AiModelTransportCallEventBase & {
+      /** One transport invocation admitted past synchronous preflight. */
+      type: "invocation";
+      transport: string;
+      ordinal: number;
+      attemptOrdinal: number;
+      hopOrdinal: number;
+      reason: AiModelTransportAttemptReason;
+    })
   | (AiModelTransportCallEventBase & {
       type: "attempt";
       transport: string;
@@ -267,7 +282,7 @@ export type AiModelTransportEvent =
       toModel: string;
     })
   | (AiModelTransportCallEventBase & {
-      /** Scoped uncertainty that changes no physical transport count. */
+      /** Scoped uncertainty that changes no transport aggregate. */
       type: "coverage";
       scope: "provider_fallbacks";
       state: "lower_bound";
@@ -305,8 +320,9 @@ export interface AiTransportHost {
     options?: AiModelFetchOptions,
   ): typeof fetch | undefined;
   /**
-   * Builds a policy-guarded fetch and attests that dispatch callbacks run at
-   * their documented boundaries.
+   * Builds a policy-guarded fetch and attests that invocation callbacks run at
+   * their documented application boundary. The legacy method name does not
+   * claim byte-level network egress.
    */
   buildModelFetchWithDispatchAttestation?(
     model: Model,
@@ -315,7 +331,7 @@ export interface AiTransportHost {
   ): AiModelFetchResult | undefined;
   /**
    * Builds a fetch whose blocking callback is guaranteed to run immediately
-   * before every physical dispatch. Missing support must fail closed.
+   * before every network invocation. Missing support must fail closed.
    */
   buildModelFetchWithBlockingDispatchGuard?(
     model: Model,

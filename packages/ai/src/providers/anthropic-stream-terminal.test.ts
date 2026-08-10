@@ -77,7 +77,7 @@ describe("Anthropic stream terminal authority", () => {
         provider,
         resolveEndpointClass: () => endpointClass,
       });
-      authority.observePhysicalDispatch("https://example.test");
+      authority.observeEndpointInvocation("https://example.test");
       expect(authority.snapshot().requiresMessageStop).toBe(expected);
     },
   );
@@ -87,8 +87,8 @@ describe("Anthropic stream terminal authority", () => {
       provider: "anthropic",
       resolveEndpointClass: () => "custom",
     });
-    authority.observePhysicalDispatch("https://first.example/v1/messages");
-    authority.observePhysicalDispatch("https://second.example/v1/messages");
+    authority.observeEndpointInvocation("https://first.example/v1/messages");
+    authority.observeEndpointInvocation("https://second.example/v1/messages");
 
     expect(authority.snapshot()).toEqual({
       endpointClass: "custom",
@@ -102,8 +102,8 @@ describe("Anthropic stream terminal authority", () => {
       provider: "anthropic",
       resolveEndpointClass: () => "custom",
     });
-    authority.observePhysicalDispatch("https://compatible.example/v1/messages");
-    authority.observePhysicalDispatch("https://compatible.example/v1/messages?retry=1");
+    authority.observeEndpointInvocation("https://compatible.example/v1/messages");
+    authority.observeEndpointInvocation("https://compatible.example/v1/messages?retry=1");
 
     expect(authority.snapshot()).toEqual({
       endpointClass: "custom",
@@ -112,12 +112,12 @@ describe("Anthropic stream terminal authority", () => {
     });
   });
 
-  it("keeps legacy physical observations partial without attested provenance", () => {
+  it("keeps legacy endpoint observations partial without attested provenance", () => {
     const authority = createAnthropicEndpointAuthority({
       provider: "anthropic",
       resolveEndpointClass: () => "custom",
     });
-    authority.observePhysicalDispatch("https://compatible.example/v1/messages", {
+    authority.observeEndpointInvocation("https://compatible.example/v1/messages", {
       attested: false,
     });
 

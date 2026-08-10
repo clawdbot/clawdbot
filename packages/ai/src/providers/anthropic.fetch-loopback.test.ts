@@ -62,7 +62,7 @@ function createStandaloneDoneBody(done = "[DONE]"): string {
   ])}data: ${done}\n\n`;
 }
 
-function observeTestPhysicalDispatch(
+function observeTestEndpointInvocation(
   options: AiModelFetchOptions | undefined,
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -101,7 +101,7 @@ async function runTerminalCompletenessCase(params: {
     options: AiModelFetchOptions | undefined,
   ) => ({
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      observeTestPhysicalDispatch(options, input, init);
+      observeTestEndpointInvocation(options, input, init);
       const response = globalThis.fetch(input, init);
       options?.onFetchDispatch?.();
       return await response;
@@ -141,15 +141,15 @@ afterEach(() => {
 });
 
 describe("Anthropic SDK host fetch wiring", () => {
-  it("requires message_stop when any physical authority hop is unknown", () => {
+  it("requires message_stop when any endpoint invocation lacks authority", () => {
     const authority = createAnthropicEndpointAuthority({
       provider: "anthropic",
       resolveEndpointClass: (url) =>
         url === "https://compatible.example/v1/messages" ? "custom" : "",
     });
 
-    authority.observePhysicalDispatch("https://unknown.example/v1/messages");
-    authority.observePhysicalDispatch("https://compatible.example/v1/messages");
+    authority.observeEndpointInvocation("https://unknown.example/v1/messages");
+    authority.observeEndpointInvocation("https://compatible.example/v1/messages");
 
     expect(authority.snapshot()).toEqual({
       endpointClass: "custom",
@@ -264,7 +264,7 @@ describe("Anthropic SDK host fetch wiring", () => {
     );
   });
 
-  it("counts each SDK retry at guarded fetch dispatch", async () => {
+  it("counts each SDK retry as an admitted fetch invocation", async () => {
     const events: AiModelTransportEvent[] = [];
     let requestCount = 0;
     const server = createServer((_request, response) => {
@@ -307,7 +307,7 @@ describe("Anthropic SDK host fetch wiring", () => {
     > = (_model, _timeout, options?: AiModelFetchOptions) => {
       return {
         fetch: async (input, init) => {
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           const response = globalThis.fetch(input, init);
           options?.onFetchDispatch?.();
           return await response;
@@ -335,12 +335,28 @@ describe("Anthropic SDK host fetch wiring", () => {
 
     expect(events).toEqual([
       expect.objectContaining({
+        type: "invocation",
+        callId: "call-sdk-retry",
+        ordinal: 1,
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+        reason: "initial",
+      }),
+      expect.objectContaining({
         type: "attempt",
         callId: "call-sdk-retry",
         ordinal: 1,
         reason: "initial",
         outcome: "failed",
         statusCode: 503,
+      }),
+      expect.objectContaining({
+        type: "invocation",
+        callId: "call-sdk-retry",
+        ordinal: 2,
+        attemptOrdinal: 2,
+        hopOrdinal: 1,
+        reason: "retry",
       }),
       expect.objectContaining({
         type: "attempt",
@@ -359,7 +375,7 @@ describe("Anthropic SDK host fetch wiring", () => {
     configureAiTransportHost({
       buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => {
         const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           const response = hostFetch(input, init);
           options?.onFetchDispatch?.();
           return await response;
@@ -419,14 +435,14 @@ describe("Anthropic SDK host fetch wiring", () => {
     expect(events).toEqual([]);
   });
 
-  it("does not count a synchronous owned SDK fetch throw as a dispatch", async () => {
+  it("does not count a synchronous owned SDK fetch throw as an invocation", async () => {
     const events: AiModelTransportEvent[] = [];
     const hostFetch = vi.fn<typeof fetch>(() => {
       throw new Error("fetch invocation failed");
     });
     configureAiTransportHost({
       buildModelFetch: (_model, _timeout, options?: AiModelFetchOptions) => (input, init) => {
-        observeTestPhysicalDispatch(options, input, init);
+        observeTestEndpointInvocation(options, input, init);
         const response = hostFetch(input, init);
         options?.onFetchDispatch?.();
         return response;
@@ -493,7 +509,7 @@ describe("Anthropic SDK host fetch wiring", () => {
     configureAiTransportHost({
       buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
         fetch: async (input, init) => {
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           const response = globalThis.fetch(input, init);
           options.onFetchDispatch?.();
           return await response;
@@ -518,6 +534,13 @@ describe("Anthropic SDK host fetch wiring", () => {
     }
 
     expect(events).toEqual([
+      expect.objectContaining({
+        type: "invocation",
+        callId: "call-sdk-incomplete",
+        ordinal: 1,
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      }),
       expect.objectContaining({
         type: "attempt",
         callId: "call-sdk-incomplete",

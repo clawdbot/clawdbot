@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   configureAiTransportHost,
   getAiTransportHost,
+  type AiModelFetchOptions,
   type AiModelTransportEvent,
 } from "../host.js";
 import { responsesPromptObserver } from "../internal/openai.js";
@@ -10,11 +11,13 @@ import {
   abortErroredSseResponse,
   attemptEvents,
   azureModel,
+  chatGptModel,
   completedSseEvent,
   completedSseResponse,
   configureTransportObserver,
   context,
   coverageEvents,
+  invocationEvents,
   openAIModel,
   providerFallbackEvents,
   resetOpenAITransportAccountingTestState,
@@ -27,10 +30,48 @@ import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 
 afterEach(resetOpenAITransportAccountingTestState);
 
 describe("OpenAI Responses SDK transport accounting", () => {
+  it("executes the managed ChatGPT route with invocation accounting", async () => {
+    const events: AiModelTransportEvent[] = [];
+    configureTransportObserver(events, () => vi.fn(async () => completedSseResponse()));
+
+    const streamFn = createBoundaryAwareStreamFnForModel(chatGptModel);
+    if (!streamFn) {
+      throw new Error("managed ChatGPT route selector returned no stream");
+    }
+    const stream = await Promise.resolve(
+      streamFn(chatGptModel, context, {
+        apiKey: "test-key",
+        maxRetries: 0,
+        requestId: "call-chatgpt-managed",
+      }),
+    );
+
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(invocationEvents(events)).toMatchObject([
+      {
+        callId: "call-chatgpt-managed",
+        api: "openai-chatgpt-responses",
+        transport: "responses-sdk",
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      },
+    ]);
+    expect(attemptEvents(events)).toMatchObject([
+      {
+        callId: "call-chatgpt-managed",
+        api: "openai-chatgpt-responses",
+        transport: "responses-sdk",
+        ordinal: 1,
+        outcome: "completed",
+      },
+    ]);
+  });
+
   it("records authoritative SDK serving-model transitions from HTTP and event headers", async () => {
     const events: AiModelTransportEvent[] = [];
     configureTransportObserver(events, () =>
@@ -250,7 +291,7 @@ describe("OpenAI Responses SDK transport accounting", () => {
     expect(coverageEvents(events)).toEqual([]);
   });
 
-  it("records SDK retries from physical fetches, not retry headers", async () => {
+  it("records SDK retries from admitted fetch invocations, not retry headers", async () => {
     const events: AiModelTransportEvent[] = [];
     const guardedFetch = vi
       .fn<typeof fetch>()
@@ -273,6 +314,10 @@ describe("OpenAI Responses SDK transport accounting", () => {
 
     expect((await stream.result()).stopReason).toBe("stop");
     expect(guardedFetch).toHaveBeenCalledTimes(2);
+    expect(invocationEvents(events)).toMatchObject([
+      { ordinal: 1, attemptOrdinal: 1, hopOrdinal: 1, reason: "initial" },
+      { ordinal: 2, attemptOrdinal: 2, hopOrdinal: 1, reason: "retry" },
+    ]);
     expect(attemptEvents(events)).toMatchObject([
       { ordinal: 1, reason: "initial", outcome: "failed", statusCode: 503 },
       { ordinal: 2, reason: "retry", outcome: "completed", statusCode: 200 },
@@ -471,7 +516,7 @@ describe("OpenAI Responses SDK transport accounting", () => {
       buildModelFetchWithDispatchAttestation: (
         _model: Model,
         _timeoutMs: number | undefined,
-        options: { onFetchDispatch?: () => void },
+        options: AiModelFetchOptions,
       ) => ({
         provenance: "dispatch_attested",
         fetch: async () => {
@@ -479,6 +524,7 @@ describe("OpenAI Responses SDK transport accounting", () => {
           if (guardedFetchCalls === 1) {
             throw new TypeError("blocked before provider dispatch");
           }
+          options?.onFetchInvocation?.();
           options?.onFetchDispatch?.();
           return completedSseResponse();
         },
@@ -518,7 +564,7 @@ describe("OpenAI Responses SDK transport accounting", () => {
       buildModelFetchWithDispatchAttestation: (
         _model: Model,
         _timeoutMs: number | undefined,
-        options: { onFetchDispatch?: () => void },
+        options: AiModelFetchOptions,
       ) => ({
         provenance: "dispatch_attested",
         fetch: async () => {
@@ -526,6 +572,7 @@ describe("OpenAI Responses SDK transport accounting", () => {
           if (guardedFetchCalls <= 2) {
             throw new TypeError("blocked before provider dispatch");
           }
+          options?.onFetchInvocation?.();
           options?.onFetchDispatch?.();
           return completedSseResponse();
         },
@@ -782,11 +829,67 @@ describe("OpenAI Responses SDK transport accounting", () => {
     );
 
     expect((await stream.result()).stopReason).toBe("stop");
+    expect(invocationEvents(events)).toMatchObject([
+      {
+        callId: "call-azure-sdk",
+        transport: "responses-sdk",
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      },
+    ]);
     expect(attemptEvents(events)).toMatchObject([
       {
         callId: "call-azure-sdk",
         provider: "azure-openai-responses",
         api: "azure-openai-responses",
+        reason: "initial",
+        outcome: "completed",
+      },
+    ]);
+  });
+
+  it("retains Azure invocation accounting from a legacy-only attested host", async () => {
+    const events: AiModelTransportEvent[] = [];
+    configureTransportObserver(events);
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      buildModelFetchWithDispatchAttestation: (
+        _model: Model,
+        _timeoutMs: number | undefined,
+        options: AiModelFetchOptions,
+      ) => ({
+        provenance: "dispatch_attested",
+        fetch: async () => {
+          const response = completedSseResponse("resp-azure-legacy-only", {
+            httpModel: azureModel.id,
+            model: azureModel.id,
+          });
+          options.onFetchDispatch?.();
+          return response;
+        },
+      }),
+    });
+
+    const stream = await Promise.resolve(
+      createAzureOpenAIResponsesTransportStreamFn()(azureModel, context, {
+        apiKey: "test-key",
+        maxRetries: 0,
+        requestId: "call-azure-legacy-only",
+      }),
+    );
+
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(invocationEvents(events)).toMatchObject([
+      {
+        callId: "call-azure-legacy-only",
+        transport: "responses-sdk",
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      },
+    ]);
+    expect(attemptEvents(events)).toMatchObject([
+      {
+        callId: "call-azure-legacy-only",
         reason: "initial",
         outcome: "completed",
       },

@@ -11,11 +11,16 @@ import {
   lowerMissingTransportFallbackCause,
   projectProviderTransportAccounting,
   providerTransportAggregateKeysForEvent,
+  retainProviderTransportAttempt,
+  retainProviderTransportInvocation,
   retainProviderTransportEventDetail,
   type ProviderTransportProjectionCall,
 } from "./provider-transport-accounting-project.js";
 import {
   commitProviderTransportEventIdentity,
+  createMutableProviderTransportAccounting,
+  hasSameProviderTransportRoute,
+  latestProviderTransportLogicalCall,
   markProviderTransportObservationFailure,
   prepareProviderTransportEventIdentity,
   rejectProviderTransportFact,
@@ -23,10 +28,21 @@ import {
   requireProviderTransportIdentity,
   type MutableProviderTransportAccounting,
 } from "./provider-transport-accounting-state.js";
+import {
+  bindOrValidateTransport,
+  canContinueTransportAttempt,
+  expectedTransportAttemptReason,
+  pendingOrCurrentTransport,
+  rejectAfterAbortedZeroSubmission,
+  rejectTransportInvocationRelation,
+  transportAttemptReasonMatches,
+  validateRequestedTransportIdentity,
+  validateTransportEventRoute,
+  validateTransportOrdinal,
+} from "./provider-transport-accounting-validate.js";
 import type {
   ProviderTransportAccountingCollector,
   ProviderTransportAccountingObserver,
-  ProviderTransportLogicalCallStarted,
 } from "./provider-transport-accounting.types.js";
 
 export {
@@ -47,8 +63,9 @@ export type {
 
 const MAX_MODEL_TRANSPORT_LOGICAL_CALLS = 64;
 const MAX_MODEL_TRANSPORT_EVENTS = 128;
+const MAX_MODEL_TRANSPORT_ATTEMPTS = 128;
+const MAX_MODEL_TRANSPORT_INVOCATIONS = 128;
 
-type RequestedRoute = Omit<ProviderTransportLogicalCallStarted, "callId">;
 type TrackedLogicalCall = ProviderTransportProjectionCall;
 type RoutePhase = NonNullable<TrackedLogicalCall["phase"]>;
 type CallScopedTransportEvent = Exclude<
@@ -59,51 +76,6 @@ type CallScopedTransportEvent = Exclude<
 const rejectFact = rejectProviderTransportFact;
 const rejectValue = rejectProviderTransportValue;
 const requireIdentity = requireProviderTransportIdentity;
-
-function sameRequestedRoute(left: RequestedRoute, right: RequestedRoute): boolean {
-  return left.provider === right.provider && left.model === right.model && left.api === right.api;
-}
-
-function eventTransport(event: AiModelTransportEvent): string {
-  return event.type === "fallback" ? event.fromTransport : event.transport;
-}
-
-function validateRequestedIdentity(
-  event: AiModelTransportEvent,
-  call: TrackedLogicalCall,
-  state: MutableProviderTransportAccounting,
-): boolean {
-  return event.provider === call.provider && event.model === call.model && event.api === call.api
-    ? true
-    : rejectFact(state, "transport_unknown_route", "event");
-}
-
-function validateEventTransport(
-  event: AiModelTransportEvent,
-  expectedTransport: string,
-  state: MutableProviderTransportAccounting,
-): boolean {
-  return eventTransport(event) === expectedTransport
-    ? true
-    : rejectFact(state, "transport_unknown_route", "event");
-}
-
-function validateOrdinal(
-  actual: number,
-  expected: number,
-  state: MutableProviderTransportAccounting,
-): boolean {
-  return actual === expected ? true : rejectFact(state, "transport_invalid_ordinal", "event");
-}
-
-function latestLogicalCall(
-  callId: string,
-  state: MutableProviderTransportAccounting,
-): { call: TrackedLogicalCall; key: string } | undefined {
-  const key = state.latestLogicalCallKeyByCallId.get(callId);
-  const call = key ? state.logicalCalls.get(key) : undefined;
-  return call && key ? { call, key } : undefined;
-}
 
 function correlateTransportEvent(
   event: AiModelTransportEvent,
@@ -121,7 +93,7 @@ function correlateTransportEvent(
     );
     return undefined;
   }
-  const latest = latestLogicalCall(normalized.value, state);
+  const latest = latestProviderTransportLogicalCall(normalized.value, state);
   if (!latest) {
     rejectFact(state, "transport_uncorrelated_event", "call_event");
     return undefined;
@@ -137,7 +109,7 @@ function requireOpenCall(
   event: CallScopedTransportEvent,
   state: MutableProviderTransportAccounting,
 ): TrackedLogicalCall | undefined {
-  const call = latestLogicalCall(event.callId, state)?.call;
+  const call = latestProviderTransportLogicalCall(event.callId, state)?.call;
   if (!call) {
     return rejectValue(state, "transport_uncorrelated_event", "call_event");
   }
@@ -145,33 +117,6 @@ function requireOpenCall(
     return rejectValue(state, "transport_event_conflict", "event");
   }
   return call;
-}
-
-function canContinueAfterAttempt(
-  call: TrackedLogicalCall,
-  state: MutableProviderTransportAccounting,
-): boolean {
-  return !call.lastAttempt || call.lastAttempt.outcome === "failed"
-    ? true
-    : rejectFact(state, "transport_event_conflict", "event");
-}
-
-function bindOrValidateCurrentTransport(
-  call: TrackedLogicalCall,
-  transport: string,
-  state: MutableProviderTransportAccounting,
-): boolean {
-  if (!call.currentTransport) {
-    call.currentTransport = transport;
-    return true;
-  }
-  return call.currentTransport === transport
-    ? true
-    : rejectFact(state, "transport_unknown_route", "event");
-}
-
-function pendingOrCurrentTransport(call: TrackedLogicalCall): string | undefined {
-  return call.pendingTransportTarget ?? call.currentTransport;
 }
 
 function markOutcomeConflict(state: MutableProviderTransportAccounting): void {
@@ -189,6 +134,10 @@ function sealPendingSettlement(
   }
   const evidence = call.latestZeroSubmissionOutcome ?? call.lastAttempt?.outcome;
   if (!evidence) {
+    if (observationComplete) {
+      call.settledOutcome = pending;
+      call.pendingSettlementOutcome = undefined;
+    }
     return;
   }
   if (evidence === pending) {
@@ -213,17 +162,6 @@ function sealPendingSettlement(
   call.pendingSettlementOutcome = undefined;
 }
 
-function rejectAfterAbortedZeroSubmission(
-  call: TrackedLogicalCall,
-  state: MutableProviderTransportAccounting,
-): boolean {
-  if (call.latestZeroSubmissionOutcome !== "aborted") {
-    return false;
-  }
-  rejectFact(state, "transport_event_conflict", "event");
-  return true;
-}
-
 function applyAttempt(
   event: Extract<AiModelTransportEvent, { type: "attempt" }>,
   state: MutableProviderTransportAccounting,
@@ -232,42 +170,43 @@ function applyAttempt(
   if (
     !call ||
     rejectAfterAbortedZeroSubmission(call, state) ||
-    !canContinueAfterAttempt(call, state)
+    !canContinueTransportAttempt(call, state)
   ) {
     return false;
   }
   const previous = call.lastAttempt;
   const expectedOrdinal = (previous?.ordinal ?? 0) + 1;
   if (
-    !validateRequestedIdentity(event, call, state) ||
-    !validateOrdinal(event.ordinal, expectedOrdinal, state)
+    !validateRequestedTransportIdentity(event, call, state) ||
+    !validateTransportOrdinal(event.ordinal, expectedOrdinal, state)
   ) {
     return false;
   }
 
   const phase = call.phase;
   const expectedTransport = phase?.transport ?? pendingOrCurrentTransport(call) ?? event.transport;
-  if (!validateEventTransport(event, expectedTransport, state)) {
+  if (!validateTransportEventRoute(event, expectedTransport, state)) {
     return false;
   }
-  const expectedReason =
-    phase?.expectedAttemptReason ??
-    (call.pendingTransportTarget
-      ? "transport_fallback"
-      : previous || call.latestZeroSubmissionOutcome
-        ? "same_route"
-        : "initial");
-  if (expectedReason === "same_route") {
-    if (event.reason === "initial" || event.reason === "transport_fallback") {
-      return rejectFact(state, "transport_invalid_fact", "event");
-    }
-  } else if (event.reason !== expectedReason) {
+  const pendingInvocation = call.pendingInvocationAttempt;
+  if (
+    pendingInvocation &&
+    (pendingInvocation.ordinal !== event.ordinal || pendingInvocation.reason !== event.reason)
+  ) {
+    return rejectTransportInvocationRelation(state);
+  }
+  const expectedReason = expectedTransportAttemptReason(call);
+  if (!transportAttemptReasonMatches(event.reason, expectedReason)) {
     return rejectFact(state, "transport_invalid_fact", "event");
+  }
+  if (!pendingInvocation) {
+    state.issues.add("transport_invocation_relation_incomplete");
+    state.aggregateLowerBounds.invocations = true;
   }
   if (
     !call.pendingTransportTarget &&
     !phase &&
-    !bindOrValidateCurrentTransport(call, event.transport, state)
+    !bindOrValidateTransport(call, event.transport, state)
   ) {
     return false;
   }
@@ -283,14 +222,80 @@ function applyAttempt(
     servingModel,
     outcome: event.outcome,
   };
+  call.unsettledInvocations = 0;
+  call.pendingInvocationAttempt = undefined;
   call.fallbackCause =
     event.outcome === "failed"
       ? { transport: expectedTransport, reason: "stream_failure" }
       : undefined;
   call.pendingTransportTarget = undefined;
   call.phase = undefined;
+  retainProviderTransportAttempt(
+    {
+      logicalCallOrdinal: call.ordinal,
+      ordinal: event.ordinal,
+      transport: expectedTransport,
+      reason: event.reason,
+      outcome: event.outcome,
+    },
+    state,
+    MAX_MODEL_TRANSPORT_ATTEMPTS,
+  );
   countProviderTransportAttempt(event, state);
   sealPendingSettlement(call, state);
+  return true;
+}
+
+function applyInvocation(
+  event: Extract<AiModelTransportEvent, { type: "invocation" }>,
+  state: MutableProviderTransportAccounting,
+): boolean {
+  const call = requireOpenCall(event, state);
+  if (
+    !call ||
+    rejectAfterAbortedZeroSubmission(call, state) ||
+    !canContinueTransportAttempt(call, state) ||
+    !validateRequestedTransportIdentity(event, call, state) ||
+    !validateTransportOrdinal(event.ordinal, call.nextInvocationOrdinal, state)
+  ) {
+    return false;
+  }
+  const expectedAttemptOrdinal = (call.lastAttempt?.ordinal ?? 0) + 1;
+  if (event.attemptOrdinal !== expectedAttemptOrdinal) {
+    return rejectTransportInvocationRelation(state);
+  }
+  const expectedReason = expectedTransportAttemptReason(call);
+  if (!transportAttemptReasonMatches(event.reason, expectedReason)) {
+    return rejectTransportInvocationRelation(state);
+  }
+  const pendingInvocation = call.pendingInvocationAttempt;
+  if (
+    pendingInvocation
+      ? pendingInvocation.ordinal !== event.attemptOrdinal ||
+        pendingInvocation.reason !== event.reason ||
+        pendingInvocation.nextHopOrdinal !== event.hopOrdinal
+      : event.hopOrdinal !== 1
+  ) {
+    return rejectTransportInvocationRelation(state);
+  }
+  const expectedTransport =
+    call.phase?.transport ?? pendingOrCurrentTransport(call) ?? event.transport;
+  if (!validateTransportEventRoute(event, expectedTransport, state)) {
+    return false;
+  }
+  if (!call.pendingTransportTarget && !call.phase) {
+    if (!bindOrValidateTransport(call, event.transport, state)) {
+      return false;
+    }
+  }
+  call.nextInvocationOrdinal += 1;
+  call.unsettledInvocations += 1;
+  call.pendingInvocationAttempt = {
+    ordinal: event.attemptOrdinal,
+    reason: event.reason,
+    nextHopOrdinal: event.hopOrdinal + 1,
+  };
+  retainProviderTransportInvocation(event, call.ordinal, state, MAX_MODEL_TRANSPORT_INVOCATIONS);
   return true;
 }
 
@@ -313,7 +318,7 @@ function applyConnection(
   state: MutableProviderTransportAccounting,
 ): boolean {
   if (event.reason === "prewarm") {
-    if (!validateOrdinal(event.ordinal, state.nextPrewarmConnectionOrdinal, state)) {
+    if (!validateTransportOrdinal(event.ordinal, state.nextPrewarmConnectionOrdinal, state)) {
       return false;
     }
     state.nextPrewarmConnectionOrdinal += 1;
@@ -324,15 +329,15 @@ function applyConnection(
   if (
     !call ||
     rejectAfterAbortedZeroSubmission(call, state) ||
-    !canContinueAfterAttempt(call, state)
+    !canContinueTransportAttempt(call, state)
   ) {
     return false;
   }
   const expectedTransport = call.phase?.transport ?? pendingOrCurrentTransport(call);
   if (
-    !validateRequestedIdentity(event, call, state) ||
-    !validateOrdinal(event.ordinal, call.nextConnectionOrdinal, state) ||
-    (expectedTransport ? !validateEventTransport(event, expectedTransport, state) : false)
+    !validateRequestedTransportIdentity(event, call, state) ||
+    !validateTransportOrdinal(event.ordinal, call.nextConnectionOrdinal, state) ||
+    (expectedTransport ? !validateTransportEventRoute(event, expectedTransport, state) : false)
   ) {
     return false;
   }
@@ -359,8 +364,8 @@ function applyTransportFallback(
     rejectAfterAbortedZeroSubmission(call, state) ||
     call.pendingTransportTarget ||
     call.phase ||
-    !canContinueAfterAttempt(call, state) ||
-    !validateRequestedIdentity(event, call, state)
+    !canContinueTransportAttempt(call, state) ||
+    !validateRequestedTransportIdentity(event, call, state)
   ) {
     if (call && (call.pendingTransportTarget || call.phase)) {
       rejectFact(state, "transport_event_conflict", "event");
@@ -392,15 +397,15 @@ function applyProviderFallback(
   if (
     !call ||
     rejectAfterAbortedZeroSubmission(call, state) ||
-    !canContinueAfterAttempt(call, state) ||
-    !validateRequestedIdentity(event, call, state)
+    !canContinueTransportAttempt(call, state) ||
+    !validateRequestedTransportIdentity(event, call, state)
   ) {
     return false;
   }
   const pendingTransportTarget = call.pendingTransportTarget;
   const expectedTransport =
     call.phase?.transport ?? pendingTransportTarget ?? call.currentTransport ?? event.transport;
-  if (!validateEventTransport(event, expectedTransport, state)) {
+  if (!validateTransportEventRoute(event, expectedTransport, state)) {
     return false;
   }
   let expectedAttemptReason: RoutePhase["expectedAttemptReason"];
@@ -448,7 +453,7 @@ function applyCoverage(
     call.latestZeroSubmissionOutcome ||
     call.phase ||
     call.pendingTransportTarget ||
-    !validateRequestedIdentity(event, call, state)
+    !validateRequestedTransportIdentity(event, call, state)
   ) {
     if (call && (call.latestZeroSubmissionOutcome || call.phase || call.pendingTransportTarget)) {
       rejectFact(state, "transport_event_conflict", "event");
@@ -459,13 +464,13 @@ function applyCoverage(
     if (event.scope !== "transport_semantics") {
       return rejectFact(state, "transport_event_conflict", "event");
     }
-    if (!bindOrValidateCurrentTransport(call, event.transport, state)) {
+    if (!bindOrValidateTransport(call, event.transport, state)) {
       return false;
     }
   } else if (
-    !validateEventTransport(event, call.lastAttempt.transport, state) ||
+    !validateTransportEventRoute(event, call.lastAttempt.transport, state) ||
     (call.currentTransport !== undefined &&
-      !validateEventTransport(event, call.currentTransport, state))
+      !validateTransportEventRoute(event, call.currentTransport, state))
   ) {
     return false;
   }
@@ -478,6 +483,7 @@ function applyCoverage(
     state.issues.add(event.reason);
     if (event.reason === "transport_submission_authority_partial") {
       state.aggregateLowerBounds.attempts = true;
+      state.aggregateLowerBounds.invocations = true;
       state.aggregateLowerBounds.providerFallbacks = true;
       state.aggregateLowerBounds.zeroSubmissions = true;
     }
@@ -493,21 +499,24 @@ function applyZeroSubmission(
   if (
     !call ||
     rejectAfterAbortedZeroSubmission(call, state) ||
-    !canContinueAfterAttempt(call, state) ||
-    !validateRequestedIdentity(event, call, state)
+    !canContinueTransportAttempt(call, state) ||
+    !validateRequestedTransportIdentity(event, call, state)
   ) {
     return false;
   }
   if (call.phase?.submissionEvidence) {
     return rejectFact(state, "transport_event_conflict", "event");
   }
+  if (call.unsettledInvocations > 0) {
+    return rejectFact(state, "transport_event_conflict", "event");
+  }
   if (call.pendingTransportTarget) {
-    if (!validateEventTransport(event, call.pendingTransportTarget, state)) {
+    if (!validateTransportEventRoute(event, call.pendingTransportTarget, state)) {
       return false;
     }
     call.currentTransport = call.pendingTransportTarget;
     call.pendingTransportTarget = undefined;
-  } else if (!bindOrValidateCurrentTransport(call, event.transport, state)) {
+  } else if (!bindOrValidateTransport(call, event.transport, state)) {
     return false;
   }
   call.phase = undefined;
@@ -524,6 +533,8 @@ function applyTransportEvent(
   state: MutableProviderTransportAccounting,
 ): boolean {
   switch (event.type) {
+    case "invocation":
+      return applyInvocation(event, state);
     case "attempt":
       return applyAttempt(event, state);
     case "connection":
@@ -545,55 +556,17 @@ function applyTransportEvent(
 }
 
 export function createProviderTransportAccountingCollector(): ProviderTransportAccountingCollector {
-  const state: MutableProviderTransportAccounting = {
-    logicalCalls: new Map(),
-    latestLogicalCallKeyByCallId: new Map(),
-    nextLogicalCallLifecycleOrdinal: 1,
-    eventFingerprints: new Map(),
-    aggregate: {
-      attempts: {
-        total: 0,
-        initial: 0,
-        retries: 0,
-        authRecoveries: 0,
-        payloadRecoveries: 0,
-        transportFallbacks: 0,
-      },
-      connections: { total: 0, initial: 0, prewarms: 0, reconnects: 0 },
-      fallbacks: {
-        total: 0,
-        unsupported: 0,
-        connectionFailures: 0,
-        submissionFailures: 0,
-        streamFailures: 0,
-        policy: 0,
-      },
-      providerFallbacks: { total: 0, server: 0 },
-      zeroSubmissions: { total: 0, failed: 0, aborted: 0 },
-    },
-    events: [],
-    acceptedEvents: 0,
-    nextPrewarmConnectionOrdinal: 1,
-    callTotalsLowerBound: false,
-    outcomeTotalsLowerBound: false,
-    aggregateLowerBounds: {
-      attempts: false,
-      connections: false,
-      fallbacks: false,
-      providerFallbacks: false,
-      zeroSubmissions: false,
-      events: false,
-    },
-    callDetailsTruncated: false,
-    eventDetailsTruncated: false,
-    issues: new Set(),
-  };
+  const state = createMutableProviderTransportAccounting();
 
   const observer: ProviderTransportAccountingObserver = {
     onObservationFailure(_kind) {
       markProviderTransportObservationFailure(state);
     },
     onLogicalCallStarted(rawCall) {
+      if (state.sealed) {
+        markProviderTransportObservationFailure(state);
+        return;
+      }
       const callId = requireIdentity(rawCall.callId, state, "call_outcome");
       const provider = requireIdentity(rawCall.provider, state, "call_outcome");
       const model = requireIdentity(rawCall.model, state, "call_outcome");
@@ -602,9 +575,9 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
         return;
       }
       const route = { provider, model, api };
-      const latest = latestLogicalCall(callId, state);
+      const latest = latestProviderTransportLogicalCall(callId, state);
       if (latest && !latest.call.finalized) {
-        if (!sameRequestedRoute(latest.call, route)) {
+        if (!hasSameProviderTransportRoute(latest.call, route)) {
           rejectFact(state, "transport_event_conflict", "call_outcome");
         }
         return;
@@ -616,20 +589,38 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
       }
       const lifecycleKey = String(state.nextLogicalCallLifecycleOrdinal);
       state.nextLogicalCallLifecycleOrdinal += 1;
+      if (latest?.call.finalized) {
+        state.outcomeTotalsLowerBound = true;
+        state.aggregateLowerBounds.attempts = true;
+        state.aggregateLowerBounds.invocations = true;
+        state.aggregateLowerBounds.connections = true;
+        state.aggregateLowerBounds.fallbacks = true;
+        state.aggregateLowerBounds.providerFallbacks = true;
+        state.aggregateLowerBounds.zeroSubmissions = true;
+        state.aggregateLowerBounds.events = true;
+        state.issues.add("transport_lifecycle_ambiguous");
+      }
       state.logicalCalls.set(lifecycleKey, {
+        ordinal: Number(lifecycleKey),
         callId,
         ...route,
         nextConnectionOrdinal: 1,
+        nextInvocationOrdinal: 1,
+        unsettledInvocations: 0,
         acceptedCallEventCount: 0,
       });
       state.latestLogicalCallKeyByCallId.set(callId, lifecycleKey);
     },
     onLogicalCallSettled(rawCallId, rawOutcome, cachedInput = { state: "unknown" }) {
+      if (state.sealed) {
+        markProviderTransportObservationFailure(state);
+        return;
+      }
       const callId = requireIdentity(rawCallId, state, "call_outcome");
       if (!callId) {
         return;
       }
-      const call = latestLogicalCall(callId, state)?.call;
+      const call = latestProviderTransportLogicalCall(callId, state)?.call;
       if (!call) {
         rejectFact(state, "transport_uncorrelated_event", "call_outcome");
         return;
@@ -659,6 +650,10 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
       sealPendingSettlement(call, state);
     },
     onTransportEvent(rawEvent) {
+      if (state.sealed) {
+        markProviderTransportObservationFailure(state);
+        return;
+      }
       state.activeAggregateKeys = providerTransportAggregateKeysForEvent(rawEvent);
       try {
         const correlation = correlateTransportEvent(rawEvent, state);
@@ -694,11 +689,15 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
       }
     },
     onLogicalCallFinalized(rawCallId) {
+      if (state.sealed) {
+        markProviderTransportObservationFailure(state);
+        return;
+      }
       const callId = requireIdentity(rawCallId, state, "call_outcome");
       if (!callId) {
         return;
       }
-      const call = latestLogicalCall(callId, state)?.call;
+      const call = latestProviderTransportLogicalCall(callId, state)?.call;
       if (!call) {
         rejectFact(state, "transport_uncorrelated_event", "call_outcome");
         return;
@@ -714,6 +713,12 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
   return {
     observer,
     finalize: (callId) => observer.onLogicalCallFinalized(callId),
+    seal: () => {
+      for (const call of state.logicalCalls.values()) {
+        sealPendingSettlement(call, state, true);
+      }
+      state.sealed = true;
+    },
     project: () => projectProviderTransportAccounting(state),
   };
 }

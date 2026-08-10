@@ -16,6 +16,9 @@ export type ProviderTransportAccountingCoverageReason =
   | "transport_event_conflict"
   | "transport_invalid_fact"
   | "transport_invalid_ordinal"
+  | "transport_invocation_relation_incomplete"
+  | "transport_invocation_relation_invalid"
+  | "transport_lifecycle_ambiguous"
   | "transport_observer_failed"
   | "transport_logical_call_incomplete"
   | "transport_terminal_unverified"
@@ -30,6 +33,7 @@ export type ProviderTransportAccountingCoverage =
     };
 
 export type ProviderTransportLogicalCall = {
+  ordinal?: number;
   callId: string;
   provider: string;
   model: string;
@@ -37,7 +41,30 @@ export type ProviderTransportLogicalCall = {
   transport?: string;
   servingModel?: string;
   outcome?: AiModelTransportOutcome;
+  finalized?: boolean;
   cachedInput: CachedInputObservation;
+};
+
+export type ProviderTransportAttempt = {
+  logicalCallOrdinal: number;
+  ordinal: number;
+  transport: string;
+  reason: import("@openclaw/ai").AiModelTransportAttemptReason;
+  outcome: AiModelTransportOutcome;
+};
+
+export type ProviderTransportInvocation = {
+  sequence: number;
+  logicalCallOrdinal: number;
+  callId: string;
+  provider: string;
+  model: string;
+  api: string;
+  transport: string;
+  ordinal: number;
+  attemptOrdinal: number;
+  hopOrdinal: number;
+  reason: import("@openclaw/ai").AiModelTransportAttemptReason;
 };
 
 type ProviderTransportTotals = {
@@ -60,6 +87,12 @@ export type ProviderTransportAccountingSnapshot = {
     authRecoveries: number;
     payloadRecoveries: number;
     transportFallbacks: number;
+    entries?: ProviderTransportAttempt[];
+    entriesTruncated?: boolean;
+  };
+  invocations?: ProviderTransportTotals & {
+    entries: ProviderTransportInvocation[];
+    entriesTruncated: boolean;
   };
   connections: ProviderTransportTotals & {
     initial: number;
@@ -112,6 +145,7 @@ export type ProviderTransportAccountingObserver = {
 export type ProviderTransportAccountingCollector = {
   observer: ProviderTransportAccountingObserver;
   finalize(callId: string): void;
+  seal(): void;
   project(): {
     snapshot?: ProviderTransportAccountingSnapshot;
     coverage: ProviderTransportAccountingCoverage;

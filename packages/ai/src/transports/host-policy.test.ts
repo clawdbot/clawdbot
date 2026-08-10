@@ -102,7 +102,7 @@ describe("model fetch dispatch guards", () => {
     ).toThrow("blocking model fetch dispatch guard is unavailable");
   });
 
-  it("keeps observational dispatch accounting isolated in the fallback", async () => {
+  it("keeps observational invocation accounting isolated in the fallback", async () => {
     const onFetchDispatch = vi.fn(() => {
       throw new Error("observer failure");
     });

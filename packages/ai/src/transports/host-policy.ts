@@ -14,7 +14,7 @@ function normalizeLegacyModelFetch(result: unknown): { fetch: typeof fetch } | u
 function normalizeAttestedModelFetch(result: typeof fetch | AiModelFetchResult | undefined):
   | {
       fetch: typeof fetch;
-      physicalDispatchAttested: true;
+      invocationEndpointAttested: true;
       provenance: "dispatch_attested";
     }
   | undefined {
@@ -28,14 +28,14 @@ function normalizeAttestedModelFetch(result: typeof fetch | AiModelFetchResult |
   }
   return {
     fetch: result.fetch,
-    physicalDispatchAttested: true,
+    invocationEndpointAttested: true,
     provenance: result.provenance,
   };
 }
 
 type GuardedModelFetchResult = {
   fetch: typeof fetch;
-  physicalDispatchAttested?: boolean;
+  invocationEndpointAttested?: boolean;
   provenance?: AiModelFetchResult["provenance"];
 };
 
@@ -109,7 +109,7 @@ export function buildGuardedModelFetchResult(
           }
           return await dispatched;
         },
-        physicalDispatchAttested: false,
+        invocationEndpointAttested: false,
       };
     }
     return { fetch: globalThis.fetch };

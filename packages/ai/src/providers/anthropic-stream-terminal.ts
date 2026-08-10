@@ -246,7 +246,7 @@ export function createAnthropicEndpointAuthority(params: {
   resolveEndpointClass: (url?: string) => string;
 }) {
   const provisionalEndpointClasses: string[] = [];
-  const dispatchedAuthorities: Array<{
+  const invokedAuthorities: Array<{
     attested: boolean;
     endpointClass?: string;
     origin?: string;
@@ -269,7 +269,7 @@ export function createAnthropicEndpointAuthority(params: {
         provisionalEndpointClasses.push("");
       }
     },
-    observePhysicalDispatch(url: string, options?: { attested?: boolean }): void {
+    observeEndpointInvocation(url: string, options?: { attested?: boolean }): void {
       let endpointClass: string | undefined;
       try {
         endpointClass = params.resolveEndpointClass(url) || undefined;
@@ -277,34 +277,34 @@ export function createAnthropicEndpointAuthority(params: {
         endpointClass = undefined;
       }
       const origin = resolveOrigin(url);
-      dispatchedAuthorities.push({
+      invokedAuthorities.push({
         attested: options?.attested ?? true,
         ...(endpointClass ? { endpointClass } : {}),
         ...(origin ? { origin } : {}),
       });
     },
     snapshot(): AnthropicEndpointAuthoritySnapshot {
-      const finalDispatched = dispatchedAuthorities.at(-1)?.endpointClass;
+      const finalInvoked = invokedAuthorities.at(-1)?.endpointClass;
       const finalProvisional = provisionalEndpointClasses.at(-1);
       const endpointClass =
-        dispatchedAuthorities.length > 0 ? finalDispatched : finalProvisional || undefined;
-      const knownDispatchClasses = dispatchedAuthorities.flatMap((authority) =>
+        invokedAuthorities.length > 0 ? finalInvoked : finalProvisional || undefined;
+      const knownInvocationClasses = invokedAuthorities.flatMap((authority) =>
         authority.endpointClass ? [authority.endpointClass] : [],
       );
-      const knownDispatchOrigins = dispatchedAuthorities.flatMap((authority) =>
+      const knownInvocationOrigins = invokedAuthorities.flatMap((authority) =>
         authority.origin ? [authority.origin] : [],
       );
-      const hasUnknownDispatch = dispatchedAuthorities.some(
+      const hasUnknownInvocation = invokedAuthorities.some(
         (authority) => !authority.endpointClass || !authority.origin || !authority.attested,
       );
       const hasAuthorityConflict =
-        new Set(knownDispatchClasses).size > 1 || new Set(knownDispatchOrigins).size > 1;
+        new Set(knownInvocationClasses).size > 1 || new Set(knownInvocationOrigins).size > 1;
       const traceState =
-        dispatchedAuthorities.length === 0
+        invokedAuthorities.length === 0
           ? endpointClass
             ? "partial"
             : "unknown"
-          : hasUnknownDispatch || hasAuthorityConflict
+          : hasUnknownInvocation || hasAuthorityConflict
             ? "partial"
             : endpointClass
               ? "exact"

@@ -643,6 +643,7 @@ export async function agentCommand(
       runtime,
       deps,
     );
+    commandRunAccounting.seal();
     bindAgentCommandRunAccounting(result?.meta, commandRunAccounting.project());
     return result;
   });

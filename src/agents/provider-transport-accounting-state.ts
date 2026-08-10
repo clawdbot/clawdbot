@@ -6,6 +6,7 @@ import {
 import {
   providerTransportAggregateKeysForEvent,
   type ProviderTransportAggregateLowerBoundKey,
+  type ProviderTransportProjectionCall,
   type ProviderTransportProjectionState,
 } from "./provider-transport-accounting-project.js";
 import type { ProviderTransportAccountingCoverageReason } from "./provider-transport-accounting.types.js";
@@ -25,6 +26,76 @@ export type PreparedProviderTransportEventIdentity = {
 
 export type MutableProviderTransportAccounting = ProviderTransportProjectionState;
 
+export function hasSameProviderTransportRoute(
+  left: Pick<ProviderTransportProjectionCall, "provider" | "model" | "api">,
+  right: Pick<ProviderTransportProjectionCall, "provider" | "model" | "api">,
+): boolean {
+  return left.provider === right.provider && left.model === right.model && left.api === right.api;
+}
+
+export function latestProviderTransportLogicalCall(
+  callId: string,
+  state: MutableProviderTransportAccounting,
+): { call: ProviderTransportProjectionCall; key: string } | undefined {
+  const key = state.latestLogicalCallKeyByCallId.get(callId);
+  const call = key ? state.logicalCalls.get(key) : undefined;
+  return call && key ? { call, key } : undefined;
+}
+
+export function createMutableProviderTransportAccounting(): MutableProviderTransportAccounting {
+  return {
+    logicalCalls: new Map(),
+    latestLogicalCallKeyByCallId: new Map(),
+    nextLogicalCallLifecycleOrdinal: 1,
+    eventFingerprints: new Map(),
+    aggregate: {
+      attempts: {
+        total: 0,
+        initial: 0,
+        retries: 0,
+        authRecoveries: 0,
+        payloadRecoveries: 0,
+        transportFallbacks: 0,
+      },
+      connections: { total: 0, initial: 0, prewarms: 0, reconnects: 0 },
+      fallbacks: {
+        total: 0,
+        unsupported: 0,
+        connectionFailures: 0,
+        submissionFailures: 0,
+        streamFailures: 0,
+        policy: 0,
+      },
+      providerFallbacks: { total: 0, server: 0 },
+      zeroSubmissions: { total: 0, failed: 0, aborted: 0 },
+    },
+    events: [],
+    attempts: [],
+    invocations: [],
+    acceptedEvents: 0,
+    acceptedInvocations: 0,
+    nextInvocationSequence: 1,
+    nextPrewarmConnectionOrdinal: 1,
+    callTotalsLowerBound: false,
+    outcomeTotalsLowerBound: false,
+    aggregateLowerBounds: {
+      attempts: false,
+      invocations: false,
+      connections: false,
+      fallbacks: false,
+      providerFallbacks: false,
+      zeroSubmissions: false,
+      events: false,
+    },
+    callDetailsTruncated: false,
+    eventDetailsTruncated: false,
+    attemptDetailsTruncated: false,
+    invocationDetailsTruncated: false,
+    sealed: false,
+    issues: new Set(),
+  };
+}
+
 function markCallTotalsLowerBound(state: MutableProviderTransportAccounting): void {
   state.callTotalsLowerBound = true;
   state.issues.add("transport_totals_lower_bound");
@@ -41,6 +112,7 @@ export function markProviderTransportObservationFailure(
   markCallTotalsLowerBound(state);
   markOutcomeTotalsLowerBound(state);
   state.aggregateLowerBounds.attempts = true;
+  state.aggregateLowerBounds.invocations = true;
   state.aggregateLowerBounds.connections = true;
   state.aggregateLowerBounds.fallbacks = true;
   state.aggregateLowerBounds.providerFallbacks = true;

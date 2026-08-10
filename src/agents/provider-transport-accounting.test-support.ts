@@ -70,6 +70,33 @@ export function emitAttempt(params: {
   });
 }
 
+export function emitInvocation(params: {
+  callId: string;
+  ordinal: number;
+  attemptOrdinal: number;
+  hopOrdinal: number;
+  reason?: AiModelTransportAttemptReason;
+  transport?: string;
+  route?: TestRoute;
+  eventId?: string;
+}): void {
+  const route = params.route ?? ROUTE;
+  const transport = params.transport ?? route.transport;
+  observeProviderTransportEvent({
+    type: "invocation",
+    eventId: params.eventId ?? `invocation-${params.callId}-${String(params.ordinal)}`,
+    callId: params.callId,
+    provider: route.provider,
+    model: route.model,
+    api: route.api,
+    transport,
+    ordinal: params.ordinal,
+    attemptOrdinal: params.attemptOrdinal,
+    hopOrdinal: params.hopOrdinal,
+    reason: params.reason ?? (params.attemptOrdinal === 1 ? "initial" : "retry"),
+  });
+}
+
 export function emitConnection(params: {
   callId: string;
   ordinal: number;

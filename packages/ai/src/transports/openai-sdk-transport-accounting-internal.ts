@@ -24,6 +24,7 @@ type OpenAISdkTransportScope = {
   pendingResponseAttempt?: ModelTransportAttemptAuthority;
   pendingResponseStatus?: number;
   currentInvocationZeroSubmissionObserved: boolean;
+  currentInvocationAttemptKey?: object;
   fetchProvenance?: AiModelFetchProvenance;
 };
 
@@ -101,10 +102,19 @@ export function createOpenAISdkAccountingFetch(params: {
       if (scope.fetchProvenance !== "dispatch_attested") {
         return;
       }
+      const reason = scope.phaseFetchInvocationCount === 1 ? scope.submissionReason : "retry";
+      scope.events.observeInvocation({
+        attemptKey: (scope.currentInvocationAttemptKey ??= {}),
+        transport: OPENAI_SDK_TRANSPORT,
+        reason,
+      });
+      if (scope.activeAttempt) {
+        return;
+      }
       scope.phaseAwaitingSubmission = false;
       const pendingAttempt = scope.events.startAttempt({
         transport: OPENAI_SDK_TRANSPORT,
-        reason: scope.phaseFetchInvocationCount === 1 ? scope.submissionReason : "retry",
+        reason,
       });
       scope.activeAttempt = createModelTransportAttemptAuthority({
         events: scope.events,
@@ -116,6 +126,7 @@ export function createOpenAISdkAccountingFetch(params: {
     wrapGuardedFetch(fetch) {
       return async (input, init) => {
         scope.phaseFetchInvocationCount += 1;
+        scope.currentInvocationAttemptKey = {};
         scope.phaseAwaitingSubmission = true;
         scope.currentInvocationZeroSubmissionObserved = false;
         try {
@@ -138,11 +149,11 @@ export function createOpenAISdkAccountingFetch(params: {
             shouldRetryResponse(response);
           return response;
         } catch (error) {
-          const fetchDispatched = scope.activeAttempt !== undefined;
+          const fetchInvoked = scope.activeAttempt !== undefined;
           const outcome = scope.callerSignal?.aborted ? "aborted" : "failed";
           if (
             scope.fetchProvenance === "dispatch_attested" &&
-            !fetchDispatched &&
+            !fetchInvoked &&
             !scope.currentInvocationZeroSubmissionObserved
           ) {
             scope.currentInvocationZeroSubmissionObserved = true;
@@ -181,6 +192,7 @@ export function setOpenAISdkFetchProvenance(
 export function markOpenAISdkPayloadRecovery(scope: OpenAISdkTransportScope): void {
   scope.submissionReason = "payload_recovery";
   scope.phaseFetchInvocationCount = 0;
+  scope.currentInvocationAttemptKey = undefined;
   scope.phaseAwaitingSubmission = true;
   scope.currentInvocationZeroSubmissionObserved = false;
 }

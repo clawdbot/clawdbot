@@ -34,12 +34,13 @@ function serializeSse(events: Record<string, unknown>[]): string {
     .join("");
 }
 
-function observeTestPhysicalDispatch(
+function observeTestEndpointInvocation(
   options: AiModelFetchOptions | undefined,
   input: RequestInfo | URL,
   init?: RequestInit,
 ): void {
   const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+  options?.onFetchInvocation?.();
   options?.observeFetchDispatch?.({ url, init: init ?? {} });
 }
 
@@ -168,7 +169,7 @@ describe("Anthropic SDK endpoint authority and injected clients", () => {
     );
     configureAiTransportHost({
       buildModelFetch: (_model, _timeout, options?: AiModelFetchOptions) => async (input, init) => {
-        observeTestPhysicalDispatch(options, input, init);
+        observeTestEndpointInvocation(options, input, init);
         return new Response("data: [DONE]\n\n", {
           status: 200,
           headers: { "content-type": "text/event-stream" },
@@ -346,6 +347,7 @@ describe("Anthropic SDK endpoint authority and injected clients", () => {
       buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
         fetch: async () => {
           const dispatch = { url: "https://compatible.example/v1/messages", init: {} };
+          options.onFetchInvocation?.();
           options.observeFetchDispatch?.(dispatch);
           options.onFetchDispatch?.();
           return new Response(body, {
@@ -371,13 +373,21 @@ describe("Anthropic SDK endpoint authority and injected clients", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("ended before message_stop");
-    expect(events).toEqual([
-      expect.objectContaining({
-        type: "attempt",
-        callId: "call-sdk-incomplete-tail",
-        outcome: "failed",
-      }),
-    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "invocation",
+          callId: "call-sdk-incomplete-tail",
+          attemptOrdinal: 1,
+          hopOrdinal: 1,
+        }),
+        expect.objectContaining({
+          type: "attempt",
+          callId: "call-sdk-incomplete-tail",
+          outcome: "failed",
+        }),
+      ]),
+    );
   });
 
   it("keeps SDK token-cache 401 refresh accounting explicitly partial", async () => {
@@ -466,7 +476,7 @@ describe("Anthropic SDK endpoint authority and injected clients", () => {
           resolveProviderEndpointClass: () => "anthropic-public",
         });
         return async (input, init) => {
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           options?.onFetchDispatch?.();
           return new Response("data: [DONE]\n\n", {
             status: 200,
@@ -546,8 +556,10 @@ describe("Anthropic SDK endpoint authority and injected clients", () => {
     configureAiTransportHost({
       buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
         fetch: async () => {
+          options.onFetchInvocation?.();
           options.observeFetchDispatch?.({ url: testCase.hops[0], init: {} });
           options.onFetchDispatch?.();
+          options.onFetchInvocation?.();
           options.observeFetchDispatch?.({ url: testCase.hops[1], init: {} });
           return new Response(testCase.body, {
             status: 200,
@@ -597,6 +609,7 @@ describe("Anthropic SDK endpoint authority and injected clients", () => {
             init: {},
           };
           options.beforeFetchDispatch(official);
+          options.onFetchInvocation?.();
           options.observeFetchDispatch?.(official);
           observedPhysicalUrls.push(official.url);
           options.onFetchDispatch?.();

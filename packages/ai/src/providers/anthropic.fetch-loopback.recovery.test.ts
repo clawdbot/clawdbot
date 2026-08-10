@@ -75,7 +75,7 @@ function createOpenRawSseResponse(params: {
   );
 }
 
-function observeTestPhysicalDispatch(
+function observeTestEndpointInvocation(
   options: AiModelFetchOptions | undefined,
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -114,7 +114,7 @@ async function runTerminalCompletenessCase(params: {
     options: AiModelFetchOptions | undefined,
   ) => ({
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      observeTestPhysicalDispatch(options, input, init);
+      observeTestEndpointInvocation(options, input, init);
       const response = globalThis.fetch(input, init);
       options?.onFetchDispatch?.();
       return await response;
@@ -274,7 +274,7 @@ describe("Anthropic SDK host fetch wiring", () => {
     configureAiTransportHost({
       buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
         fetch: async (input, init) => {
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           options.onFetchDispatch?.();
           return new Response(body, {
             status: 200,
@@ -301,6 +301,13 @@ describe("Anthropic SDK host fetch wiring", () => {
     expect(result.errorMessage).toContain("ended before message_stop");
     expect(events).toEqual([
       expect.objectContaining({
+        type: "invocation",
+        callId: "call-sdk-compatible-clean-eof",
+        ordinal: 1,
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      }),
+      expect.objectContaining({
         type: "attempt",
         callId: "call-sdk-compatible-clean-eof",
         outcome: "failed",
@@ -323,7 +330,7 @@ describe("Anthropic SDK host fetch wiring", () => {
       configureAiTransportHost({
         buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
           fetch: async (input, init) => {
-            observeTestPhysicalDispatch(options, input, init);
+            observeTestEndpointInvocation(options, input, init);
             options.onFetchDispatch?.();
             return createOpenRawSseResponse({
               body: `${createStandaloneDoneBody()}event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ignored"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n`,
@@ -346,6 +353,13 @@ describe("Anthropic SDK host fetch wiring", () => {
       expect(onCancel).toHaveBeenCalledOnce();
       expect(events).toEqual([
         expect.objectContaining({
+          type: "invocation",
+          callId: `call-sdk-done-${endpointClass}`,
+          ordinal: 1,
+          attemptOrdinal: 1,
+          hopOrdinal: 1,
+        }),
+        expect.objectContaining({
           type: "attempt",
           callId: `call-sdk-done-${endpointClass}`,
           outcome: expectedOutcome,
@@ -360,7 +374,7 @@ describe("Anthropic SDK host fetch wiring", () => {
     configureAiTransportHost({
       buildModelFetchWithDispatchAttestation: (_model, _timeout, options) => ({
         fetch: async (input, init) => {
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           options.onFetchDispatch?.();
           return createOpenRawSseResponse({
             body: createStandaloneDoneBody(),
@@ -463,7 +477,7 @@ describe("Anthropic SDK host fetch wiring", () => {
             init: init ?? {},
           };
           options?.beforeFetchDispatch?.(dispatch);
-          observeTestPhysicalDispatch(options, input, init);
+          observeTestEndpointInvocation(options, input, init);
           const response = globalThis.fetch(loopbackUrl, init);
           options?.onFetchDispatch?.();
           return await response;
@@ -501,6 +515,13 @@ describe("Anthropic SDK host fetch wiring", () => {
 
       expect(requestCount).toBe(1);
       expect(events).toEqual([
+        expect.objectContaining({
+          type: "invocation",
+          callId: requestId,
+          ordinal: 1,
+          attemptOrdinal: 1,
+          hopOrdinal: 1,
+        }),
         expect.objectContaining({
           type: "provider_fallback",
           callId: requestId,
@@ -583,7 +604,7 @@ describe("Anthropic SDK host fetch wiring", () => {
           init: init ?? {},
         };
         options?.beforeFetchDispatch?.(dispatch);
-        observeTestPhysicalDispatch(options, input, init);
+        observeTestEndpointInvocation(options, input, init);
         const response = globalThis.fetch(loopbackUrl, init);
         options?.onFetchDispatch?.();
         return await response;
@@ -631,6 +652,13 @@ describe("Anthropic SDK host fetch wiring", () => {
     }
 
     expect(events).toEqual([
+      expect.objectContaining({
+        type: "invocation",
+        callId: "call-sdk-incomplete-fallback",
+        ordinal: 1,
+        attemptOrdinal: 1,
+        hopOrdinal: 1,
+      }),
       expect.objectContaining({
         type: "provider_fallback",
         callId: "call-sdk-incomplete-fallback",

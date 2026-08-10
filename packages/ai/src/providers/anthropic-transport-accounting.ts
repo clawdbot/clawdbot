@@ -135,8 +135,9 @@ export function createAnthropicTransportAccounting(params: {
   let serverFallbackEnabled = params.serverFallbackEnabled;
   let phaseInvocationCount = 0;
   let currentInvocationOrdinal = 0;
-  let invocationPendingDispatch = false;
+  let invocationAwaitingAdmission = false;
   let zeroSubmissionObservedForInvocation = false;
+  let currentInvocationAttemptKey: object | undefined;
   let fetchProvenance: AiModelFetchProvenance | undefined;
   let fallbackCoverageObserved = false;
   let activeAttempt: PendingTransportEvent | undefined;
@@ -273,11 +274,20 @@ export function createAnthropicTransportAccounting(params: {
       if (finalized || fetchProvenance !== "dispatch_attested") {
         return;
       }
-      invocationPendingDispatch = false;
+      const reason = currentInvocationOrdinal === 1 ? context.reason : "retry";
+      state.events.observeInvocation({
+        attemptKey: (currentInvocationAttemptKey ??= {}),
+        transport: ANTHROPIC_TRANSPORT,
+        reason,
+      });
+      if (activeAttempt) {
+        return;
+      }
+      invocationAwaitingAdmission = false;
       zeroSubmissionObservedForInvocation = false;
       activeAttempt = state.events.startAttempt({
         transport: ANTHROPIC_TRANSPORT,
-        reason: currentInvocationOrdinal === 1 ? context.reason : "retry",
+        reason,
       });
     },
     wrapFetch(fetch, provenance) {
@@ -289,7 +299,8 @@ export function createAnthropicTransportAccounting(params: {
             semanticCoverageReasons.add("transport_submission_authority_partial");
           }
           currentInvocationOrdinal = ++phaseInvocationCount;
-          invocationPendingDispatch = true;
+          currentInvocationAttemptKey = {};
+          invocationAwaitingAdmission = true;
           zeroSubmissionObservedForInvocation = false;
           activeAttempt = undefined;
         }
@@ -298,7 +309,7 @@ export function createAnthropicTransportAccounting(params: {
           if (finalized) {
             return response;
           }
-          invocationPendingDispatch = false;
+          invocationAwaitingAdmission = false;
           const attempt = takeActiveAttempt();
           if (attempt) {
             if (response.ok) {
@@ -313,8 +324,8 @@ export function createAnthropicTransportAccounting(params: {
           if (finalized) {
             throw error;
           }
-          const failedBeforeDispatch = invocationPendingDispatch;
-          invocationPendingDispatch = false;
+          const failedBeforeInvocationAdmission = invocationAwaitingAdmission;
+          invocationAwaitingAdmission = false;
           const attempt = takeActiveAttempt();
           if (attempt) {
             const outcome = resolveTransportOutcome(error, options?.signal);
@@ -322,7 +333,7 @@ export function createAnthropicTransportAccounting(params: {
             observeFallbackCoverage();
           } else if (
             fetchProvenance === "dispatch_attested" &&
-            failedBeforeDispatch &&
+            failedBeforeInvocationAdmission &&
             !zeroSubmissionObservedForInvocation
           ) {
             zeroSubmissionObservedForInvocation = true;
@@ -424,10 +435,10 @@ export function createAnthropicTransportAccounting(params: {
               terminalUsage: provisionalTerminalUsage,
             })
           : resolution;
-      if (invocationPendingDispatch) {
+      if (invocationAwaitingAdmission) {
         submissionAuthorityPartial = true;
         semanticCoverageReasons.add("transport_submission_authority_partial");
-        invocationPendingDispatch = false;
+        invocationAwaitingAdmission = false;
       }
       const hadUnsettledResponse = Boolean(activeAttempt || pendingResponseAttempt);
       const responseCouldContainFallback =

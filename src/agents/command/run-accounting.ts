@@ -106,11 +106,14 @@ export async function runWithAgentCommandAccounting<T>(
   const accounting = createRunAccountingAccumulator();
   return await activeCommandRunAccounting.run(accounting, async () => {
     try {
-      return await runWithProviderTransportAccountingObserver(
+      const result = await runWithProviderTransportAccountingObserver(
         accounting.providerTransportObserver,
         () => run(accounting),
       );
+      accounting.seal();
+      return result;
     } catch (error) {
+      accounting.seal();
       if ((typeof error === "object" && error !== null) || typeof error === "function") {
         bindAgentCommandRunAccounting(error, accounting.project());
       }
@@ -370,6 +373,9 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
     },
     observeCodeModeFinalQuiescence(finalQuiescence) {
       state.codeModeFinalQuiescence = finalQuiescence;
+    },
+    seal() {
+      state.providerTransport.seal();
     },
     project(): AgentCommandRunAccountingSnapshot {
       const providerTransport = state.providerTransport.project();

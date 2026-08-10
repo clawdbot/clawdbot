@@ -22,7 +22,7 @@ afterEach(() => {
   configureAiTransportHost(initialHost);
 });
 
-describe("hostless model fetch dispatch accounting", () => {
+describe("hostless model fetch invocation accounting", () => {
   it("preserves the legacy callable contract with explicit undefined options", () => {
     const hostFetch = vi.fn<typeof fetch>();
     const legacyBuilder = vi.fn(() => hostFetch);
@@ -74,7 +74,7 @@ describe("hostless model fetch dispatch accounting", () => {
 
     expect(result).toMatchObject({
       fetch: hostFetch,
-      physicalDispatchAttested: true,
+      invocationEndpointAttested: true,
       provenance: "dispatch_attested",
     });
   });
@@ -182,7 +182,7 @@ describe("hostless model fetch dispatch accounting", () => {
     });
 
     const result = buildGuardedModelFetchResult(model, undefined, { onFetchDispatch });
-    expect(result.physicalDispatchAttested).toBe(false);
+    expect(result.invocationEndpointAttested).toBe(false);
     expect(result.provenance).toBeUndefined();
     const response = await result.fetch("https://api.openai.com/v1/responses");
 

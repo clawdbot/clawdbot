@@ -67,15 +67,20 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   init?: RequestInit;
   /**
-   * Runs for every physical hop after SSRF/DNS preflight and immediately
-   * before the underlying fetch. Failure blocks dispatch.
+   * Runs for each network invocation after SSRF/DNS preflight and immediately
+   * before the underlying fetch. Failure blocks the invocation.
    */
   beforeFetchDispatch?: (params: { url: string; init: RequestInit }) => void;
   /**
-   * Observes every physical hop after blocking policy succeeds and the fetch
-   * invocation returns normally. Observer failure is isolated from the request.
+   * Observes each admitted fetch invocation and endpoint after synchronous
+   * preflight. It does not attest byte-level network egress.
    */
   observeFetchDispatch?: (params: { url: string; init: RequestInit }) => void;
+  /**
+   * Observes each admitted fetch invocation without exposing request material.
+   * It does not attest byte-level network egress.
+   */
+  onFetchInvocation?: () => void;
   /**
    * Fires once after the first fetch invocation returns normally. Redirect
    * hops remain one transport attempt.
@@ -675,16 +680,21 @@ async function fetchWithSsrFGuardInternal(
         ? invokeRuntimeDispatcherFetch(parsedUrl.toString(), init)
         : defaultFetch(parsedUrl.toString(), init);
       try {
+        params.onFetchInvocation?.();
+      } catch {
+        // Invocation accounting is observational and must never alter provider traffic.
+      }
+      try {
         params.observeFetchDispatch?.({ url: parsedUrl.toString(), init });
       } catch {
-        // Dispatch observation is diagnostic and must never alter provider traffic.
+        // Invocation observation is diagnostic and must never alter provider traffic.
       }
       if (!didNotifyFetchDispatch) {
         didNotifyFetchDispatch = true;
         try {
           params.onFetchDispatch?.();
         } catch {
-          // Transport accounting is observational and must never block dispatch.
+          // Transport accounting is observational and must never block the request.
         }
       }
       const response = await responsePromise;

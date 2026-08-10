@@ -38,6 +38,7 @@ import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { buildGuardedModelFetchResult } from "../transports/host-policy.js";
 import {
+  createFetchInvocationCompatibilityObservers,
   createModelTransportAttemptAuthority,
   createModelTransportEventScope,
   type ModelTransportAttemptAuthority,
@@ -537,9 +538,12 @@ export const streamOpenAICodexResponses: StreamFunction<
         sseHeaders.set("content-encoding", "zstd");
       }
       const sseBody: BodyInit = compressedBody ?? bodyJson;
-      let onSseFetchDispatch: (() => void) | undefined;
+      let observeSseFetchInvocation: (() => void) | undefined;
+      const sseInvocationObservers = createFetchInvocationCompatibilityObservers(() =>
+        observeSseFetchInvocation?.(),
+      );
       const guardedSseFetch = buildGuardedModelFetchResult(model, undefined, {
-        onFetchDispatch: () => onSseFetchDispatch?.(),
+        ...sseInvocationObservers,
       });
       sseSubmissionAttested = guardedSseFetch.provenance === "dispatch_attested";
       const sseFetch = guardedSseFetch.fetch;
@@ -561,14 +565,24 @@ export const streamOpenAICodexResponses: StreamFunction<
         let attemptResponse: Response;
         let errorText: string;
         let attemptAuthority: ModelTransportAttemptAuthority | undefined;
-        onSseFetchDispatch = () => {
-          if (guardedSseFetch.provenance !== "dispatch_attested" || attemptAuthority) {
+        const invocationAttemptKey = {};
+        observeSseFetchInvocation = () => {
+          if (guardedSseFetch.provenance !== "dispatch_attested") {
+            return;
+          }
+          const reason =
+            attempt === 0 ? (sseStartsAfterFallback ? "transport_fallback" : "initial") : "retry";
+          transportAccounting.observeInvocation({
+            attemptKey: invocationAttemptKey,
+            transport: "native-codex-sse",
+            reason,
+          });
+          if (attemptAuthority) {
             return;
           }
           const pendingAttempt = transportAccounting.startAttempt({
             transport: "native-codex-sse",
-            reason:
-              attempt === 0 ? (sseStartsAfterFallback ? "transport_fallback" : "initial") : "retry",
+            reason,
           });
           attemptAuthority = createModelTransportAttemptAuthority({
             events: transportAccounting,
@@ -661,7 +675,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           }
           throw lastError;
         } finally {
-          onSseFetchDispatch = undefined;
+          observeSseFetchInvocation = undefined;
         }
 
         if (attempt < maxRetries && isRetryableError(attemptResponse.status, errorText)) {
@@ -2312,6 +2326,7 @@ async function processWebSocketStream(
     });
     const requestFrame = JSON.stringify({ type: "response.create", ...requestBody });
     responseStream = createWebSocketEventStream(socket, options?.signal);
+    const invocationAttemptKey = {};
     await submitWebSocketFrame(
       acquired,
       requestFrame,
@@ -2319,6 +2334,11 @@ async function processWebSocketStream(
       responseStream.firstValidEvent,
       () => {
         onSubmitted();
+        transportAccounting.observeInvocation({
+          attemptKey: invocationAttemptKey,
+          transport: "native-codex-websocket",
+          reason: attemptReason,
+        });
         const pendingAttempt = transportAccounting.startAttempt({
           transport: "native-codex-websocket",
           reason: attemptReason,
