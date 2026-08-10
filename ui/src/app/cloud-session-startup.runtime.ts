@@ -45,7 +45,7 @@ type CloudStartupOwner = Pick<
 type CloudStartupEntry = {
   recovery: CloudSessionRecovery | null;
   readonly owner: CloudStartupOwner;
-  readonly persistRecovery: boolean;
+  persistRecovery: boolean;
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
   state: "pending" | "sending" | "failed";
@@ -125,16 +125,15 @@ function buildInitialUserMessage(
   };
 }
 
-export function createApplicationCloudStartupRuntime(
+export default function createApplicationCloudStartupRuntime(
   params: ApplicationCloudStartupDependencies,
-  options: { reconcileCurrentSnapshot?: boolean } = {},
 ): ApplicationCloudStartupRuntime {
   const listeners = new Set<() => void>();
   const entries = new Map<string, CloudStartupEntry>();
-  const scopeOwners = new Map<string, CloudStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
   let lastRecoveryClient: object | null = null;
   let lastRecoveryKey = "";
+  let disposed = false;
 
   const publish = () => {
     for (const listener of listeners) {
@@ -151,11 +150,8 @@ export function createApplicationCloudStartupRuntime(
     return null;
   };
 
-  const scopeKey = (owner: CloudStartupOwner) => `${owner.gatewayUrl}\0${owner.recoveryScope}`;
-
   const ownsEntry = (entry: CloudStartupEntry) =>
-    findEntry(entry.owner.sessionKey)?.entry === entry &&
-    scopeOwners.get(scopeKey(entry.owner)) === entry;
+    findEntry(entry.owner.sessionKey)?.entry === entry;
 
   const lifecycleCurrent = (entry: CloudStartupEntry) => {
     const snapshot = params.gateway.snapshot;
@@ -191,9 +187,6 @@ export function createApplicationCloudStartupRuntime(
       return;
     }
     entries.delete(found.key);
-    if (scopeOwners.get(scopeKey(entry.owner)) === entry) {
-      scopeOwners.delete(scopeKey(entry.owner));
-    }
     if (notify) {
       publish();
     }
@@ -234,12 +227,13 @@ export function createApplicationCloudStartupRuntime(
           entry.owner.recoveryScope,
           entry.owner.sessionKey,
         ),
-      setRecoveryPhase: (phase) => {
+      setRecoveryPhase: (phase, durable) => {
         if (phase !== "sending") {
           return;
         }
         const sendingRecovery = { ...currentRecovery, phase };
         entry.recovery = sendingRecovery;
+        entry.persistRecovery = durable;
         currentRecovery = sendingRecovery;
         setEntryState(entry, "sending");
       },
@@ -323,7 +317,6 @@ export function createApplicationCloudStartupRuntime(
       state: "pending",
     };
     entries.set(owner.sessionKey, entry);
-    scopeOwners.set(scopeKey(owner), entry);
     publish();
     run(entry, input.recovery, input.recovering);
   };
@@ -356,9 +349,12 @@ export function createApplicationCloudStartupRuntime(
     start({ recovery, persistRecovery: true, recovering: true, createdAt: Date.now() });
   };
   const stopGateway = params.gateway.subscribe(handleGatewaySnapshot);
-  if (options.reconcileCurrentSnapshot !== false) {
-    handleGatewaySnapshot(params.gateway.snapshot);
-  }
+  // Let the facade drain queued fresh Starts before durable recovery claims the same session.
+  queueMicrotask(() => {
+    if (!disposed) {
+      handleGatewaySnapshot(params.gateway.snapshot);
+    }
+  });
 
   return {
     get(sessionKey) {
@@ -412,10 +408,10 @@ export function createApplicationCloudStartupRuntime(
       return () => listeners.delete(listener);
     },
     dispose() {
+      disposed = true;
       connection.dispose();
       stopGateway();
       entries.clear();
-      scopeOwners.clear();
       listeners.clear();
     },
   };

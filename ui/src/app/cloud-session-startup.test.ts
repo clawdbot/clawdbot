@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
+  readCloudSessionRecovery,
   type CloudSessionRecovery,
   writeCloudSessionRecovery,
 } from "../lib/sessions/cloud-recovery.ts";
@@ -144,7 +145,7 @@ describe("application cloud startup", () => {
     vi.unstubAllGlobals();
   });
 
-  it("bridges pre-load listeners and resolves start after runtime registration", async () => {
+  it("publishes pending status synchronously and bridges it into the loaded runtime", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
@@ -154,23 +155,22 @@ describe("application cloud startup", () => {
     const listener = vi.fn();
     startup.subscribe(listener);
 
-    const starting = startup.start(input);
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    moduleLoad.resolve({ createApplicationCloudStartupRuntime: factory });
-    await starting;
-
-    expect(factory).toHaveBeenCalledWith(expect.anything(), {
-      reconcileCurrentSnapshot: false,
-    });
+    startup.start(input);
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
     expect(listener).toHaveBeenCalledOnce();
+    moduleLoad.resolve({ default: factory });
+    await flush();
+
+    expect(factory).toHaveBeenCalledWith(expect.anything());
+    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
+    expect(listener).toHaveBeenCalledTimes(2);
     fake.setStatus({
       sessionKey: input.recovery.sessionKey,
       phase: "sending",
       startedAt: input.createdAt,
     });
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("sending");
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(3);
     startup.dispose();
   });
 
@@ -184,15 +184,52 @@ describe("application cloud startup", () => {
     const listener = vi.fn();
     startup.subscribe(listener);
 
-    const starting = startup.start(input);
+    startup.start(input);
+    expect(listener).toHaveBeenCalledOnce();
     startup.dispose();
-    moduleLoad.resolve({ createApplicationCloudStartupRuntime: factory });
-    await starting;
+    moduleLoad.resolve({ default: factory });
+    await flush();
 
     expect(factory).not.toHaveBeenCalled();
     expect(fake.runtime.start).not.toHaveBeenCalled();
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledOnce();
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
+  });
+
+  it("bounds coalesced starts and fences an older same-session completion", async () => {
+    const moduleLoad = createDeferred<RuntimeModule>();
+    const fake = createFakeRuntime();
+    const loader = vi.fn(() => moduleLoad.promise);
+    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const starts: CloudStartupInput[] = [];
+    for (let index = 0; index < 32; index += 1) {
+      const next = {
+        ...input,
+        recovery: { ...input.recovery, sessionKey: `agent:cloud:bounded-${index}` },
+      };
+      starts.push(next);
+      startup.start(next);
+    }
+    const replaced = {
+      ...input,
+      recovery: { ...input.recovery, sessionKey: "agent:cloud:durable", messageId: "replaced" },
+    };
+    const replacement = {
+      ...input,
+      recovery: { ...input.recovery, sessionKey: "agent:cloud:durable", messageId: "replacement" },
+    };
+    startup.start(replaced);
+    startup.start(replacement);
+
+    expect(loader).toHaveBeenCalledOnce();
+    expect(startup.get(starts[0]!.recovery.sessionKey)).toBeNull();
+    moduleLoad.resolve({ default: () => fake.runtime });
+    await flush();
+
+    expect(fake.runtime.start).toHaveBeenCalledTimes(32);
+    expect(fake.runtime.start).not.toHaveBeenCalledWith(replaced);
+    expect(fake.runtime.start).toHaveBeenCalledWith(replacement);
+    startup.dispose();
   });
 
   it("keeps get and retry inert before any runtime load", async () => {
@@ -206,28 +243,35 @@ describe("application cloud startup", () => {
     startup.dispose();
   });
 
-  it("resumes recovery only for the current ready recovery scope", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi.fn(async () => ({ createApplicationCloudStartupRuntime: factory }));
-    const { startup, client } = harness(vi.fn(), { loadRuntime: loader });
+  it("prewarms the runtime on connection even when recovery storage is empty", async () => {
+    const request = vi.fn();
+    const loader = vi.fn(() => import("./cloud-session-startup.runtime.ts"));
+    const { startup } = harness(request, { loadRuntime: loader });
+    sessionStorage.clear();
 
-    client.recoveryScopeReady = false;
-    startup.resumeRecovery();
-    client.recoveryScopeReady = true;
-    client.recoveryScope = "";
-    startup.resumeRecovery();
-    client.recoveryScope = "principal-b";
-    startup.resumeRecovery();
-    expect(loader).not.toHaveBeenCalled();
-
-    client.recoveryScope = "principal-a";
     startup.resumeRecovery();
     await flush();
+
     expect(loader).toHaveBeenCalledOnce();
-    expect(factory).toHaveBeenCalledWith(expect.anything(), {
-      reconcileCurrentSnapshot: true,
-    });
+    expect(request).not.toHaveBeenCalled();
+    startup.dispose();
+  });
+
+  it("lets Start own recovery when it arrives during connection prewarm", async () => {
+    const moduleLoad = createDeferred<RuntimeModule>();
+    const fake = createFakeRuntime();
+    const factory = vi.fn(() => fake.runtime);
+    const loader = vi.fn(() => moduleLoad.promise);
+    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+
+    startup.resumeRecovery();
+    startup.start(input);
+    moduleLoad.resolve({ default: factory });
+    await flush();
+
+    expect(loader).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledWith(expect.anything());
+    expect(fake.runtime.start).toHaveBeenCalledWith(input);
     startup.dispose();
   });
 
@@ -237,7 +281,7 @@ describe("application cloud startup", () => {
     const loader = vi
       .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ createApplicationCloudStartupRuntime: factory });
+      .mockResolvedValueOnce({ default: factory });
     const { startup } = harness(vi.fn(), { loadRuntime: loader });
 
     startup.resumeRecovery();
@@ -251,29 +295,55 @@ describe("application cloud startup", () => {
     startup.dispose();
   });
 
-  it("rejects a runtime load and fresh-imports on the next start", async () => {
+  it("fresh-imports on Start after a connection prewarm rejection", async () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi
       .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
       .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ createApplicationCloudStartupRuntime: factory });
+      .mockResolvedValueOnce({ default: factory });
+    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+
+    startup.resumeRecovery();
+    await flush();
+    expect(loader).toHaveBeenCalledOnce();
+
+    startup.start(input);
+    await flush();
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledWith(expect.anything());
+    expect(fake.runtime.start).toHaveBeenCalledWith(input);
+    startup.dispose();
+  });
+
+  it("surfaces a runtime load failure and fresh-imports on retry", async () => {
+    const fake = createFakeRuntime();
+    const factory = vi.fn(() => fake.runtime);
+    const loader = vi
+      .fn<NonNullable<Parameters<typeof createApplicationCloudStartup>[1]>>()
+      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
+      .mockResolvedValueOnce({ default: factory });
     const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
     const listener = vi.fn();
     startup.subscribe(listener);
 
-    await expect(startup.start(input)).rejects.toThrow("cloud startup chunk unavailable");
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    expect(listener).not.toHaveBeenCalled();
-
-    await startup.start(input);
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledWith(expect.anything(), {
-      reconcileCurrentSnapshot: false,
+    startup.start(input);
+    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
+    await flush();
+    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+      phase: "failed",
+      error: "cloud startup chunk unavailable",
+      retryable: true,
     });
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    startup.retry(input.recovery.sessionKey);
+    await flush();
+    expect(loader).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledWith(expect.anything());
     expect(fake.runtime.start).toHaveBeenCalledWith(input);
     expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledTimes(4);
     startup.dispose();
   });
 
@@ -320,8 +390,14 @@ describe("application cloud startup", () => {
     const { startup, input, client, sessions, state, initialUserMessage } = harness(request);
     const published = vi.fn();
     startup.subscribe(published);
-    await startup.start(input);
+    startup.start(input);
     expect(published).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(
+        1,
+      );
+    });
+    const publishedBeforePlacementChanges = published.mock.calls.length;
 
     for (const [phase, generation] of [
       ["requested", 1],
@@ -336,17 +412,18 @@ describe("application cloud startup", () => {
       expect(startup.get(input.recovery.sessionKey)?.phase).toBe(phase);
       expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
     }
-    expect(published).toHaveBeenCalledTimes(1);
+    expect(published).toHaveBeenCalledTimes(publishedBeforePlacementChanges);
     expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
 
     dispatch.resolve({ placement: placement("active", 5) });
-    await flush();
-    expect(request).toHaveBeenCalledWith("sessions.send", {
-      key: input.recovery.sessionKey,
-      agentId: input.recovery.agentId,
-      message: input.recovery.message,
-      attachments: undefined,
-      idempotencyKey: input.recovery.messageId,
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.send", {
+        key: input.recovery.sessionKey,
+        agentId: input.recovery.agentId,
+        message: input.recovery.message,
+        attachments: undefined,
+        idempotencyKey: input.recovery.messageId,
+      });
     });
     expect(startup.get(input.recovery.sessionKey)).toBeNull();
     expect(initialUserMessage.read(input.recovery.sessionKey, client)).toMatchObject({
@@ -354,6 +431,74 @@ describe("application cloud startup", () => {
       __openclaw: { idempotencyKey: "message-stable:user", seq: 7 },
     });
     expect(sessions.refresh).not.toHaveBeenCalled();
+    startup.dispose();
+  });
+
+  it("advances two sessions in one recovery scope without replacing either owner", async () => {
+    const firstDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const secondDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const request = vi.fn((method: string, params?: unknown) => {
+      const key = (params as { key?: string } | undefined)?.key;
+      if (method === "sessions.dispatch") {
+        return key === "agent:cloud:startup" ? firstDispatch.promise : secondDispatch.promise;
+      }
+      if (method === "sessions.send") {
+        return Promise.resolve({ messageSeq: key === "agent:cloud:startup" ? 7 : 8 });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const { startup, input, client, initialUserMessage } = harness(request);
+    const secondInput = {
+      ...input,
+      recovery: {
+        ...input.recovery,
+        sessionKey: "agent:cloud:second",
+        messageId: "message-second",
+        message: "start the second task",
+      },
+    };
+
+    startup.start(input);
+    startup.start(secondInput);
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(
+        2,
+      );
+    });
+    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("requested");
+    expect(startup.get(secondInput.recovery.sessionKey)?.phase).toBe("pending");
+    expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.abort")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "environments.destroy")).toHaveLength(
+      0,
+    );
+
+    firstDispatch.resolve({ placement: placement("active", 2) });
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    });
+    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toMatchObject({
+      sessionKey: secondInput.recovery.sessionKey,
+      messageId: secondInput.recovery.messageId,
+      phase: "dispatching",
+    });
+    expect(initialUserMessage.read(input.recovery.sessionKey, client)).not.toBeNull();
+    expect(startup.get(secondInput.recovery.sessionKey)).not.toBeNull();
+
+    secondDispatch.resolve({ placement: placement("active", 3) });
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
+    });
+    const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
+    expect(sends.map(([, params]) => (params as { key: string }).key)).toEqual([
+      input.recovery.sessionKey,
+      secondInput.recovery.sessionKey,
+    ]);
+    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toBeNull();
+    expect(initialUserMessage.read(secondInput.recovery.sessionKey, client)).not.toBeNull();
+    for (const method of ["sessions.delete", "sessions.abort", "environments.destroy"]) {
+      expect(request.mock.calls.filter(([candidate]) => candidate === method)).toHaveLength(0);
+    }
     startup.dispose();
   });
 
@@ -371,12 +516,13 @@ describe("application cloud startup", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const { startup, input, sessions } = harness(request);
-    await startup.start(input);
-    await flush();
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      error: "cloud profile was removed",
-      retryable: false,
+    startup.start(input);
+    await vi.waitFor(() => {
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        error: "cloud profile was removed",
+        retryable: false,
+      });
     });
     expect(sessions.refresh).toHaveBeenCalledOnce();
     expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
@@ -403,16 +549,16 @@ describe("application cloud startup", () => {
     });
     const { startup, input } = harness(request);
     sessionStorage.clear();
-    await startup.start({ ...input, persistRecovery: false });
-    await flush();
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      retryable: true,
+    startup.start({ ...input, persistRecovery: false });
+    await vi.waitFor(() => {
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        retryable: true,
+      });
     });
 
     startup.retry(input.recovery.sessionKey);
-    await flush();
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
+    await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)).toBeNull());
     const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
     expect(sends).toHaveLength(2);
     expect(sends.map(([, payload]) => payload)).toEqual([
@@ -438,8 +584,10 @@ describe("application cloud startup", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const { startup, input, client, gateway } = harness(request);
-    await startup.start(input);
-    await flush();
+    startup.start(input);
+    await vi.waitFor(() => {
+      expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed");
+    });
 
     const storage = sessionStorage;
     const storageRead = vi.fn(storage.getItem.bind(storage));
@@ -449,7 +597,9 @@ describe("application cloud startup", () => {
       removeItem: storage.removeItem.bind(storage),
     });
     startup.retry(input.recovery.sessionKey);
-    await flush();
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
+    });
     expect(storageRead).toHaveBeenCalledWith(
       "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",
     );
@@ -487,14 +637,15 @@ describe("application cloud startup", () => {
     } as GatewaySessionRow;
     vi.mocked(sessions.refresh).mockRejectedValueOnce(new Error("refresh unavailable"));
 
-    await startup.start(input);
-    await flush();
-    expect(sessions.refresh).toHaveBeenCalledOnce();
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      error: "send response lost",
-      retryable: true,
+    startup.start(input);
+    await vi.waitFor(() => {
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        error: "send response lost",
+        retryable: true,
+      });
     });
+    expect(sessions.refresh).toHaveBeenCalledOnce();
     startup.dispose();
   });
 
@@ -507,12 +658,16 @@ describe("application cloud startup", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const { startup, input } = harness(request);
-    await startup.start({
+    startup.start({
       ...input,
       recovery: { ...input.recovery, sessionKey: "agent:main:main" },
     });
-    await startup.start({ ...input, recovery: { ...input.recovery, sessionKey: "main" } });
-    expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(1);
+    startup.start({ ...input, recovery: { ...input.recovery, sessionKey: "main" } });
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(
+        1,
+      );
+    });
     startup.dispose();
   });
 });

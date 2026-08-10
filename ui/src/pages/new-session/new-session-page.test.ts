@@ -115,7 +115,7 @@ describe("new session draft route ownership", () => {
     expect(page.message).toBe("");
   });
 
-  it("keeps cloud recovery on a lazy-runtime failure and retries the same identity", async () => {
+  it("hands cloud startup to the application owner and navigates immediately", async () => {
     window.history.replaceState({}, "", "/new");
     const page = document.createElement(
       "openclaw-new-session-page",
@@ -126,10 +126,12 @@ describe("new session draft route ownership", () => {
       key: String(params.key),
       initialRun: { status: "idle" as const },
     }));
-    const start = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce(undefined);
+    const start = vi.fn(
+      (_input: Parameters<ApplicationContext["cloudStartup"]["start"]>[0]) =>
+        new Promise<void>(() => {
+          // The application owner keeps loading after this route commits.
+        }),
+    );
     const navigate = vi.fn();
     const setSessionKey = vi.fn();
     const selectAgent = vi.fn();
@@ -171,28 +173,17 @@ describe("new session draft route ownership", () => {
     ]);
 
     await page.submit();
-    const retained = page.pendingCloud.capture();
-    expect(page.error).toContain("cloud startup chunk unavailable");
-    expect(page.message).toBe("keep this cloud task");
-    expect(page.attachmentDraft.attachments).toHaveLength(1);
-    expect(retained).toMatchObject({
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0]?.[0].recovery).toMatchObject({
       message: "keep this cloud task",
       attachments: [{ fileName: "note.txt", content: "SGk=" }],
       phase: "dispatching",
     });
-    expect(navigate).not.toHaveBeenCalled();
+    expect(page.pendingCloud.capture()).toBeNull();
+    expect(page.attachmentDraft.attachments).toHaveLength(0);
     expect(page.submitting).toBe(false);
-    expect(window.location.pathname).toBe("/new");
-
-    await page.submit();
     expect(createResult).toHaveBeenCalledOnce();
-    expect(start).toHaveBeenCalledTimes(2);
-    expect(start.mock.calls[1]?.[0].recovery).toMatchObject({
-      sessionKey: retained?.sessionKey,
-      messageId: retained?.messageId,
-      message: retained?.message,
-    });
-    expect(setSessionKey).toHaveBeenCalledWith(retained?.sessionKey);
+    expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
     expect(selectAgent).toHaveBeenCalledWith("cloud");
     expect(navigate).toHaveBeenCalledOnce();
   });

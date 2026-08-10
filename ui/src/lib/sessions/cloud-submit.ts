@@ -10,6 +10,7 @@ import {
   deleteRecoveredCloudDraftSession,
   startCloudInitialTurn,
 } from "./cloud-startup.ts";
+import { areUiSessionKeysEquivalent } from "./session-key.ts";
 
 export type CloudDraftAdvanceResult =
   | { status: "started"; messageId: string; messageSeq?: number }
@@ -30,7 +31,7 @@ export async function advanceCloudDraftSession(params: {
   isLifecycleCurrent: () => boolean;
   ownsRecovery: () => boolean;
   clearRecovery: (retirement: CloudRecoveryRetirement) => void;
-  setRecoveryPhase: (phase: CloudSessionRecovery["phase"]) => void;
+  setRecoveryPhase: (phase: CloudSessionRecovery["phase"], durable: boolean) => void;
 }): Promise<CloudDraftAdvanceResult> {
   const persistRecovery = params.persistRecovery !== false;
   const recovery = params.recovery;
@@ -99,12 +100,22 @@ export async function advanceCloudDraftSession(params: {
         return true;
       }
       if (!persistRecovery) {
-        params.setRecoveryPhase("sending");
+        params.setRecoveryPhase("sending", false);
+        return true;
+      }
+      const currentRecovery = readCloudSessionRecovery(recovery.gatewayUrl, recovery.recoveryScope);
+      if (
+        currentRecovery &&
+        !areUiSessionKeysEquivalent(currentRecovery.sessionKey, recovery.sessionKey)
+      ) {
+        // The scope stores only its newest startup. Keep this older operation in memory so it can
+        // send without replacing the newer durable recovery owner.
+        params.setRecoveryPhase("sending", false);
         return true;
       }
       const persisted = writeCloudSessionRecovery({ ...recovery, phase: "sending" });
       if (persisted) {
-        params.setRecoveryPhase("sending");
+        params.setRecoveryPhase("sending", true);
       }
       return persisted;
     },

@@ -10,6 +10,7 @@ import {
   controlUiSessionUrl,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
+  expectPendingCloudStartupBeforeRuntime,
   installMockGateway,
   pastePng,
   pollLocatorText,
@@ -207,18 +208,12 @@ suite.define(() => {
       });
       expect(create.params).not.toHaveProperty("attachments");
       await expect.poll(() => runtimeRequested).toBe(true);
-      expect(new URL(page.url()).pathname).toContain("/new");
-      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      await expect
-        .poll(() => page.locator(".new-session-page__scroll").getAttribute("aria-busy"))
-        .toBe("true");
+      const startupStatus = await expectPendingCloudStartupBeforeRuntime(page, gateway, sessionKey);
       runtimeLoad.resolve();
       await gateway.waitForRequest("sessions.dispatch");
-      await waitForCommittedChatRoute(page);
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
         .length;
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      const startupStatus = page.locator('.chat-cloud-startup[role="status"]');
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
         .toBe(true);

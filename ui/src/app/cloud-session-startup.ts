@@ -1,4 +1,3 @@
-import { hasCloudSessionRecovery } from "../lib/sessions/cloud-recovery-storage-key.ts";
 import type { CloudSessionRecovery } from "../lib/sessions/cloud-recovery.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -42,7 +41,7 @@ export type ApplicationCloudStartupRuntime = {
 };
 
 export type ApplicationCloudStartup = Omit<ApplicationCloudStartupRuntime, "start"> & {
-  start: (input: CloudStartupInput) => Promise<void>;
+  start: (input: CloudStartupInput) => void;
   resumeRecovery: () => void;
 };
 
@@ -53,87 +52,94 @@ export function createApplicationCloudStartup(
   dependencies: ApplicationCloudStartupDependencies,
   loadRuntime: CloudStartupRuntimeLoader = () => import("./cloud-session-startup.runtime.ts"),
 ): ApplicationCloudStartup {
+  const preRuntimeEntries = new Map<string, CloudStartupInput>();
+  let activeDependencies: ApplicationCloudStartupDependencies | null = dependencies;
+  let runtime: ApplicationCloudStartupRuntime | undefined;
+  let runtimeLoad: Promise<void> | undefined;
+  let runtimeError: string | undefined;
   const listeners = new Set<() => void>();
-  let runtime: ApplicationCloudStartupRuntime | null = null;
-  let runtimeLoad: Promise<ApplicationCloudStartupRuntime | null> | null = null;
-  let disposed = false;
 
   const publish = () => {
-    listeners.forEach((listener) => listener());
+    for (const listener of listeners) {
+      listener();
+    }
   };
 
-  const ensureRuntime = (
-    reconcileCurrentSnapshot = true,
-  ): Promise<ApplicationCloudStartupRuntime | null> => {
-    if (runtime) {
-      return Promise.resolve(runtime);
-    }
-    if (runtimeLoad) {
-      return runtimeLoad;
-    }
-    runtimeLoad = loadRuntime()
-      .then(({ createApplicationCloudStartupRuntime }) => {
-        if (disposed) {
-          return null;
+  const ensureRuntime = (): Promise<void> =>
+    (runtimeLoad ??= loadRuntime().then(
+      ({ default: createApplicationCloudStartupRuntime }) => {
+        if (!activeDependencies) {
+          return;
         }
-        const created = createApplicationCloudStartupRuntime(dependencies, {
-          reconcileCurrentSnapshot,
-        });
-        runtime = created;
-        created.subscribe(publish);
-        if (reconcileCurrentSnapshot) {
-          publish();
+        runtime = createApplicationCloudStartupRuntime(activeDependencies);
+        runtime.subscribe(publish);
+        // Runtime starts publish synchronously, keeping each delete/start handoff observable.
+        for (const [sessionKey, input] of preRuntimeEntries) {
+          preRuntimeEntries.delete(sessionKey);
+          runtime.start(input);
         }
-        return created;
-      })
-      .catch((error: unknown) => {
-        runtimeLoad = null;
-        throw error;
-      });
-    return runtimeLoad;
+      },
+      (error: unknown) => {
+        runtimeLoad = undefined;
+        runtimeError = error instanceof Error ? error.message : String(error);
+        publish();
+      },
+    ));
+
+  const start = (input: CloudStartupInput) => {
+    if (!activeDependencies || runtime) {
+      return runtime?.start(input);
+    }
+    const sessionKey = input.recovery.sessionKey;
+    runtimeError = undefined;
+    preRuntimeEntries.delete(sessionKey);
+    preRuntimeEntries.set(sessionKey, input);
+    // Each start adds at most one entry, so one oldest-entry deletion maintains the bound.
+    if (preRuntimeEntries.size > 32) {
+      preRuntimeEntries.delete(preRuntimeEntries.keys().next().value!);
+    }
+    publish();
+    void ensureRuntime();
   };
 
   return {
     get(sessionKey) {
-      return runtime?.get(sessionKey) ?? null;
+      const input = preRuntimeEntries.get(sessionKey);
+      return (
+        runtime?.get(sessionKey) ??
+        (input
+          ? {
+              sessionKey,
+              phase: runtimeError ? "failed" : "pending",
+              startedAt: input.createdAt,
+              error: runtimeError,
+              retryable: Boolean(runtimeError),
+            }
+          : null)
+      );
     },
-    async start(input) {
-      const target = await ensureRuntime(false);
-      if (!target || disposed) {
-        return;
-      }
-      target.start(input);
-    },
+    start,
     retry(sessionKey) {
-      runtime?.retry(sessionKey);
+      const input = preRuntimeEntries.get(sessionKey);
+      if (input) {
+        start(input);
+      } else {
+        runtime?.retry(sessionKey);
+      }
     },
     resumeRecovery() {
-      const snapshot = dependencies.gateway.snapshot;
-      const recoveryScope = snapshot.client?.recoveryScope;
-      if (
-        !snapshot.client?.recoveryScopeReady ||
-        !recoveryScope ||
-        !hasCloudSessionRecovery(dependencies.gateway.connection.gatewayUrl, recoveryScope)
-      ) {
-        return;
-      }
-      void ensureRuntime().catch(() => {
-        // Keep the durable recovery for New Session, whose next user-triggered submit retries the
-        // import and surfaces any load error without spinning in the background.
-      });
+      // Ready-connection prewarm resumes durable recovery and removes first-Start chunk latency.
+      void ensureRuntime();
     },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     dispose() {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
+      activeDependencies = null;
       runtime?.dispose();
-      runtime = null;
-      runtimeLoad = null;
+      runtime = undefined;
+      preRuntimeEntries.clear();
       listeners.clear();
     },
   };

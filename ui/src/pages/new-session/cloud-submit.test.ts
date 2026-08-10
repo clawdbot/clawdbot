@@ -104,6 +104,110 @@ describe("cloud draft advancement", () => {
     expect(clearRecovery).not.toHaveBeenCalled();
   });
 
+  it("sends an older startup in memory without replacing a newer durable session", async () => {
+    const gatewayUrl = "ws://gateway.example";
+    const recoveryScope = "principal-a";
+    const sessionKey = "agent:cloud:older";
+    const newerRecovery: CloudSessionRecovery = {
+      sessionKey: "agent:cloud:newer",
+      messageId: "message-newer",
+      message: "newer task",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl,
+      recoveryScope,
+      phase: "dispatching",
+    };
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.dispatch") {
+        expect(writeCloudSessionRecovery(newerRecovery)).toBe(true);
+        return Promise.resolve({ placement: { state: "active", environmentId: "worker-older" } });
+      }
+      if (method === "sessions.send") {
+        return Promise.resolve({ runId: "run-older", status: "started" });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const setRecoveryPhase = vi.fn();
+    const clearRecovery = vi.fn(() =>
+      clearCloudSessionRecovery(gatewayUrl, recoveryScope, sessionKey),
+    );
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: sessionKey,
+        agentId: "cloud",
+        profileId: "aws",
+        message: "older task",
+        messageId: "message-older",
+        gatewayUrl,
+        recoveryScope,
+        recoveryPhase: "dispatching",
+        recovering: false,
+        isLifecycleCurrent: () => true,
+        ownsRecovery: () => true,
+        clearRecovery,
+        setRecoveryPhase,
+      }),
+    ).resolves.toMatchObject({ status: "started", messageId: "message-older" });
+    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", false);
+    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope)).toEqual(newerRecovery);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
+    expect(clearRecovery).toHaveBeenCalledWith("resolved");
+  });
+
+  it("fails closed when the current durable owner cannot persist sending", async () => {
+    const storage = sessionStorage;
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.dispatch") {
+        vi.stubGlobal("sessionStorage", {
+          getItem: storage.getItem.bind(storage),
+          removeItem: storage.removeItem.bind(storage),
+          setItem: vi.fn(() => {
+            throw new DOMException("storage disabled", "SecurityError");
+          }),
+        });
+        return Promise.resolve({
+          placement: { state: "active", environmentId: "worker-current" },
+        });
+      }
+      if (method === "environments.destroy") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const setRecoveryPhase = vi.fn();
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: "agent:cloud:current",
+        agentId: "cloud",
+        profileId: "aws",
+        message: "current task",
+        messageId: "message-current",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        recoveryPhase: "dispatching",
+        recovering: false,
+        isLifecycleCurrent: () => true,
+        ownsRecovery: () => true,
+        clearRecovery: vi.fn(),
+        setRecoveryPhase,
+      }),
+    ).resolves.toEqual({
+      status: "dispatch-rejected",
+      error: "cloud recovery storage is unavailable",
+    });
+    expect(setRecoveryPhase).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("environments.destroy", {
+      environmentId: "worker-current",
+    });
+    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+  });
+
   it("does not overwrite recovery after submission ownership is lost", async () => {
     sessionStorage.setItem(
       "openclaw.new-session.cloud-recovery.v1:ws://gateway.example:principal-a",

@@ -16,7 +16,6 @@ import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   readSessionMethodAccess,
@@ -1343,28 +1342,12 @@ class NewSessionPage extends OpenClawLightDomElement {
         if (requestId !== this.submitRequestToken) {
           return;
         }
-        try {
-          await context.cloudStartup.start({
-            recovery,
-            persistRecovery: this.pendingCloud.persistent,
-            recovering: pendingCloud,
-            createdAt: submittedAt,
-          });
-        } catch (error) {
-          if (
-            requestId === this.submitRequestToken &&
-            this.pendingCloud.owns(
-              submissionGatewayUrl,
-              submissionRecoveryScope,
-              recovery.sessionKey,
-            )
-          ) {
-            this.error = t("newSession.cloudStartFailed", {
-              error: formatUiError(error, t("newSession.createFailed")),
-            });
-          }
-          return;
-        }
+        context.cloudStartup.start({
+          recovery,
+          persistRecovery: this.pendingCloud.persistent,
+          recovering: pendingCloud,
+          createdAt: submittedAt,
+        });
         if (
           requestId !== this.submitRequestToken ||
           !isSubmissionLifecycleCurrent() ||
