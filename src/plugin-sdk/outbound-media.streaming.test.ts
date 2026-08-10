@@ -94,6 +94,43 @@ describe("hosted outbound media chunk streaming", () => {
     expect(await chunkStore.entries()).toEqual([]);
   });
 
+  it("acquires the reader lease atomically with metadata lookup", async () => {
+    const { chunkStore, metadataStore, store } = createStoreFixture("atomic-reader-media");
+    await prepareFixture(store);
+    const originalLookup = metadataStore.lookup.bind(metadataStore);
+    let markLookupStarted: (() => void) | undefined;
+    let releaseLookup: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    const lookupReleased = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
+      const result = await originalLookup(key);
+      markLookupStarted?.();
+      await lookupReleased;
+      return result;
+    });
+
+    const pendingStream = store.readChunks(MEDIA_ID);
+    await lookupStarted;
+    const deletion = store.delete(MEDIA_ID);
+    releaseLookup?.();
+    const stream = await pendingStream;
+    await deletion;
+
+    expect(await metadataStore.entries()).toHaveLength(1);
+    expect(await chunkStore.entries()).toHaveLength(3);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream?.chunks ?? []) {
+      chunks.push(chunk);
+    }
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("image-bytes");
+    expect(await metadataStore.entries()).toEqual([]);
+    expect(await chunkStore.entries()).toEqual([]);
+  });
+
   it("deletes an entry whose persisted chunk size is corrupt", async () => {
     const { chunkStore, store } = createStoreFixture("corrupt-streamed-media");
     await prepareFixture(store);

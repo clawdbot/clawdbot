@@ -284,6 +284,7 @@ export function createHostedOutboundMediaStore(
   let capacityMutation = Promise.resolve();
   const activeReaders = new Map<string, number>();
   const deferredDeletes = new Set<string>();
+  const deletingEntries = new Set<string>();
 
   async function withCapacityMutation<T>(operation: () => Promise<T>): Promise<T> {
     const result = capacityMutation.then(operation, operation);
@@ -299,9 +300,14 @@ export function createHostedOutboundMediaStore(
       deferredDeletes.add(id);
       return false;
     }
-    await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore);
-    deferredDeletes.delete(id);
-    return true;
+    deletingEntries.add(id);
+    try {
+      await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore);
+      deferredDeletes.delete(id);
+      return true;
+    } finally {
+      deletingEntries.delete(id);
+    }
   }
 
   async function deleteEntryRows(id: string, chunkCount: number): Promise<void> {
@@ -353,14 +359,15 @@ export function createHostedOutboundMediaStore(
     });
   }
 
-  async function readChunks(
+  async function acquireReader(
     id: string,
-    nowMs = Date.now(),
-  ): Promise<HostedOutboundMediaChunkStream | null> {
-    const meta = await readMetadataRecord(id, nowMs);
-    if (!meta) {
-      return null;
-    }
+    nowMs: number,
+  ): Promise<{
+    meta: HostedOutboundMediaMetaRecord;
+    close: () => Promise<void>;
+  } | null> {
+    // Register before the first await so deletion observes pending SQLite readers
+    // without serializing concurrent capability authentication.
     activeReaders.set(id, (activeReaders.get(id) ?? 0) + 1);
     let closed = false;
     const close = async () => {
@@ -378,6 +385,27 @@ export function createHostedOutboundMediaStore(
         await withCapacityMutation(async () => await deleteEntry(id));
       }
     };
+    if (deletingEntries.has(id)) {
+      await close();
+      return null;
+    }
+    const meta = await readMetadataRecord(id, nowMs);
+    if (!meta) {
+      await close();
+      return null;
+    }
+    return { meta, close };
+  }
+
+  async function readChunks(
+    id: string,
+    nowMs = Date.now(),
+  ): Promise<HostedOutboundMediaChunkStream | null> {
+    const reader = await acquireReader(id, nowMs);
+    if (!reader) {
+      return null;
+    }
+    const { close, meta } = reader;
     return {
       metadata: createHostedOutboundMediaMetadata(meta),
       close,
@@ -571,23 +599,30 @@ export function createHostedOutboundMediaStore(
     },
     readChunks,
     async read(id, nowMs = Date.now()) {
-      const meta = await readMetadataRecord(id, nowMs);
-      if (!meta) {
+      const reader = await acquireReader(id, nowMs);
+      if (!reader) {
         return null;
       }
-      const chunks: Buffer[] = [];
-      for (let index = 0; index < meta.chunkCount; index += 1) {
-        const chunk = await options.chunkStore.lookup(buildHostedOutboundMediaChunkKey(id, index));
-        if (!chunk || chunk.id !== id || chunk.index !== index) {
-          await withCapacityMutation(async () => await deleteEntry(id));
-          return null;
+      const { close, meta } = reader;
+      try {
+        const chunks: Buffer[] = [];
+        for (let index = 0; index < meta.chunkCount; index += 1) {
+          const chunk = await options.chunkStore.lookup(
+            buildHostedOutboundMediaChunkKey(id, index),
+          );
+          if (!chunk || chunk.id !== id || chunk.index !== index) {
+            await withCapacityMutation(async () => await deleteEntry(id));
+            return null;
+          }
+          chunks.push(Buffer.from(chunk.dataBase64, "base64"));
         }
-        chunks.push(Buffer.from(chunk.dataBase64, "base64"));
+        return {
+          metadata: createHostedOutboundMediaMetadata(meta),
+          buffer: Buffer.concat(chunks, meta.byteLength),
+        };
+      } finally {
+        await close();
       }
-      return {
-        metadata: createHostedOutboundMediaMetadata(meta),
-        buffer: Buffer.concat(chunks, meta.byteLength),
-      };
     },
     async delete(id) {
       await withCapacityMutation(async () => await deleteEntry(id));
