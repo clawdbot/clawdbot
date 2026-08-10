@@ -83,6 +83,19 @@ conversation history. Treat it as a trusted-proxy-only header — set it on your
 server, next to the auth check that establishes who the user is, never from
 browser-supplied input.
 
+## Request validation
+
+A malformed request is answered with a JSON `400` before the run is admitted, so
+the caller never gets a committed SSE stream that fails part way through. This
+covers the browser-declared `tools` array and the state-writer tools declared in
+`forwardedProps.stateWriterTools`: each entry must be an object with a name, and
+`parameters` must be a JSON Schema object. Conflicting tool names and oversized
+tool schemas are refused the same way.
+
+Nothing is silently coerced. A mistyped field is reported rather than replaced
+with a default, because a defaulted state-writer declaration would write to the
+wrong place with no error to show for it.
+
 ## Notes
 
 - Streaming is Server-Sent Events only; the endpoint always responds

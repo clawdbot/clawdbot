@@ -1,4 +1,5 @@
 import type { Message } from "@ag-ui/core";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // ---------------------------------------------------------------------------
 // Extract text from AG-UI messages
@@ -285,13 +286,13 @@ export function formatContextEntries(context: readonly unknown[]): string | unde
  */
 const STATE_WRITER_PROPS_KEY = "stateWriterTools";
 
-interface StateWriterSpec {
+export interface StateWriterSpec {
   stateKey: string;
   arg?: string;
   mode: "replace" | "append";
 }
 
-interface OpenAIToolSchema {
+export interface OpenAIToolSchema {
   type: "function";
   function: {
     name: string;
@@ -309,70 +310,95 @@ export function isSharedState(state: unknown): state is Record<string, unknown> 
   );
 }
 
+type StateWriterToolsResult =
+  | { ok: true; specs: Map<string, StateWriterSpec>; schemas: OpenAIToolSchema[] }
+  | { ok: false; message: string };
+
 /**
  * Parse `forwardedProps.stateWriterTools` into (specs, schemas). Accepts a list
  * of decl objects (each carrying its own `name`) or a name->decl map. Returns
  * empty when nothing is declared.
+ *
+ * Every malformed shape is rejected rather than coerced, because the caller runs
+ * this before the run is admitted and turns a rejection into the documented 400.
+ * Coercion was wrong in both directions here: a non-record `parameters` (an
+ * array passes a bare `typeof === "object"`) reached the model as an invalid
+ * tool schema and failed only inside the run, once SSE was committed and the
+ * session written; a mistyped `stateKey`/`arg`/`mode` was quietly replaced by a
+ * default, so the writer ran against the wrong state slot with nothing reported.
+ * Core drops a non-record `parameters` at the equivalent boundary
+ * (`extractClientToolsFromChatRequest`, src/gateway/openai-http.ts); this
+ * surface owns the declaration itself, so it names the error instead.
  */
-export function parseStateWriterTools(forwardedProps: unknown): {
-  specs: Map<string, StateWriterSpec>;
-  schemas: OpenAIToolSchema[];
-} {
+export function parseStateWriterTools(forwardedProps: unknown): StateWriterToolsResult {
   const specs = new Map<string, StateWriterSpec>();
   const schemas: OpenAIToolSchema[] = [];
-  const props =
-    forwardedProps && typeof forwardedProps === "object"
-      ? (forwardedProps as Record<string, unknown>)
-      : undefined;
-  const raw = props?.[STATE_WRITER_PROPS_KEY];
-  if (!raw) {
-    return { specs, schemas };
+  const raw = isRecord(forwardedProps) ? forwardedProps[STATE_WRITER_PROPS_KEY] : undefined;
+  if (raw == null) {
+    return { ok: true, specs, schemas };
   }
 
-  const decls: Array<Record<string, unknown>> = [];
+  // Both accepted forms normalize to (label, decl) pairs, so only the label
+  // differs downstream.
+  const entries: Array<{ label: string; decl: Record<string, unknown> }> = [];
   if (Array.isArray(raw)) {
-    for (const d of raw) {
-      if (d && typeof d === "object") {
-        decls.push(d as Record<string, unknown>);
+    for (const [index, decl] of raw.entries()) {
+      const label = `${STATE_WRITER_PROPS_KEY}[${index}]`;
+      if (!isRecord(decl)) {
+        return { ok: false, message: `\`${label}\` must be an object.` };
       }
+      entries.push({ label, decl });
     }
-  } else if (typeof raw === "object") {
-    for (const [name, d] of Object.entries(raw as Record<string, unknown>)) {
-      const entry = (d && typeof d === "object" ? { ...(d as object) } : {}) as Record<
-        string,
-        unknown
-      >;
-      if (entry.name == null) {
-        entry.name = name;
+  } else if (isRecord(raw)) {
+    for (const [name, decl] of Object.entries(raw)) {
+      const label = `${STATE_WRITER_PROPS_KEY}.${name}`;
+      if (!isRecord(decl)) {
+        return { ok: false, message: `\`${label}\` must be an object.` };
       }
-      decls.push(entry);
+      // An explicit name in the value wins, but a null one counts as absent —
+      // the key already named the tool, so falling back to it beats rejecting a
+      // declaration that says the same thing twice.
+      entries.push({ label, decl: decl.name == null ? { ...decl, name } : decl });
     }
+  } else {
+    return {
+      ok: false,
+      message: `\`${STATE_WRITER_PROPS_KEY}\` must be an array or an object.`,
+    };
   }
 
-  for (const decl of decls) {
-    const name = typeof decl.name === "string" ? decl.name : undefined;
+  for (const { label, decl } of entries) {
+    const name = typeof decl.name === "string" ? decl.name.trim() : "";
     if (!name) {
-      continue;
+      return { ok: false, message: `\`${label}.name\` is required.` };
     }
-    specs.set(name, {
-      stateKey: typeof decl.stateKey === "string" ? decl.stateKey : "",
-      arg: typeof decl.arg === "string" ? decl.arg : undefined,
-      mode: decl.mode === "append" ? "append" : "replace",
-    });
+    const { stateKey, arg, mode, description, parameters } = decl;
+    if (stateKey !== undefined && typeof stateKey !== "string") {
+      return { ok: false, message: `\`${label}.stateKey\` must be a string.` };
+    }
+    if (arg !== undefined && typeof arg !== "string") {
+      return { ok: false, message: `\`${label}.arg\` must be a string.` };
+    }
+    if (mode !== undefined && mode !== "replace" && mode !== "append") {
+      return { ok: false, message: `\`${label}.mode\` must be "replace" or "append".` };
+    }
+    if (description !== undefined && typeof description !== "string") {
+      return { ok: false, message: `\`${label}.description\` must be a string.` };
+    }
+    if (parameters !== undefined && !isRecord(parameters)) {
+      return { ok: false, message: `\`${label}.parameters\` must be a JSON Schema object.` };
+    }
+    specs.set(name, { stateKey: stateKey ?? "", arg, mode: mode ?? "replace" });
     schemas.push({
       type: "function",
       function: {
         name,
-        description:
-          typeof decl.description === "string" ? decl.description : "Update shared UI state.",
-        parameters:
-          decl.parameters && typeof decl.parameters === "object"
-            ? (decl.parameters as Record<string, unknown>)
-            : { type: "object", properties: {} },
+        description: description ?? "Update shared UI state.",
+        parameters: parameters ?? { type: "object", properties: {} },
       },
     });
   }
-  return { specs, schemas };
+  return { ok: true, specs, schemas };
 }
 
 /** Merge a state-writer call's args into `state` per its spec (mutates state). */

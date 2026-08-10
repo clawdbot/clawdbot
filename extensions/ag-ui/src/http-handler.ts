@@ -7,11 +7,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveAguiAgentRoute } from "./agent-route.js";
-import {
-  MAX_CLIENT_TOOL_SCHEMA_CHARS,
-  findDeclaredToolConflicts,
-  parseDeclaredTools,
-} from "./client-tools.js";
+import { validateRequestToolset } from "./client-tools.js";
 import { handlePreflightAndRequirePost } from "./cors.js";
 import { authenticateAguiDevice } from "./device-auth.js";
 import { observeDisconnect } from "./disconnect.js";
@@ -22,7 +18,6 @@ import {
   buildBodyFromMessages,
   buildDeltaPrompt,
   formatContextEntries,
-  parseStateWriterTools,
   applyStateWriter,
   formatSharedState,
   isSharedState,
@@ -329,60 +324,18 @@ async function dispatchAuthenticatedAguiRequest(
     return;
   }
 
-  const { specs: stateWriterSpecs, schemas: stateWriterSchemas } = parseStateWriterTools(
-    input.forwardedProps,
-  );
-
-  // the agent can call something it can never see.
-  // Validate the SHAPE first, and keep the validated array — measuring a
-  // coerced copy while the run later mapped over `input.tools` let a malformed
-  // payload past this gate and blow up after admission, headers, and the
-  // session upsert, turning a 400 into a committed SSE 200 + RUN_ERROR with a
-  // session entry already written. Core enforces the same invariant at the
-  // equivalent boundary (`extractClientToolsFromChatRequest` in
-  // src/gateway/openai-http.ts), so this surface matches it.
-  const declaredTools = parseDeclaredTools(input.tools);
-  if (!declaredTools.ok) {
+  // The whole pre-admission tool contract, resolved in one place: shape, name
+  // conflicts across the combined set, and the schema size cap. Run BEFORE the
+  // empty-messages early return, or the contract holds on turns that run an
+  // agent and silently lapses on session init/sync.
+  const toolset = validateRequestToolset(input.tools, input.forwardedProps);
+  if (!toolset.ok) {
     sendJson(res, 400, {
-      error: { message: declaredTools.message, type: "invalid_request_error" },
+      error: { message: toolset.message, type: "invalid_request_error" },
     });
     return;
   }
-  // The set the model actually receives is the declared tools PLUS the
-  // state-writer tools this handler injects. Core rejects a colliding set, but
-  // only inside the run — after SSE is committed and the session may already be
-  // upserted — so the caller would get a 200/RUN_ERROR instead of the
-  // documented 400. Check the combined set here, while a JSON status is still
-  // possible.
-  const toolConflicts = findDeclaredToolConflicts(
-    declaredTools.tools.map((t) => t.name),
-    stateWriterSchemas.map((s) => s.function.name),
-  );
-  if (toolConflicts.length > 0) {
-    sendJson(res, 400, {
-      error: {
-        message: `Conflicting tool names: ${toolConflicts.join(", ")}. Each declared tool needs a distinct name, and none may collide with a declared state-writer tool.`,
-        type: "invalid_request_error",
-      },
-    });
-    return;
-  }
-
-  const declaredToolsChars =
-    JSON.stringify(declaredTools.tools).length + JSON.stringify(stateWriterSchemas).length;
-  if (declaredToolsChars > MAX_CLIENT_TOOL_SCHEMA_CHARS) {
-    sendJson(res, 400, {
-      error: {
-        message: `Declared tool schemas are too large (${declaredToolsChars} chars, limit ${MAX_CLIENT_TOOL_SCHEMA_CHARS}). Send fewer tools or shorter descriptions/parameter schemas.`,
-        type: "invalid_request_error",
-      },
-    });
-    return;
-  }
-
-  // Validated BEFORE the empty-messages early return: an init/sync request that
-  // declares a bad tool set must be refused too, or the contract holds on turns
-  // that run an agent and silently lapses on the ones that do not.
+  const { declaredTools, stateWriterSpecs, stateWriterSchemas } = toolset;
 
   const hasUserMessage = messages.some((m) => m.role === "user");
   const hasToolMessage = messages.some((m) => m.role === "tool");
@@ -767,12 +720,12 @@ async function dispatchAuthenticatedAguiRequest(
 
     // Uses the array validated before admission, never `input.tools` again —
     // re-reading the raw value is what let a malformed payload reach this line.
-    const clientTools = declaredTools.tools.map((t) => ({
+    const clientTools = declaredTools.map((t) => ({
       type: "function" as const,
       function: {
         name: t.name,
         description: t.description ?? "",
-        parameters: (t.parameters ?? {}) as Record<string, unknown>,
+        parameters: t.parameters ?? {},
       },
     }));
 

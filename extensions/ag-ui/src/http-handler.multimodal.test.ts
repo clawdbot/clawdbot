@@ -174,6 +174,158 @@ describe("AG-UI multimodal image forwarding", () => {
     expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  // State-writer declarations are browser input on the same request as `tools`,
+  // and they become model-visible tool schemas. A malformed one used to be
+  // coerced to a default and injected anyway: `parameters: []` passes a bare
+  // `typeof === "object"`, so an invalid schema reached the model and failed
+  // inside the run — after SSE was committed and the session written — while a
+  // mistyped stateKey/arg/mode silently retargeted the write. Both must be the
+  // documented 400 with no stream and no run.
+  it.each([
+    [
+      "array-valued parameters",
+      [{ name: "set_notes", stateKey: "notes", parameters: [] }],
+      "`stateWriterTools[0].parameters` must be a JSON Schema object.",
+    ],
+    [
+      "non-record parameters",
+      [{ name: "set_notes", stateKey: "notes", parameters: "notes" }],
+      "`stateWriterTools[0].parameters` must be a JSON Schema object.",
+    ],
+    ["a non-object entry", ["set_notes"], "`stateWriterTools[0]` must be an object."],
+    ["an entry with no name", [{ stateKey: "notes" }], "`stateWriterTools[0].name` is required."],
+    [
+      "a non-string stateKey",
+      [{ name: "set_notes", stateKey: ["notes"] }],
+      "`stateWriterTools[0].stateKey` must be a string.",
+    ],
+    [
+      "a non-string arg",
+      [{ name: "set_notes", stateKey: "notes", arg: 7 }],
+      "`stateWriterTools[0].arg` must be a string.",
+    ],
+    [
+      "an unknown mode",
+      [{ name: "set_notes", stateKey: "notes", mode: "appnd" }],
+      '`stateWriterTools[0].mode` must be "replace" or "append".',
+    ],
+  ])(
+    "rejects a state writer with %s before opening the stream",
+    async (_label, stateWriterTools, message) => {
+      const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+      const res = createRes();
+      await handler(
+        createReq({
+          headers: { authorization: `Bearer ${token}` },
+          body: {
+            threadId: "t-sw-bad",
+            runId: "r-sw-bad",
+            messages: [{ role: "user", content: "hi" }],
+            forwardedProps: { stateWriterTools },
+          },
+        }),
+        res,
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.headers["content-type"]).toContain("application/json");
+      expect(JSON.parse(res.chunks[0]!).error.message).toBe(message);
+      expect(parseEvents(res.chunks)).toHaveLength(0);
+      expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a stateWriterTools value that is neither a list nor a map", async () => {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-sw-scalar",
+          runId: "r-sw-scalar",
+          messages: [{ role: "user", content: "hi" }],
+          forwardedProps: { stateWriterTools: "set_notes" },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.chunks[0]!).error.message).toBe(
+      "`stateWriterTools` must be an array or an object.",
+    );
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("takes the map key as the name when the entry's own name is null", async () => {
+    // The map form names each tool by its key. An entry that also carries an
+    // explicit `name: null` is saying nothing new, so it must still resolve to
+    // the key rather than be refused for a missing name.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-sw-map",
+          runId: "r-sw-map",
+          messages: [{ role: "user", content: "hi" }],
+          forwardedProps: {
+            stateWriterTools: { set_notes: { name: null, stateKey: "notes" } },
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call.clientTools.map((t: { function: { name: string } }) => t.function.name)).toContain(
+      "set_notes",
+    );
+  });
+
+  it("accepts the declaration shape the CopilotKit demos send", async () => {
+    // Verbatim from showcase/integrations/openclaw shared-state-read-write. The
+    // rejections above must not narrow the shape real clients already ship.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-sw-real",
+          runId: "r-sw-real",
+          messages: [{ role: "user", content: "remember I like tea" }],
+          forwardedProps: {
+            stateWriterTools: [
+              {
+                name: "set_notes",
+                stateKey: "notes",
+                arg: "notes",
+                mode: "replace",
+                description: "Save short notes about the user into shared state.",
+                parameters: {
+                  type: "object",
+                  properties: { notes: { type: "array", items: { type: "string" } } },
+                  required: ["notes"],
+                },
+              },
+            ],
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(call.clientTools.map((t: { function: { name: string } }) => t.function.name)).toContain(
+      "set_notes",
+    );
+  });
+
   it("validates tools on an empty init/sync request too", async () => {
     // The empty-messages path returns a 200 empty run early. Tool validation has
     // to precede it, or the contract holds on turns that run an agent and
@@ -254,6 +406,19 @@ describe("AG-UI multimodal image forwarding", () => {
     ["an entry that is not an object", ["nope"], "`tools[0]` must be an object."],
     ["an entry with no name", [{ description: "x" }], "`tools[0].name` is required."],
     ["an entry with a blank name", [{ name: "   " }], "`tools[0].name` is required."],
+    // Same array-vs-record hole the state-writer half had: `[]` satisfies a bare
+    // `typeof === "object"`, so an unusable schema would ride through to the
+    // model. Both halves of the toolset are held to the record check.
+    [
+      "array-valued parameters",
+      [{ name: "ok", parameters: [] }],
+      "`tools[0].parameters` must be a JSON Schema object.",
+    ],
+    [
+      "non-record parameters",
+      [{ name: "ok", parameters: "object" }],
+      "`tools[0].parameters` must be a JSON Schema object.",
+    ],
   ])("rejects %s with 400 before opening the stream", async (_label, tools, message) => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const res = createRes();
