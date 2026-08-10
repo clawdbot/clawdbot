@@ -53,7 +53,7 @@ export function resolveTelegramConversationRoute(params: {
 }): TelegramConversationRouteResult {
   const peerId = params.isGroup
     ? buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId)
-    : resolveTelegramDirectPeerId(params.chatId, params.senderId);
+    : resolveTelegramDirectPeerId({ chatId: params.chatId, senderId: params.senderId });
   const parentPeer = buildTelegramParentPeer({
     isGroup: params.isGroup,
     resolvedThreadId: params.resolvedThreadId,

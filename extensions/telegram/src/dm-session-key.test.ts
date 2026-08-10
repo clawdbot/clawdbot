@@ -3,8 +3,10 @@ import { resolveTelegramDirectPeerId, resolveTelegramSecurityDmRoute } from "./d
 
 describe("Telegram DM session keys", () => {
   it("prefers sender id and falls back to chat id", () => {
-    expect(resolveTelegramDirectPeerId(777777777, 123456789)).toBe("123456789");
-    expect(resolveTelegramDirectPeerId(777777777)).toBe("777777777");
+    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
+      "123456789",
+    );
+    expect(resolveTelegramDirectPeerId({ chatId: 777777777 })).toBe("777777777");
   });
 
   it.each([

@@ -5,12 +5,12 @@ import {
   type ResolvedAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 
-export function resolveTelegramDirectPeerId(
-  chatId: number | string,
-  senderId?: number | string | null,
-) {
-  const normalized = senderId == null ? "" : String(senderId).trim();
-  return normalized || String(chatId);
+export function resolveTelegramDirectPeerId(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+}) {
+  const normalized = params.senderId == null ? "" : String(params.senderId).trim();
+  return normalized || String(params.chatId);
 }
 
 export function resolveTelegramNamedAccountBaseSessionKey(
@@ -36,7 +36,10 @@ export function resolveTelegramNamedAccountBaseSessionKey(
     accountId: params.route.accountId,
     peer: {
       kind: "direct",
-      id: resolveTelegramDirectPeerId(params.chatId, params.senderId),
+      id: resolveTelegramDirectPeerId({
+        chatId: params.chatId,
+        senderId: params.senderId,
+      }),
     },
     dmScope: "per-account-channel-peer",
     identityLinks: params.cfg.session?.identityLinks,
