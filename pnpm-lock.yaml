@@ -2438,8 +2438,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/session-url-contract
       '@openclaw/uirouter':
-        specifier: 0.1.0
-        version: 0.1.0
+        specifier: 0.1.1
+        version: 0.1.1
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
@@ -4163,8 +4163,8 @@ packages:
     peerDependencies:
       undici: '>=8.5.0 <9'
 
-  '@openclaw/uirouter@0.1.0':
-    resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
+  '@openclaw/uirouter@0.1.1':
+    resolution: {integrity: sha512-aiZFvWmP/ndpS3em5xVtiPlj1k6asA8ueoNxGxekA1024EZlCwnICPZklG6g2sU4Wlntp9AYocLCr5/iuvL7hw==}
     engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.221.0':
@@ -11448,7 +11448,7 @@ snapshots:
     dependencies:
       undici: 8.9.0
 
-  '@openclaw/uirouter@0.1.0': {}
+  '@openclaw/uirouter@0.1.1': {}
 
   '@opentelemetry/api-logs@0.221.0':
     dependencies:
