@@ -1944,6 +1944,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/repo-root.mjs": [
         "test/scripts/ts-guard-utils.test.ts",
         "test/scripts/android-release-signing.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
       "scripts/lib/ts-guard-utils.mts": ["test/scripts/ts-guard-utils.test.ts"],
       "scripts/lib/tsgo-sparse-guard.mts": [

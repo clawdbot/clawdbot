@@ -227,6 +227,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs sandbox media staging file URL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
+    );
+  });
+
   it("runs the native OpenSSH resolver proof in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/ssh-client.windows.test.ts",

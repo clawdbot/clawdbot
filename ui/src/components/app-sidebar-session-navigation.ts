@@ -294,6 +294,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       runtimeSampledAtByRow: this.runtimeSampledAtByRow,
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
       outboxCountForSessionKey: (sessionKey) => this.outboxCountForSessionKey(sessionKey),
+      hasSessionDraft: (sessionKey) => this.hasSessionDraft(sessionKey),
       resolveAttention: (row) => this.attention.resolveSessionAttention(row),
       resolveAgentStatusNote: (row) => this.attention.resolveSessionAgentStatus(row)?.note,
     });

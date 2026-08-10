@@ -10,7 +10,6 @@ import {
   createGitHubApi,
   createGuardApproverChecks,
   createIssueMutationHelpers,
-  guardCommentHeadSha,
   guardTrustedActorCandidates,
   isCommentNewerThan,
   readBoundedGitHubErrorText,
@@ -235,36 +234,33 @@ export async function findDependencyOverrideCommandAsync(input) {
   return null;
 }
 
-export function dependencyGuardCommentHeadSha(comment) {
-  return guardCommentHeadSha(comment);
+function dependencyGraphGuardStateMarker(state, headSha) {
+  return `<!-- openclaw:dependency-graph-guard state=${state} sha=${headSha ?? "<head-sha>"} -->`;
+}
+
+function hasDependencyGraphGuardState(comment, state, headSha) {
+  // Only the machine-owned comment prefix carries reusable guard state. PR-controlled paths
+  // rendered later in the comment must never be able to create an allow decision.
+  return (
+    Boolean(headSha) &&
+    comment?.body?.startsWith(
+      `${dependencyGraphGuardMarker}\n${dependencyGraphGuardStateMarker(state, headSha)}\n`,
+    ) === true
+  );
 }
 
 export function dependencyOverrideExpectedSha(existingGuardComment, currentHeadSha) {
-  if (
-    !currentHeadSha ||
-    existingGuardComment?.body?.includes("### Dependency graph changes are blocked") !== true
-  ) {
-    return null;
-  }
-  return dependencyGuardCommentHeadSha(existingGuardComment) === currentHeadSha
+  return hasDependencyGraphGuardState(existingGuardComment, "blocked", currentHeadSha)
     ? currentHeadSha
     : null;
 }
 
 export function isDependencyGuardAuthorizedForHead(comment, currentHeadSha) {
-  return (
-    Boolean(currentHeadSha) &&
-    comment?.body?.includes("### Dependency graph change authorized") === true &&
-    dependencyGuardCommentHeadSha(comment) === currentHeadSha
-  );
+  return hasDependencyGraphGuardState(comment, "authorized", currentHeadSha);
 }
 
 export function isDependencyGuardTrustedForHead(comment, currentHeadSha) {
-  return (
-    Boolean(currentHeadSha) &&
-    comment?.body?.includes("### Dependency graph changes noted") === true &&
-    dependencyGuardCommentHeadSha(comment) === currentHeadSha
-  );
+  return hasDependencyGraphGuardState(comment, "trusted", currentHeadSha);
 }
 
 export function securityApproverSet(value) {
@@ -319,6 +315,7 @@ function renderDependencyAwarenessComment(dependencyFiles) {
 export function renderAuthorizedDependencyComment(override) {
   const lines = [
     dependencyGraphGuardMarker,
+    dependencyGraphGuardStateMarker("authorized", override.sha),
     "",
     "### Dependency graph change authorized",
     "",
@@ -337,6 +334,7 @@ export function renderAuthorizedDependencyComment(override) {
 export function renderTrustedDependencyComment({ actor, headSha }) {
   return [
     dependencyGraphGuardMarker,
+    dependencyGraphGuardStateMarker("trusted", headSha),
     "",
     "### Dependency graph changes noted",
     "",
@@ -448,6 +446,7 @@ export function renderBlockedDependencyComment({
       : [];
   return [
     dependencyGraphGuardMarker,
+    dependencyGraphGuardStateMarker("blocked", headSha),
     "",
     "### Dependency graph changes are blocked",
     "",

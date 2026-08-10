@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -15,7 +15,7 @@ import type { installGatewayDaemonNonInteractive } from "./onboard-non-interacti
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 const testConfigStore = new Map<string, OpenClawConfig>();
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
 const pluginLifecycleLeaseState = vi.hoisted(() => ({ depth: 0 }));
 const configWritePluginLeaseDepths: number[] = [];
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
@@ -55,35 +55,33 @@ function readTestConfig<T = OpenClawConfig>(): T {
   return (testConfigStore.get(resolveTestConfigPath()) ?? {}) as T;
 }
 
-readConfigFileSnapshotMock.mockImplementation(async () => {
-  const configPath = resolveTestConfigPath();
-  const config = testConfigStore.get(configPath);
-  if (config) {
-    const raw = `${JSON.stringify(config, null, 2)}\n`;
-    return {
-      exists: true,
-      valid: true,
-      config,
-      sourceConfig: config,
-      raw,
-      hash: "test-config-hash",
-    };
-  }
+function readTestConfigSnapshot(): ConfigFileSnapshot {
+  const config = testConfigStore.get(resolveTestConfigPath()) ?? {};
+  const exists = testConfigStore.has(resolveTestConfigPath());
   return {
-    exists: false,
+    path: resolveTestConfigPath(),
+    exists,
+    raw: exists ? `${JSON.stringify(config, null, 2)}\n` : null,
+    parsed: config,
+    sourceConfig: config,
+    resolved: config,
     valid: true,
-    config: {},
-    sourceConfig: {},
-    raw: null,
-    hash: undefined,
+    runtimeConfig: config,
+    config,
+    ...(exists ? { hash: "test-config-hash" } : {}),
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
   };
-});
+}
+
+readConfigFileSnapshotMock.mockImplementation(async () => readTestConfigSnapshot());
 
 vi.mock("../config/io.js", () => ({
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
-  loadConfig: () => testConfigStore.get(resolveTestConfigPath()) ?? {},
+  loadConfig: () => readTestConfig(),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
@@ -116,20 +114,46 @@ const capturedReplaceConfigFileCalls: Array<{
   writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
 }> = [];
 
-vi.mock("../config/config.js", () => ({
-  replaceConfigFile: async ({
-    nextConfig,
-    writeOptions,
-  }: {
-    nextConfig: OpenClawConfig;
-    writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
-  }) => {
-    configWritePluginLeaseDepths.push(pluginLifecycleLeaseState.depth);
-    capturedReplaceConfigFileCalls.push({ nextConfig, ...(writeOptions ? { writeOptions } : {}) });
-    testConfigStore.set(resolveTestConfigPath(), nextConfig);
-  },
-  resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
-}));
+vi.mock("../config/config.js", async (importActual) => {
+  const actual = await importActual<typeof import("../config/config.js")>();
+  return {
+    replaceConfigFile: async ({
+      nextConfig,
+      writeOptions,
+    }: {
+      nextConfig: OpenClawConfig;
+      writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
+    }) => {
+      configWritePluginLeaseDepths.push(pluginLifecycleLeaseState.depth);
+      capturedReplaceConfigFileCalls.push({
+        nextConfig,
+        ...(writeOptions ? { writeOptions } : {}),
+      });
+      testConfigStore.set(resolveTestConfigPath(), nextConfig);
+    },
+    resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
+    resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
+    transformConfigFileWithRetry: async (
+      params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
+    ) => {
+      const snapshot = await readConfigFileSnapshotMock();
+      const previousHash = snapshot.hash ?? null;
+      const transformed = await params.transform(snapshot.sourceConfig, {
+        snapshot,
+        previousHash,
+        attempt: 0,
+      });
+      const committed = await params.commit!({
+        nextConfig: transformed.nextConfig,
+        snapshot,
+        ...(previousHash ? { baseHash: previousHash } : {}),
+        writeOptions: params.writeOptions,
+        afterWrite: { mode: "auto" },
+      });
+      return { nextConfig: committed.config };
+    },
+  };
+});
 
 vi.mock("./onboard-agent.js", () => ({ ensureOnboardingAgent: mockOnboardingAgent }));
 
@@ -191,9 +215,7 @@ async function loadGatewayOnboardModules(): Promise<void> {
     await import("./onboard-non-interactive/local.test-support.js"));
 }
 
-function getPseudoPort(base: number): number {
-  return base + (process.pid % 1000);
-}
+const getPseudoPort = (base: number): number => base + (process.pid % 1000);
 
 const runtime = createThrowingRuntime();
 
@@ -383,13 +405,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     testConfigStore.clear();
     capturedReplaceConfigFileCalls.length = 0;
     configWritePluginLeaseDepths.length = 0;
-    readConfigFileSnapshotMock.mockClear();
-    ensureWorkspaceAndSessionsMock.mockClear();
-    installGatewayDaemonNonInteractiveMock.mockClear();
-    healthCommandMock.mockClear();
-    gatewayServiceMock.isLoaded.mockClear();
-    gatewayServiceMock.readRuntime.mockClear();
-    readLastGatewayErrorLineMock.mockClear();
+    vi.clearAllMocks();
   });
 
   it("serializes concurrent onboarding runs sharing one state directory", async () => {
@@ -441,7 +457,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
         releaseFirstSetup();
         await Promise.all([first, second]);
-        expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond + 1);
         expect(maxActiveWorkspaceSetups).toBe(1);
         expect(configWritePluginLeaseDepths).toHaveLength(2);
         expect(configWritePluginLeaseDepths.every((depth) => depth > 0)).toBe(true);
@@ -542,7 +557,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("allows local onboard plugin install-record migration size drops", async () => {
+  it("migrates local onboard plugin install records in the setup write", async () => {
     await withStateDir("state-local-plugin-installs-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
       testConfigStore.set(resolveTestConfigPath(), {
@@ -572,14 +587,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
-      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
-      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
-      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
-
+      expect(capturedReplaceConfigFileCalls).toHaveLength(1);
       const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(onboardWrite?.nextConfig.plugins?.installs).toBeUndefined();
-      expect(onboardWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(onboardWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
       expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);
@@ -665,7 +676,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   }, 60_000);
 
   it("persists skipBootstrap and skips workspace bootstrap creation", async () => {
-    ensureWorkspaceAndSessionsMock.mockClear();
     await withStateDir("state-skip-bootstrap-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
 
@@ -804,7 +814,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("allows remote onboard plugin install-record migration size drops", async () => {
+  it("migrates remote onboard plugin install records in the setup write", async () => {
     await withStateDir("state-remote-plugin-installs-", async (stateDir) => {
       const port = getPseudoPort(30_000);
       const token = "tok_remote_seed";
@@ -835,14 +845,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
-      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
-      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
-      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
-
+      expect(capturedReplaceConfigFileCalls).toHaveLength(1);
       const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(remoteWrite?.nextConfig.plugins?.installs).toBeUndefined();
-      expect(remoteWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(remoteWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
       expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);

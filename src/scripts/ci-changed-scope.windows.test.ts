@@ -138,6 +138,18 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes sandbox media staging file URL handling to Windows", () => {
+    for (const fileUrlPath of [
+      "src/auto-reply/reply/stage-sandbox-media.ts",
+      "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
+    ]) {
+      expect(detectChangedScope([fileUrlPath]), fileUrlPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes usage footer template changes and native coverage to Windows", () => {
     for (const templatePath of [
       "src/auto-reply/usage-bar/template.ts",

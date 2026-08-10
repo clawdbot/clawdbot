@@ -103,20 +103,38 @@ function scopeChannelHandler(
   ) as ChannelHandler;
 }
 
+async function runChannelPlatformSend<
+  TContext extends { onPlatformSendDispatch?: () => Promise<void> },
+  TResult,
+>(params: {
+  ctx: TContext;
+  beforePlatformSend?: (ctx: TContext) => Promise<void> | undefined;
+  send: (ctx: TContext) => Promise<TResult>;
+}): Promise<TResult> {
+  await params.beforePlatformSend?.(params.ctx);
+  if (!params.ctx.onPlatformSendDispatch) {
+    return await params.send(params.ctx);
+  }
+  await params.ctx.onPlatformSendDispatch();
+  return await params.send({ ...params.ctx, onPlatformSendDispatch: undefined });
+}
+
 async function runChannelMessageSendWithLifecycle<
+  TContext extends ChannelMessageSendAttemptContext,
   TResult extends ChannelMessageSendResult,
 >(params: {
   lifecycle?: ChannelMessageSendLifecycleAdapter;
-  ctx: ChannelMessageSendAttemptContext;
-  send: () => Promise<TResult>;
+  ctx: TContext;
+  beforePlatformSend?: (ctx: TContext) => Promise<void> | undefined;
+  send: (ctx: TContext) => Promise<TResult>;
 }): Promise<{ result: TResult; afterCommit?: OutboundDeliveryCommitHook }> {
   if (!params.lifecycle) {
-    return { result: await params.send() };
+    return { result: await runChannelPlatformSend(params) };
   }
   let attemptToken: unknown;
   try {
     attemptToken = await params.lifecycle.beforeSendAttempt?.(params.ctx);
-    const result = await params.send();
+    const result = await runChannelPlatformSend(params);
     const successCtx = {
       ...params.ctx,
       result,
@@ -404,18 +422,19 @@ function createPluginHandler(
               const sent = await runChannelMessageSendWithLifecycle({
                 lifecycle: messageLifecycle,
                 ctx: messagePayloadCtx,
-                send: async () => {
-                  await params.onPlatformSendStart?.(messagePayloadCtx);
-                  return await messagePayload(messagePayloadCtx);
-                },
+                beforePlatformSend: params.onPlatformSendStart,
+                send: (ctx) => messagePayload(ctx),
               });
               return attachOutboundDeliveryCommitHook(
                 normalizeChannelMessageSendResult(params.channel, sent.result),
                 sent.afterCommit,
               );
             }
-            await params.onPlatformSendStart?.(payloadCtx);
-            return outbound!.sendPayload!(payloadCtx);
+            return await runChannelPlatformSend({
+              ctx: payloadCtx,
+              beforePlatformSend: params.onPlatformSendStart,
+              send: (ctx) => outbound!.sendPayload!(ctx),
+            });
           }
         : undefined,
     sendFormattedText: outbound?.sendFormattedText
@@ -425,8 +444,11 @@ function createPluginHandler(
             text,
           };
           assertUnknownSendReconciliationKind("text");
-          await params.onPlatformSendStart?.(formattedCtx);
-          return await outbound.sendFormattedText!(formattedCtx);
+          return await runChannelPlatformSend({
+            ctx: { ...formattedCtx, kind: "text" },
+            beforePlatformSend: params.onPlatformSendStart,
+            send: (ctx) => outbound.sendFormattedText!(ctx),
+          });
         }
       : undefined,
     sendFormattedMedia: outbound?.sendFormattedMedia
@@ -437,8 +459,11 @@ function createPluginHandler(
             mediaUrl,
           };
           assertUnknownSendReconciliationKind("media");
-          await params.onPlatformSendStart?.(formattedCtx);
-          return await outbound.sendFormattedMedia!(formattedCtx);
+          return await runChannelPlatformSend({
+            ctx: { ...formattedCtx, kind: "media" },
+            beforePlatformSend: params.onPlatformSendStart,
+            send: (ctx) => outbound.sendFormattedMedia!(ctx),
+          });
         }
       : undefined,
     sendText: async (text, overrides) => {
@@ -453,18 +478,19 @@ function createPluginHandler(
         const sent = await runChannelMessageSendWithLifecycle({
           lifecycle: messageLifecycle,
           ctx: messageTextCtx,
-          send: async () => {
-            await params.onPlatformSendStart?.(messageTextCtx);
-            return await messageText(messageTextCtx);
-          },
+          beforePlatformSend: params.onPlatformSendStart,
+          send: (ctx) => messageText(ctx),
         });
         return attachOutboundDeliveryCommitHook(
           normalizeChannelMessageSendResult(params.channel, sent.result),
           sent.afterCommit,
         );
       }
-      await params.onPlatformSendStart?.(textCtx);
-      return sendText!(textCtx);
+      return await runChannelPlatformSend({
+        ctx: textCtx,
+        beforePlatformSend: params.onPlatformSendStart,
+        send: (ctx) => sendText!(ctx),
+      });
     },
     buildTargetRef,
     sendMedia: async (caption, mediaUrl, overrides) => {
@@ -480,10 +506,8 @@ function createPluginHandler(
         const sent = await runChannelMessageSendWithLifecycle({
           lifecycle: messageLifecycle,
           ctx: messageMediaCtx,
-          send: async () => {
-            await params.onPlatformSendStart?.(messageMediaCtx);
-            return await messageMedia(messageMediaCtx);
-          },
+          beforePlatformSend: params.onPlatformSendStart,
+          send: (ctx) => messageMedia(ctx),
         });
         return attachOutboundDeliveryCommitHook(
           normalizeChannelMessageSendResult(params.channel, sent.result),
@@ -491,11 +515,17 @@ function createPluginHandler(
         );
       }
       if (sendMedia) {
-        await params.onPlatformSendStart?.(mediaCtx);
-        return sendMedia(mediaCtx);
+        return await runChannelPlatformSend({
+          ctx: mediaCtx,
+          beforePlatformSend: params.onPlatformSendStart,
+          send: (ctx) => sendMedia(ctx),
+        });
       }
-      await params.onPlatformSendStart?.(mediaCtx);
-      return sendText!(mediaCtx);
+      return await runChannelPlatformSend({
+        ctx: mediaCtx,
+        beforePlatformSend: params.onPlatformSendStart,
+        send: (ctx) => sendText!(ctx),
+      });
     },
   };
 }

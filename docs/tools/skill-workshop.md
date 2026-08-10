@@ -110,6 +110,13 @@ Update an existing workspace skill:
 Update trip-planning to also check seat maps before booking.
 ```
 
+If a skill used in the current turn proves wrong or incomplete, the agent reads
+the live skill and creates a targeted patch proposal. A runtime receipt limits
+this flow to skills used in that run. Autonomous mode `off` disables repair,
+`propose` leaves the patch pending until explicitly applied, and `auto` scans and
+applies it immediately. The repaired skill is loaded by new sessions; the
+running session keeps its original skill snapshot.
+
 Iterate on a pending proposal:
 
 ```text
@@ -235,14 +242,15 @@ and paths outside the standard support folders.
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | update | revise | list | inspect | evaluate | apply | reject | quarantine`.
+`create | read | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine`.
 Other parameters apply depending on the action:
 
 | Parameter                  | Used by                                                          | Notes                                                                |
 | -------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise |
 | `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                        |
-| `skill_name`               | `update`                                                         | Existing skill name or key                                           |
+| `skill_name`               | `read`, `patch`, `update`                                        | Existing skill name or key                                           |
+| `old_string`, `new_string` | `patch`                                                          | Exact current text and its replacement; read the skill first         |
 | `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body      |
 | `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                         |
 | `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                    |

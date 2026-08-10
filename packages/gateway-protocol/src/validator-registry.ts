@@ -243,7 +243,6 @@ export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDelete
 export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
 export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);
 export const validateSessionsCompactionListParams = compile(S.SessionsCompactionListParamsSchema);
-export const validateSessionsCompactionGetParams = compile(S.SessionsCompactionGetParamsSchema);
 export const validateSessionsCompactionBranchParams = compile(
   S.SessionsCompactionBranchParamsSchema,
 );
@@ -302,13 +301,10 @@ export const validateTalkClientToolCallResult = compile(S.TalkClientToolCallResu
 export const validateTalkClientTranscriptParams = compile(S.TalkClientTranscriptParamsSchema);
 export const validateTalkClientSteerParams = compile(S.TalkClientSteerParamsSchema);
 export const validateTalkSessionCreateParams = compile(S.TalkSessionCreateParamsSchema);
-export const validateTalkSessionJoinParams = compile(S.TalkSessionJoinParamsSchema);
 export const validateTalkSessionAppendAudioParams = compile(S.TalkSessionAppendAudioParamsSchema);
 export const validateTalkSessionAcknowledgeMarkParams = compile(
   S.TalkSessionAcknowledgeMarkParamsSchema,
 );
-export const validateTalkSessionTurnParams = compile(S.TalkSessionTurnParamsSchema);
-export const validateTalkSessionCancelTurnParams = compile(S.TalkSessionCancelTurnParamsSchema);
 export const validateTalkSessionCancelOutputParams = compile(S.TalkSessionCancelOutputParamsSchema);
 export const validateTalkSessionSteerParams = compile(S.TalkSessionSteerParamsSchema);
 export const validateTalkSessionSubmitToolResultParams = compile(

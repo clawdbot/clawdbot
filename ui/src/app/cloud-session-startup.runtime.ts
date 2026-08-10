@@ -204,6 +204,7 @@ export default function createApplicationCloudStartupRuntime(
     params.initialUserMessage.prepare({
       sessionKey: entry.owner.sessionKey,
       owner: entry.scope.client,
+      pendingRunId: result.messageId,
       message: buildInitialUserMessage(recovery, entry.createdAt, result),
     });
   };

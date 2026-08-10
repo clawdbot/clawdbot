@@ -269,7 +269,7 @@ export class TerminalSessionManager {
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
       this.indexByConn(request.owner.connId, session.id);
-      session.output.push(composeTerminalIntroBanner(request.cols));
+      session.output.push(composeTerminalIntroBanner());
     }
 
     backend.onData((chunk) => {

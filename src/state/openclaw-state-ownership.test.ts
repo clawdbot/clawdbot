@@ -88,6 +88,83 @@ describe("external shared-state ownership", () => {
     expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();
   });
 
+  it("reads ownership from a WAL when the SHM index is absent", () => {
+    const env = createEnv(true);
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+      const ownership = {
+        version: 1,
+        mode: "external",
+        managerId: "wal-only-manager",
+        claimedAt: 1,
+      } as const;
+      writer
+        .prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        )
+        .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
+
+      const copyDir = tempDirs.make("openclaw-state-ownership-wal-only-");
+      const copyPath = path.join(copyDir, "openclaw.sqlite");
+      fs.copyFileSync(databasePath, copyPath);
+      fs.copyFileSync(`${databasePath}-wal`, `${copyPath}-wal`);
+      expect(fs.existsSync(`${copyPath}-shm`)).toBe(false);
+
+      expect(inspectOpenClawStateOwnershipAtPath(copyPath)).toEqual(ownership);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("rechecks ownership when a WAL appears during immutable inspection", () => {
+    const env = createEnv(true);
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const ownership = {
+      version: 1,
+      mode: "external",
+      managerId: "transition-manager",
+      claimedAt: 2,
+    } as const;
+    const { DatabaseSync } = requireNodeSqlite();
+    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+      | undefined;
+    if (!originalExec) {
+      throw new Error("DatabaseSync.exec descriptor is unavailable");
+    }
+    let writer: InstanceType<typeof DatabaseSync> | undefined;
+    let injected = false;
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string,
+    ) {
+      if (!injected && sql.includes("PRAGMA busy_timeout")) {
+        injected = true;
+        writer = new DatabaseSync(databasePath);
+        originalExec.call(writer, "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+        writer
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+          )
+          .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
+      }
+      return originalExec.call(this, sql);
+    });
+
+    try {
+      expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toEqual(ownership);
+      expect(injected).toBe(true);
+    } finally {
+      exec.mockRestore();
+      writer?.close();
+    }
+  });
+
   it("requires the external marker and makes claims idempotent only for one manager", () => {
     const env = createEnv();
     expect(() => claimOpenClawStateOwnership("gateway-supervisor", { env })).toThrow(

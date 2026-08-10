@@ -399,6 +399,12 @@ function persistChatComposerStateResult(
       options.agentId,
     ).session;
     if (persisted?.draftRevision === draftRevision && (persisted.draft ?? "") === draft) {
+      // Notify only on presence transitions: sidebar draft indicators consume
+      // presence, and content-only notifies would let projection subscribers
+      // re-persist a stale pane over a newer draft (route-fallback invariant).
+      if (Boolean(storedDraft) !== Boolean(draft)) {
+        notifyStoredChatOutboxChanges();
+      }
       return "persisted";
     }
     // Retention limits can make a successful storage write omit this draft.

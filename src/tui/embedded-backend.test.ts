@@ -1851,7 +1851,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
       "active-session",
       "steer this turn",
-      { steeringMode: "all", debounceMs: 500 },
+      { steeringMode: "all", debounceMs: 500, isInboundUserMessage: true },
     );
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 

@@ -307,6 +307,7 @@ export async function prepareSetupMigrationAttemptBoundary(params: {
 export async function withSetupMigrationTargetLock<T>(
   stateDir: string,
   fn: () => Promise<T>,
+  options?: { wait?: boolean },
 ): Promise<T> {
   const resolvedStateDir = path.resolve(stateDir);
   const activeStateDir = activeSetupMigrationTargetLock.getStore();
@@ -320,7 +321,12 @@ export async function withSetupMigrationTargetLock<T>(
   await fs.mkdir(migrationDir, { recursive: true, mode: 0o700 });
   return await withFileLock(
     path.join(migrationDir, "onboarding.lock-target"),
-    ONBOARDING_TARGET_LOCK_OPTIONS,
+    options?.wait === false
+      ? {
+          ...ONBOARDING_TARGET_LOCK_OPTIONS,
+          retries: { ...ONBOARDING_TARGET_LOCK_OPTIONS.retries, retries: 0 },
+        }
+      : ONBOARDING_TARGET_LOCK_OPTIONS,
     async () => await activeSetupMigrationTargetLock.run(resolvedStateDir, fn),
   );
 }

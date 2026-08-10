@@ -2,7 +2,6 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import {
@@ -20,6 +19,10 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -76,7 +79,7 @@ const SessionsSearchOutputSchema = Type.Union([
   ),
 ]);
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 
 type GatewaySearchHit = {
   sessionKey?: unknown;
@@ -325,7 +328,7 @@ export function createSessionsSearchTool(opts?: {
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
-  const gatewayCall = opts?.callGateway ?? callGateway;
+  const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   return {
     label: "Sessions Search",
     name: "sessions_search",
@@ -365,6 +368,7 @@ export function createSessionsSearchTool(opts?: {
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
           restrictToSpawned,
+          callGateway: gatewayCall,
         });
         if (!resolved.ok) {
           return jsonResult({ status: resolved.status, error: resolved.error });
@@ -375,6 +379,7 @@ export function createSessionsSearchTool(opts?: {
           requesterSessionKey: effectiveRequesterKey,
           restrictToSpawned,
           visibilitySessionKey: requestedSessionKey,
+          callGateway: gatewayCall,
         });
         if (!visible.ok) {
           return jsonResult({ status: visible.status, error: visible.error });
@@ -390,14 +395,6 @@ export function createSessionsSearchTool(opts?: {
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const requesterAgentId =
         opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
-      const guard = await createSessionVisibilityGuard({
-        action: "history",
-        defaultAgentId,
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
-      });
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
         defaultAgentId,
@@ -406,10 +403,23 @@ export function createSessionsSearchTool(opts?: {
         visibility,
         a2aPolicy,
       });
+      const directGuard = await createSessionVisibilityGuard({
+        action: "history",
+        defaultAgentId,
+        requesterAgentId,
+        requesterSessionKey: effectiveRequesterKey,
+        visibility,
+        a2aPolicy,
+        callGateway: gatewayCall,
+      });
       if (sessionKey) {
-        const access = !parseAgentSessionKey(sessionKey)
-          ? rowGuard.check({ key: sessionKey, agentId: requesterAgentId })
-          : guard.check(sessionKey);
+        const parsedSessionKey = parseAgentSessionKey(sessionKey);
+        let access: ReturnType<typeof rowGuard.check>;
+        if (parsedSessionKey) {
+          access = directGuard.check(sessionKey);
+        } else {
+          access = rowGuard.check({ key: sessionKey, agentId: requesterAgentId });
+        }
         if (!access.allowed) {
           return jsonResult({ status: access.status, error: access.error });
         }
@@ -491,7 +501,7 @@ export function createSessionsSearchTool(opts?: {
               candidate.access === "row" ||
               (candidate.agentId !== undefined && !parseAgentSessionKey(candidate.key))
                 ? rowGuard.check(candidate)
-                : guard.check(visibilityKey);
+                : directGuard.check(visibilityKey);
             if (!access.allowed) {
               continue;
             }

@@ -65,9 +65,16 @@ describe("worker placement dispatch reclaim", () => {
     ]);
   });
 
-  it("reconciles the workspace before destroying and reclaiming an active worker", async () => {
-    const harness = createHarness(placementStore);
-    await harness.service.dispatch(REQUEST);
+  it("reclaims an unchanged active placement through the fenced teardown lifecycle", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
+      state: "active",
+      turnClaim: null,
+      workspaceBaseManifestRef: MANIFEST_REF,
+    });
 
     await expect(
       harness.service.reclaim({
@@ -77,9 +84,11 @@ describe("worker placement dispatch reclaim", () => {
       }),
     ).resolves.toMatchObject({
       state: "reclaimed",
-      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: null,
+      workspaceBaseManifestRef: MANIFEST_REF,
     });
 
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.log.slice(-11)).toEqual([
       "tunnel:attached",
       "workspace:quiesce",

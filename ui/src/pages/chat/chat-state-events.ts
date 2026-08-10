@@ -59,7 +59,11 @@ function sessionMessageMatchesChat(
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
 }
 
-function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
+function applyLiveUserMessage(
+  state: ChatPageHost,
+  payload: unknown,
+  runActive: boolean | undefined,
+): void {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return;
   }
@@ -105,7 +109,7 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
   reduceChatSessionProjection(
     state,
     { type: "messagePersisted", message, envelope: event },
-    { scope },
+    { scope, runActive },
   );
 }
 
@@ -176,7 +180,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
-    applyLiveUserMessage(state, payload);
+    applyLiveUserMessage(state, payload, event.hasActiveRun ?? undefined);
     void loadChatBranches(state);
   }
   if (matchesChat && event.archived !== null) {

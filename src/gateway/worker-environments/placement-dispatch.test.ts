@@ -461,6 +461,30 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toContain("workspace:resume");
   });
 
+  it("preserves a provider destroy failure after teardown owns the stopped tunnel", async () => {
+    const harness = createHarness(placementStore, {
+      destroyFails: true,
+      destroyFailureState: "destroying",
+      resumeFails: true,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+
+    await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
+
+    expect(harness.environments.get(active.environmentId)).toMatchObject({
+      state: "destroying",
+      ownerEpoch: active.activeOwnerEpoch,
+    });
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { owner: "worker" },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: expect.any(Number) },
+    ]);
+    expect(harness.log).not.toContain("workspace:resume");
+  });
+
   it.each<DispatchStage>([
     "barrier",
     "workspace",
