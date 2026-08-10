@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -114,10 +115,6 @@ type GauntletContext = {
   qaTimeoutMs: number;
 };
 type QaSummary = NonNullable<ReturnType<typeof readQaSuiteSummary>["summary"]>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 /**
  * Parses plugin gateway gauntlet CLI arguments and env defaults.

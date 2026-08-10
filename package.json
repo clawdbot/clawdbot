@@ -1535,6 +1535,7 @@
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node --import tsx scripts/check-changelog-attributions.mts",
+    "check:coercion-helpers": "node --import tsx scripts/check-coercion-helper-declarations.mts",
     "check:database-first-legacy-stores": "node --import tsx scripts/check-database-first-legacy-stores.mts",
     "check:deprecated-api-usage": "node --import tsx scripts/check-deprecated-api-usage.mts",
     "check:deprecated-jsdoc": "node --import tsx scripts/check-deprecated-jsdoc.mts",

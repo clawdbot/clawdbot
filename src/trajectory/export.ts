@@ -1,6 +1,7 @@
 // Trajectory export helpers package recorded trajectories for diagnostics.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
@@ -530,7 +531,7 @@ function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
     value.source === "runtime" &&
     typeof value.type === "string" &&
     typeof value.ts === "string" &&
-    !Number.isNaN(Date.parse(value.ts)) &&
+    parseDateTimestampMs(value.ts) !== undefined &&
     isFiniteNumber(value.seq) &&
     typeof value.sessionId === "string" &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))

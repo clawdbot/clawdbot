@@ -1,6 +1,6 @@
 // Shared fetch and parsing helpers for provider usage endpoints.
 import {
-  asDateTimestampMs,
+  parseDateTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
@@ -29,10 +29,7 @@ export function parseFiniteNumber(value: unknown): number | undefined {
 
 /** Parses a provider reset-time string without leaking an invalid Date timestamp. */
 export function parseUsageResetAt(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return asDateTimestampMs(Date.parse(value));
+  return typeof value === "string" ? parseDateTimestampMs(value) : undefined;
 }
 
 type BuildUsageHttpErrorSnapshotOptions = {

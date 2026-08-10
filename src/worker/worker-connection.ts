@@ -32,7 +32,7 @@ import {
   WorkerFencedError,
   isFencedCloseReason,
   resolvePositiveTimeout,
-  toError,
+  toWorkerConnectionError,
   type WorkerConnectionExit,
   type WorkerConnectionOptions,
   type WorkerConnectionState,
@@ -228,7 +228,7 @@ export class WorkerConnection {
             this.reconnectAbort.signal,
           );
         } catch (error) {
-          throw this.isTerminal() ? this.terminalError() : toError(error);
+          throw this.isTerminal() ? this.terminalError() : toWorkerConnectionError(error);
         }
         remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
@@ -310,7 +310,7 @@ export class WorkerConnection {
       await this.connectUntilReady();
     } catch (error) {
       if (!this.isTerminal()) {
-        this.finishFailed(toError(error));
+        this.finishFailed(toWorkerConnectionError(error));
       }
     } finally {
       this.reconnectPromise = undefined;
@@ -358,7 +358,7 @@ export class WorkerConnection {
       }
     } catch (error) {
       if (!(error instanceof WorkerConnectionInterruptedError) && !this.isTerminal()) {
-        this.finishFailed(toError(error));
+        this.finishFailed(toWorkerConnectionError(error));
         return;
       }
     }

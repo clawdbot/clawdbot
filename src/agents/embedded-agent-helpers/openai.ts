@@ -1,6 +1,7 @@
 /**
  * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
  */
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -56,17 +57,6 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
   }
   if (type === "reasoning" || type.startsWith("reasoning.")) {
     return { id, type };
-  }
-  return null;
-}
-
-function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
 }
@@ -445,7 +435,8 @@ export function downgradeOpenAIReasoningBlocks(
       out.push(msg);
       continue;
     }
-    const messageTimestamp = parseTimestampMs((assistantMsg as { timestamp?: unknown }).timestamp);
+    const messageTimestamp =
+      parseDateTimestampMs((assistantMsg as { timestamp?: unknown }).timestamp) ?? null;
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.
     const dropReplayableReasoning =

@@ -125,7 +125,7 @@ function readShow(params: Record<string, unknown>): boolean {
   return value;
 }
 
-function readOptionalString(
+function readOptionalStringParam(
   params: Record<string, unknown>,
   key: "command" | "cwd",
   options: { trim?: boolean } = {},
@@ -187,8 +187,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       }
 
       if (action === "open") {
-        const command = readOptionalString(params, "command", { trim: false });
-        const cwd = readOptionalString(params, "cwd");
+        const command = readOptionalStringParam(params, "command", { trim: false });
+        const cwd = readOptionalStringParam(params, "cwd");
         const cols = readDimension(params, "cols", DEFAULT_COLS);
         const rows = readDimension(params, "rows", DEFAULT_ROWS);
         const show = readShow(params);

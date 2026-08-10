@@ -1054,7 +1054,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveReactionMessageId",
       "resolveTargetsWithOptionalToken",
       "appendMatchMetadata",
-      "asString",
       "collectIssuesForEnabledAccounts",
       "isRecord",
       "resolveEnabledConfiguredAccountId",
@@ -1153,7 +1152,6 @@ describe("plugin-sdk subpath exports", () => {
     expectRepoSourceOmitsSnippet("src/channels/streaming.ts", "SlackChannelStreamingConfig");
     expectSourceMentions("status-helpers", [
       "appendMatchMetadata",
-      "asString",
       "collectIssuesForEnabledAccounts",
       "isRecord",
       "resolveEnabledConfiguredAccountId",

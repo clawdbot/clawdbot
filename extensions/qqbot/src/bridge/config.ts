@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
@@ -11,7 +12,6 @@ import {
   resolveAccountBase,
   resolveDefaultAccountId,
 } from "../engine/config/resolve.js";
-import { normalizeOptionalString } from "../engine/utils/string-normalize.js";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "../types.js";
 
 export const DEFAULT_ACCOUNT_ID = ENGINE_DEFAULT_ACCOUNT_ID;

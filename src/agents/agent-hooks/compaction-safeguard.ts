@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
@@ -106,11 +107,6 @@ function prependPreviousSummaryForRedistill(params: {
   ];
 }
 
-function coerceTimestamp(value: unknown): number {
-  const timestamp = typeof value === "string" ? Date.parse(value) : value;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0;
-}
-
 function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
   if (entry.type === "message" && entry.message && typeof entry.message === "object") {
     return entry.message;
@@ -122,7 +118,7 @@ function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
       content: entry.content,
       display: entry.display !== false,
       details: entry.details,
-      timestamp: coerceTimestamp(entry.timestamp),
+      timestamp: parseDateTimestampMs(entry.timestamp) ?? 0,
     };
   }
   if (entry.type === "branch_summary") {
@@ -130,7 +126,7 @@ function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
       role: "branchSummary",
       summary: typeof entry.summary === "string" ? entry.summary : "",
       fromId: typeof entry.fromId === "string" ? entry.fromId : "root",
-      timestamp: coerceTimestamp(entry.timestamp),
+      timestamp: parseDateTimestampMs(entry.timestamp) ?? 0,
     };
   }
   return undefined;

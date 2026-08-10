@@ -36,7 +36,7 @@ type EncodedExportTrajectoryRequest = {
 
 const ENCODED_EXPORT_REQUEST_RE = /^[A-Za-z0-9_-]{1,65536}$/u;
 
-function readOptionalString(value: unknown): string | undefined {
+function readNonBlankString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
@@ -59,23 +59,23 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   }
   const request = decoded as EncodedExportTrajectoryRequest;
   const opts: Partial<ExportTrajectoryCommandOptions> = {};
-  const sessionKey = readOptionalString(request.sessionKey);
+  const sessionKey = readNonBlankString(request.sessionKey);
   if (sessionKey !== undefined) {
     opts.sessionKey = sessionKey;
   }
-  const output = readOptionalString(request.output);
+  const output = readNonBlankString(request.output);
   if (output !== undefined) {
     opts.output = output;
   }
-  const store = readOptionalString(request.store);
+  const store = readNonBlankString(request.store);
   if (store !== undefined) {
     opts.store = store;
   }
-  const agent = readOptionalString(request.agent);
+  const agent = readNonBlankString(request.agent);
   if (agent !== undefined) {
     opts.agent = agent;
   }
-  const workspace = readOptionalString(request.workspace);
+  const workspace = readNonBlankString(request.workspace);
   if (workspace !== undefined) {
     opts.workspace = workspace;
   }

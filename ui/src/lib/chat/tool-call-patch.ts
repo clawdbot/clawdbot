@@ -36,7 +36,7 @@ type PatchViewData = {
   move?: { from: string; to: string };
 };
 
-function readString(value: unknown): string | undefined {
+function readNonBlankString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
@@ -371,13 +371,13 @@ function parseStructuredPatch(changes: unknown[]): PatchViewData | null {
   const collector: PatchCollector = { sections: [], storedRows: 0, truncated: false };
   for (const value of changes) {
     const record = asRecord(value);
-    const sourcePath = readString(record?.path)?.trim();
+    const sourcePath = readNonBlankString(record?.path)?.trim();
     if (!record || !sourcePath) {
       continue;
     }
     const operation = readOperation(record.kind);
     const section = startSection(collector, operation, sourcePath);
-    const movePath = readString(
+    const movePath = readNonBlankString(
       asRecord(record.kind)?.move_path ?? asRecord(record.kind)?.movePath,
     );
     if (movePath) {
@@ -413,7 +413,10 @@ export function parsePatchView(args: unknown): PatchViewData | null {
       return structured;
     }
   }
-  const text = readString(record.patch) ?? readString(record.input) ?? readString(record.diff);
+  const text =
+    readNonBlankString(record.patch) ??
+    readNonBlankString(record.input) ??
+    readNonBlankString(record.diff);
   if (!text) {
     return null;
   }

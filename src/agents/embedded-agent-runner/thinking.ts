@@ -1,6 +1,7 @@
 /**
  * Sanitizes reasoning/thinking blocks for replay and recovery.
  */
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -94,19 +95,6 @@ function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
   return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
 }
 
-function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
 function stripSignatureFieldsFromThinkingBlock(
   block: AssistantContentBlock,
 ): AssistantContentBlock {
@@ -190,7 +178,7 @@ export function stripStaleThinkingSignaturesForCompactionReplay(
     if ((message as { role?: unknown }).role !== "compactionSummary") {
       continue;
     }
-    const ts = parseTimestampMs((message as { timestamp?: unknown }).timestamp);
+    const ts = parseDateTimestampMs((message as { timestamp?: unknown }).timestamp) ?? null;
     if (ts !== null) {
       latestCompactionTimestamp =
         latestCompactionTimestamp === null ? ts : Math.max(latestCompactionTimestamp, ts);
@@ -207,7 +195,7 @@ export function stripStaleThinkingSignaturesForCompactionReplay(
       out.push(message);
       continue;
     }
-    const ts = parseTimestampMs((message as { timestamp?: unknown }).timestamp);
+    const ts = parseDateTimestampMs((message as { timestamp?: unknown }).timestamp) ?? null;
     if (ts === null || ts >= latestCompactionTimestamp) {
       out.push(message);
       continue;

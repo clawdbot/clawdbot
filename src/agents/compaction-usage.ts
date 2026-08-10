@@ -2,13 +2,9 @@
  * Shared helpers for clearing assistant usage snapshots invalidated by
  * transcript compaction.
  */
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
-
-function parseCompactionUsageTimestamp(value: unknown): number | null {
-  const timestamp = typeof value === "string" ? Date.parse(value) : value;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
-}
 
 export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends AgentMessage>(
   messages: TMessage[],
@@ -25,9 +21,10 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
     return messages;
   }
 
-  const latestCompactionTimestamp = parseCompactionUsageTimestamp(
-    (messages[latestCompactionSummaryIndex] as { timestamp?: unknown } | undefined)?.timestamp,
-  );
+  const latestCompactionTimestamp =
+    parseDateTimestampMs(
+      (messages[latestCompactionSummaryIndex] as { timestamp?: unknown } | undefined)?.timestamp,
+    ) ?? null;
   let out = messages;
   for (let i = 0; i < messages.length; i += 1) {
     const candidate = messages[i] as
@@ -41,7 +38,7 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
       continue;
     }
 
-    const messageTimestamp = parseCompactionUsageTimestamp(candidate.timestamp);
+    const messageTimestamp = parseDateTimestampMs(candidate.timestamp) ?? null;
     const stale =
       !hasCompactionSummary ||
       (latestCompactionTimestamp !== null && messageTimestamp !== null

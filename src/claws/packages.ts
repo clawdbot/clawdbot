@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
@@ -121,9 +122,9 @@ function ownerInstallIsNewerThanRefs(
   installedAt: string | undefined,
   refs: PersistedClawPackageRef[],
 ): boolean {
-  const timestamp = Date.parse(installedAt ?? "");
+  const timestamp = parseDateTimestampMs(installedAt);
   return (
-    Number.isFinite(timestamp) &&
+    timestamp !== undefined &&
     refs.length > 0 &&
     refs.every((candidate) => timestamp > candidate.updatedAtMs)
   );

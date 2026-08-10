@@ -12,7 +12,11 @@ import {
   type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  normalizeOptionalString,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   claimCodexAppServerLiveThread,
   releaseCodexAppServerLiveThread,
@@ -1833,11 +1837,6 @@ function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | und
   const source = isJsonObject(thread?.source) ? thread.source : undefined;
   const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
   return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
-}
-
-function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function readStringArray(value: unknown): string[] {

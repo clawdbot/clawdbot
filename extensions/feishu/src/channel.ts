@@ -40,6 +40,7 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -69,7 +70,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "./channel-runtime-api.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
-import { isRecord } from "./comment-shared.js";
 import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeConfigAuditRecord, type ConfigAuditRecord } from "../config/io.audit.js";
 import { redactSecrets } from "../logging/redact.js";
 import type { SystemAgentAuditEntry } from "../system-agent/audit.js";
@@ -27,8 +28,7 @@ function legacyAuditRecordCreatedAt(
   if (typeof timestamp !== "string") {
     return 0;
   }
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return parseDateTimestampMs(timestamp) ?? 0;
 }
 
 type PreparedLegacyAuditRecords =

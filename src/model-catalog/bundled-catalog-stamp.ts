@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
 const BUILD_INFO_CANDIDATES = [
   "../build-info.json",
@@ -15,8 +16,8 @@ export function bundledCatalogGeneratedAt(moduleUrl = import.meta.url): number |
       if (typeof info.builtAt !== "string") {
         continue;
       }
-      const generatedAt = Date.parse(info.builtAt);
-      if (Number.isFinite(generatedAt) && generatedAt > 0) {
+      const generatedAt = parseDateTimestampMs(info.builtAt);
+      if (generatedAt !== undefined && generatedAt > 0) {
         return generatedAt;
       }
     } catch {

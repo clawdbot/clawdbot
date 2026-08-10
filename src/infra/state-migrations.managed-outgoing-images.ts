@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   managedImageRecordFromRow,
@@ -312,11 +313,9 @@ function removeClaimedSources(params: {
 }
 
 function isExpiredTransient(record: ManagedImageRecord, nowMs: number, transientTtlMs: number) {
-  const createdAtMs = Date.parse(record.createdAt);
+  const createdAtMs = parseDateTimestampMs(record.createdAt);
   return (
-    record.messageId === null &&
-    Number.isFinite(createdAtMs) &&
-    nowMs - createdAtMs >= transientTtlMs
+    record.messageId === null && createdAtMs !== undefined && nowMs - createdAtMs >= transientTtlMs
   );
 }
 

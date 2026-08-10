@@ -6,7 +6,7 @@ import {
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, parseDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readPiSessionFileBaseline } from "./pi-session-store.js";
 
 const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
@@ -70,17 +70,6 @@ function textFromContent(content: unknown): string | undefined {
     )
     .join("\n");
   return text || undefined;
-}
-
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
 }
 
 function readFilePath(probe: SessionUpstreamProbe): string | undefined {
@@ -168,7 +157,9 @@ async function checkPiSessionUpstreamActivity(
       humanTurns += 1;
       occurredAt = Math.max(
         occurredAt ?? 0,
-        timestampMs(entry.message.timestamp) ?? timestampMs(entry.timestamp) ?? stat.mtimeMs,
+        parseDateTimestampMs(entry.message.timestamp) ??
+          parseDateTimestampMs(entry.timestamp) ??
+          stat.mtimeMs,
       );
     }
     const nextOffset = markerOffset + classifiedBytes;

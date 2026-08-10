@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
@@ -1253,8 +1254,7 @@ function isFailedSessionSqliteMigrationManifest(manifest: SessionSqliteMigration
 
 function manifestSortTime(manifest: SessionSqliteMigrationManifest): number {
   const timestamp = manifest.failedAt ?? manifest.completedAt ?? manifest.startedAt;
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return parseDateTimestampMs(timestamp) ?? 0;
 }
 
 function createPrefilledGithubIssueUrl(title: string, body: string): string {

@@ -1,5 +1,9 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  asFiniteNumber,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   isNonSuccessItemStatus,
   itemKind,
   itemName,
@@ -19,12 +23,7 @@ import {
   shouldEmitTranscriptToolProgress,
 } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import {
-  readHookOutputEntries,
-  readNullableString,
-  readNumber,
-  readString,
-} from "./event-projector-values.js";
+import { readHookOutputEntries, readNullableString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
@@ -78,7 +77,7 @@ export class CodexEventProjection {
     if (!run) {
       return;
     }
-    const durationMs = readNumber(run, "durationMs");
+    const durationMs = asFiniteNumber(run.durationMs);
     const entries = readHookOutputEntries(run.entries);
     const hookTurnId = readNullableString(params, "turnId");
     this.emitAgentEvent({

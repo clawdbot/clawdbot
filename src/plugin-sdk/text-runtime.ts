@@ -50,7 +50,6 @@ export {
   displayString,
   ensureDir,
   escapeRegExp,
-  isRecord,
   normalizeE164,
   pathExists,
   resolveConfigDir,

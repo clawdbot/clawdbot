@@ -13,7 +13,6 @@ export type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
 export {
   appendMatchMetadata,
-  asString,
   collectIssuesForEnabledAccounts,
   formatMatchMetadata,
   resolveEnabledConfiguredAccountId,
