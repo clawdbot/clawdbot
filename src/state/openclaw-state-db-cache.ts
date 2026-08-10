@@ -18,7 +18,7 @@ type OpenClawStateDatabaseCloseResult = {
 };
 
 /** Close both physical-handle owners while retaining every cleanup failure. */
-export function closeOpenClawStateDatabaseHandle(
+function closeOpenClawStateDatabaseHandle(
   database: OpenClawStateDatabase,
 ): OpenClawStateDatabaseCloseResult {
   let caught = false;
@@ -41,7 +41,7 @@ export function closeOpenClawStateDatabaseHandle(
   return { caught, errors };
 }
 
-export function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
+function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
   if (cachedDatabases.get(database.path) !== database) {
     return false;
   }
@@ -54,7 +54,7 @@ export function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase
 }
 
 /** Evict an exact cached shared-state owner after a proven corruption read. */
-export function evictOpenClawStateDatabaseAfterCorruption(
+function evictOpenClawStateDatabaseAfterCorruption(
   database: OpenClawStateDatabase,
   error: unknown,
 ): boolean {
@@ -71,9 +71,7 @@ const terminalOpenLatch = createSqliteTerminalOpenLatch({
 });
 
 /** Publish a fully opened handle and bind query corruption to its exact cache owner. */
-export function publishOpenClawStateDatabase(
-  database: OpenClawStateDatabase,
-): OpenClawStateDatabase {
+function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
   const { db, path: pathname } = database;
   cachedDatabases.set(pathname, database);
   registerNodeSqliteKyselyQueryErrorHandler(db, (error) => {
@@ -86,21 +84,17 @@ export function publishOpenClawStateDatabase(
   return database;
 }
 
-export function getCachedOpenClawStateDatabase(
-  pathname: string,
-): OpenClawStateDatabase | undefined {
+function getCachedOpenClawStateDatabase(pathname: string): OpenClawStateDatabase | undefined {
   return cachedDatabases.get(path.resolve(pathname));
 }
 
-export function getOpenClawStateDatabaseIfOpenAtPath(
-  pathname: string,
-): OpenClawStateDatabase | undefined {
+function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDatabase | undefined {
   const cached = getCachedOpenClawStateDatabase(pathname);
   return cached?.db.isOpen ? cached : undefined;
 }
 
 /** Remove a closed cached owner while fresh-open access is held. */
-export function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase): void {
+function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase): void {
   if (cachedDatabases.get(database.path) !== database) {
     return;
   }
@@ -110,7 +104,7 @@ export function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDat
 }
 
 /** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawStateDatabaseOpenFailure(
+function recordOpenClawStateDatabaseOpenFailure(
   pathname: string,
   error: Error,
   generation?: SqliteFileGeneration,
@@ -119,12 +113,12 @@ export function recordOpenClawStateDatabaseOpenFailure(
 }
 
 /** Clear a terminal open failure after doctor rewrites the database file. */
-export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
+function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
   terminalOpenLatch.clear(pathname);
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-export function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
+function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
     throw terminalFailure;
@@ -132,7 +126,7 @@ export function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
 }
 
 /** Reject a fresh shared-state open after known corruption until repair clears it. */
-export function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   pathname: string,
   env: NodeJS.ProcessEnv,
 ): void {
@@ -157,7 +151,7 @@ export function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
 }
 
 /** Close one cached shared state database handle by exact pathname. */
-export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
   const resolvedPath = path.resolve(pathname);
   const database = cachedDatabases.get(resolvedPath);
   if (!database) {
@@ -172,7 +166,7 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 }
 
 /** Close all cached shared state database handles. */
-export function closeOpenClawStateDatabase(): void {
+function closeOpenClawStateDatabase(): void {
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
     if (database.db.isOpen) {
@@ -183,12 +177,31 @@ export function closeOpenClawStateDatabase(): void {
 }
 
 /** Test whether any cached shared state database handle is still open. */
-export function isOpenClawStateDatabaseOpen(): boolean {
+function isOpenClawStateDatabaseOpen(): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
 /** Close shared state handles and clear terminal failure latches for test isolation. */
-export function closeOpenClawStateDatabaseForTest(): void {
+function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();
 }
+
+/** Process-wide owner for cached shared-state handles and terminal open failures. */
+export const openClawStateDatabaseCache = {
+  assertOpenClawStateDatabaseFreshOpenAllowedAtPath,
+  assertOpenClawStateDatabaseOpenAllowed,
+  clearOpenClawStateDatabaseOpenFailure,
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseHandle,
+  closeStaleCachedOpenClawStateDatabase,
+  evictCachedOpenClawStateDatabase,
+  evictOpenClawStateDatabaseAfterCorruption,
+  getCachedOpenClawStateDatabase,
+  getOpenClawStateDatabaseIfOpenAtPath,
+  isOpenClawStateDatabaseOpen,
+  publishOpenClawStateDatabase,
+  recordOpenClawStateDatabaseOpenFailure,
+};
