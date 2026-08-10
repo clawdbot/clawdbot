@@ -511,22 +511,15 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         return null;
       }
       const client = resolveApprovalClient(resolved.context, preparedTarget.teamId);
-      const to = preparedTarget.teamId
-        ? await resolveEnterpriseApprovalChannel(client, preparedTarget.to)
-        : preparedTarget.to;
-      const eventScope = preparedTarget.teamId
-        ? resolveApprovalEventScope({
-            client,
-            teamId: preparedTarget.teamId,
-          })
-        : undefined;
+      const to = await resolveApprovalChannel(client, preparedTarget.to, preparedTarget.teamId);
+      const eventScope = resolveApprovalEventScope(client, preparedTarget.teamId);
       const message = await sendMessageSlack(to, pendingPayload.text, {
         cfg,
         accountId: resolved.accountId,
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
         client,
-        ...(eventScope ? { eventScope } : {}),
+        eventScope,
       });
       return {
         channelId: message.channelId,
@@ -571,17 +564,23 @@ function resolveApprovalClient(context: SlackApprovalHandlerContext, teamId?: st
   return client;
 }
 
-function resolveApprovalEventScope(params: { client: WebClient; teamId: string }): SlackEventScope {
+function resolveApprovalEventScope(
+  client: WebClient,
+  teamId?: string,
+): SlackEventScope | undefined {
+  if (!teamId) {
+    return undefined;
+  }
   return {
-    teamId: params.teamId,
-    client: params.client,
+    teamId,
+    client,
   };
 }
 
-async function resolveEnterpriseApprovalChannel(
-  client: WebClient,
-  target: string,
-): Promise<string> {
+async function resolveApprovalChannel(client: WebClient, target: string, teamId?: string) {
+  if (!teamId) {
+    return target;
+  }
   const parsed = parseSlackTarget(target, { defaultKind: "channel" });
   if (!parsed) {
     throw new Error("Slack approval delivery target is missing");
