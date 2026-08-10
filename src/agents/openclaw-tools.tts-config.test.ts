@@ -314,6 +314,18 @@ describe("createOpenClawTools transcript ownership wiring", () => {
       expect.objectContaining({ agentAccountId: "delivery" }),
     );
   });
+
+  it("hides transcripts when scheduled account authority has no channel", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCaller: { channel: null, accountId: "creator" },
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
+  });
 });
 
 describe("createOpenClawTools media generation session wiring", () => {

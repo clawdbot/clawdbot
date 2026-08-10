@@ -7,7 +7,7 @@ import { parseSessionDeliveryRoute } from "../routing/session-key.js";
 /** Trusted runtime context for a scheduled run with a server-stamped tool cap. */
 export type ScheduledToolPolicyContext =
   | Extract<CronScheduledToolPolicy, { mode: "trusted" }>
-  | (Extract<CronScheduledToolPolicy, { mode: "account" }> & { ownerChannel: string });
+  | (Extract<CronScheduledToolPolicy, { mode: "account" }> & { ownerChannel?: string });
 
 /** Builds scheduled policy context only when both the cap and trusted owner exist. */
 export function resolveScheduledToolPolicyContext(params: {
@@ -22,5 +22,5 @@ export function resolveScheduledToolPolicyContext(params: {
     return policy;
   }
   const ownerChannel = parseSessionDeliveryRoute(policy.ownerSessionKey)?.channel;
-  return ownerChannel ? { ...policy, ownerChannel } : undefined;
+  return ownerChannel ? { ...policy, ownerChannel } : policy;
 }

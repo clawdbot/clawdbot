@@ -112,7 +112,7 @@ export function createOpenClawTools(
     agentChannel?: string;
     runId?: string;
     agentAccountId?: string;
-    gatewayCaller?: { channel?: string; accountId?: string };
+    gatewayCaller?: { channel?: string | null; accountId?: string };
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -263,10 +263,12 @@ export function createOpenClawTools(
     threadId: options?.agentThreadId,
   });
   // Scheduled turns authorize tools as their creator while retaining separate delivery routing.
-  const callerOptions = { ...options };
-  callerOptions.agentChannel = options?.gatewayCaller?.channel ?? options?.agentChannel;
-  callerOptions.agentAccountId = options?.gatewayCaller?.accountId ?? options?.agentAccountId;
-  Object.assign(callerOptions, { agentId: sessionAgentId, config: resolvedConfig });
+  const caller = { ...options };
+  const callerChannel = options?.gatewayCaller?.channel;
+  caller.agentChannel =
+    callerChannel === null ? undefined : (callerChannel ?? options?.agentChannel);
+  caller.agentAccountId = options?.gatewayCaller?.accountId ?? options?.agentAccountId;
+  Object.assign(caller, { agentId: sessionAgentId, config: resolvedConfig });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
@@ -458,7 +460,8 @@ export function createOpenClawTools(
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     pluginToolDenylist: options?.pluginToolDenylist,
   });
-  const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
+  const transcriptsEnabled = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
+  const includeTranscriptsTool = transcriptsEnabled && options?.gatewayCaller?.channel !== null;
   const tools: AnyAgentTool[] = [
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -485,7 +488,7 @@ export function createOpenClawTools(
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
-            agentAccountId: callerOptions.agentAccountId,
+            agentAccountId: caller.agentAccountId,
             config: options?.config,
             currentDeliveryContext: {
               channel: options?.agentChannel,
@@ -547,7 +550,7 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool ? [createTranscriptsTool(callerOptions)] : []),
+    ...(includeTranscriptsTool ? [createTranscriptsTool(caller)] : []),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
@@ -739,7 +742,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapCaller = createGatewayToolCallerWrapper(hookAgentId, options ? callerOptions : options);
+  const wrapCaller = createGatewayToolCallerWrapper(hookAgentId, options ? caller : options);
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapCaller);

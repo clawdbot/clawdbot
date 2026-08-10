@@ -656,8 +656,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const gatewayCallerAccountId =
     options?.scheduledToolPolicy?.ownerAccountId ?? options?.agentAccountId;
   const gatewayCallerChannel =
-    options?.scheduledToolPolicy?.ownerChannel ??
-    resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider);
+    options?.scheduledToolPolicy?.mode === "account"
+      ? options.scheduledToolPolicy.ownerChannel
+      : resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider);
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
   const pluginToolCallerIdentity =
@@ -753,7 +754,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             ),
             agentAccountId: options?.agentAccountId,
             gatewayCaller: {
-              channel: gatewayCallerChannel,
+              channel:
+                options?.scheduledToolPolicy?.mode === "account"
+                  ? (gatewayCallerChannel ?? null)
+                  : gatewayCallerChannel,
               accountId: gatewayCallerAccountId,
             },
             agentTo: options?.messageTo,

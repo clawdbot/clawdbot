@@ -1247,6 +1247,7 @@ describe("createOpenClawCodingTools", () => {
           mode: "account",
           ownerSessionKey: "agent:main:discord:group:ops",
           ownerAccountId: "creator",
+          ownerChannel: "discord",
         },
         messageThreadId: "42",
         includeCoreTools: false,

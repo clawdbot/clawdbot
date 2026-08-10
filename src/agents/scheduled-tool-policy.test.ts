@@ -44,7 +44,7 @@ describe("resolveScheduledToolPolicyContext", () => {
     });
   });
 
-  it("rejects account provenance without a canonical owner channel", () => {
+  it("preserves account provenance without a canonical owner channel", () => {
     expect(
       resolveScheduledToolPolicyContext({
         toolsAllow: [],
@@ -55,6 +55,11 @@ describe("resolveScheduledToolPolicyContext", () => {
           ownerAccountId: "work",
         },
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:main",
+      ownerAccountId: "work",
+    });
   });
 });
