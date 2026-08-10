@@ -1876,14 +1876,18 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+/* Structural label, not content: at the session row's 13px/500 a group reads as
+   just another session. Type carries the whole split because the head color
+   stays near `--text` for readability; case stays as authored (project names). */
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
 }
 
 .sidebar-session-catalog-project__count {
