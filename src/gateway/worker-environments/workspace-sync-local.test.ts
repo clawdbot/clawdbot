@@ -7,12 +7,9 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_ENTRIES,
-} from "./workspace-manifest.js";
-import {
-  createGitTransferList,
-  preflightWorkerWorkspace,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
+} from "./workspace-inventory-limits.js";
+import { createGitTransferList, runLocalCommandToFile } from "./workspace-sync-local.js";
+import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -112,7 +109,6 @@ describe("runLocalCommandToFile", () => {
 
       const outputPath = await createGitTransferList({
         gitRoot: root,
-        baseCommit: null,
         temporaryDirectory,
         signal: new AbortController().signal,
         timeoutMs: 10_000,
@@ -153,7 +149,6 @@ process.stdout.write("eligible.txt\\0".repeat(${count}));
 
       const acceptedPath = await createGitTransferList({
         gitRoot: root,
-        baseCommit: null,
         temporaryDirectory: firstTransfer,
         signal: new AbortController().signal,
         timeoutMs: 20_000,
@@ -166,7 +161,6 @@ process.stdout.write("eligible.txt\\0".repeat(${count}));
       await expect(
         createGitTransferList({
           gitRoot: root,
-          baseCommit: null,
           temporaryDirectory: secondTransfer,
           signal: new AbortController().signal,
           timeoutMs: 20_000,
@@ -222,10 +216,9 @@ describe("preflightWorkerWorkspace", () => {
       await git(path.join(root, "nested"), "init", "--quiet");
       await fs.writeFile(path.join(root, "nested", "private.txt"), "nested\n");
 
-      const inventory = await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 });
+      await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 });
       const transferPath = await createGitTransferList({
         gitRoot: root,
-        baseCommit: await git(root, "rev-parse", "HEAD"),
         temporaryDirectory: transferDirectory,
         signal: new AbortController().signal,
         timeoutMs: 10_000,
@@ -242,8 +235,6 @@ describe("preflightWorkerWorkspace", () => {
           "tracked.txt",
         ]),
       );
-      expect(inventory.manifestEntries).toBe(paths.size + 1);
-      expect(inventory.eligibleBytes).toBeGreaterThan(0);
     } finally {
       await Promise.all([
         fs.rm(root, { recursive: true, force: true }),

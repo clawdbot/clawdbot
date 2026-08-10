@@ -21,12 +21,11 @@ import {
 import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
 import {
-  changedEntryPaths,
-  workspaceReconciliationRecordCount,
-} from "./workspace-reconcile-plan.js";
-import {
   applyStagedWorkerWorkspace,
+  changedEntryPaths,
+  changedPaths,
   inspectAcceptedWorkerWorkspace,
+  manifestNodes,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
 
@@ -53,6 +52,19 @@ export function workerWorkspaceTransferPaths(
 ): string[] {
   // Staging is directory-agnostic because it transfers file and symlink bytes only.
   return parseV2ChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
+}
+
+function workspaceReconciliationRecordCount(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+): number {
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  let records = 0;
+  for (const entryPath of changedPaths(base, current)) {
+    records += Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath));
+  }
+  return records;
 }
 
 function parseChangedWorkspaceResult(

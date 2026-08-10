@@ -6,13 +6,13 @@ export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-r
 export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 import { MAX_WORKSPACE_HASH_MEMO_BYTES, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
-  MAX_RECONCILIATION_ENTRIES,
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
-} from "./workspace-manifest.js";
+} from "./workspace-inventory-limits.js";
+import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
   DERIVED_WORKSPACE_FILE_NAMES,

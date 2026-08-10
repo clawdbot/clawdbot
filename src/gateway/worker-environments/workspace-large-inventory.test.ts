@@ -177,6 +177,36 @@ it("recovers a converged shipped v1 deletion above the v2 worst-case record limi
   );
 }, 30_000);
 
+it("rejects a directory-only v2 delta above the reconciliation record limit", async () => {
+  const local = await temporaryDirectory("workspace-directory-entry-limit-local");
+  const payload = await temporaryDirectory("workspace-directory-entry-limit-payload");
+  const directoryCount = MAX_RECONCILIATION_ENTRIES / 2 + 1;
+  const manifest = (prefix: string) =>
+    encodeManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [],
+      directories: Array.from(
+        { length: directoryCount },
+        (_, index) => `${prefix}-${index.toString().padStart(5, "0")}`,
+      ),
+    });
+  const base = manifest("base");
+  const current = manifest("current");
+
+  await expect(
+    workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+      root: local,
+      stagingRoot: payload,
+      stagedResultRef: workerWorkspaceResultRef("claim-directory-entry-limit"),
+      baseManifestRef: base.ref,
+      currentManifestRef: current.ref,
+      baseManifestRaw: base.raw,
+      currentManifestRaw: current.raw,
+    }),
+  ).rejects.toThrow(`exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`);
+});
+
 it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
   const local = await temporaryDirectory("workspace-large-baseline-local");
   const payload = await temporaryDirectory("workspace-large-baseline-payload");

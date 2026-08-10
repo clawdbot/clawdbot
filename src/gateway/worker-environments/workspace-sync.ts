@@ -19,7 +19,6 @@ import {
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { registerWorkspaceReconcileReporter } from "./workspace-finalize.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-manifest.js";
 import {
   createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
@@ -27,6 +26,7 @@ import {
   withWorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
@@ -217,7 +217,6 @@ export function createWorkerWorkspaceActions(
 
         gitTransferListPath = await createGitTransferList({
           gitRoot,
-          baseCommit,
           temporaryDirectory: path.join(temporaryDirectory, "transfer"),
           signal: options.ownerSignal,
           timeoutMs: WORKSPACE_TIMEOUT_MS,

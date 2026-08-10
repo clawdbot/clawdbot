@@ -1,13 +1,10 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { readActualWorkspaceManifestImpl } from "./workspace-actual-manifest.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
-  MAX_WORKSPACE_INVENTORY_ENTRIES,
-  MAX_WORKSPACE_INVENTORY_PATH_BYTES,
-  MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
-  serializeWorkerWorkspaceManifest,
+  MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
@@ -19,16 +16,9 @@ import {
 import {
   directoryContainsOnlyDerivedWorkspaceEntries,
   entryMatches,
-  isPortableRootContainedSymlink,
   localPath,
-  localWorkspaceDescendantPaths,
   readWorkspaceFileSnapshot,
 } from "./workspace-reconcile-fs.js";
-import {
-  manifestNodes,
-  sameWorkspaceNode,
-  type WorkspaceNode,
-} from "./workspace-reconcile-plan.js";
 export {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
@@ -40,7 +30,15 @@ export {
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 
+const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
+
 export class ConcurrentWorkspacePathError extends Error {}
+
+type WorkspaceNode =
+  | WorkerWorkspaceManifestEntry
+  | { path: string; type: "directory" }
+  | { path: string; type: "unsupported" }
+  | undefined;
 
 export type WorkerWorkspaceApplyResult = {
   manifestRef: string;
@@ -64,13 +62,33 @@ export async function assertWorkspaceMatchesManifest(params: {
     const matches =
       entry.type === "file" || entry.type === "symlink"
         ? await entryMatches(root, entry)
-        : sameWorkspaceNode(await localWorkspaceNode(root, entry.path), entry);
+        : sameEntry(await localWorkspaceNode(root, entry.path), entry);
     if (!matches) {
       throw new ConcurrentWorkspacePathError(
         `Gateway workspace changed after cloud dispatch: ${entry.path}`,
       );
     }
   }
+}
+
+function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function manifestNodes(manifest: WorkerWorkspaceManifest): Map<string, WorkspaceNode> {
+  return new Map<string, WorkspaceNode>([
+    ...reconciliationDirectories(manifest.directories).map(
+      (entryPath) =>
+        [
+          entryPath,
+          {
+            path: entryPath,
+            type: "directory",
+          } as const,
+        ] as const,
+    ),
+    ...reconciliationEntries(manifest.entries).map((entry) => [entry.path, entry] as const),
+  ]);
 }
 
 function hasPathAncestor(paths: ReadonlySet<string>, entryPath: string): boolean {
@@ -116,220 +134,50 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
   };
 }
 
+async function localWorkspaceDescendantPaths(
+  root: string,
+  entryPaths: readonly string[],
+): Promise<string[]> {
+  const paths: string[] = [];
+  const pending = [...entryPaths];
+  let pathBytes = 0;
+  let enumeratedEntries = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const names: string[] = [];
+    for await (const entry of await fs.opendir(localPath(root, directory))) {
+      names.push(entry.name);
+      enumeratedEntries += 1;
+      if (enumeratedEntries > MAX_RECONCILIATION_ENTRIES) {
+        throw new Error("Gateway workspace manifest has too many entries");
+      }
+    }
+    for (const name of names.toSorted()) {
+      const childPath = `${directory}/${name}`;
+      pathBytes += Buffer.byteLength(childPath);
+      if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
+        throw new Error("Gateway workspace manifest paths exceed their byte limit");
+      }
+      if (isDerivedWorkspacePath(childPath)) {
+        continue;
+      }
+      paths.push(childPath);
+      const stats = await fs.lstat(localPath(root, childPath));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        pending.push(childPath);
+      }
+    }
+  }
+  return paths;
+}
+
 export async function readActualWorkspaceManifest(params: {
   root: string;
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
-  const root = await fs.realpath(params.root);
-  const rawEntries: Array<
-    WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
-  > = [];
-  let totalBytes = 0;
-  let manifestPathBytes = 0;
-  let traversedEntries = 0;
-  let traversedPathBytes = 0;
-  const addEntry = (entry: (typeof rawEntries)[number], bytes = 0): void => {
-    totalBytes += bytes;
-    if (totalBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-      throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
-    }
-    manifestPathBytes += Buffer.byteLength(entry.path);
-    if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw new Error("Gateway workspace manifest paths exceed their byte limit");
-    }
-    rawEntries.push(entry);
-    if (rawEntries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw new Error("Gateway workspace manifest has too many entries");
-    }
-  };
-  const checkTraversal = (relative: string): void => {
-    traversedEntries += 1;
-    traversedPathBytes += Buffer.byteLength(relative);
-    if (traversedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw new Error("Gateway workspace manifest has too many entries");
-    }
-    if (traversedPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw new Error("Gateway workspace manifest paths exceed their byte limit");
-    }
-  };
-  const addFile = async (relative: string): Promise<void> => {
-    const snapshot = await readWorkspaceFileSnapshot(
-      root,
-      relative,
-      MAX_WORKSPACE_INVENTORY_TOTAL_BYTES - totalBytes,
-    );
-    if (snapshot.type === "file") {
-      addEntry(
-        {
-          path: relative,
-          type: "file",
-          mode: snapshot.mode,
-          size: snapshot.size,
-          sha256: snapshot.sha256,
-        },
-        snapshot.size,
-      );
-      return;
-    }
-    throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
-  };
-  const addIncludedPath = async (
-    relative: string,
-    includedNodes: ReadonlySet<string>,
-    derivedOnlyDirectories: ReadonlySet<string>,
-  ): Promise<"included" | "derived-only" | "absent"> => {
-    if (isDerivedWorkspacePath(relative)) {
-      return "derived-only";
-    }
-    checkTraversal(relative);
-    const absolute = localPath(root, relative);
-    const stats = await fs.lstat(absolute).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-        return undefined;
-      }
-      throw error;
-    });
-    if (!stats) {
-      return "absent";
-    }
-    if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (params.preserveDirectories?.has(relative)) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
-        return "included";
-      }
-      let hasDerivedEntry = false;
-      let hasIncludedEntry = false;
-      for await (const entry of await fs.opendir(absolute)) {
-        const child = `${relative}/${entry.name}`;
-        if (isDerivedWorkspacePath(child) || derivedOnlyDirectories.has(child)) {
-          hasDerivedEntry = true;
-        } else if (includedNodes.has(child)) {
-          hasIncludedEntry = true;
-        }
-      }
-      if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
-        return "included";
-      }
-      return "derived-only";
-    }
-    if (stats.isSymbolicLink()) {
-      const target = await fs.readlink(absolute);
-      if (isPortableRootContainedSymlink(root, relative, target)) {
-        addEntry(
-          { path: relative, type: "symlink", mode: 0o777, target },
-          Buffer.byteLength(target),
-        );
-        return "included";
-      }
-      return "absent";
-    }
-    if (stats.isFile()) {
-      await addFile(relative);
-      return "included";
-    }
-    return "absent";
-  };
-  const walk = async (
-    relativeDirectory: string,
-  ): Promise<{ hasDerivedEntry: boolean; included: boolean }> => {
-    const absoluteDirectory = relativeDirectory ? localPath(root, relativeDirectory) : root;
-    let hasDerivedEntry = false;
-    let hasNonDerivedEntry = false;
-    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
-      const name = directoryEntry.name;
-      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
-      checkTraversal(relative);
-      if (!relativeDirectory && name === ".git") {
-        continue;
-      }
-      if (isDerivedWorkspacePath(relative)) {
-        hasDerivedEntry = true;
-        continue;
-      }
-      const absolute = localPath(root, relative);
-      const stats = await fs.lstat(absolute);
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        const child = await walk(relative);
-        if (child.included || params.preserveDirectories?.has(relative)) {
-          addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
-          hasNonDerivedEntry = true;
-        } else {
-          hasDerivedEntry ||= child.hasDerivedEntry;
-        }
-      } else if (stats.isSymbolicLink()) {
-        hasNonDerivedEntry = true;
-        const target = await fs.readlink(absolute);
-        if (!isPortableRootContainedSymlink(root, relative, target)) {
-          // Like other unsupported local nodes, an escaping symlink is retained
-          // as a conflict but omitted from the canonical cloud manifest.
-          continue;
-        }
-        addEntry(
-          {
-            path: relative,
-            type: "symlink",
-            mode: 0o777,
-            target,
-          },
-          Buffer.byteLength(target),
-        );
-      } else if (stats.isFile()) {
-        hasNonDerivedEntry = true;
-        await addFile(relative);
-      } else {
-        hasNonDerivedEntry = true;
-        // Special local nodes cannot be represented in a cloud manifest. They
-        // remain in place and are surfaced as conflicts when the worker changed
-        // the same path; omitting them lets that conflicted turn still finish.
-        continue;
-      }
-    }
-    return {
-      hasDerivedEntry,
-      // Preserve real empty directories, but omit a directory whose only
-      // physical contents are excluded derived paths.
-      included: hasNonDerivedEntry || !hasDerivedEntry,
-    };
-  };
-  if (params.includePaths) {
-    const includedNodes = new Set<string>();
-    const derivedOnlyDirectories = new Set<string>();
-    const paths = [...params.includePaths]
-      .map((relative) => ({ relative, depth: relative.split("/").length }))
-      .toSorted(
-        (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
-      );
-    for (const { relative } of paths) {
-      const state = await addIncludedPath(relative, includedNodes, derivedOnlyDirectories);
-      if (state === "included") {
-        includedNodes.add(relative);
-      } else if (state === "derived-only") {
-        derivedOnlyDirectories.add(relative);
-      }
-    }
-  } else {
-    await walk("");
-  }
-  const directories = rawEntries
-    .filter((entry) => entry.type === "directory")
-    .toSorted((left, right) => left.path.localeCompare(right.path));
-  const manifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit: params.baseCommit,
-    entries: rawEntries
-      .filter((entry): entry is WorkerWorkspaceManifestEntry => entry.type !== "directory")
-      .toSorted((left, right) => left.path.localeCompare(right.path)),
-    directories: directories.map((entry) => entry.path),
-  };
-  const raw = serializeWorkerWorkspaceManifest(manifest);
-  const manifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-  return {
-    manifestRef,
-    manifest,
-  };
+  return await readActualWorkspaceManifestImpl(params);
 }
 
 export async function inspectAcceptedWorkerWorkspace(params: {
@@ -391,6 +239,36 @@ export async function assertActualWorkspaceManifest(params: {
   if (actual.manifestRef !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }
+}
+
+export function changedPaths(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+): Set<string> {
+  const baseByPath = manifestNodes(base);
+  const currentByPath = manifestNodes(current);
+  return new Set(
+    [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
+      (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
+    ),
+  );
+}
+
+export function changedEntryPaths(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+): Set<string> {
+  const baseByPath = new Map(
+    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
+  );
+  const currentByPath = new Map(
+    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
+  );
+  return new Set(
+    [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
+      (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
+    ),
+  );
 }
 
 export async function applyWorkspaceDirectoryChanges(params: {
@@ -471,7 +349,7 @@ export function hasReplacedBaseEntryAncestor(
   for (let index = 1; index < segments.length; index += 1) {
     const ancestor = segments.slice(0, index).join("/");
     const baseEntry = baseByPath.get(ancestor);
-    if (baseEntry && !sameWorkspaceNode(baseEntry, currentByPath.get(ancestor))) {
+    if (baseEntry && !sameEntry(baseEntry, currentByPath.get(ancestor))) {
       return true;
     }
   }
@@ -492,7 +370,7 @@ export async function preflightWorkspaceApply(params: {
   const manifestPaths = [...new Set([...baseNodes.keys(), ...currentNodes.keys()])];
   const changed = new Set(
     manifestPaths.filter(
-      (entryPath) => !sameWorkspaceNode(baseNodes.get(entryPath), currentNodes.get(entryPath)),
+      (entryPath) => !sameEntry(baseNodes.get(entryPath), currentNodes.get(entryPath)),
     ),
   );
   const structurallyReplacedDirectories = new Set(
@@ -572,11 +450,11 @@ export async function preflightWorkspaceApply(params: {
       const localStructurallyMatchesBase =
         localAncestor?.type === "directory" && baseAncestor?.type === "directory"
           ? true
-          : sameWorkspaceNode(localAncestor, baseAncestor);
+          : sameEntry(localAncestor, baseAncestor);
       const localStructurallyMatchesCurrent =
         localAncestor?.type === "directory" && currentAncestor?.type === "directory"
           ? true
-          : sameWorkspaceNode(localAncestor, currentAncestor);
+          : sameEntry(localAncestor, currentAncestor);
       if (!localStructurallyMatchesBase && !localStructurallyMatchesCurrent) {
         conflicts.add(ancestor);
         blockingConflicts.add(ancestor);
@@ -595,8 +473,8 @@ export async function preflightWorkspaceApply(params: {
       if (
         baseAncestor &&
         baseAncestor.type !== "directory" &&
-        !sameWorkspaceNode(baseAncestor, currentNodes.get(ancestor)) &&
-        sameWorkspaceNode(await localNode(ancestor), baseAncestor)
+        !sameEntry(baseAncestor, currentNodes.get(ancestor)) &&
+        sameEntry(await localNode(ancestor), baseAncestor)
       ) {
         replacedBaseAncestor = true;
         break;
@@ -615,11 +493,11 @@ export async function preflightWorkspaceApply(params: {
         local = undefined;
       }
     }
-    if (sameWorkspaceNode(local, baseNodes.get(entryPath))) {
+    if (sameEntry(local, baseNodes.get(entryPath))) {
       if (changed.has(entryPath)) {
         applyPaths.add(entryPath);
       }
-    } else if (!sameWorkspaceNode(local, currentNodes.get(entryPath))) {
+    } else if (!sameEntry(local, currentNodes.get(entryPath))) {
       conflicts.add(entryPath);
       const current = currentNodes.get(entryPath);
       if (

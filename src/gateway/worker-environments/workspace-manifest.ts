@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+  MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
@@ -40,11 +46,6 @@ export type WorkerWorkspaceReconciliationJournalAdapter = {
 export const MAX_RECONCILIATION_ENTRIES = 25_000;
 export const MAX_RECONCILIATION_FILE_BYTES = 64 * 1024 * 1024;
 export const MAX_RECONCILIATION_TOTAL_BYTES = 256 * 1024 * 1024;
-export const MAX_WORKSPACE_INVENTORY_ENTRIES = 250_000;
-export const MAX_WORKSPACE_GIT_CANDIDATES = MAX_WORKSPACE_INVENTORY_ENTRIES * 4;
-export const MAX_WORKSPACE_INVENTORY_PATH_BYTES = 64 * 1024 * 1024;
-export const MAX_WORKSPACE_MANIFEST_BYTES = 64 * 1024 * 1024;
-export const MAX_WORKSPACE_INVENTORY_TOTAL_BYTES = 4 * 1024 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 

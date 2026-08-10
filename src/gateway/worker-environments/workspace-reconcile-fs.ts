@@ -1,171 +1,33 @@
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside, resolveOpenedFileRealPathForHandle } from "../../infra/fs-safe.js";
 import { runCommandBuffered } from "../../process/exec.js";
-import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
+import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import {
-  gitFileMode,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
-const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
 
 export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
-}
-
-export function isPortableRootContainedSymlink(
-  root: string,
-  entryPath: string,
-  target: string,
-): boolean {
-  if (
-    !target ||
-    target.includes("\\") ||
-    path.posix.isAbsolute(target) ||
-    path.win32.parse(target).root !== ""
-  ) {
-    return false;
-  }
-  const resolved = path.resolve(path.dirname(localPath(root, entryPath)), target);
-  return resolved === root || resolved.startsWith(`${root}${path.sep}`);
-}
-
-export async function localWorkspaceDescendantPaths(
-  root: string,
-  entryPaths: readonly string[],
-): Promise<string[]> {
-  const paths: string[] = [];
-  const pending = [...entryPaths];
-  let pathBytes = 0;
-  let enumeratedEntries = 0;
-  while (pending.length > 0) {
-    const directory = pending.pop()!;
-    const names: string[] = [];
-    for await (const entry of await fs.opendir(localPath(root, directory))) {
-      names.push(entry.name);
-      enumeratedEntries += 1;
-      if (enumeratedEntries > MAX_RECONCILIATION_ENTRIES) {
-        throw new Error("Gateway workspace manifest has too many entries");
-      }
-    }
-    for (const name of names.toSorted()) {
-      const childPath = `${directory}/${name}`;
-      pathBytes += Buffer.byteLength(childPath);
-      if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
-        throw new Error("Gateway workspace manifest paths exceed their byte limit");
-      }
-      if (isDerivedWorkspacePath(childPath)) {
-        continue;
-      }
-      paths.push(childPath);
-      const stats = await fs.lstat(localPath(root, childPath));
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        pending.push(childPath);
-      }
-    }
-  }
-  return paths;
 }
 
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
   | { type: "unsupported" };
 
-async function readOpenedWorkspaceFile(params: {
-  handle: Awaited<ReturnType<typeof fs.open>>;
-  expectedPath: string;
-  root?: string;
-  maxBytes: number;
-}): Promise<WorkspaceFileSnapshot> {
-  const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
-  const before = await params.handle.stat({ bigint: true });
-  const realPath = await resolveOpenedFileRealPathForHandle(params.handle, params.expectedPath);
-  if (!before.isFile() || (params.root && !isPathInside(params.root, realPath))) {
-    throw new Error("Gateway workspace file changed while it was being read");
-  }
-  if (before.size > BigInt(params.maxBytes)) {
-    return { type: "unsupported" };
-  }
-  const identity = workspaceStatIdentity("gateway", before);
-  let sha256 = hashMemo?.get(identity);
-  let size = Number(before.size);
-  if (sha256) {
-    if (metrics) {
-      metrics.memoHitCount += 1;
-    }
-  } else {
-    const hashStartedAt = performance.now();
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    size = 0;
-    for (;;) {
-      const { bytesRead } = await params.handle.read(buffer, 0, buffer.length, size);
-      if (bytesRead === 0) {
-        break;
-      }
-      size += bytesRead;
-      if (size > params.maxBytes) {
-        return { type: "unsupported" };
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-    sha256 = hash.digest("hex");
-    if (metrics) {
-      metrics.contentHashCount += 1;
-      metrics.contentHashDurationMs += performance.now() - hashStartedAt;
-    }
-  }
-  const after = await params.handle.stat({ bigint: true });
-  if (after.size !== BigInt(size) || workspaceStatIdentity("gateway", after) !== identity) {
-    throw new Error("Gateway workspace file changed while it was being read");
-  }
-  hashMemo?.set(identity, sha256);
-  return {
-    type: "file",
-    mode: gitFileMode(Number(after.mode & 0o777n)),
-    size,
-    sha256,
-  };
-}
-
 export async function readWorkspaceFileSnapshot(
   root: string,
   entryPath: string,
-  maxBytes = MAX_RECONCILIATION_FILE_BYTES,
 ): Promise<WorkspaceFileSnapshot> {
   const absolute = localPath(root, entryPath);
-  const handle = await fs.open(
-    absolute,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute, root, maxBytes });
-  } finally {
-    await handle.close();
-  }
+  return await readWorkspaceFileSnapshotWithLimit(absolute, MAX_RECONCILIATION_FILE_BYTES, root);
 }
 
 async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFileSnapshot> {
-  const handle = await fs.open(
-    absolute,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    return await readOpenedWorkspaceFile({
-      handle,
-      expectedPath: absolute,
-      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    });
-  } finally {
-    await handle.close();
-  }
+  return await readWorkspaceFileSnapshotWithLimit(absolute, MAX_RECONCILIATION_FILE_BYTES);
 }
 
 export async function absoluteEntryMatches(

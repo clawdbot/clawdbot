@@ -9,7 +9,6 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { workspaceReconciliationRecordCount } from "./workspace-reconcile-plan.js";
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
@@ -795,11 +794,5 @@ describe("worker workspace reconciliation recovery", () => {
     const empty = manifest([]);
     expect(workerWorkspaceTransferPaths(additions, empty)).toHaveLength(MAX_RECONCILIATION_ENTRIES);
     expect(workerWorkspaceTransferPaths(empty, additions)).toEqual([]);
-    expect(
-      workspaceReconciliationRecordCount(
-        { ...empty, directories: ["removed"] },
-        { ...empty, directories: ["added"] },
-      ),
-    ).toBe(2);
   });
 });
