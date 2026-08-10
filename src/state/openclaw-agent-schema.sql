@@ -67,6 +67,51 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
   ON session_nodes(session_key)
   WHERE entry_valid = 0;
 
+-- Write-once memory provenance for one logical session. Current authority is
+-- rechecked in shared state; this row is never rewritten to chase a later
+-- principal, binding, or session-window mapping.
+CREATE TABLE IF NOT EXISTS session_memory_subjects (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  binding_id TEXT,
+  principal_id TEXT,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN (
+    'user', 'conversation', 'service', 'agent', 'system', 'ambiguous', 'quarantined'
+  )),
+  subject_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  CHECK (
+    (subject_kind = 'user' AND binding_id IS NOT NULL AND principal_id IS NOT NULL)
+    OR
+    (subject_kind IN ('conversation', 'service', 'agent', 'system') AND binding_id IS NULL AND principal_id IS NOT NULL)
+    OR
+    (subject_kind IN ('ambiguous', 'quarantined') AND binding_id IS NULL AND principal_id IS NULL)
+  )
+) STRICT;
+
+-- A logical node keeps one immutable subject. Every session-id window gets an
+-- immutable snapshot of that subject so reset/rebind races cannot silently
+-- inherit authority from a different generation.
+CREATE TABLE IF NOT EXISTS session_memory_subject_snapshots (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  subject_revision TEXT NOT NULL,
+  session_identity_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (session_key) REFERENCES session_memory_subjects(session_key)
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS session_memory_subjects_immutable
+BEFORE UPDATE ON session_memory_subjects
+BEGIN
+  SELECT RAISE(ABORT, 'session memory subject is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_memory_subject_snapshots_immutable
+BEFORE UPDATE ON session_memory_subject_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'session memory subject snapshot is immutable');
+END;
+
 CREATE TABLE IF NOT EXISTS session_key_contract (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   main_key TEXT NOT NULL,

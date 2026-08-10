@@ -87,6 +87,13 @@ export async function enforceTelegramDmAccess(params: {
   bot: Bot;
   logger: TelegramDmAccessLogger;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
+  memoryIdentityAdmission?: {
+    admitVerifiedDirectPairingSender: (params: {
+      channel: string;
+      accountId: string;
+      stableSenderId: string;
+    }) => unknown;
+  };
 }): Promise<boolean> {
   const {
     isGroup,
@@ -98,6 +105,7 @@ export async function enforceTelegramDmAccess(params: {
     bot,
     logger,
     upsertPairingRequest,
+    memoryIdentityAdmission: admissionCapability,
   } = params;
   if (isGroup) {
     return true;
@@ -125,6 +133,15 @@ export async function enforceTelegramDmAccess(params: {
   if (access.decision === "pairing") {
     try {
       const telegramUserId = sender.userId ?? sender.candidateId;
+      // Only a Bot API-authenticated sender id can produce a memory receipt.
+      // Legacy pairing still works for unusual updates which lack `from`.
+      const memoryIdentityAdmission = sender.userId
+        ? admissionCapability?.admitVerifiedDirectPairingSender({
+            channel: "telegram",
+            accountId,
+            stableSenderId: sender.userId,
+          })
+        : undefined;
       await createChannelPairingChallengeIssuer({
         channel: "telegram",
         accountId,
@@ -134,6 +151,7 @@ export async function enforceTelegramDmAccess(params: {
             id,
             accountId,
             meta,
+            ...(memoryIdentityAdmission ? { memoryIdentityAdmission } : {}),
           }),
       })({
         senderId: telegramUserId,

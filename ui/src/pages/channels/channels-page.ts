@@ -5,6 +5,8 @@ import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
   NostrProfile,
+  UserProfile,
+  UsersListResult,
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -74,6 +76,17 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   @state()
   private pairingNotice: string | null = null;
+
+  @state()
+  private pairingProfiles: readonly UserProfile[] | null = null;
+
+  @state()
+  private pairingProfilesLoading = false;
+
+  @state()
+  private pairingProfilesError: string | null = null;
+
+  private pairingProfilesRequestGeneration = 0;
 
   @state()
   private showAdvancedSettings = false;
@@ -174,6 +187,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.pairingChannelFilter = null;
       this.pairingAccountFilter = null;
       this.pairingNotice = null;
+      this.clearPairingProfiles();
     }
     this.gatewayPairingAuthSignature = pairingAuthSignature;
     this.syncPairingPolling(snapshot);
@@ -243,6 +257,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.pairingChannelFilter = null;
     this.pairingAccountFilter = null;
     this.pairingNotice = null;
+    this.clearPairingProfiles();
     this.pairingPolling.stop();
     this.invalidateNostrForm();
     this.subscriptions.clear();
@@ -588,16 +603,68 @@ class ChannelsPage extends OpenClawLightDomElement {
       request,
       notify: false,
       bootstrapCommandOwner: false,
+      targetProfileId: null,
     };
+    if (
+      kind === "approve" &&
+      hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null)
+    ) {
+      void this.loadPairingProfiles();
+    }
   }
 
   private patchPairingPrompt(
-    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
+    patch: Partial<
+      Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "targetProfileId">
+    >,
   ) {
     if (!this.pairingPrompt) {
       return;
     }
     this.pairingPrompt = { ...this.pairingPrompt, ...patch };
+  }
+
+  private clearPairingProfiles() {
+    this.pairingProfilesRequestGeneration += 1;
+    this.pairingProfiles = null;
+    this.pairingProfilesLoading = false;
+    this.pairingProfilesError = null;
+  }
+
+  private async loadPairingProfiles() {
+    const gateway = this.context.gateway.snapshot;
+    const client = gateway.client;
+    if (
+      gateway.phase !== "connected" ||
+      !client ||
+      !hasOperatorAdminAccess(gateway.hello?.auth ?? null)
+    ) {
+      return;
+    }
+    const requestGeneration = ++this.pairingProfilesRequestGeneration;
+    this.pairingProfilesLoading = true;
+    this.pairingProfilesError = null;
+    try {
+      const result = await client.request<UsersListResult>("users.list", {});
+      if (requestGeneration !== this.pairingProfilesRequestGeneration) {
+        return;
+      }
+      this.pairingProfiles = result.profiles
+        .filter((profile) => profile.mergedInto === null)
+        .toSorted((left, right) => {
+          const byName = (left.displayName ?? left.id).localeCompare(right.displayName ?? right.id);
+          return byName || left.id.localeCompare(right.id);
+        });
+    } catch (error) {
+      if (requestGeneration !== this.pairingProfilesRequestGeneration) {
+        return;
+      }
+      this.pairingProfilesError = String(error);
+    } finally {
+      if (requestGeneration === this.pairingProfilesRequestGeneration) {
+        this.pairingProfilesLoading = false;
+      }
+    }
   }
 
   private async confirmPairingPrompt() {
@@ -624,6 +691,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       requestId: prompt.request.requestId,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
+      ...(prompt.targetProfileId ? { targetProfileId: prompt.targetProfileId } : {}),
     });
     if (!result || this.pairingPrompt !== prompt) {
       return;
@@ -675,6 +743,9 @@ class ChannelsPage extends OpenClawLightDomElement {
           pairingAccountFilter: this.pairingAccountFilter,
           pairingPrompt: this.pairingPrompt,
           pairingNotice: this.pairingNotice,
+          pairingProfiles: this.pairingProfiles,
+          pairingProfilesLoading: this.pairingProfilesLoading,
+          pairingProfilesError: this.pairingProfilesError,
           canManagePairing,
           canAdmin,
           whatsappMessage: channels.whatsappLoginMessage,

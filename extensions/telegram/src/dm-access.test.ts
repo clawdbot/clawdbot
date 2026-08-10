@@ -171,4 +171,42 @@ describe("enforceTelegramDmAccess", () => {
       "telegram pairing request",
     );
   });
+
+  it("stages loader-attested sender evidence with the direct pairing request", async () => {
+    const proof = {};
+    const admitVerifiedDirectPairingSender = vi.fn(() => proof);
+    createChannelPairingChallengeIssuerMock.mockImplementationOnce(
+      ({ upsertPairingRequest }: Parameters<typeof createChannelPairingChallengeIssuer>[0]) =>
+        async () => {
+          await upsertPairingRequest({ id: "12345" });
+        },
+    );
+
+    await enforceTelegramDmAccess({
+      isGroup: false,
+      dmPolicy: "pairing",
+      msg: createDmMessage(),
+      chatId: 42,
+      effectiveDmAllow: normalizeAllowFrom([]),
+      accountId: "main",
+      bot: { api: { sendMessage: vi.fn(async () => undefined) } } as never,
+      logger: { info: vi.fn() },
+      upsertPairingRequest: upsertChannelPairingRequestMock,
+      memoryIdentityAdmission: { admitVerifiedDirectPairingSender },
+    });
+
+    expect(admitVerifiedDirectPairingSender).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "main",
+      stableSenderId: "12345",
+    });
+    expect(upsertChannelPairingRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "main",
+        id: "12345",
+        memoryIdentityAdmission: proof,
+      }),
+    );
+  });
 });

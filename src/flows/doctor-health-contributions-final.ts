@@ -132,6 +132,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:memory-shared-main-dm-scope",
+      label: "Memory DM isolation",
+      healthCheckIds: ["core/doctor/memory-shared-main-dm-scope"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/memory-shared-main-dm-scope"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:web-fetch-proxy",
       label: "Web fetch proxy",
       run: runWebFetchProxyHealth,

@@ -167,11 +167,13 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
   if (method === "channels.pairing.approve") {
-    const bootstrapCommandOwner =
+    const request =
       params && typeof params === "object" && !Array.isArray(params)
-        ? (params as { bootstrapCommandOwner?: unknown }).bootstrapCommandOwner
+        ? (params as { bootstrapCommandOwner?: unknown; targetProfileId?: unknown })
         : undefined;
-    return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
+    return request?.bootstrapCommandOwner === true || request?.targetProfileId !== undefined
+      ? [PAIRING_SCOPE, ADMIN_SCOPE]
+      : [PAIRING_SCOPE];
   }
   if (method === "fs.listDir") {
     const targetsNode =

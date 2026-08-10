@@ -8,7 +8,7 @@ export const USER_PREFS_ENTRY_LIMIT = 32;
 export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
 
-const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
+export const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
 const UserPreferenceKeySchema = Type.String({ pattern: "^.{1,256}$" });
 const UserPreferenceEntriesSchema = Type.Record(UserPreferenceKeySchema, Type.Unknown());

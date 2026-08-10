@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { UserProfileIdSchema } from "./users.js";
 
 const ChannelPairingAccountSchema = closedObject({
   channel: NonEmptyString,
@@ -48,6 +49,8 @@ export const ChannelsPairingApproveParamsSchema = closedObject({
   channel: NonEmptyString,
   accountId: NonEmptyString,
   requestId: NonEmptyString,
+  /** Explicit existing profile which owns the verified sender's memory identity. */
+  targetProfileId: Type.Optional(UserProfileIdSchema),
   notify: Type.Optional(Type.Boolean()),
   bootstrapCommandOwner: Type.Optional(Type.Boolean()),
 });

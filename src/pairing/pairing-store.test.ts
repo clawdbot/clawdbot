@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelMemoryIdentityAdmission } from "../channels/message-access/memory-identity-admission.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -11,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 
 const pairingMocks = vi.hoisted(() => ({
   getPairingAdapter: vi.fn<
@@ -84,6 +86,33 @@ function requireFirstPairingRequest(
     throw new Error("expected pairing request");
   }
   return request;
+}
+
+function admitVerifiedPairingSender(params: {
+  channel?: string;
+  accountId?: string;
+  senderId: string;
+}) {
+  const channel = params.channel ?? "telegram";
+  return createChannelMemoryIdentityAdmission({
+    pluginId: channel,
+    adapterId: `plugin:${channel}`,
+    ownsChannel: (candidate) => candidate === channel,
+    isActive: () => true,
+  }).admitVerifiedDirectPairingSender({
+    channel,
+    accountId: params.accountId ?? "default",
+    stableSenderId: params.senderId,
+  });
+}
+
+function memoryPairingReceiptCount(env: NodeJS.ProcessEnv): number {
+  const db = openOpenClawStateDatabase({ env }).db;
+  return (
+    db.prepare("SELECT COUNT(*) AS count FROM memory_pairing_identity_receipts").get() as {
+      count: number;
+    }
+  ).count;
 }
 
 async function withMockRandomInt(params: {
@@ -434,6 +463,247 @@ describe("pairing store", () => {
         env,
       }),
     ).resolves.toEqual({ changed: true, allowFrom: ["shared"] });
+  });
+
+  it("atomically links a verified receipt to the explicit target profile", async () => {
+    const { env } = createTestEnv();
+    const admin = ensureProfileForEmail("admin@example.test", { env });
+    const alice = ensureProfileForEmail("alice@example.test", { env });
+    const admission = createChannelMemoryIdentityAdmission({
+      pluginId: "telegram",
+      adapterId: "plugin:telegram",
+      ownsChannel: (channel) => channel === "telegram",
+      isActive: () => true,
+    }).admitVerifiedDirectPairingSender({
+      channel: "telegram",
+      accountId: "default",
+      stableSenderId: "sender-alice",
+    });
+    expect(admission).toBeDefined();
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "default",
+      id: "pending-alice",
+      env,
+      memoryIdentityAdmission: admission,
+    });
+    const request = requireFirstPairingRequest(await listChannelPairingRequests("telegram", env));
+    const requestId = resolveChannelPairingRequestId("telegram", request);
+
+    await expect(
+      approveChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        requestId,
+        env,
+        memoryIdentityLink: { targetProfileId: alice.id, createdByProfileId: admin.id },
+      }),
+    ).resolves.toMatchObject({ id: "pending-alice" });
+    expect(await listChannelPairingRequests("telegram", env)).toEqual([]);
+    expect(await readChannelAllowFromStore("telegram", env, "default")).toEqual(["pending-alice"]);
+
+    const db = openOpenClawStateDatabase({ env }).db;
+    expect(
+      db
+        .prepare(
+          `SELECT p.user_profile_id, b.created_by_profile_id
+           FROM memory_identity_bindings b
+           JOIN memory_principals p ON p.principal_id = b.principal_id`,
+        )
+        .get(),
+    ).toEqual({ user_profile_id: alice.id, created_by_profile_id: admin.id });
+    expect(
+      JSON.stringify(db.prepare("SELECT * FROM memory_pairing_identity_receipts").all()),
+    ).not.toContain("sender-alice");
+  });
+
+  it("keeps a request pending when target linking lacks a verified receipt", async () => {
+    const { env } = createTestEnv();
+    const admin = ensureProfileForEmail("admin@example.test", { env });
+    const alice = ensureProfileForEmail("alice@example.test", { env });
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "default",
+      id: "unverified-alice",
+      env,
+    });
+    const request = requireFirstPairingRequest(await listChannelPairingRequests("telegram", env));
+
+    await expect(
+      approveChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        requestId: resolveChannelPairingRequestId("telegram", request),
+        env,
+        memoryIdentityLink: { targetProfileId: alice.id, createdByProfileId: admin.id },
+      }),
+    ).rejects.toThrow("memory identity pairing receipt is missing");
+    expect(await listChannelPairingRequests("telegram", env)).toHaveLength(1);
+    expect(await readChannelAllowFromStore("telegram", env, "default")).toEqual([]);
+  });
+
+  it("rejects forged and replayed admissions without creating an unverified request", async () => {
+    const { env } = createTestEnv();
+    await expect(
+      upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        id: "forged",
+        env,
+        memoryIdentityAdmission: {},
+      }),
+    ).rejects.toThrow("requires admitted sender evidence");
+    expect(await listChannelPairingRequests("telegram", env)).toEqual([]);
+
+    const admission = admitVerifiedPairingSender({ senderId: "one-use" });
+    await expect(
+      upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        id: "first",
+        env,
+        memoryIdentityAdmission: admission,
+      }),
+    ).resolves.toMatchObject({ created: true });
+    await expect(
+      upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        id: "second",
+        env,
+        memoryIdentityAdmission: admission,
+      }),
+    ).rejects.toThrow("requires admitted sender evidence");
+    expect(await listChannelPairingRequests("telegram", env)).toHaveLength(1);
+  });
+
+  it("uses canonical account scope for verified receipts and target linking", async () => {
+    const { env } = createTestEnv();
+    const admin = ensureProfileForEmail("admin@example.test", { env });
+    const alice = ensureProfileForEmail("alice@example.test", { env });
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "Main Account!",
+      id: "canonical-account",
+      env,
+      memoryIdentityAdmission: admitVerifiedPairingSender({
+        accountId: "Main Account!",
+        senderId: "canonical-account-sender",
+      }),
+    });
+    const request = requireFirstPairingRequest(
+      await listChannelPairingRequests("telegram", env, "main-account"),
+    );
+    await expect(
+      approveChannelPairingRequest({
+        channel: "telegram",
+        accountId: "main-account",
+        requestId: resolveChannelPairingRequestId("telegram", request),
+        env,
+        memoryIdentityLink: { targetProfileId: alice.id, createdByProfileId: admin.id },
+      }),
+    ).resolves.toMatchObject({ id: "canonical-account" });
+    expect(await readChannelAllowFromStore("telegram", env, "Main Account!")).toEqual([
+      "canonical-account",
+    ]);
+  });
+
+  it("removes unconsumed receipts when a request is dismissed or expires", async () => {
+    const { env } = createTestEnv();
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "default",
+      id: "dismissed",
+      env,
+      memoryIdentityAdmission: admitVerifiedPairingSender({ senderId: "dismissed-sender" }),
+    });
+    expect(memoryPairingReceiptCount(env)).toBe(1);
+    const dismissed = requireFirstPairingRequest(await listChannelPairingRequests("telegram", env));
+    await dismissChannelPairingRequest({
+      channel: "telegram",
+      accountId: "default",
+      requestId: resolveChannelPairingRequestId("telegram", dismissed),
+      env,
+    });
+    expect(memoryPairingReceiptCount(env)).toBe(0);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "default",
+      id: "expired",
+      env,
+      memoryIdentityAdmission: admitVerifiedPairingSender({ senderId: "expired-sender" }),
+    });
+    expect(memoryPairingReceiptCount(env)).toBe(1);
+    vi.setSystemTime(new Date("2026-01-01T02:00:00.000Z"));
+    await expect(listChannelPairingRequests("telegram", env)).resolves.toEqual([]);
+    expect(memoryPairingReceiptCount(env)).toBe(0);
+  });
+
+  it("prunes an expired receipt while keeping the targeted request pending", async () => {
+    const { env } = createTestEnv();
+    const admin = ensureProfileForEmail("admin@example.test", { env });
+    const alice = ensureProfileForEmail("alice@example.test", { env });
+    await upsertChannelPairingRequest({
+      channel: "telegram",
+      accountId: "default",
+      id: "expired-receipt",
+      env,
+      memoryIdentityAdmission: admitVerifiedPairingSender({ senderId: "expired-receipt-sender" }),
+    });
+    const request = requireFirstPairingRequest(await listChannelPairingRequests("telegram", env));
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE memory_pairing_identity_receipts SET expires_at = ?")
+      .run(Date.now() - 1);
+
+    await expect(
+      approveChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        requestId: resolveChannelPairingRequestId("telegram", request),
+        env,
+        memoryIdentityLink: { targetProfileId: alice.id, createdByProfileId: admin.id },
+      }),
+    ).rejects.toThrow("memory identity pairing receipt is missing, expired, or already used");
+    expect(await listChannelPairingRequests("telegram", env)).toHaveLength(1);
+    expect(await readChannelAllowFromStore("telegram", env, "default")).toEqual([]);
+    expect(memoryPairingReceiptCount(env)).toBe(0);
+  });
+
+  it("removes the receipt for a persisted request dropped by the per-account cap", async () => {
+    const { env } = createTestEnv();
+    for (const id of ["old", "second", "third"]) {
+      await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "default",
+        id,
+        env,
+        memoryIdentityAdmission: admitVerifiedPairingSender({ senderId: `${id}-sender` }),
+      });
+    }
+    expect(memoryPairingReceiptCount(env)).toBe(3);
+    const state = readChannelPairingStateSnapshot("telegram", env);
+    state.requests = [
+      ...state.requests.map((request) =>
+        request.id === "old" ? { ...request, lastSeenAt: "1970-01-01T00:00:00.000Z" } : request,
+      ),
+      {
+        id: "legacy-extra",
+        code: "EXTRA001",
+        createdAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        meta: { accountId: "default" },
+      },
+    ];
+    writeChannelPairingStateSnapshot("telegram", state, env);
+
+    await expect(listChannelPairingRequests("telegram", env)).resolves.toHaveLength(3);
+    expect(await listChannelPairingRequests("telegram", env)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "old" })]),
+    );
+    expect(memoryPairingReceiptCount(env)).toBe(2);
   });
 
   it("reads current SQLite entries without a process-local file cache", async () => {

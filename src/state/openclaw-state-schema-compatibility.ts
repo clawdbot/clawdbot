@@ -61,24 +61,32 @@ export function getOpenClawStateRuntimeSchema(options: {
   const omittedIndexes = options.includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
-  for (const tableName of omittedTables) {
-    const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${tableName} (`);
+  const omittedTableBlocks = omittedTables.map((tableName) => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${tableName} (`);
     const endMarker = "\n) STRICT;";
-    const end = start >= 0 ? schema.indexOf(endMarker, start) : -1;
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
     if (start < 0 || end < 0) {
       throw new Error(`lazy additive state schema block is missing for ${tableName}`);
     }
-    schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
+    return { start, end: end + endMarker.length };
+  });
+  for (const block of omittedTableBlocks.toSorted((left, right) => right.start - left.start)) {
+    schema = `${schema.slice(0, block.start)}${schema.slice(block.end)}`;
   }
-  for (const indexName of omittedIndexes) {
-    const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
-    const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
-    const start = plainStart >= 0 ? plainStart : uniqueStart;
+  const omittedIndexBlocks = omittedIndexes.map((indexName) => {
+    const starts = [
+      schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`),
+      schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`),
+    ].filter((start) => start >= 0);
+    const start = starts.length > 0 ? Math.min(...starts) : -1;
     const end = start >= 0 ? schema.indexOf(";", start) : -1;
     if (start < 0 || end < 0) {
       throw new Error(`lazy additive state schema index is missing for ${indexName}`);
     }
-    schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
+    return { start, end: end + 1 };
+  });
+  for (const block of omittedIndexBlocks.toSorted((left, right) => right.start - left.start)) {
+    schema = `${schema.slice(0, block.start)}${schema.slice(block.end)}`;
   }
   return schema;
 }
