@@ -64,7 +64,7 @@ function applyPreparedClawToolPolicyConsent(): void {
   }
 }
 
-export function prepareClawToolPolicyConsent(
+function prepareClawToolPolicyConsent(
   config: OpenClawConfig,
   options: OpenClawStateDatabaseOptions & {
     readSchemaVersions?: typeof readCachedClawInstallSchemaVersions;

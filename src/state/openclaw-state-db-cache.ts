@@ -11,7 +11,7 @@ import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { createOpenClawDatabaseVerificationError } from "./openclaw-state-db-maintenance.js";
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
-export type OpenClawStateDatabaseLifecycleEvent =
+type OpenClawStateDatabaseLifecycleEvent =
   | { kind: "opened"; database: OpenClawStateDatabase }
   | { kind: "closed"; path: string }
   | { kind: "open-error"; path: string; error: unknown };

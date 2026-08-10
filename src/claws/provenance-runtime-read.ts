@@ -6,14 +6,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { parseClawInstallRecordSchemaVersion } from "./provenance-schema-version.js";
 
-export type ClawInstallSchemaVersionRead =
+type ClawInstallSchemaVersionRead =
   | {
       kind: "ok";
       schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>;
     }
   | { kind: "error"; error: unknown };
 
-export type ClawInstallSchemaVersionSnapshot =
+type ClawInstallSchemaVersionSnapshot =
   | { kind: "ready"; schemaVersions: Map<string, ClawInstallSchemaVersionRead> }
   | { kind: "state-error"; error: unknown }
   | { kind: "uninitialized" };

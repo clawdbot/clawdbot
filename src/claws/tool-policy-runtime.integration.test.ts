@@ -129,6 +129,50 @@ describe("Claw tool policy consent provenance", () => {
     ).toThrow("uses a legacy dynamic tool policy");
   });
 
+  it("gives a legacy unbounded full profile an actionable repair path", async () => {
+    const root = tempDirs.make("openclaw-claw-full-tool-consent-");
+    const env = stateEnv(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(root, "state"));
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(plan, { env });
+    openOpenClawStateDatabase({ env })
+      .db /* sqlite-allow-raw: test-only downgrade simulates a legacy unbounded full profile. */
+      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
+      .run("openclaw.clawInstallRecord.v1", "worker");
+    closeOpenClawStateDatabase();
+    openOpenClawStateDatabase({ env });
+
+    const config = {
+      agents: {
+        list: [
+          {
+            ...plan.agent.config,
+            tools: { profile: "full" as const },
+          },
+        ],
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+
+    expect(() =>
+      resolveConversationCapabilityProfile({
+        agentId: "worker",
+        config,
+      }),
+    ).toThrow(
+      "Add an explicit tools.allow list to its package OpenClaw profile, then run `openclaw claws update worker`",
+    );
+  });
+
   it("isolates an unsupported install record from other agents", async () => {
     const root = tempDirs.make("openclaw-claw-tool-consent-isolation-");
     const env = stateEnv(root);
