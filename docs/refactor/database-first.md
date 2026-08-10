@@ -2044,8 +2044,7 @@ payload.
      `gateway_locks` and no longer exposes a file-lock directory seam.
    - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
      files; it writes shared SQLite plugin-state rows. Done.
-   - QMD coordination uses a shared SQLite lease for embeds and a per-agent
-     SQLite lease for every collection/update/embed writer. Runtime no longer
+   - QMD writers no longer take OpenClaw state leases. Runtime no longer
      creates `qmd/embed.lock.lock` or `agents/<agentId>/qmd-write.lock.lock`;
      Doctor removes only definitely stale retired sidecars. Done.
 
