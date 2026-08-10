@@ -303,6 +303,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       ? resolveStableMessageToolAvailability({
           cfg,
           ctx,
+          sessionEntry: sessionStoreEntry.entry,
           sessionAgentId,
           sessionKey: acpDispatchSessionKey,
         })

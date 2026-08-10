@@ -19,12 +19,15 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  deliveryContextFromSession,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defaults.js";
+import { isSystemEventProvider } from "./effective-reply-route.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
@@ -48,12 +51,18 @@ export function resolveSessionStableReplyMode(params: {
   const { cfg, ctx, sessionEntry } = params;
   const chatType =
     normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry.chatType) ?? undefined;
+  // System-event provider strings ("heartbeat", "cron-event") are wake
+  // plumbing, not the session's surface; an entry with no persisted delivery
+  // origin has only ever been driven internally, so it must resolve the same
+  // internal-channel branch dispatch's live webchat turns do.
   const stableReplyContext = {
     CommandAuthorized: false,
     ChatType: chatType,
     Provider:
-      normalizeOptionalString(ctx.Provider) ?? sessionDeliveryOrigin(sessionEntry)?.provider,
-    Surface: normalizeOptionalString(ctx.Surface) ?? sessionDeliveryChannel(sessionEntry),
+      resolveStableChannelFact(ctx.Provider) ??
+      sessionDeliveryOrigin(sessionEntry)?.provider ??
+      INTERNAL_MESSAGE_CHANNEL,
+    Surface: resolveStableChannelFact(ctx.Surface) ?? sessionDeliveryChannel(sessionEntry),
     ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
   };
   const { harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
@@ -75,15 +84,17 @@ export function resolveSessionStableReplyMode(params: {
     return candidateMode;
   }
   // Dispatch downgrades tool-only delivery to automatic when the message tool
-  // is policy-denied; the stable fact must downgrade identically or the two
-  // turn kinds hash different policies. Sender fields are deliberately absent:
+  // is policy-denied (source-reply-delivery-mode.ts availability gate); with a
+  // stable ctx that is the boolean's only effect, so apply it directly rather
+  // than re-deriving the whole mode. Sender fields are deliberately absent:
   // session-stable policy cannot vary by sender.
-  return resolveSourceReplyDeliveryMode({
-    cfg,
-    ctx: stableReplyContext,
-    defaultVisibleReplies: harnessDefaultVisibleReplies,
-    messageToolAvailable: resolveStableMessageToolAvailability(params),
-  });
+  return resolveStableMessageToolAvailability(params) ? candidateMode : "automatic";
+}
+
+/** Strips system-event wake providers so only real channel surfaces remain. */
+function resolveStableChannelFact(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && !isSystemEventProvider(normalized) ? normalized : undefined;
 }
 
 /**
@@ -95,10 +106,11 @@ export function resolveSessionStableReplyMode(params: {
 export function resolveStableMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
+  sessionEntry?: SessionEntry;
   sessionAgentId: string;
   sessionKey?: string;
 }): boolean {
-  const { cfg, ctx } = params;
+  const { cfg, ctx, sessionEntry } = params;
   const {
     globalPolicy,
     globalProviderPolicy,
@@ -124,18 +136,29 @@ export function resolveStableMessageToolAvailability(params: {
     ...(providerProfileAlsoAllow ?? []),
     "message",
   ]);
+  // Direct callers (command prepare, synthetic wakes) may carry a bare ctx;
+  // fall back to the persisted session facts dispatch sees on live turns, or
+  // group/account-scoped policies resolve differently per producer.
   const groupPolicy = resolveGroupToolPolicy({
     config: cfg,
     sessionKey: params.sessionKey,
     messageProvider: resolveOriginMessageProvider({
-      originatingChannel: ctx.OriginatingChannel,
-      provider: ctx.Provider ?? ctx.Surface,
+      originatingChannel:
+        ctx.OriginatingChannel ?? (sessionEntry ? sessionDeliveryChannel(sessionEntry) : undefined),
+      provider:
+        resolveStableChannelFact(ctx.Provider ?? ctx.Surface) ??
+        (sessionEntry ? sessionDeliveryOrigin(sessionEntry)?.provider : undefined),
     }),
-    groupId: resolveGroupSessionKey(ctx)?.id,
+    groupId: resolveGroupSessionKey(ctx)?.id ?? sessionEntry?.groupId,
     groupChannel:
-      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
+      normalizeOptionalString(ctx.GroupChannel) ??
+      normalizeOptionalString(ctx.GroupSubject) ??
+      normalizeOptionalString(sessionEntry?.groupChannel) ??
+      normalizeOptionalString(sessionEntry?.subject),
     groupSpace: normalizeOptionalString(ctx.GroupSpace),
-    accountId: ctx.AccountId,
+    accountId:
+      ctx.AccountId ??
+      (sessionEntry ? deliveryContextFromSession(sessionEntry)?.accountId : undefined),
   });
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, { cfg });
   const subagentPolicy =
