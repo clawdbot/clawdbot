@@ -78,17 +78,20 @@ describe("scripts/check-file-utils listRepoFilesSync", () => {
     execFileSyncMock.mockReset();
   });
 
-  it("bounds git ls-files with a timeout and kill signal", () => {
-    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/skip.d.ts\n");
+  it("bounds git ls-files with a timeout and skips staged deletions", () => {
+    const rootDir = createTempDir("openclaw-check-file-utils-git-");
+    fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "src", "keep.ts"), "");
+    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/deleted.ts\nsrc/skip.d.ts\n");
 
     expect(
-      listRepoFilesSync("/fake/repo", {
+      listRepoFilesSync(rootDir, {
         includeFile: (filePath) => isCodeFile(filePath),
       }),
     ).toEqual(["src/keep.ts"]);
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "git",
-      expect.arrayContaining(["-C", "/fake/repo", "ls-files", "--"]),
+      expect.arrayContaining(["-C", rootDir, "ls-files", "--"]),
       expect.objectContaining({
         timeout: 30_000,
         killSignal: "SIGKILL",

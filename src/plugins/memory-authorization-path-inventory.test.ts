@@ -60,6 +60,7 @@ const REQUIRED_PHASE_0_PATH_IDS = [
   "session-backfill-derived-memory-write",
   "dreaming-session-transcript-ingestion",
   "session-transcript-index-ingestion",
+  "session-memory-hook-transcript-capture",
   "memory-migration-import",
   "memory-export",
   "memory-public-artifact-provider-list",
@@ -700,6 +701,13 @@ describe("memory authorization path inventory", () => {
         "extensions/memory-core/src/memory/manager-sync-ops.ts",
         "extensions/memory-core/src/memory/manager-source-sync-ops.ts",
       ]),
+    });
+    expect(entriesById.get("session-memory-hook-transcript-capture")).toEqual({
+      id: "session-memory-hook-transcript-capture",
+      direction: "derive",
+      owner: "core-session-runtime",
+      disposition: "blocked-in-enforced-mode",
+      surfaces: ["src/hooks/bundled/session-memory/handler.ts"],
     });
   });
 
