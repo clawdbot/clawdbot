@@ -70,7 +70,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
+    latestUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   const resolvedModelRef = resolveReportedModelRef({
@@ -100,7 +100,7 @@ export function prepareEmbeddedRunTerminal(input: {
     sessionFile: input.sessionFileUsed,
     provider: reportedModelRef.provider,
     model: reportedModelRef.model,
-    ...input.outerContextTokenMeta,
+    contextTokens: attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens,
     agentHarnessId: attempt.agentHarnessId,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,

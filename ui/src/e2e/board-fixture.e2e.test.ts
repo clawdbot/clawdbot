@@ -186,6 +186,22 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const colors = await readMenuColors(page);
         expect(colorContrast(colors.foreground, colors.background)).toBeGreaterThanOrEqual(4.5);
 
+        const widgetBackgrounds = await page
+          .locator('[data-test-id="board-widget"]')
+          .first()
+          .evaluate((widget) => {
+            const frame = widget.querySelector(".board-widget__frame");
+            if (!(frame instanceof HTMLIFrameElement)) {
+              throw new Error("board widget frame is missing");
+            }
+            return {
+              frame: getComputedStyle(frame).backgroundColor,
+              widget: getComputedStyle(widget).backgroundColor,
+            };
+          });
+        expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
+        expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
+
         await expect
           .poll(() => page.frames().some((frame) => frame.url().startsWith("data:text/html")))
           .toBe(true);

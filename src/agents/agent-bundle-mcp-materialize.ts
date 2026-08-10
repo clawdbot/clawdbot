@@ -57,6 +57,7 @@ function buildAppToolPolicyProjections(params: {
     return serverOrder || a.toolName.localeCompare(b.toolName);
   });
   for (const tool of appOnlyTools) {
+    const server = params.catalog.servers[tool.serverName];
     const name = buildSafeToolName({
       serverName: tool.safeServerName,
       toolName: tool.toolName,
@@ -80,6 +81,10 @@ function buildAppToolPolicyProjections(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        codexApproval: {
+          mode: server?.codexApprovalMode ?? "auto",
+          ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
+        },
       },
     });
     tools.push(projection);
@@ -344,6 +349,10 @@ export function buildBundleMcpToolsFromCatalog(params: {
         toolName: tool.toolName,
         operation: "tool",
         ...(tool.deniedBySession ? { deniedBySession: true } : {}),
+        codexApproval: {
+          mode: server?.codexApprovalMode ?? "auto",
+          ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
+        },
       },
     });
     tools.push(agentTool);

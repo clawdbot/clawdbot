@@ -174,6 +174,7 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
         ownerKind: "account",
         ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId: coldProfileId }),
         state: "unavailable",
+        degradationState: "cold",
       },
     ]);
     const profiles = snapshot.authStores[0]?.store.profiles;

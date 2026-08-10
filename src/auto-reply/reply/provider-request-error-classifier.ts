@@ -1,9 +1,7 @@
 // Classifies provider request failures into retry and user-facing categories.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  AUTH_INVALID_TOKEN_USER_TEXT,
-  classifyProviderRuntimeFailureKind,
-} from "../../agents/embedded-agent-helpers/errors.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/error-text.js";
+import { classifyProviderRuntimeFailureKind } from "../../agents/embedded-agent-helpers/provider-runtime-failure.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 

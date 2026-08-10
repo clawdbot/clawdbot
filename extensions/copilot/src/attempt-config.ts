@@ -4,6 +4,7 @@ import {
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveUserPath,
+  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   COPILOT_ASK_USER_AVAILABLE_TOOLS,
@@ -314,13 +315,16 @@ export function createSystemMessageContent(
   params: AttemptParamsLike,
   workspaceBootstrapInstructions: string | undefined,
 ): string | undefined {
-  const sections: string[] = [];
+  if (isRawCopilotModelRun(params)) {
+    return undefined;
+  }
+  const sections: string[] = [TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT];
   const bootstrap = workspaceBootstrapInstructions?.trim();
   if (bootstrap) {
     sections.push(bootstrap);
   }
   const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
-  if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
+  if (extraSystemPrompt) {
     const contextHeader =
       params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);

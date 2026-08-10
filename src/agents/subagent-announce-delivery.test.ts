@@ -184,6 +184,10 @@ const longChildCompletionOutput = [
   "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
 ].join("\n");
 
+const committedSessionSpawnEvidence = {
+  acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+} as const;
+
 function registerDirectTargetTestChannel(channelId: string): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -307,6 +311,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
+  sourceSessionKey?: string;
   sourceTool?: string;
   signal?: AbortSignal;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
@@ -345,6 +350,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     directIdempotencyKey: "announce-dm-fallback-empty",
     internalEvents: params.internalEvents,
     sourceRunId: "run-generated-media",
+    sourceSessionKey: params.sourceSessionKey,
     sourceTool: params.sourceTool,
     signal: params.signal,
     onDeliveryResult: params.onDeliveryResult,
@@ -1805,7 +1811,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "accepted session spawn",
       result: {
         payloads: [],
-        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+        ...committedSessionSpawnEvidence,
       },
     },
     {
@@ -2425,7 +2431,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "does not deliver a failure notice after ambiguous persistence failure",
       createCallGateway: () =>
         vi.fn(async () => {
-          throw new Error("SessionWriteLockTimeoutError: session file locked before agent run");
+          throw new Error("gateway persistence failed before agent run");
         }) as unknown as typeof runtimeCallGateway,
       event: {
         childSessionKey: "music_generate:task-failed",
@@ -2721,11 +2727,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("keeps generated media queued for the session agent after a requester handoff lock", async () => {
+  it("keeps generated media queued after requester handoff fails", async () => {
     const callGateway = vi.fn(async () => {
-      throw new Error(
-        "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43",
-      );
+      throw new Error("requester handoff failed before dispatch");
     }) as unknown as typeof runtimeCallGateway;
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
       "transcript_commit_wait_unsupported",
@@ -2880,6 +2884,78 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "rejects missing visible delivery",
+      gatewayResult: { payloads: [{ text: "NO_REPLY" }] },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
+    },
+    {
+      name: "blocks replay after committed outbound side effects",
+      gatewayResult: {
+        payloads: [],
+        ...committedSessionSpawnEvidence,
+      },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+        phases: [
+          {
+            phase: "direct-primary",
+            delivered: false,
+            path: "direct",
+            error: "completion agent did not produce a visible reply",
+          },
+        ],
+      },
+    },
+    {
+      name: "accepts visible parent output after committed outbound side effects",
+      gatewayResult: {
+        payloads: [{ text: "The delegated task completed." }],
+        ...committedSessionSpawnEvidence,
+      },
+      expected: { delivered: true, path: "direct" },
+    },
+  ])(
+    "$name for automatic no-output channel subagent completions",
+    async ({ gatewayResult, expected }) => {
+      const callGateway = createGatewayMock({ result: gatewayResult });
+      const childSessionKey = "agent:worker:subagent:automatic-no-output";
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: "announce-channel-subagent-automatic-no-output",
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "child-session-id",
+          taskLabel: "channel no-output completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "(no output)",
+        }),
+      });
+
+      expect(result).toMatchObject(expected);
+      expectGatewayAgentParams(callGateway, {
+        deliver: true,
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        sourceReplyDeliveryMode: undefined,
+      });
+    },
+  );
+
   it("keeps configured channel subagent completions on parent message-tool handoff", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -2912,6 +2988,76 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it.each([
+    {
+      route: "configured Slack channel",
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+    },
+    {
+      route: "forced Discord direct message",
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+    },
+  ] as const)(
+    "blocks replay for required no-output $route completions with committed outbound side effects",
+    async ({ route, channel, accountId, to }) => {
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          ...committedSessionSpawnEvidence,
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const childSessionKey = "agent:worker:subagent:no-output-side-effect";
+      const internalEvents = taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "no-output side-effect smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      });
+      const result =
+        route === "configured Slack channel"
+          ? await deliverSlackChannelAnnouncement({
+              callGateway,
+              sendMessage,
+              directIdempotencyKey: "announce-channel-subagent-no-output-side-effect",
+              sourceTool: "subagent_announce",
+              sourceSessionKey: childSessionKey,
+              runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+              internalEvents,
+            })
+          : await deliverDiscordDirectMessageCompletion({
+              callGateway,
+              sendMessage,
+              sourceTool: "subagent_announce",
+              sourceSessionKey: childSessionKey,
+              internalEvents,
+            });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      });
+      expectGatewayAgentParams(callGateway, {
+        deliver: false,
+        channel,
+        accountId,
+        to,
+        threadId: undefined,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails configured channel subagent completions when parent skips required message tool", async () => {
     const callGateway = createPayloadGatewayMock({ text: "The subagent is done." });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
@@ -2932,6 +3078,81 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
+    });
+  });
+
+  it.each([
+    { status: "ok", statusLabel: "completed successfully" },
+    { status: "error", statusLabel: "failed" },
+  ] as const)(
+    "fails $status no-output channel subagent completions when parent silently skips required message tool",
+    async ({ status, statusLabel }) => {
+      const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+      const childSessionKey = "agent:worker:subagent:no-output";
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: `announce-channel-subagent-${status}-no-output-message-tool-missing`,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        queueEmbeddedAgentMessageWithOutcome,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "child-session-id",
+          taskLabel: "channel no-output completion smoke",
+          status,
+          statusLabel,
+          result: "(no output)",
+        }),
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      });
+      expectGatewayAgentParams(callGateway, {
+        deliver: false,
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: undefined,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+    },
+  );
+
+  it("preserves intentional silence for no-output channel harness completions", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const childSessionKey = "agent:worker:subagent:harness-no-output";
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-channel-harness-no-output-intentional-silence",
+      sourceTool: "agent_harness_task",
+      sourceSessionKey: childSessionKey,
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "channel harness no-output completion smoke",
+        status: "error",
+        statusLabel: "failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
   });
 
@@ -2965,6 +3186,87 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
       path: "direct",
       reason: "message_tool_delivery_missing",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "rejects off-target messaging alone",
+      sideEffects: {},
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      },
+    },
+    {
+      name: "blocks replay after an accepted session spawn with off-target messaging",
+      sideEffects: committedSessionSpawnEvidence,
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      },
+    },
+    {
+      name: "blocks replay after a successful cron add with off-target messaging",
+      sideEffects: { successfulCronAdds: 1 },
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      },
+    },
+  ])("$name for required no-output completion", async ({ sideEffects, expected }) => {
+    const childSessionKey = "agent:worker:subagent:off-target-no-output";
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:OTHER",
+            text: "An unrelated channel update.",
+          },
+        ],
+        ...sideEffects,
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-subagent-off-target-no-output",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "off-target no-output completion smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      }),
+    });
+
+    expect(result).toMatchObject(expected);
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -3486,15 +3788,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
   });
 
-  it("does not retry session-file-changed failures with send evidence", async () => {
+  it("does not retry writer-claim rebound failures with send evidence", async () => {
     const sendErr = new OutboundDeliveryError("outbound delivery failed", {
       cause: new Error("outbound delivery failed"),
       results: [{ channel: "telegram", messageId: "msg-1" }],
     });
     const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
-      throw new Error("session file changed while embedded prompt lock was released", {
-        cause: sendErr,
-      });
+      throw Object.assign(
+        new Error("session writer claim changed before transcript persistence", {
+          cause: sendErr,
+        }),
+        { name: "SessionTranscriptWriterClaimReboundError" },
+      );
     });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
@@ -3513,41 +3818,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fallback-steer after wrapped prompt-lock takeover with send evidence", async () => {
-    const takeoverErr = Object.assign(
-      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
-      { name: "EmbeddedAttemptSessionTakeoverError" },
-    );
-
-    const promptErr = Object.assign(new Error("some model error"), { visibleReplySent: true });
-    const wrapperErr = Object.assign(new Error("some model error", { cause: takeoverErr }), {
-      name: "EmbeddedAttemptSessionTakeoverError",
-      cleanupError: takeoverErr,
-      promptError: promptErr,
-    });
-
-    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
-      throw wrapperErr;
-    });
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
-    const result = await deliverSlackChannelAnnouncement({
-      callGateway,
-      queueEmbeddedAgentMessageWithOutcome,
-      sessionId: "requester-session-lock-race-wrapped-evidence",
-      isActive: true,
-      directIdempotencyKey: "announce-permanent-wrapped-lock-error-evidence",
-    });
-
-    expect(result.delivered).toBe(false);
-    expect(result.path).toBe("direct");
-    expect(result.error).toBe("some model error");
-    expect(result.disposition).toBe("ambiguous");
-    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries session-file-changed failures without send evidence", async () => {
+  it("retries writer-claim rebound failures without send evidence", async () => {
     let attempts = 0;
     const callGatewaySpy = vi.fn();
     const callGateway: typeof runtimeCallGateway = async <
@@ -3556,7 +3827,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       callGatewaySpy();
       attempts++;
       if (attempts <= 1) {
-        throw new Error("session file changed while embedded prompt lock was released");
+        throw Object.assign(
+          new Error("session writer claim changed before transcript persistence"),
+          { name: "SessionTranscriptWriterClaimReboundError" },
+        );
       }
       return {
         result: {
@@ -3628,63 +3902,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("detects send evidence from OutboundDeliveryError in the error chain", () => {
-    const err = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
-      {
+  it("detects send evidence from OutboundDeliveryError in a writer rebound chain", () => {
+    const err = Object.assign(
+      new Error("session writer claim changed before transcript persistence", {
         cause: new OutboundDeliveryError("outbound delivery failed", {
           cause: new Error("outbound delivery failed"),
           results: [{ channel: "telegram", messageId: "msg-1" }],
         }),
-      },
+      }),
+      { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isSessionFileChangedAnnounceError(err.message)).toBe(true);
+    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
-  it("classifies session-file-changed error as no-send-evidence when the error chain has no send markers", () => {
-    const err = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+  it("classifies writer rebound without send markers as no-send-evidence", () => {
+    const err = Object.assign(
+      new Error("session writer claim changed before transcript persistence"),
+      { name: "SessionTranscriptWriterClaimReboundError" },
     );
 
-    expect(testing.isSessionFileChangedAnnounceError(err.message)).toBe(true);
+    expect(testing.isWriterClaimReboundAnnounceError(err)).toBe(true);
     expect(testing.hasAnnounceSendEvidence(err)).toBe(false);
   });
 
-  it("detects send evidence from visibleReplySent flag on session-file-changed error", () => {
+  it("detects send evidence from visibleReplySent on writer rebound", () => {
     const err = Object.assign(
-      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
-      { visibleReplySent: true },
+      new Error("session writer claim changed before transcript persistence"),
+      { name: "SessionTranscriptWriterClaimReboundError", visibleReplySent: true },
     );
 
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
-  it("detects send evidence from sentBeforeError flag on session-file-changed error", () => {
+  it("detects send evidence from sentBeforeError on writer rebound", () => {
     const err = Object.assign(
-      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
-      { sentBeforeError: true },
+      new Error("session writer claim changed before transcript persistence"),
+      { name: "SessionTranscriptWriterClaimReboundError", sentBeforeError: true },
     );
 
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
-  });
-
-  it("detects send evidence recursively through promptError", () => {
-    const takeoverErr = Object.assign(
-      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
-      { name: "EmbeddedAttemptSessionTakeoverError" },
-    );
-
-    const promptErr = Object.assign(new Error("some model error"), { visibleReplySent: true });
-
-    const wrapperErr = Object.assign(new Error("some model error", { cause: takeoverErr }), {
-      name: "EmbeddedAttemptSessionTakeoverError",
-      promptError: promptErr,
-    });
-
-    expect(testing.hasAnnounceSendEvidence(wrapperErr)).toBe(true);
-    expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

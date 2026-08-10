@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -27,11 +27,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
-import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
   createHooksRequestHandler,
@@ -53,10 +54,45 @@ const HOOK_AGENT_SESSION_CONFLICT_ERROR =
   "hook agent run was rejected because the target session changed";
 const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
 
-function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
-  return params.agentId
-    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
-    : resolveMainSessionKey(params.cfg);
+type HookEventTarget = {
+  eventSessionKey: string;
+  heartbeatTarget: { agentId?: string; sessionKey?: string };
+};
+
+function resolveHookEventTarget(params: {
+  cfg: OpenClawConfig;
+  resolvedAgentId: string;
+  explicitAgentId?: string;
+  sessionKey?: string;
+}): HookEventTarget {
+  if (params.cfg.session?.scope === "global") {
+    // Each agent owns a literal `global` row in its store. Target the agent,
+    // but never force an agent-qualified session key that the runner ignores.
+    return {
+      eventSessionKey: "global",
+      heartbeatTarget: { agentId: params.resolvedAgentId },
+    };
+  }
+  const eventSessionKey = params.sessionKey
+    ? canonicalizeMainSessionAlias({
+        cfg: params.cfg,
+        agentId: params.resolvedAgentId,
+        sessionKey: toAgentStoreSessionKey({
+          agentId: params.resolvedAgentId,
+          requestKey: params.sessionKey,
+          mainKey: params.cfg.session?.mainKey,
+        }),
+      })
+    : params.explicitAgentId
+      ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.explicitAgentId })
+      : resolveMainSessionKey(params.cfg);
+  return {
+    eventSessionKey,
+    heartbeatTarget: {
+      ...(params.explicitAgentId ? { agentId: params.explicitAgentId } : {}),
+      sessionKey: eventSessionKey,
+    },
+  };
 }
 
 function shouldAnnounceHookRunResult(params: {
@@ -233,33 +269,22 @@ export function createGatewayHooksRequestHandler(params: {
       ? (() => {
           const cfg = getRuntimeConfig();
           const agentId = value.agentId ?? resolveDefaultAgentId(cfg);
-          if (cfg.session?.scope === "global") {
-            return {
-              eventSessionKey: "global",
-              heartbeatTarget: { agentId },
-            };
-          }
-          const eventSessionKey = canonicalizeMainSessionAlias({
+          return resolveHookEventTarget({
             cfg,
-            agentId,
-            sessionKey: value.sessionKey
-              ? toAgentStoreSessionKey({
-                  agentId,
-                  requestKey: value.sessionKey,
-                  mainKey: cfg.session?.mainKey,
-                })
-              : resolveAgentMainSessionKey({ cfg, agentId }),
+            resolvedAgentId: agentId,
+            explicitAgentId: value.agentId,
+            sessionKey: value.sessionKey,
           });
-          return {
-            eventSessionKey,
-            heartbeatTarget: { agentId, sessionKey: eventSessionKey },
-          };
         })()
       : undefined;
     const sessionKey = target?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, {
-      sessionKey,
-    });
+    const eventOptions = { sessionKey };
+    enqueueSystemEvent(
+      value.text,
+      isUnscopedSessionKeySentinel(sessionKey) && target?.heartbeatTarget.agentId
+        ? withSystemEventOwner(eventOptions, target.heartbeatTarget.agentId)
+        : eventOptions,
+    );
     if (value.mode === "now") {
       requestHeartbeat({
         source: "hook",
@@ -303,17 +328,61 @@ export function createGatewayHooksRequestHandler(params: {
       delivery: value.delivery,
       state: { nextRunAtMs: nowMs },
     };
-    let hookEventSessionKey: string | undefined;
+    let hookEventTarget: HookEventTarget | undefined;
+    const resolveGlobalTerminalAgentId = (status: string): string | undefined => {
+      const acceptedAgentId = hookEventTarget?.heartbeatTarget.agentId;
+      // Agent id is the stable principal: mutable config reloads preserve admission,
+      // but a principal absent from the fresh roster cannot receive terminal output.
+      if (acceptedAgentId && listAgentIds(getRuntimeConfig()).includes(acceptedAgentId)) {
+        return acceptedAgentId;
+      }
+      logHooks.warn("hook agent terminal event suppressed", {
+        sourcePath: value.sourcePath,
+        name: safeName,
+        runId,
+        jobId,
+        acceptedAgentId,
+        sessionKey,
+        status: sanitizeHookConsoleValue(status) ?? "unknown",
+        reason: "accepted-agent-removed",
+      });
+      return undefined;
+    };
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
-      enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-        sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
-      });
+      const eventSessionKey = hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
+      const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
+      let heartbeatTarget: HookEventTarget["heartbeatTarget"];
+      if (isGlobalEvent && hookEventTarget) {
+        const globalTerminalAgentId = resolveGlobalTerminalAgentId("error");
+        if (!globalTerminalAgentId) {
+          return;
+        }
+        heartbeatTarget = { agentId: globalTerminalAgentId };
+      } else {
+        heartbeatTarget =
+          hookEventTarget?.heartbeatTarget ??
+          (isGlobalEvent
+            ? {
+                agentId:
+                  normalizeOptionalString(value.agentId) ??
+                  resolveDefaultAgentId(getRuntimeConfig()),
+              }
+            : { sessionKey: eventSessionKey });
+      }
+      const failureEventOptions = { sessionKey: eventSessionKey };
+      enqueueSystemEvent(
+        `Hook ${safeName} (error): ${String(err)}`,
+        isGlobalEvent && heartbeatTarget.agentId
+          ? withSystemEventOwner(failureEventOptions, heartbeatTarget.agentId)
+          : failureEventOptions,
+      );
       if (value.wakeMode === "now") {
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
+          ...heartbeatTarget,
         });
       }
     };
@@ -398,9 +467,10 @@ export function createGatewayHooksRequestHandler(params: {
           }
           // Keep an omitted agent omitted for event routing so global session scope
           // stays global; runner identity is frozen separately via accepted agentId.
-          hookEventSessionKey = resolveHookEventSessionKey({
+          hookEventTarget = resolveHookEventTarget({
             cfg,
-            agentId: acceptedValue.agentId,
+            resolvedAgentId: agentId,
+            explicitAgentId: acceptedValue.agentId,
           });
           const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
           // Lazy module loading is the last Gateway-owned async boundary before
@@ -466,12 +536,34 @@ export function createGatewayHooksRequestHandler(params: {
             });
           }
           if (shouldAnnounce) {
-            const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
-            enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-              sessionKey: eventSessionKey,
-            });
+            const eventSessionKey =
+              hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
+            const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
+            let announceEventOptions = { sessionKey: eventSessionKey };
+            let heartbeatTarget: HookEventTarget["heartbeatTarget"];
+            if (isGlobalEvent) {
+              const globalTerminalAgentId = resolveGlobalTerminalAgentId(result.status);
+              if (!globalTerminalAgentId) {
+                return;
+              }
+              announceEventOptions = withSystemEventOwner(
+                announceEventOptions,
+                globalTerminalAgentId,
+              );
+              heartbeatTarget = { agentId: globalTerminalAgentId };
+            } else {
+              heartbeatTarget = hookEventTarget?.heartbeatTarget ?? {
+                sessionKey: eventSessionKey,
+              };
+            }
+            enqueueSystemEvent(`${prefix}: ${summary}`.trim(), announceEventOptions);
             if (value.wakeMode === "now") {
-              requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+              requestHeartbeat({
+                source: "hook",
+                intent: "immediate",
+                reason: `hook:${jobId}`,
+                ...heartbeatTarget,
+              });
             }
           } else if (result.status === "ok" && !value.deliver) {
             logHooks.info("hook agent run completed without announcement", {

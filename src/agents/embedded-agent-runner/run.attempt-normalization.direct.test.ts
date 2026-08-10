@@ -27,6 +27,19 @@ function makeAttempt(
   };
 }
 
+function makeCliUsageAssistant(stopReason: "error" | "stop", text = "legacy reply") {
+  return {
+    role: "assistant",
+    api: "cli",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    content: [{ type: "text", text }],
+    usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+    stopReason,
+    timestamp: 1,
+  };
+}
+
 function makePromptState(options: { waitForPersistence?: () => Promise<void> } = {}) {
   const activePrompt = { persisted: false, internal: false };
   const state = {
@@ -157,16 +170,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
 
   it("does not promote historical CLI usage without context provenance", async () => {
     const state = makePromptState();
-    const legacyAssistant = {
-      role: "assistant",
-      api: "cli",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      content: [{ type: "text", text: "legacy reply" }],
-      usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
-      stopReason: "error",
-      timestamp: 1,
-    };
+    const legacyAssistant = makeCliUsageAssistant("error");
     const attempt = makeAttempt();
     attempt.messagesSnapshot = [legacyAssistant] as never;
     attempt.lastAssistant = legacyAssistant as never;
@@ -182,16 +186,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
 
   it("keeps the current unavailable sentinel instead of reviving prior usage", async () => {
     const state = makePromptState();
-    const legacyAssistant = {
-      role: "assistant",
-      api: "cli",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      content: [{ type: "text", text: "legacy reply" }],
-      usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
-      stopReason: "stop",
-      timestamp: 1,
-    };
+    const legacyAssistant = makeCliUsageAssistant("stop");
     const attempt = makeAttempt();
     attempt.messagesSnapshot = [legacyAssistant] as never;
     attempt.lastAssistant = legacyAssistant as never;
@@ -207,4 +202,5 @@ describe("normalizeEmbeddedRunAttempt", () => {
     }
     expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
   });
+
 });

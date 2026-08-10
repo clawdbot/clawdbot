@@ -21,6 +21,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
+import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -1092,6 +1093,106 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
   });
 
+  it("retains handshake-attested locality for direct operator admission", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-local-operator-authority",
+      connectNonce: "nonce-local-operator-authority",
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-local-operator-authority", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.admin"],
+      caps: [],
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      clientIp?: string;
+      internal?: { isLocalClient?: true };
+    } | null;
+    expect(connectedClient?.clientIp).toBeUndefined();
+    expect(connectedClient?.internal?.isLocalClient).toBe(true);
+
+    const admission = resolveGatewayCronCreatorAuthorityAdmission({
+      runId: "local-operator-run",
+      resolvedSessionKey: "agent:main:main",
+      client: harness.client as never,
+      request: { message: "hello", idempotencyKey: "local-operator-run" },
+      hasRestoredCronContinuation: false,
+      isOneShotModelRun: false,
+      isRestartRecoveryResumeRun: false,
+    });
+    expect(admission).toEqual({ runId: "local-operator-run" });
+  });
+
+  it("does not carry local operator authority for an authenticated remote client", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-operator-authority",
+      connectNonce: "nonce-remote-operator-authority",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-remote-operator-authority", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.admin"],
+      caps: [],
+      auth: { token: "gateway-token" },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      clientIp?: string;
+      internal?: { isLocalClient?: true };
+    } | null;
+    expect(connectedClient?.clientIp).toBe("203.0.113.50");
+    expect(connectedClient?.internal?.isLocalClient).toBeUndefined();
+
+    const admission = resolveGatewayCronCreatorAuthorityAdmission({
+      runId: "remote-operator-run",
+      resolvedSessionKey: "agent:main:main",
+      client: harness.client as never,
+      request: { message: "hello", idempotencyKey: "remote-operator-run" },
+      hasRestoredCronContinuation: false,
+      isOneShotModelRun: false,
+      isRestartRecoveryResumeRun: false,
+    });
+    expect(admission).toBeUndefined();
+  });
+
   it("marks operator approval clients with the server runtime token", async () => {
     const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
       createHealthSummary(),
@@ -1322,6 +1423,30 @@ describe("resolvePinnedClientMetadata", () => {
         deviceFamilyMismatch: false,
         pinnedPlatform: pairedPlatform,
         pinnedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
+      });
+    },
+  );
+
+  it.each([
+    ["darwin", "macos", "Mac"],
+    ["win32", "windows", "Windows"],
+  ])(
+    "normalizes exact legacy node-host platform %s to canonical %s",
+    (legacyPlatform, canonicalPlatform, deviceFamily) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId: "node-host",
+          clientMode: "node",
+          claimedPlatform: legacyPlatform,
+          claimedDeviceFamily: deviceFamily,
+          pairedPlatform: legacyPlatform,
+          pairedDeviceFamily: deviceFamily,
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: canonicalPlatform,
+        pinnedDeviceFamily: deviceFamily,
       });
     },
   );

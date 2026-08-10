@@ -339,6 +339,68 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 });
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("keeps shared-workspace legacy MCP warnings scoped to each job agent", async () => {
+    const storePath = await makeTempStorePath();
+    const sharedWorkspace = path.join(path.dirname(storePath), "shared-workspace");
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "research-job",
+        name: "Research legacy cap",
+        agentId: "research",
+        payload: {
+          kind: "agentTurn",
+          message: "research",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+      createCurrentCronJob({
+        id: "support-job",
+        name: "Support legacy cap",
+        agentId: "support",
+        payload: {
+          kind: "agentTurn",
+          message: "support",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ]);
+    const cfg = {
+      cron: { store: storePath },
+      agents: {
+        list: [
+          { id: "research", workspace: sharedWorkspace },
+          { id: "support", workspace: sharedWorkspace },
+        ],
+      },
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "notes-mcp",
+            codex: { agents: ["research"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await maybeRepairLegacyCronStore({
+      cfg,
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const advisory = noteMock.mock.calls.find(
+      ([message, title]) =>
+        title === "Cron" &&
+        typeof message === "string" &&
+        message.includes("inherited default tool cap"),
+    )?.[0];
+    expect(advisory).toContain("Research legacy cap");
+    expect(advisory).not.toContain("Support legacy cap");
+  });
+
   it("reports quarantined cron rows even when the active store is already sanitized", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, []);

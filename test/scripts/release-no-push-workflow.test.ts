@@ -693,19 +693,11 @@ describe("release validation no-push transport", () => {
     );
     expect(packDockerArtifact.run).toContain("archive_sha256=");
     const validatePackage = step(dockerProducer, "Validate OpenClaw Docker E2E package");
-    expect(step(dockerProducer, "Setup artifact package validation environment")).toMatchObject({
-      if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
-      uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
-      with: {
-        "package-manager-file": ".release-harness/package.json",
-        "use-actions-cache": "false",
-      },
+    expect(step(dockerProducer, "Setup trusted release harness")).toMatchObject({
+      uses: "./.release-harness/.github/actions/setup-release-harness",
+      with: { "node-version": "${{ env.NODE_VERSION }}" },
     });
-    expect(step(dockerProducer, "Install trusted package validation dependencies")).toMatchObject({
-      if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
-      "working-directory": ".release-harness",
-      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    });
+    expect(step(dockerProducer, "Setup trusted release harness").if).toBeUndefined();
     expect(validatePackage.env).toMatchObject({
       EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
       EXPECTED_PACKAGE_SHA256: "${{ inputs.package_sha256 }}",
@@ -718,9 +710,7 @@ describe("release validation no-push transport", () => {
     );
     expect(validatePackage.run).toContain("package/dist/build-info.json");
     expect(validatePackage.run).toContain('[[ "$package_source_sha" == "$SELECTED_SHA" ]]');
-    expect(validatePackage.run).toContain(
-      'validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"',
-    );
+    expect(validatePackage.run).toContain("scripts/check-openclaw-package-tarball.mjs");
     const targetedRun = step(
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",

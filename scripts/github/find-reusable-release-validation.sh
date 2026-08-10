@@ -165,7 +165,7 @@ fi
 
 # Exact-target reuse still requires internally consistent version stamps
 # (for example package.json must agree with the macOS plist).
-if ! (cd "$REPO_DIR" && node "$PREFLIGHT" --macos-versions-only >&2); then
+if ! (cd "$REPO_DIR" && env -u NODE_OPTIONS node "$PREFLIGHT" --macos-versions-only >&2); then
   no_reuse "target version metadata is inconsistent"
 fi
 

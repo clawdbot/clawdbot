@@ -48,10 +48,11 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   persistSubagentSessionTiming,
-  resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
+  updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type {
+  RequesterSettleWakeState,
   SubagentCompletionRequest,
   SubagentProgressOrigin,
   SubagentRestartRecoveryReceipt,
@@ -68,8 +69,8 @@ import {
   getSubagentSessionStartedAt,
 } from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
-import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
-import { isSwarmRunQueued, removeQueuedSwarmRun } from "./swarm-scheduler.js";
+import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
+import { isSwarmRunQueued, removeQueuedSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = isFastTestRuntimeEnv() ? 25 : 5_000;
@@ -190,6 +191,10 @@ export function markSubagentRunPausedAfterYield(params: {
   }
   if (entry.pauseReason !== "sessions_yield") {
     entry.pauseReason = "sessions_yield";
+    mutated = true;
+  }
+  if (entry.archiveAtMs !== undefined) {
+    delete entry.archiveAtMs;
     mutated = true;
   }
   if (entry.endedReason !== undefined) {
@@ -387,7 +392,9 @@ export function createSubagentRunManager(params: {
       const waitTerminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(wait);
       const waitBlocked = waitTerminalOutcome?.reason === "blocked";
       const waitAborted =
-        waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
+        waitTerminalOutcome?.reason === "aborted" ||
+        waitTerminalOutcome?.reason === "cancelled" ||
+        waitTerminalOutcome?.reason === "superseded";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
         params.clearPendingLifecycleError(runId);
@@ -673,11 +680,17 @@ export function createSubagentRunManager(params: {
     runTimeoutSeconds?: number;
     allowEndedSource?: boolean;
     preserveFrozenResultFallback?: boolean;
+    // A follow-up that continues a paused run inherits the original requester's
+    // wake credential. An operator steer intentionally drops it: the operator is
+    // already the live audience, so re-arming would wake a requester that is no
+    // longer waiting. Without this the yielded parent loses its only wake path
+    // and its settle batch defers with nothing recording why.
+    preserveRequesterSettleWake?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
     restartRecovery?: SubagentRestartRecoveryReceipt;
     lifecycleGeneration?: string;
-    requirePersistence?: boolean;
+    persistenceFailure?: "return-false" | "throw";
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -717,13 +730,6 @@ export function createSubagentRunManager(params: {
     );
     const cfg = params.getRuntimeConfig();
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs = resolveSubagentArchiveAtMs({
-      cfg,
-      now,
-      spawnMode,
-      cleanup: source.cleanup,
-      collect: source.collect,
-    });
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
@@ -747,6 +753,25 @@ export function createSubagentRunManager(params: {
       typeof replaceParams.task === "string" && replaceParams.task.length > 0
         ? replaceParams.task
         : source.task;
+    // The frozen batch is addressed by runId. Adoption retires the previous id,
+    // so an unmapped membership list would drop this row from its own batch and
+    // let the wave complete without ever waking the requester.
+    const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
+      ? source.requesterSettleWake
+      : undefined;
+    const inheritedRequesterSettleWake: RequesterSettleWakeState | undefined =
+      sourceRequesterSettleWake
+        ? {
+            ...sourceRequesterSettleWake,
+            ...(sourceRequesterSettleWake.batchRunIds
+              ? {
+                  batchRunIds: sourceRequesterSettleWake.batchRunIds
+                    .map((runId) => (runId === previousRunId ? nextRunId : runId))
+                    .toSorted(),
+                }
+              : {}),
+          }
+        : undefined;
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
@@ -765,7 +790,7 @@ export function createSubagentRunManager(params: {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
-      requesterSettleWake: undefined,
+      requesterSettleWake: inheritedRequesterSettleWake,
       execution: {
         status: "running",
         startedAt: now,
@@ -793,7 +818,7 @@ export function createSubagentRunManager(params: {
         status: source.expectsCompletionMessage === false ? "not_required" : "pending",
       },
       spawnMode,
-      archiveAtMs,
+      archiveAtMs: undefined,
       runTimeoutSeconds,
     });
     clearDeliveryState(next);
@@ -812,7 +837,7 @@ export function createSubagentRunManager(params: {
       params.persistOrThrow(...changedRunIds);
     } catch (error) {
       if (
-        replaceParams.requirePersistence === true ||
+        replaceParams.persistenceFailure !== undefined ||
         replaceParams.lifecycleGeneration !== undefined
       ) {
         restoreKillReconciliationSnapshots(killReconciliationSnapshots);
@@ -823,6 +848,9 @@ export function createSubagentRunManager(params: {
           previousRunId,
           nextRunId,
         });
+        if (replaceParams.persistenceFailure === "throw") {
+          throw error;
+        }
         return false;
       }
       // The gateway has already started nextRunId. Keep its in-memory owner
@@ -1158,13 +1186,6 @@ export function createSubagentRunManager(params: {
     );
     const cfg = params.getRuntimeConfig();
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs = resolveSubagentArchiveAtMs({
-      cfg,
-      now,
-      spawnMode,
-      cleanup: registerParams.cleanup,
-      collect: registerParams.collect,
-    });
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
@@ -1225,7 +1246,6 @@ export function createSubagentRunManager(params: {
       },
       sessionStartedAt: queued ? undefined : now,
       accumulatedRuntimeMs: 0,
-      archiveAtMs,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
       requesterSettleWake: undefined,
@@ -1740,6 +1760,8 @@ export function createSubagentRunManager(params: {
       };
       if (wasQueuedCollector && !collectorLaunchInFlight) {
         updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+      } else if (!entry.collect) {
+        updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
       }
       pendingTaskFinalizations.push({ entry, endedAt: taskEndedAt });
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {

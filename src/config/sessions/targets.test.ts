@@ -13,7 +13,6 @@ import { resolveStorePath } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
-  dedupeSessionStoreTargetsBySqliteTarget,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -339,36 +338,6 @@ describe("resolveSessionStoreTargets", () => {
       ).toBe(path.join(home, "shared.worker.2.sqlite"));
     });
   });
-
-  it.runIf(process.platform !== "win32")(
-    "deduplicates aliased SQLite locators by physical identity",
-    async () => {
-      await withTempHome(async (home) => {
-        const stateDir = path.join(home, ".openclaw");
-        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        const realDir = path.join(home, "real-stores");
-        const aliasDir = path.join(home, "alias-stores");
-        await fs.mkdir(realDir, { recursive: true });
-        await fs.symlink(realDir, aliasDir, "dir");
-        const diagnostics: string[] = [];
-
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget(
-            [
-              { agentId: "main", storePath: path.join(realDir, "shared.sqlite") },
-              { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
-            ],
-            {
-              defaultAgentId: "main",
-              env,
-              onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
-            },
-          ),
-        ).toEqual([{ agentId: "main", storePath: path.join(realDir, "shared.sqlite") }]);
-        expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
-      });
-    },
-  );
 
   it("retains a shared-store claimant when the physical owner left the roster", async () => {
     await withTempHome(async (home) => {

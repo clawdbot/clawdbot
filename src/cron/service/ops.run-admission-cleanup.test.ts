@@ -1,11 +1,11 @@
 // Queued cron reservation cleanup regressions across every trigger.
 import { describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -40,7 +40,7 @@ describe("cron service run admission cleanup", () => {
       job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-      const runnerStarted = createDeferred<void>();
+      const runnerStarted = createDeferred();
       const releaseRun = createDeferred<{
         status: "ok";
         summary: string;
@@ -85,7 +85,7 @@ describe("cron service run admission cleanup", () => {
 
   it("releases immediate and queued admission slots in FIFO order after failures", async () => {
     const store = opsRegressionFixtures.makeStorePath();
-    const releaseFirst = createDeferred<void>();
+    const releaseFirst = createDeferred();
     const executionOrder: string[] = [];
     const state = createCronServiceState({
       cronEnabled: true,

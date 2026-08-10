@@ -8,6 +8,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
@@ -164,7 +165,7 @@ export async function waitForLocalOAuthCallback(params: {
   successTitle: string;
   /** Optional progress message emitted once the listener starts. */
   progressMessage?: string;
-  /** Loopback hostname to bind; defaults to localhost. */
+  /** Extra loopback hostname to bind; the redirect URI hostname is always bound. */
   hostname?: string;
   /** Progress callback invoked after the server begins listening. */
   onProgress?: (message: string) => void;
@@ -175,175 +176,47 @@ export async function waitForLocalOAuthCallback(params: {
    */
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
-  const hostname = params.hostname ?? "localhost";
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const escapedSuccessTitle = escapeHtml(params.successTitle);
+  const callbackUrl = new URL(params.redirectUri);
+  callbackUrl.port = String(params.port);
+  callbackUrl.pathname = params.callbackPath;
   const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
   const hasCorsOriginAllowlist =
     params.corsOriginAllowlist?.some((host) => host.trim().length > 0) ?? false;
-
-  return new Promise<OAuthCallbackResult>((resolve, reject) => {
-    let settled = false;
-    let timeout: NodeJS.Timeout | null = null;
-    const server = createServer((req, res) => {
-      try {
-        // A browser may reuse loopback HTTP/1.1 connections. Closing each
-        // response prevents an accepted socket from pinning the CLI process.
-        res.setHeader("Connection", "close");
-        applyOAuthCallbackCorsHeaders(
-          req,
-          res,
-          hasCorsOriginAllowlist ? resolveOAuthCallbackOrigin : undefined,
-        );
-        const requestUrl = new URL(req.url ?? "/", params.redirectUri);
-        if (req.method === "OPTIONS") {
-          res.statusCode = 204;
-          res.end();
-          return;
-        }
-        if (requestUrl.pathname !== params.callbackPath) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Not found");
-          return;
-        }
-        if (req.method !== "GET") {
-          res.statusCode = 405;
-          res.setHeader("Allow", "GET, OPTIONS");
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Method not allowed");
-          return;
-        }
-
-        const state = requestUrl.searchParams.get("state")?.trim();
-        if (!state) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.once("finish", () => finish(new Error("Missing OAuth state"), undefined, true));
-          res.end("Missing state");
-          return;
-        }
-        if (state !== params.expectedState) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.once("finish", () => finish(new Error("OAuth state mismatch"), undefined, true));
-          res.end("Invalid state");
-          return;
-        }
-
-        const error = requestUrl.searchParams.get("error");
-        if (error) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.once("finish", () => finish(new Error(`OAuth error: ${error}`), undefined, true));
-          res.end(`Authentication failed: ${error}`);
-          return;
-        }
-
-        const code = requestUrl.searchParams.get("code")?.trim();
-        if (!code) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.once("finish", () => finish(new Error("Missing OAuth code"), undefined, true));
-          res.end("Missing code");
-          return;
-        }
-
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.once("finish", () => finish(undefined, { code, state }, true));
-        res.end(
-          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-            `<body><h2>${escapedSuccessTitle}</h2>` +
-            "<p>You can close this window and return to OpenClaw.</p></body></html>",
-        );
-      } catch (err) {
-        finish(err instanceof Error ? err : new Error("OAuth callback failed"), undefined, true);
-      }
-    });
-
-    const finish = (err?: Error, result?: OAuthCallbackResult, forceClose = false) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      try {
-        server.close();
-        if (forceClose) {
-          server.closeAllConnections();
-        }
-      } catch {
-        // ignore close errors
-      }
-      if (err) {
-        reject(err);
-      } else if (result) {
-        resolve(result);
-      }
-    };
-
-    const onAbort = () => finish(new Error("OAuth callback cancelled"), undefined, true);
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    if (params.signal?.aborted) {
-      onAbort();
-      return;
-    }
-
-    server.once("error", (err) => {
-      finish(
-        err instanceof Error ? err : new Error("OAuth callback server error"),
-        undefined,
-        true,
-      );
-    });
-
-    server.listen(params.port, hostname, () => {
-      params.onProgress?.(
-        params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
-      );
-    });
-
-    timeout = setTimeout(() => {
-      finish(new Error("OAuth callback timeout"), undefined, true);
-    }, timeoutMs);
+  const callback = await startOAuthLoopbackCallbackServer({
+    redirectUrl: callbackUrl,
+    expectedState: params.expectedState,
+    timeoutMs,
+    ...(params.hostname ? { bindHostname: params.hostname } : {}),
+    createServer,
+    ...(params.signal ? { signal: params.signal } : {}),
+    resolveCorsOrigin: hasCorsOriginAllowlist
+      ? resolveOAuthCallbackOrigin
+      : (originHeader) => {
+          const value = Array.isArray(originHeader) ? originHeader[0] : originHeader;
+          return value && isHttpOrigin(value) ? value : undefined;
+        },
+    renderSuccess: () => ({
+      body:
+        "<!doctype html><html><head><meta charset='utf-8'/></head>" +
+        `<body><h2>${escapedSuccessTitle}</h2>` +
+        "<p>You can close this window and return to OpenClaw.</p></body></html>",
+      contentType: "text/html; charset=utf-8",
+    }),
   });
-}
-
-function applyOAuthCallbackCorsHeaders(
-  req: import("node:http").IncomingMessage,
-  res: import("node:http").ServerResponse,
-  resolveOrigin?: (originHeader: string | string[] | undefined) => string | undefined,
-): void {
-  const origin =
-    resolveOrigin === undefined
-      ? typeof req.headers.origin === "string" && isHttpOrigin(req.headers.origin)
-        ? req.headers.origin
-        : undefined
-      : resolveOrigin(req.headers.origin);
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
-  }
-  if (resolveOrigin !== undefined && !origin) {
-    // With an allowlist present, untrusted origins receive a bare 204 preflight
-    // response so browser navigation still works but scripts cannot read it.
-    return;
-  }
-
-  const requestedHeaders = req.headers["access-control-request-headers"];
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    typeof requestedHeaders === "string" && requestedHeaders.trim().length > 0
-      ? requestedHeaders
-      : "content-type",
+  params.onProgress?.(
+    params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
   );
-  res.setHeader("Access-Control-Allow-Private-Network", "true");
-  res.setHeader("Access-Control-Max-Age", "600");
+  try {
+    const result = await callback.waitForCallback();
+    if (result.type === "oauth_error") {
+      throw new Error(`OAuth error: ${result.error}`);
+    }
+    return { code: result.code, state: result.state };
+  } finally {
+    await callback.close();
+  }
 }
 
 function isHttpOrigin(value: string): boolean {

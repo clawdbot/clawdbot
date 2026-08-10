@@ -26,7 +26,7 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
@@ -373,8 +373,8 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
-const SESSION_FILE_CHANGED_ANNOUNCE_RE =
-  /session file changed while embedded prompt lock was released/i;
+const WRITER_CLAIM_REBOUND_ANNOUNCE_RE =
+  /session writer claim changed before transcript persistence/i;
 
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
@@ -386,20 +386,19 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  SESSION_FILE_CHANGED_ANNOUNCE_RE,
+  WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
-function isSessionFileChangedAnnounceError(message: string): boolean {
-  return SESSION_FILE_CHANGED_ANNOUNCE_RE.test(message);
+function isWriterClaimReboundAnnounceError(error: unknown): boolean {
+  return Boolean(
+    (error &&
+      typeof error === "object" &&
+      (error as { name?: unknown }).name === "SessionTranscriptWriterClaimReboundError") ||
+    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error)),
+  );
 }
 
-const ANNOUNCE_ERROR_CHAIN_KEYS = [
-  "cause",
-  "cleanupError",
-  "error",
-  "promptError",
-  "reason",
-] as const;
+const ANNOUNCE_ERROR_CHAIN_KEYS = ["cause", "error", "reason"] as const;
 type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
 type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
   sentBeforeError?: unknown;
@@ -429,10 +428,8 @@ function hasAnnounceErrorMatch(
   return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
 }
 
-function hasSessionFileChangedAnnounceError(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, (candidate) =>
-    isSessionFileChangedAnnounceError(summarizeDeliveryError(candidate)),
-  );
+function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
 }
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
@@ -440,12 +437,12 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const topLevelPermanent = Boolean(
     message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
   );
-  if (topLevelPermanent && !isSessionFileChangedAnnounceError(message)) {
+  if (topLevelPermanent && !isWriterClaimReboundAnnounceError(error)) {
     return false;
   }
 
-  const sessionFileChanged = hasSessionFileChangedAnnounceError(error);
-  if (sessionFileChanged) {
+  const writerClaimRebound = hasWriterClaimReboundAnnounceError(error);
+  if (writerClaimRebound) {
     return !hasAnnounceSendEvidence(error);
   }
 
@@ -474,7 +471,7 @@ function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   return (
     (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
-    hasSessionFileChangedAnnounceError(error)
+    hasWriterClaimReboundAnnounceError(error)
   );
 }
 
@@ -926,6 +923,11 @@ async function sendSubagentAnnounceDirectly(params: {
       subagentCompletionEvents[0]?.childSessionKey === params.sourceSessionKey
         ? subagentCompletionEvents[0]
         : undefined;
+    const hasRequiredSubagentNoOutputCompletion =
+      params.expectsCompletionMessage &&
+      isSubagentCompletion &&
+      (trustedCompletionEvent?.result.trim() === "(no output)" ||
+        hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -1189,21 +1191,34 @@ async function sendSubagentAnnounceDirectly(params: {
       (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
         hasMessagingToolDelivery),
     );
+    const hasVisibleNonSilentGatewayPayload = Boolean(
+      directAnnounceResult &&
+      hasVisibleAgentPayload(directAnnounceResult, {
+        ...completionPayloadVisibility,
+        includeSilentReplyPayloads: false,
+      }),
+    );
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
+    const hasCompletionSideEffect = Boolean(
+      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
+    );
+    const hasVisibleRequiredCompletionReply =
+      hasMessagingToolDelivery ||
+      (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
-      !hasVisibleGatewayPayload &&
+      !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
       const textDelivery = await tryTextCompletionDirectDelivery();
       if (textDelivery) {
         return textDelivery;
       }
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (hasRequiredSubagentNoOutputCompletion && !hasCompletionSideEffect) {
         return {
           delivered: false,
           path: "direct",
@@ -1213,12 +1228,27 @@ async function sendSubagentAnnounceDirectly(params: {
       }
     }
     if (
+      hasRequiredSubagentNoOutputCompletion &&
+      !hasVisibleRequiredCompletionReply &&
+      hasCompletionSideEffect
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      };
+    }
+    if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
       !hasMessagingToolDelivery &&
-      (!hasIntentionalSilentCompletionReply || subagentDirectMessageCompletionRequiresMessageTool)
+      (!hasIntentionalSilentCompletionReply ||
+        subagentDirectMessageCompletionRequiresMessageTool ||
+        hasRequiredSubagentNoOutputCompletion)
     ) {
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (hasRequiredSubagentNoOutputCompletion) {
         return {
           delivered: false,
           path: "direct",
@@ -1267,9 +1297,6 @@ async function sendSubagentAnnounceDirectly(params: {
         ) &&
           (!params.requireVisibleReply ||
             directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
-    );
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
@@ -1538,8 +1565,8 @@ const testing = {
       : defaultSubagentAnnounceDeliveryDeps;
   },
   hasAnnounceSendEvidence,
-  hasSessionFileChangedAnnounceError,
-  isSessionFileChangedAnnounceError,
+  hasWriterClaimReboundAnnounceError,
+  isWriterClaimReboundAnnounceError,
 };
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[

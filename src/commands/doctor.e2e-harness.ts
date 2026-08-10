@@ -303,10 +303,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/tui/last-session.json",
       hasLegacy: false,
     },
-    commitments: {
-      sourcePath: "/tmp/state/commitments/commitments.json",
-      hasLegacy: false,
-    },
     auditLogs: {
       sources: [],
       hasLegacy: false,
@@ -351,10 +347,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       defaultAccountIds: {},
       accountIds: {},
       hasLegacy: false,
-    },
-    channelPlans: {
-      hasLegacy: false,
-      plans: [],
     },
     warnings: [],
     notices: [],

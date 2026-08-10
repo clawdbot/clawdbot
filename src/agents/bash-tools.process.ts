@@ -9,18 +9,22 @@ import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.j
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
+  acknowledgeNotifyOnExit,
   type ProcessSession,
   deleteSession,
+  drainFinishedSession,
   drainSession,
   getFinishedSession,
+  getFinishedSessionForProcess,
   getSession,
   listFinishedSessions,
   listRunningSessions,
+  markTerminalPollObserved,
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecExitLabel } from "./bash-tools.exec-output.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -70,6 +74,12 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
     return "";
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
+}
+
+function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
+  return session.totalOutputChars > session.aggregated.length
+    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
+    : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -145,6 +155,58 @@ function resetPollRetrySuggestion(sessionId: string): void {
   } catch {
     // Ignore diagnostics state failures for process tool behavior.
   }
+}
+
+type FinishedSession = NonNullable<ReturnType<typeof getFinishedSession>>;
+
+function finishedPollResult(
+  sessionId: string,
+  finished: FinishedSession,
+): AgentToolResult<unknown> {
+  resetPollRetrySuggestion(sessionId);
+  acknowledgeNotifyOnExit(finished);
+  const { stdout, stderr, outputDropped } = drainFinishedSession(finished);
+  const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+  // Omitted retained output is pageable only while this public id still owns
+  // the exact snapshot; a reused slug must never point the model at successor logs.
+  const retainedOutputNote = outputDropped
+    ? getFinishedSession(sessionId) === finished
+      ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
+      : "\n\n[earlier output is omitted from this poll; omitted output is no longer available through action=log]"
+    : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text: appendExecTimeoutRetryGuidance(
+          (output || "(no new output)") +
+            retentionCapNote(finished) +
+            retainedOutputNote +
+            `\n\nProcess exited with ${renderExecExitLabel(finished)}.`,
+          finished.exitReason,
+        ),
+      },
+    ],
+    details: {
+      status: finished.status === "completed" ? "completed" : "failed",
+      sessionId,
+      exitCode: finished.exitCode ?? undefined,
+      ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
+      ...(finished.exitReason
+        ? {
+            exitReason: finished.exitReason,
+            timedOut:
+              finished.exitReason === "overall-timeout" ||
+              finished.exitReason === "no-output-timeout",
+          }
+        : {}),
+      ...(finished.noOutputTimedOut !== undefined
+        ? { noOutputTimedOut: finished.noOutputTimedOut }
+        : {}),
+      aggregated: finished.aggregated,
+      name: deriveSessionName(finished.command),
+    },
+  };
 }
 
 function createAbortError(reason: unknown): Error {
@@ -390,47 +452,7 @@ export function createProcessTool(
         case "poll": {
           if (!scopedSession) {
             if (scopedFinished) {
-              resetPollRetrySuggestion(params.sessionId);
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: appendExecTimeoutRetryGuidance(
-                      (scopedFinished.tail ||
-                        `(no output recorded${
-                          scopedFinished.truncated ? " — truncated to cap" : ""
-                        })`) +
-                        `\n\nProcess exited with ${
-                          scopedFinished.exitSignal
-                            ? `signal ${scopedFinished.exitSignal}`
-                            : `code ${scopedFinished.exitCode ?? 0}`
-                        }.`,
-                      scopedFinished.exitReason,
-                    ),
-                  },
-                ],
-                details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
-                  sessionId: params.sessionId,
-                  exitCode: scopedFinished.exitCode ?? undefined,
-                  ...(scopedFinished.exitSignal != null
-                    ? { exitSignal: scopedFinished.exitSignal }
-                    : {}),
-                  ...(scopedFinished.exitReason
-                    ? {
-                        exitReason: scopedFinished.exitReason,
-                        timedOut:
-                          scopedFinished.exitReason === "overall-timeout" ||
-                          scopedFinished.exitReason === "no-output-timeout",
-                      }
-                    : {}),
-                  ...(scopedFinished.noOutputTimedOut !== undefined
-                    ? { noOutputTimedOut: scopedFinished.noOutputTimedOut }
-                    : {}),
-                  aggregated: scopedFinished.aggregated,
-                  name: deriveSessionName(scopedFinished.command),
-                },
-              };
+              return finishedPollResult(params.sessionId, scopedFinished);
             }
             resetPollRetrySuggestion(params.sessionId);
             return failText(`No session found for ${params.sessionId}`);
@@ -445,71 +467,45 @@ export function createProcessTool(
               await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
-          const { stdout, stderr } = drainSession(scopedSession);
-          const exited = scopedSession.exited;
-          const exitCode = scopedSession.exitCode ?? 0;
-          const exitSignal = scopedSession.exitSignal ?? undefined;
-          if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
-            markExited(
-              scopedSession,
-              scopedSession.exitCode ?? null,
-              scopedSession.exitSignal ?? null,
-              status,
-              scopedSession.exitReason,
-              scopedSession.noOutputTimedOut,
-            );
-          }
-          const status = exited
-            ? exitCode === 0 && exitSignal == null
-              ? "completed"
-              : "failed"
-            : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
-          const hasNewOutput = output.length > 0;
-          const retryInMs = exited
-            ? undefined
-            : recordPollRetrySuggestion(params.sessionId, hasNewOutput);
-          if (exited) {
+          if (scopedSession.exited) {
+            markTerminalPollObserved(scopedSession);
+            // Exit finalization owns the terminal transition. Re-read by process
+            // object because the public id may already index a successor.
+            const finishedAfterWait = getFinishedSessionForProcess(scopedSession);
+            if (finishedAfterWait && isInScope(finishedAfterWait)) {
+              return finishedPollResult(params.sessionId, finishedAfterWait);
+            }
             resetPollRetrySuggestion(params.sessionId);
+            return failText(`No session found for ${params.sessionId}`);
           }
-          const runtime = exited ? undefined : describeRunningSession(scopedSession);
+          const { stdout, stderr, outputDropped } = drainSession(scopedSession);
+          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const aggregateOutputNote = retentionCapNote(scopedSession);
+          const retainedOutputNote = outputDropped
+            ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
+            : "";
+          const hasNewOutput = output.length > 0;
+          const retryInMs = recordPollRetrySuggestion(params.sessionId, hasNewOutput);
+          const runtime = describeRunningSession(scopedSession);
           return {
             content: [
               {
                 type: "text",
                 text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
-                    (exited
-                      ? `\n\nProcess exited with ${
-                          exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                        }.`
-                      : buildInputWaitHint(runtime) || "\n\nProcess still running."),
-                  exited ? scopedSession.exitReason : undefined,
+                    aggregateOutputNote +
+                    retainedOutputNote +
+                    (buildInputWaitHint(runtime) || "\n\nProcess still running."),
+                  undefined,
                 ),
               },
             ],
             details: {
-              status,
+              status: "running",
               sessionId: params.sessionId,
-              exitCode: exited ? exitCode : undefined,
-              ...(exited && scopedSession.exitSignal != null
-                ? { exitSignal: scopedSession.exitSignal }
-                : {}),
-              ...(exited && scopedSession.exitReason
-                ? {
-                    exitReason: scopedSession.exitReason,
-                    timedOut:
-                      scopedSession.exitReason === "overall-timeout" ||
-                      scopedSession.exitReason === "no-output-timeout",
-                  }
-                : {}),
-              ...(exited && scopedSession.noOutputTimedOut !== undefined
-                ? { noOutputTimedOut: scopedSession.noOutputTimedOut }
-                : {}),
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
-              ...(runtime ? runningSessionInputDetails(runtime) : {}),
+              ...runningSessionInputDetails(runtime),
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             },
           };
@@ -541,7 +537,10 @@ export function createProcessTool(
                 {
                   type: "text",
                   text:
-                    (slice || "(no output yet)") + logDefaultTailNote + buildInputWaitHint(runtime),
+                    (slice || "(no output yet)") +
+                    logDefaultTailNote +
+                    retentionCapNote(scopedSession) +
+                    buildInputWaitHint(runtime),
                 },
               ],
               details: {
@@ -567,7 +566,13 @@ export function createProcessTool(
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                {
+                  type: "text",
+                  text:
+                    (slice || "(no output recorded)") +
+                    logDefaultTailNote +
+                    retentionCapNote(scopedFinished),
+                },
               ],
               details: {
                 status,

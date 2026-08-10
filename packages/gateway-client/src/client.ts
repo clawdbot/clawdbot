@@ -17,7 +17,12 @@ import type {
   HelloOk,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "@openclaw/gateway-protocol/version";
 import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
@@ -215,6 +220,7 @@ type AssembledConnect = {
   authApprovalRuntimeToken: string | undefined;
   authAgentRuntimeIdentityToken: string | undefined;
   resolvedDeviceToken: string | undefined;
+  storedScopes: string[] | undefined;
   storedToken: string | undefined;
   usingStoredDeviceToken: boolean | undefined;
 };
@@ -366,6 +372,17 @@ const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
 
+function resolveLegacyNodePlatform(platform: string): string | undefined {
+  switch (platform) {
+    case "macos":
+      return "darwin";
+    case "windows":
+      return "win32";
+    default:
+      return undefined;
+  }
+}
+
 type PendingStop = {
   ws: WebSocket;
   promise: Promise<void>;
@@ -379,6 +396,9 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private deps: Required<GatewayClientHostDeps>;
   private stopped = false;
+  private useLegacyNodeProtocolEnvelope = false;
+  private nodeProtocolTransitionPending = false;
+  private suppressNextHelloCallback = false;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private approvalRuntimeTokenCompatibilityDisabled = false;
@@ -446,7 +466,13 @@ export class GatewayClient {
         return { closeCode: 1008, closeReason: "connect failed", stop: true, error: marked };
       },
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
-      onHello: (hello) => this.opts.onHelloOk?.(hello),
+      onHello: (hello) => {
+        if (this.suppressNextHelloCallback) {
+          this.suppressNextHelloCallback = false;
+          return;
+        }
+        this.opts.onHelloOk?.(hello);
+      },
       onConnectFailure: (error, context) => this.handleConnectRequestFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
@@ -770,19 +796,54 @@ export class GatewayClient {
       storedScopes,
       defaultScopes: ["operator.admin"],
     });
-    const platform = this.opts.platform ?? process.platform;
+    const clientMode = this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+    const clientId = this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+    const isBuiltInNodeHost =
+      role === "node" &&
+      clientMode === GATEWAY_CLIENT_MODES.NODE &&
+      clientId === GATEWAY_CLIENT_NAMES.NODE_HOST;
+    const negotiatesNodeProtocol = this.shouldNegotiateLegacyNodeProtocol();
+    const useLegacyNodeProtocolEnvelope =
+      isBuiltInNodeHost &&
+      (this.useLegacyNodeProtocolEnvelope ||
+        (this.opts.maxProtocol === MIN_NODE_PROTOCOL_VERSION &&
+          (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) <= MIN_NODE_PROTOCOL_VERSION));
+    // Match server admission: only probes and exact node role+mode identities
+    // may advertise specialized floors; every other client stays current-only.
+    const minProtocol = useLegacyNodeProtocolEnvelope
+      ? MIN_NODE_PROTOCOL_VERSION
+      : negotiatesNodeProtocol
+        ? PROTOCOL_VERSION
+        : (this.opts.minProtocol ??
+          (clientMode === GATEWAY_CLIENT_MODES.PROBE
+            ? MIN_PROBE_PROTOCOL_VERSION
+            : role === "node" && clientMode === GATEWAY_CLIENT_MODES.NODE
+              ? MIN_NODE_PROTOCOL_VERSION
+              : MIN_CLIENT_PROTOCOL_VERSION));
+    const maxProtocol = useLegacyNodeProtocolEnvelope
+      ? MIN_NODE_PROTOCOL_VERSION
+      : negotiatesNodeProtocol
+        ? PROTOCOL_VERSION
+        : (this.opts.maxProtocol ?? PROTOCOL_VERSION);
+    const configuredPlatform = this.opts.platform ?? process.platform;
+    // A released v3 Gateway rejects v4 before authentication, so the retry can
+    // reproduce the shipped node-host envelope without mutating v4 pairings.
+    const platform = useLegacyNodeProtocolEnvelope
+      ? (resolveLegacyNodePlatform(configuredPlatform) ?? configuredPlatform)
+      : configuredPlatform;
+    const deviceFamily = useLegacyNodeProtocolEnvelope ? undefined : this.opts.deviceFamily;
 
     return {
       params: {
-        minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
-        maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
+        minProtocol,
+        maxProtocol,
         client: {
-          id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
           platform,
-          deviceFamily: this.opts.deviceFamily,
-          mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+          deviceFamily,
+          mode: clientMode,
           instanceId: this.opts.instanceId,
         },
         caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
@@ -802,14 +863,67 @@ export class GatewayClient {
           signatureToken,
           signedAtMs,
           platform,
+          deviceFamily,
+          clientMode,
         }),
       },
       authApprovalRuntimeToken,
       authAgentRuntimeIdentityToken,
       resolvedDeviceToken,
+      storedScopes,
       storedToken,
       usingStoredDeviceToken,
     };
+  }
+
+  private shouldNegotiateLegacyNodeProtocol(): boolean {
+    if (
+      this.opts.role !== "node" ||
+      this.opts.mode !== GATEWAY_CLIENT_MODES.NODE ||
+      this.opts.clientName !== GATEWAY_CLIENT_NAMES.NODE_HOST
+    ) {
+      return false;
+    }
+    return (
+      (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) === MIN_NODE_PROTOCOL_VERSION &&
+      (this.opts.maxProtocol ?? PROTOCOL_VERSION) === PROTOCOL_VERSION
+    );
+  }
+
+  private shouldRetryWithLegacyNodeProtocol(error: GatewayProtocolRequestError): boolean {
+    if (
+      this.useLegacyNodeProtocolEnvelope ||
+      !this.shouldNegotiateLegacyNodeProtocol() ||
+      !(error instanceof GatewayClientRequestError)
+    ) {
+      return false;
+    }
+    const detailCode = readConnectErrorDetailCode(error.details);
+    const expectedProtocol = (error.details as { expectedProtocol?: unknown } | null | undefined)
+      ?.expectedProtocol;
+    return (
+      expectedProtocol === MIN_NODE_PROTOCOL_VERSION &&
+      (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
+        normalizeLowercaseStringOrEmpty(error.message).includes("protocol mismatch"))
+    );
+  }
+
+  private shouldRetryWithCurrentNodeProtocol(error: GatewayProtocolRequestError): boolean {
+    if (
+      !this.useLegacyNodeProtocolEnvelope ||
+      !this.shouldNegotiateLegacyNodeProtocol() ||
+      !(error instanceof GatewayClientRequestError)
+    ) {
+      return false;
+    }
+    const detailCode = readConnectErrorDetailCode(error.details);
+    const expectedProtocol = (error.details as { expectedProtocol?: unknown } | null | undefined)
+      ?.expectedProtocol;
+    return (
+      expectedProtocol === PROTOCOL_VERSION &&
+      (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
+        normalizeLowercaseStringOrEmpty(error.message).includes("protocol mismatch"))
+    );
   }
 
   private buildDeviceConnectParams(params: {
@@ -819,24 +933,27 @@ export class GatewayClient {
     signatureToken: string | undefined;
     signedAtMs: number;
     platform: string;
+    deviceFamily: string | undefined;
+    clientMode: GatewayClientMode;
   }): ConnectParams["device"] {
     if (!this.opts.deviceIdentity) {
       return undefined;
     }
-    const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
+    const { nonce, role, scopes, signatureToken, signedAtMs, platform, deviceFamily, clientMode } =
+      params;
     // The signed payload mirrors server verification exactly; keep metadata
     // normalized here so different hosts sign the same logical device facts.
     const payload = buildDeviceAuthPayloadV3({
       deviceId: this.opts.deviceIdentity.deviceId,
       clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+      clientMode,
       role,
       scopes,
       signedAtMs,
       token: signatureToken ?? null,
       nonce,
       platform,
-      deviceFamily: this.opts.deviceFamily,
+      deviceFamily,
     });
     const signature = this.deps.signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
     return {
@@ -849,22 +966,43 @@ export class GatewayClient {
   }
 
   private handleConnectHello(helloOk: HelloOk, assembled: AssembledConnect): void {
+    const reconnectWithCurrentNodeProtocol =
+      this.useLegacyNodeProtocolEnvelope &&
+      this.shouldNegotiateLegacyNodeProtocol() &&
+      helloOk.protocol > MIN_NODE_PROTOCOL_VERSION;
+    if (reconnectWithCurrentNodeProtocol) {
+      this.useLegacyNodeProtocolEnvelope = false;
+    }
+    this.nodeProtocolTransitionPending = false;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.suppressedTransientPreHelloCleanCloses = 0;
     const role = this.opts.role ?? "operator";
     const authInfo = helloOk.auth;
     if (authInfo?.deviceToken && this.opts.deviceIdentity) {
+      const tokenRole = authInfo.role ?? role;
+      const scopes =
+        tokenRole === role && authInfo.deviceToken === assembled.storedToken
+          ? (assembled.storedScopes ?? authInfo.scopes ?? [])
+          : (authInfo.scopes ?? []);
       this.deps.storeDeviceAuthToken({
         deviceId: this.opts.deviceIdentity.deviceId,
-        role: authInfo.role ?? role,
+        role: tokenRole,
         token: authInfo.deviceToken,
-        scopes: authInfo.scopes ?? [],
+        scopes,
         env: this.opts.env,
       });
     }
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
+    if (reconnectWithCurrentNodeProtocol) {
+      // A v4 Gateway accepted the exact-v3 probe as a legacy session. Reconnect
+      // before reporting readiness so node capabilities are not silently filtered.
+      this.suppressNextHelloCallback = true;
+      this.protocol.resetReconnectBackoff(250);
+      this.protocol.closeSocket(1012, "gateway protocol upgraded");
+      return;
+    }
     this.lastTick = Date.now();
     this.startTickWatch();
     void assembled;
@@ -874,7 +1012,29 @@ export class GatewayClient {
     error: GatewayProtocolRequestError,
     assembled: AssembledConnect,
   ) {
+    if (this.shouldRetryWithCurrentNodeProtocol(error)) {
+      const resetBackoff = !this.nodeProtocolTransitionPending;
+      this.useLegacyNodeProtocolEnvelope = false;
+      this.nodeProtocolTransitionPending = true;
+      if (resetBackoff) {
+        this.protocol.resetReconnectBackoff(250);
+      }
+      this.logDebug("gateway rejected protocol v3; retrying node host with protocol v4");
+      return { closeCode: 1008, closeReason: "connect retry" };
+    }
+    if (this.shouldRetryWithLegacyNodeProtocol(error)) {
+      const resetBackoff = !this.nodeProtocolTransitionPending;
+      this.useLegacyNodeProtocolEnvelope = true;
+      this.nodeProtocolTransitionPending = true;
+      if (resetBackoff) {
+        this.protocol.resetReconnectBackoff(250);
+      }
+      this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
+      return { closeCode: 1008, closeReason: "connect retry" };
+    }
     const role = this.opts.role ?? "operator";
+    const detailCode =
+      error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
     const shouldRetryWithDeviceToken = shouldRetryGatewayWithDeviceToken({
       retryBudgetUsed: this.deviceTokenRetryBudgetUsed,
       currentDeviceToken: assembled.resolvedDeviceToken,
@@ -886,9 +1046,7 @@ export class GatewayClient {
     if (
       this.opts.deviceIdentity &&
       assembled.usingStoredDeviceToken &&
-      error instanceof GatewayClientRequestError &&
-      readConnectErrorDetailCode(error.details) ===
-        ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+      detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
     ) {
       const deviceId = this.opts.deviceIdentity.deviceId;
       try {
@@ -942,7 +1100,11 @@ export class GatewayClient {
     }
     this.notifyConnectError(error);
     const message = `gateway connect failed: ${formatGatewayClientErrorForLog(error)}`;
-    if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(error)) {
+    if (
+      this.opts.mode === GATEWAY_CLIENT_MODES.PROBE ||
+      isGatewayClientStoppedError(error) ||
+      detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED
+    ) {
       this.logDebug(message);
     } else {
       this.logError(message);

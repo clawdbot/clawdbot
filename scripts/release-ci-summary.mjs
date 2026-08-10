@@ -594,6 +594,13 @@ export function selectedChildKeys(parentJobs) {
   );
 }
 
+/**
+ * @template {{ manifestKey: string, name: string }} Child
+ * @param {{ childRunIds: Record<string, string> }} manifest
+ * @param {Child[]} children
+ * @param {Set<string>} selectedKeys
+ * @returns {Array<{ child: Child, runId: string }>}
+ */
 export function manifestChildEntries(manifest, children, selectedKeys) {
   return children.flatMap((child) => {
     const runId = manifest.childRunIds[child.manifestKey];
@@ -1291,6 +1298,16 @@ function validateStrictChildRun({ child, client, parentEvidence, parentJobs, rep
   };
 }
 
+/**
+ * @param {{
+ *   manifestPath?: string,
+ *   repository?: string,
+ *   runId: string,
+ *   trustedWorkflowRef?: string,
+ *   verifierSourceContent?: string | Uint8Array,
+ *   verifierSourceSha: string,
+ * }} options
+ */
 export function validateReleaseRunEvidence(
   {
     manifestPath,

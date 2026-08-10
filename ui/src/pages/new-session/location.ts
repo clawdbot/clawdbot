@@ -6,6 +6,7 @@ export type NewSessionRouteData = {
   catalogId: string;
   model: string;
   catalogLabel: string;
+  startTerminal: boolean;
 };
 
 export type NewSessionTarget = { catalogId: string };

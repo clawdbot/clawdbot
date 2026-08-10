@@ -34,7 +34,7 @@ vi.mock("../sandbox-skills.js", () => ({
   mapSandboxSkillUsagePaths: vi.fn(() => []),
 }));
 
-import { prepareEmbeddedAttemptSkills } from "./attempt-startup.js";
+import { prepareEmbeddedAttemptSkills } from "./attempt-setup.js";
 
 describe("prepareEmbeddedAttemptSkills", () => {
   beforeEach(() => {

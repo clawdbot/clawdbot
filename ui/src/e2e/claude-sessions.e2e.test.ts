@@ -198,6 +198,36 @@ function hostGroupedNativeCatalogs() {
   return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
 }
 
+async function catalogHeaderAffordances(header: Locator) {
+  return header.evaluate((element) => {
+    const toggle = element.querySelector<HTMLElement>(".sidebar-session-group-toggle");
+    const providerIcon = element.querySelector<HTMLElement>(
+      ".sidebar-session-catalog-provider-icon",
+    );
+    const chevron = element.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+    const grip = element.querySelector<HTMLElement>(".sidebar-session-group-drag-handle");
+    const actions = element.querySelector<HTMLElement>(".sidebar-session-group-actions");
+    if (!toggle || !providerIcon || !chevron || !grip || !actions) {
+      throw new Error("expected complete branded catalog header affordances");
+    }
+    return {
+      actionFocusVisible: actions.matches(":focus-visible"),
+      actionFocused: document.activeElement === actions,
+      actionsOpacity: getComputedStyle(actions).opacity,
+      actionsPointerEvents: getComputedStyle(actions).pointerEvents,
+      chevronOpacity: getComputedStyle(chevron).opacity,
+      finePointer: matchMedia("(pointer: fine)").matches,
+      focusWithin: element.matches(":focus-within"),
+      gripOpacity: getComputedStyle(grip).opacity,
+      hoverCapable: matchMedia("(hover: hover)").matches,
+      hovered: element.matches(":hover"),
+      providerOpacity: getComputedStyle(providerIcon).opacity,
+      toggleFocusVisible: toggle.matches(":focus-visible"),
+      toggleFocused: document.activeElement === toggle,
+    };
+  });
+}
+
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
   await page.waitForFunction(() =>
@@ -225,8 +255,109 @@ async function openClaudeCatalogTerminal(page: Page) {
 }
 
 suite.define(() => {
+  it("shows catalog header affordances only for hover or keyboard-visible focus", async () => {
+    await suite.withPage(
+      { hasTouch: false, viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "sessions.catalog.list",
+            "sessions.groups.put",
+          ],
+          methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await expandCodingSection(page);
+
+        const header = page.locator(
+          '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
+        );
+        const toggle = header.locator(".sidebar-session-group-toggle");
+        await header.hover();
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionsOpacity: "1",
+            actionsPointerEvents: "auto",
+            chevronOpacity: "0.75",
+            finePointer: true,
+            gripOpacity: "0.55",
+            hoverCapable: true,
+            hovered: true,
+            providerOpacity: "0",
+          });
+
+        await toggle.click();
+        await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
+        await expect
+          .poll(() =>
+            header.evaluate((element) => {
+              const focusedToggle = element.querySelector<HTMLElement>(
+                ".sidebar-session-group-toggle",
+              );
+              return {
+                focusWithin: element.matches(":focus-within"),
+                hovered: element.matches(":hover"),
+                toggleFocusVisible: focusedToggle?.matches(":focus-visible") ?? false,
+                toggleFocused: document.activeElement === focusedToggle,
+              };
+            }),
+          )
+          .toEqual({
+            focusWithin: true,
+            hovered: false,
+            toggleFocusVisible: false,
+            toggleFocused: true,
+          });
+
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await fs.mkdir(artifactDir, { recursive: true });
+          await header.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "catalog-header-pointer-away.png"),
+          });
+        }
+
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionsOpacity: "0",
+            actionsPointerEvents: "none",
+            chevronOpacity: "0",
+            focusWithin: true,
+            gripOpacity: "0",
+            hovered: false,
+            providerOpacity: "1",
+            toggleFocusVisible: false,
+            toggleFocused: true,
+          });
+
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionFocusVisible: true,
+            actionFocused: true,
+            actionsOpacity: "1",
+            actionsPointerEvents: "auto",
+            chevronOpacity: "0.75",
+            focusWithin: true,
+            gripOpacity: "0.55",
+            hovered: false,
+            providerOpacity: "0",
+          });
+      },
+    );
+  });
+
   it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
-    const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await suite.browser.newPage({
+      hasTouch: true,
+      viewport: { width: 1440, height: 900 },
+    });
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
@@ -251,6 +382,32 @@ suite.define(() => {
           1,
         );
       }
+
+      const touchAffordance = await page
+        .locator(
+          '[data-session-section="catalog:claude"] .sidebar-session-group-toggle__lead--branded',
+        )
+        .evaluate((lead) => {
+          const providerIcon = lead.querySelector<HTMLElement>(
+            ".sidebar-session-catalog-provider-icon",
+          );
+          const chevron = lead.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+          if (!providerIcon || !chevron) {
+            throw new Error("expected branded catalog provider icon and chevron");
+          }
+          return {
+            coarsePointer: matchMedia("(pointer: coarse)").matches,
+            noHover: matchMedia("(hover: none)").matches,
+            providerOpacity: getComputedStyle(providerIcon).opacity,
+            chevronOpacity: getComputedStyle(chevron).opacity,
+          };
+        });
+      expect(touchAffordance).toEqual({
+        coarsePointer: true,
+        noHover: true,
+        providerOpacity: "0",
+        chevronOpacity: "0.75",
+      });
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -476,6 +633,11 @@ suite.define(() => {
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
       .toBe(true);
+    await thread.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await gateway.deferNext("sessions.catalog.read");
     await thread.evaluate((element) => {
@@ -506,7 +668,7 @@ suite.define(() => {
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
     expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
     await expect
-      .poll(() => page.getByText("This thread is on a paired node and is view-only.").count())
+      .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {
@@ -681,7 +843,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(/^focus retention message 200\n/).waitFor();
     const thread = page.locator(".chat-thread");
-    const action = thread.locator("button.chat-group-delete").last();
+    const action = thread.locator("button.chat-reply-btn").last();
     await action.focus();
     const focusedRowKey = await action.evaluate(
       (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",

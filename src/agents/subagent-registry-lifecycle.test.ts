@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import {
-  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -163,7 +163,7 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
 }));
 
@@ -182,13 +182,13 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   ANNOUNCE_EXPIRY_MS: 5 * 60_000,
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   PROVISIONAL_KILL_RECONCILIATION_MS: 5 * 60_000,
-  backfillCollectorArchiveAtMs: () => false,
   capFrozenResultText: (text: string) => text.trim(),
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
   resolveAnnounceRetryDelayMs: (retryCount: number) =>
     Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+  updateSubagentArchiveAtMs: () => false,
 }));
 
 type RunEntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
@@ -564,9 +564,9 @@ describe("subagent registry lifecycle hardening", () => {
     const cleanupReady = new Promise<void>((resolve) => {
       releaseCleanup = resolve;
     });
-    const staleWriteLock = vi.fn();
-    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      staleWriteLock();
+    const requesterTranscriptWrite = vi.fn();
+    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      requesterTranscriptWrite();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
@@ -575,13 +575,13 @@ describe("subagent registry lifecycle hardening", () => {
     const freshTranscriptWrite = vi.fn(async () => {});
     const runSubagentAnnounceFlow = vi.fn(async () => {
       await cleanupReady;
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return true;
     });
     const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
       async () => {
         expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
       },
@@ -592,7 +592,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     await waitForLifecycleState(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
     await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("delivered"));
-    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
 
@@ -1468,6 +1468,24 @@ describe("subagent registry lifecycle hardening", () => {
     expectFields(taskExecutorMocks.completeTaskRunByRunId.mock.calls.at(-1)?.[0], {
       progressSummary: "Already captured final reply.",
     });
+  });
+
+  it("skips frozen-result refill for a sessions_yield-paused run", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      pauseReason: "sessions_yield",
+    });
+    const captureSubagentCompletionReply = vi.fn(async () => "text from the next turn");
+    const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
+
+    expect(await controller.refreshFrozenResultFromSession(entry.childSessionKey)).toBe(false);
+
+    // The yield cleared this row's result on purpose. Whatever the session holds
+    // now belongs to the turn that runs next, so refreezing it would announce a
+    // stranger's output as the paused run's completion.
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(entry.completion?.resultText).toBeUndefined();
   });
 
   it("keeps success canonical while a killed callback waits behind reply capture", async () => {
@@ -3818,9 +3836,9 @@ describe("requester settle wake trigger", () => {
     const wakeReady = new Promise<void>((resolve) => {
       releaseWake = resolve;
     });
-    const staleWriteLock = vi.fn();
-    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      staleWriteLock();
+    const requesterTranscriptWrite = vi.fn();
+    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      requesterTranscriptWrite();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
@@ -3829,7 +3847,7 @@ describe("requester settle wake trigger", () => {
     const freshTranscriptWrite = vi.fn(async () => {});
     const settleWake = vi.fn(async () => {
       await wakeReady;
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return false;
     });
     const controller = createLifecycleController({
@@ -3838,7 +3856,7 @@ describe("requester settle wake trigger", () => {
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
       async () => {
         controller.completeCleanupBookkeeping({
           runId: entry.runId,
@@ -3853,7 +3871,7 @@ describe("requester settle wake trigger", () => {
     releaseWake();
 
     await waitForLifecycleState(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
-    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(settleWake).toHaveBeenCalledOnce();
   });
 
@@ -4101,6 +4119,26 @@ describe("requester settle wake trigger", () => {
       "run-later",
     ]);
     expect(later.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+  });
+
+  it("does not resume a persisted settle wake until its registry row is terminal", async () => {
+    const entry = createRunEntry({
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.resumeRequesterSettleWake(entry.runId, entry);
+    await Promise.resolve();
+    expect(settleWake).not.toHaveBeenCalled();
+
+    entry.execution = { ...entry.execution, status: "terminal", endedAt: 4_000 };
+    controller.resumeRequesterSettleWake(entry.runId, entry);
+
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
   });
 
   it("keeps a yielded completion parked until its requester turn settles", async () => {

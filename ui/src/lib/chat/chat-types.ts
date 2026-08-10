@@ -5,6 +5,14 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { SenderIdentity } from "./sender-label.ts";
 
+export type BrowserAnnotationAttachment = {
+  modelContext: string;
+  title: string;
+  displayUrl: string;
+  markedRegionCount: number;
+  inspectedElement: boolean;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -12,6 +20,8 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+  /** UI-local context that must remain coupled to its annotated screenshot. */
+  browserAnnotation?: BrowserAnnotationAttachment;
 };
 
 export type ChatQueueSkillWorkshopRevision = {

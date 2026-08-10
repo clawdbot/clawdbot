@@ -12,6 +12,7 @@ import {
   ensureDir,
   isMemoryPath,
   listMemoryFiles,
+  normalizeExtraMemoryPathEntries,
   normalizeExtraMemoryPaths,
   remapChunkLines,
   runWithConcurrency,
@@ -55,6 +56,19 @@ function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): Fil
     throw new Error("Expected file entry to be built");
   }
   return entry;
+}
+
+function tryCreateSymlink(target: string, linkPath: string, type?: "dir"): boolean {
+  try {
+    fsSync.symlinkSync(target, linkPath, type);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      return false;
+    }
+    throw err;
+  }
 }
 
 function expectMultimodalIndexingChunk(
@@ -150,6 +164,16 @@ describe("memory host SDK package internals", () => {
       path.join(os.homedir(), "shared-notes"),
       os.homedir(),
     ]);
+    expect(
+      normalizeExtraMemoryPathEntries(workspaceDir, [
+        { path: " notes ", pattern: " runbooks/**/*.md " },
+        { path: "notes", pattern: "runbooks/**/*.md" },
+        { path: "notes", pattern: "archive/**/*.md" },
+      ]),
+    ).toEqual([
+      { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
+      { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
+    ]);
   });
 
   it("lists canonical markdown and enabled multimodal files", async () => {
@@ -176,6 +200,34 @@ describe("memory host SDK package internals", () => {
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
       path.join("extra", "recording.m2a"),
+    ]);
+  });
+
+  it("filters extra directories by glob while preserving symlink skips", async () => {
+    const tmpDir = getTmpDir();
+    const extraDir = path.join(tmpDir, "extra");
+    const outsideDir = path.join(tmpDir, "outside");
+    fsSync.mkdirSync(path.join(extraDir, "notes", "nested"), { recursive: true });
+    fsSync.mkdirSync(path.join(extraDir, "drafts"), { recursive: true });
+    fsSync.mkdirSync(outsideDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "root.md"), "root");
+    fsSync.writeFileSync(path.join(extraDir, "notes", "keep.md"), "keep");
+    fsSync.writeFileSync(path.join(extraDir, "notes", "nested", "keep.md"), "nested");
+    fsSync.writeFileSync(path.join(extraDir, "drafts", "skip.md"), "skip");
+    fsSync.writeFileSync(path.join(extraDir, "notes", "ignore.txt"), "ignore");
+    fsSync.writeFileSync(path.join(outsideDir, "linked.md"), "linked");
+    tryCreateSymlink(path.join(outsideDir, "linked.md"), path.join(extraDir, "notes", "linked.md"));
+    tryCreateSymlink(outsideDir, path.join(extraDir, "notes", "linked-dir"), "dir");
+
+    const files = await listMemoryFiles(tmpDir, [
+      { path: extraDir, pattern: "root.md" },
+      { path: extraDir, pattern: "notes/**/*.md" },
+    ]);
+
+    expect(files.map((file) => path.relative(extraDir, file)).toSorted()).toEqual([
+      path.join("notes", "keep.md"),
+      path.join("notes", "nested", "keep.md"),
+      "root.md",
     ]);
   });
 

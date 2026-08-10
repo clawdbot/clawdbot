@@ -10,6 +10,8 @@ import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import type { ModelCatalogEntry } from "../api/types.ts";
+import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
 export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
@@ -159,6 +161,7 @@ const defaultControlUiFeatureMethods = [
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
+  "sessions.patchMany",
   "sessions.branches.switch",
   "sessions.compact",
   "sessions.compaction.branch",
@@ -175,6 +178,9 @@ const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "update.hold",
+  "update.run",
+  "update.status",
 ] as const;
 
 export type MockGatewayRequest = {
@@ -244,20 +250,14 @@ export type ControlUiMockGatewayScenario = {
   sessionInfo?: Record<string, unknown> | null;
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
-  models?: Array<{
-    id: string;
-    name: string;
-    provider: string;
-    available?: boolean;
-    contextWindow?: number;
-    supportsTools?: boolean;
-  }>;
+  models?: ModelCatalogEntry[];
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
+  cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
 };
@@ -380,7 +380,9 @@ export async function startControlUiE2eServer(
       close: async () => {},
     };
   }
-  const resolvedBuildInfo = buildInfo ?? DEFAULT_CONTROL_UI_E2E_BUILD_INFO;
+  const resolvedBuildInfo = normalizeControlUiBuildInfo(
+    buildInfo ?? DEFAULT_CONTROL_UI_E2E_BUILD_INFO,
+  );
   // Shared browser fixtures import this helper; load filesystem-bound Vite
   // configuration only when its Node-owned development server actually starts.
   const [
@@ -656,6 +658,7 @@ function normalizeScenario(
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
+    cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
   };
@@ -674,6 +677,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
     terminalEnabled: normalizedScenario.terminalEnabled,
+    cliAgentsEnabled: normalizedScenario.cliAgentsEnabled,
   };
 }
 
@@ -1069,8 +1073,12 @@ function installControlUiMockGateway(
       "model",
       "thinkingLevel",
       "fastMode",
+      "label",
       "category",
+      "icon",
+      "boardFace",
       "pinned",
+      "unread",
       "toolOverrides",
     ] as const) {
       if (hasOwn(params, key)) {
@@ -1081,6 +1089,21 @@ function installControlUiMockGateway(
       patch.archived = params.archived;
     }
     sessionPatches.set(params.key, patch);
+  }
+
+  function recordSessionsPatchMany(params: unknown, response: unknown): void {
+    if (!isRecord(params) || !Array.isArray(params.targets) || !isRecord(params.patch)) {
+      return;
+    }
+    const outcomes =
+      isRecord(response) && Array.isArray(response.outcomes) ? response.outcomes : [];
+    for (const [index, target] of params.targets.entries()) {
+      const outcome = outcomes[index];
+      if (!isRecord(target) || !isRecord(outcome) || outcome.ok !== true) {
+        continue;
+      }
+      recordSessionPatch({ ...target, ...params.patch });
+    }
   }
 
   function recordMaterializedSession(params: unknown, response: unknown): void {
@@ -1356,6 +1379,9 @@ function installControlUiMockGateway(
       if (method === "sessions.create" || method === "sessions.catalog.continue") {
         recordMaterializedSession(params, configuredValue);
       }
+      if (method === "sessions.patchMany") {
+        recordSessionsPatchMany(params, configuredValue);
+      }
       return method === "sessions.list"
         ? applySessionPatches(configuredValue, params)
         : configuredValue;
@@ -1531,6 +1557,20 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.patchMany": {
+        const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
+        const result = {
+          outcomes: targets.map((target) => {
+            const key = isRecord(target) && typeof target.key === "string" ? target.key : "unknown";
+            if (isRecord(target) && typeof target.agentId === "string") {
+              return { ok: true, key, agentId: target.agentId };
+            }
+            return { ok: true, key };
+          }),
+        };
+        recordSessionsPatchMany(params, result);
+        return result;
+      }
       case "sessions.groups.list":
         return groupsPayload();
       case "sessions.groups.put": {

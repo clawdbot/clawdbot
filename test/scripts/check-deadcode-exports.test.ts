@@ -11,7 +11,7 @@ import {
   checkUnusedExports,
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
-} from "../../scripts/check-deadcode-exports.mjs";
+} from "../../scripts/check-deadcode-exports.mts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -46,7 +46,7 @@ function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
 describe("check-deadcode-exports", () => {
   it("requests every unused-export issue class from Knip", () => {
     const script = fs.readFileSync(
-      new URL("../../scripts/check-deadcode-exports.mjs", import.meta.url),
+      new URL("../../scripts/check-deadcode-exports.mts", import.meta.url),
       "utf8",
     );
     expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
@@ -346,11 +346,11 @@ src/noise.ts: src/noise.ts
   it("keeps findings from dot-directories and root entry files", () => {
     expect(
       parseKnipCompactUnusedExports(`Unused exports (2)
-.agents/skills/example/scripts/check.mjs: checkExample
+.agents/skills/example/scripts/check.mts: checkExample
 tsdown.ai.config.ts: default
 `),
     ).toEqual([
-      ".agents/skills/example/scripts/check.mjs: checkExample",
+      ".agents/skills/example/scripts/check.mts: checkExample",
       "tsdown.ai.config.ts: default",
     ]);
   });

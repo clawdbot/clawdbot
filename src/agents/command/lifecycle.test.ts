@@ -132,6 +132,38 @@ describe("createAgentCommandLifecycle", () => {
     },
   );
 
+  it("does not let generic abort metadata erase a superseded outcome", () => {
+    emitAgentEvent.mockClear();
+    const controller = new AbortController();
+    controller.abort();
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "superseded-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      abortSignal: controller.signal,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: { aborted: true },
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
+    });
+
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          aborted: true,
+          phase: "end",
+          stopReason: "superseded",
+        }),
+      }),
+    );
+  });
+
   it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
     emitAgentEvent.mockClear();
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");

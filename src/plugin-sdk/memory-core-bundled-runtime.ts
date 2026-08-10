@@ -51,10 +51,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-dangling"
     | "recall-store-over-limit"
     | "recall-lock-stale"
-    | "recall-lock-unreadable"
-    | "qmd-index-missing"
-    | "qmd-index-empty"
-    | "qmd-collections-empty";
+    | "recall-lock-unreadable";
   message: string;
   fixable: boolean;
 };
@@ -72,11 +69,6 @@ export type ShortTermAuditSummary = {
   invalidEntryCount: number;
   danglingEntryCount?: number;
   issues: ShortTermAuditIssue[];
-  qmd?: {
-    dbPath?: string;
-    collections?: number;
-    dbBytes?: number;
-  };
 };
 
 export type RepairShortTermPromotionArtifactsResult = {
@@ -111,10 +103,6 @@ type RuntimeFacadeModule = {
   }) => Promise<DreamingArtifactsAuditSummary>;
   auditShortTermPromotionArtifacts: (params: {
     workspaceDir: string;
-    qmd?: {
-      dbPath?: string;
-      collections?: number;
-    };
   }) => Promise<ShortTermAuditSummary>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;

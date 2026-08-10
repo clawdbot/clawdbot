@@ -2,15 +2,8 @@
  * Tests channel lifecycle queue ordering and failure handling.
  */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createChannelRunQueue } from "./channel-lifecycle.core.js";
-
-function createDeferred() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
-}
 
 async function flushAsyncWork() {
   for (let i = 0; i < 20; i += 1) {

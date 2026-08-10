@@ -257,6 +257,39 @@ values. A collision-free declaration becomes managed, while an exact existing
 or shared declaration is referenced. Preview, provenance, status, export, and
 removal follow the same ownership policy as other Claw resources.
 
+## Author locally
+
+Create a minimal project, validate its publishable inputs, preview its complete
+OpenClaw add plan offline, and build an immutable package artifact:
+
+```bash
+openclaw claws create ./incident-triage
+openclaw claws validate ./incident-triage
+openclaw claws dev ./incident-triage
+openclaw claws build ./incident-triage --out ./incident-triage-1.0.0.tgz
+```
+
+`create` writes only `package.json` and `CLAW.md` and refuses to merge into a
+nonempty directory. Project validation requires `openclaw.claw` to point to
+the root `CLAW.md`, rejects package scripts and lifecycle hooks, discovers a
+single unambiguous project root, and reports files excluded from the package.
+
+`dev` validates and builds the same artifact that would be published, then
+runs that artifact through the canonical add planner. It does not install
+packages, contact ClawHub, start an agent turn, enable schedules, deliver
+messages, or modify OpenClaw state. Dependencies that require online preflight
+appear as blockers instead of weakening that boundary. Use `--agent-id` or
+`--workspace` to preview collision-free local destinations.
+
+`build` writes a deterministic npm-compatible `.tgz` with a `package/` root.
+Only package metadata, `CLAW.md`, optional `BOOTSTRAP.md`, the OpenClaw profile,
+and sources selected by the manifest are included. Tests, caches, ambient or
+unselected credentials, unselected files, prior artifacts, and source-control
+state remain outside the package. Selected source bytes are package content, so
+authors must not select secret-bearing files. Build refuses to overwrite an
+existing artifact, reports its SHA-256 integrity, and re-opens it through the
+canonical Claw reader before success.
+
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
@@ -404,6 +437,19 @@ managed state has drifted:
 ```bash
 openclaw claws export incident-triage --out ./incident-triage-export --json
 ```
+
+Use `--bootstrap <path>` to attach an explicitly reviewed Markdown file as the
+package-root `BOOTSTRAP.md`. Export re-emits an unchanged, still-pending package
+bootstrap automatically. A package bootstrap that drifted in the workspace
+(edited, unsafe, or unreadable) fails the export with `bootstrap_drifted`, the
+same way managed workspace files fail with `workspace_files_drifted`; pass
+`--bootstrap <path>` with a reviewed replacement to export anyway. A bootstrap
+the agent already consumed is a completed lifecycle state, so export omits
+`BOOTSTRAP.md` instead of failing. The exporter validates the completed package
+and removes the new output directory if validation fails. Bootstrap is
+package-authored prompt content: do not include credentials, tokens, private
+answers, or machine-specific paths. Export does not infer questions, render
+personal-data templates, persist answers, or add a separate setup lifecycle.
 
 The result contains `package.json`, canonical `CLAW.md`, and managed workspace
 sidecars. Managed `SOUL.md` content is emitted as the `CLAW.md` body when it is

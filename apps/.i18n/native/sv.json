@@ -21874,11 +21874,6 @@
       "translated": "Detaljerna listas för varje alternativ ovan. Du kan åtgärda inloggningen och försöka igen, eller ansluta med en API-nyckel eller token nedan."
     },
     {
-      "id": "native.apple.a0431b20c0650139",
-      "source": "Need help? Chat with OpenClaw",
-      "translated": "Behöver du hjälp? Chatta med OpenClaw"
-    },
-    {
       "id": "native.apple.6526ced182e1fe50",
       "source": "Your AI is ready",
       "translated": "Din AI är redo"
@@ -22097,16 +22092,6 @@
       "id": "native.apple.953d477f3f3f2efa",
       "source": "That key didn’t work",
       "translated": "Den nyckeln fungerade inte"
-    },
-    {
-      "id": "native.apple.e874bd0fad63f012",
-      "source": "OpenClaw — setup helper",
-      "translated": "OpenClaw — konfigurationshjälp"
-    },
-    {
-      "id": "native.apple.bea852c8622c8214",
-      "source": "Done",
-      "translated": "Klar"
     },
     {
       "id": "native.apple.f91347240d07008f",
@@ -22507,6 +22492,11 @@
       "id": "native.apple.3bcb83316b3d90bb",
       "source": "The Gateway didn’t start",
       "translated": "Gateway startade inte"
+    },
+    {
+      "id": "native.apple.f0b128f895130fef",
+      "source": "OpenClaw installation failed",
+      "translated": "Installationen av OpenClaw misslyckades"
     },
     {
       "id": "native.apple.f36edc58238aa8ce",

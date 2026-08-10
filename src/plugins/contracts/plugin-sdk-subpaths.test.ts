@@ -791,6 +791,19 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
+    expectSourceContract("memory-core-host-engine-foundation", {
+      mentions: ['from "../../packages/memory-host-sdk/src/host/fs-utils.js"'],
+      omits: ['from "../../packages/memory-host-sdk/src/engine-foundation.js"'],
+    });
+    expectSourceContract("memory-core-host-engine-curated", {
+      mentions: ["extractProjectKeysFromCuratedEntry"],
+    });
+    expectSourceContract("memory-core-host-engine-fs", {
+      mentions: ["resolveUserPath", 'from "../infra/fs-safe.js"'],
+    });
+    expectSourceContract("memory-core-host-engine-schema", {
+      mentions: ["ensureMemoryIndexSchema", "loadSqliteVecExtension"],
+    });
     expectSourceContract("memory-core-host-runtime-core", {
       mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
       omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
@@ -816,7 +829,6 @@ describe("plugin-sdk subpath exports", () => {
       "QUEUED_USER_MESSAGE_MARKER",
     ]);
     expectSourceMentions("channel-test-helpers", [
-      "assertBundledChannelEntries",
       "formatEnvelopeTimestamp",
       "expectPairingReplyText",
     ]);
@@ -982,7 +994,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveConversationLabel",
       "shouldDebounceTextInbound",
       "shouldAckReaction",
-      "shouldAckReactionForWhatsApp",
       "toLocationContext",
       "resolveThreadBindingConversationIdFromBindingId",
       "resolveThreadBindingEffectiveExpiresAt",
@@ -1130,9 +1141,16 @@ describe("plugin-sdk subpath exports", () => {
       "logTypingFailure",
       "removeAckReactionAfterReply",
       "shouldAckReaction",
-      "shouldAckReactionForWhatsApp",
       "DEFAULT_EMOJIS",
     ]);
+    expectSourceOmits("channel-feedback", [
+      "shouldAckReactionForWhatsApp",
+      "WhatsAppAckReactionMode",
+    ]);
+    expectRepoSourceOmitsSnippet("src/channels/ack-reactions.ts", "shouldAckReactionForWhatsApp");
+    expectRepoSourceOmitsSnippet("src/channels/ack-reactions.ts", "WhatsAppAckReactionMode");
+    expectSourceMentions("channel-streaming", ["SlackChannelStreamingConfig"]);
+    expectRepoSourceOmitsSnippet("src/channels/streaming.ts", "SlackChannelStreamingConfig");
     expectSourceMentions("status-helpers", [
       "appendMatchMetadata",
       "asString",

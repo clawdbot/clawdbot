@@ -4,6 +4,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
@@ -288,19 +289,6 @@ function idleChatHistory(sessionKey = "agent:main") {
     messages: [],
     sessionInfo: row(sessionKey, { hasActiveRun: false, status: "done" }),
   };
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
 }
 
 const neverSettlesPromise: Promise<never> = Promise.race([]);
@@ -1621,7 +1609,7 @@ describe("handleSendChat", () => {
   });
 
   it("keeps a resolved model reconciliation inside the canonical settings queue", async () => {
-    const reconcile = createDeferred<void>();
+    const reconcile = createDeferred();
     let patchCount = 0;
     const host = makeChatHost({
       requestHandlers: {
@@ -3554,6 +3542,7 @@ describe("handleSendChat", () => {
         expect.objectContaining({
           message: "steer without waiting for history",
           queueMode: "steer",
+          replyToId: "steer-behind-outbox-source",
         }),
       ),
     );
@@ -3561,6 +3550,9 @@ describe("handleSendChat", () => {
 
     expect(host.chatReplyTarget).toBeNull();
     expect(host.chatRunId).toBe("active-run");
+    expect(host.chatQueue.find((item) => item.kind === "steered")?.replyToId).toBe(
+      "steer-behind-outbox-source",
+    );
     olderHistory.resolve({
       messages: [{ role: "user", __openclaw: { idempotencyKey: "older-reconciliation-run:user" } }],
       sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
@@ -7203,7 +7195,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("stale branch prompt");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
-        sendError: "The thread switched branches — review and resend.",
+        sendError: "The session switched branches — review and resend.",
         sendState: "failed",
       }),
     ]);

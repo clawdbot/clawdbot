@@ -26,7 +26,7 @@ vi.mock("../cache-ttl.js", () => ({
   readLastCacheTtlTimestamp: hoisted.readLastCacheTtlTimestamp,
 }));
 
-import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
+import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
 
 function createInput(overrides: Record<string, unknown> = {}) {
   const activeSession = {

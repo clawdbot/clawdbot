@@ -5,7 +5,7 @@ import { resolveSubagentCompletionResultText } from "../subagent-completion-resu
 import { onSubagentRegistryPersisted } from "../subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagent-registry.js";
 import type { SubagentRunRecord } from "../subagent-registry.types.js";
-import { resolveSwarmConfig } from "../swarm-config.js";
+import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
@@ -243,19 +243,5 @@ export function createAgentsWaitTool(opts: {
         Boolean(result.errors?.length);
       return jsonResult(noAuthorizedTargets ? { ...result, success: false } : result);
     },
-  };
-}
-
-const testing = {
-  ownsRun,
-  readResolvedWaitState,
-  readWaitState,
-  resolveWaitTargets,
-  waitForCollector,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentsWaitToolTestApi")] = {
-    testing,
   };
 }

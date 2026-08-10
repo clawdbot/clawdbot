@@ -5,7 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -23,6 +27,7 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../agents/prepared-model-catalog-owner.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   concretizeAgentRuntime,
@@ -41,7 +46,7 @@ import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import type { GatewaySessionsDefaults } from "./session-utils.types.js";
+import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
 
 function resolveGatewaySessionThinkingLevel(params: {
   provider: string;
@@ -238,19 +243,6 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     thinkingOptions: metadata.levels.map((level) => level.label),
     thinkingDefault: metadata.defaultLevel,
   };
-}
-
-/** Resolve the canonical runtime, selected level, and picker metadata for a session. */
-export function resolveGatewaySessionThinkingProjection(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentId: string;
-  sessionKey: string;
-  entry?: SessionEntry;
-  modelCatalog?: ModelCatalogEntry[];
-}) {
-  return resolveGatewaySessionThinkingProjectionInternal(params);
 }
 
 export function getSessionDefaults(
@@ -501,7 +493,7 @@ export function resolveSessionDisplayModelIdentityRefCached(params: {
   return value;
 }
 
-export function resolveSessionDisplayModelIdentityRef(params: {
+function resolveSessionDisplayModelIdentityRef(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
@@ -537,5 +529,54 @@ export function resolveSessionDisplayModelIdentityRef(params: {
   return {
     provider: defaultRef.provider || provider,
     model,
+  };
+}
+
+export async function projectSessionPatchResult(params: {
+  canonicalKey: string;
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  modelCatalogByAgent: ReadonlyMap<string, Promise<ModelCatalogEntry[]>>;
+  storePath: string;
+  targetAgentId: string;
+}): Promise<SessionsPatchResult> {
+  const agentId = resolveSessionAgentId({
+    config: params.cfg,
+    sessionKey: params.canonicalKey,
+    ...(params.canonicalKey === "global" ? { agentId: params.targetAgentId } : {}),
+  });
+  const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
+  const displayModel = resolveSessionDisplayModelIdentityRef({
+    cfg: params.cfg,
+    agentId,
+    provider: resolved.provider,
+    model: resolved.model,
+  });
+  const modelCatalog = await params.modelCatalogByAgent.get(params.targetAgentId);
+  const thinking = resolveGatewaySessionThinkingProjectionInternal({
+    cfg: params.cfg,
+    agentId,
+    provider: displayModel.provider ?? resolved.provider,
+    model: displayModel.model ?? resolved.model,
+    sessionKey: params.canonicalKey,
+    entry: params.entry,
+    modelCatalog,
+  });
+  return {
+    ok: true,
+    path: params.storePath,
+    key: params.canonicalKey,
+    entry: params.entry,
+    resolved: {
+      modelProvider: displayModel.provider,
+      model: displayModel.model,
+      agentRuntime: thinking.agentRuntime,
+      ...(modelCatalog
+        ? {
+            thinkingLevel: thinking.effectiveThinkingLevel,
+            thinkingLevels: thinking.thinkingLevels,
+          }
+        : {}),
+    },
   };
 }

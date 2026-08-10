@@ -81,6 +81,13 @@ function readHistoryDetails(result: { details: unknown }) {
   return result.details as Record<string, unknown>;
 }
 
+function requireGatewayRequest(requests: CallGatewayRequest[], method: string): CallGatewayRequest {
+  return expectDefined(
+    requests.find((request) => request.method === method),
+    `${method} request test invariant`,
+  );
+}
+
 function readMessageSeq(message: unknown): number | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
@@ -168,42 +175,6 @@ describe("sessions_history redaction", () => {
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 
-  it.each([
-    {
-      name: "reports decoded bytes for raw image data",
-      content: [
-        {
-          type: "image",
-          data: Buffer.from([0, 1, 2, 3, 4]).toString("base64"),
-          mimeType: "image/png",
-        },
-      ],
-      expectedBytes: 5,
-    },
-    {
-      name: "replaces stale bytes for empty image data",
-      content: [{ type: "image", data: "", mimeType: "image/png", bytes: 999 }],
-      expectedBytes: 0,
-    },
-    {
-      name: "preserves existing bytes when image data is already omitted",
-      content: [{ type: "image", mimeType: "image/png", bytes: 37, omitted: true }],
-      expectedBytes: 37,
-    },
-  ])("$name", async ({ content, expectedBytes }) => {
-    const tool = createHistoryToolWithMessage(content);
-
-    const result = await tool.execute("call-1", { sessionKey: "main" });
-    const details = readHistoryDetails(result);
-
-    expect(details.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "image", mimeType: "image/png", bytes: expectedBytes, omitted: true }],
-      },
-    ]);
-  });
-
   it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
     const tool = createHistoryToolWithMessage("hello");
 
@@ -255,15 +226,13 @@ describe("sessions_history redaction", () => {
     });
 
     const result = await tool.execute("call-1", { sessionKey: "main", limit: 2 });
+    const request = requireGatewayRequest(requests, "chat.history");
 
-    expect(requests[0]).toMatchObject({
+    expect(request).toMatchObject({
       method: "chat.history",
       params: { sessionKey: "main", limit: 2 },
     });
-    expect(
-      (expectDefined(requests[0], "requests[0] test invariant").params as Record<string, unknown>)
-        .offset,
-    ).toBeUndefined();
+    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
     expect((result.details as Record<string, unknown>).offset).toBeUndefined();
   });
 
@@ -288,7 +257,7 @@ describe("sessions_history redaction", () => {
 
     const result = await tool.execute("call-1", { sessionKey: "main", limit: 2, offset: 0 });
 
-    expect(requests[0]).toMatchObject({
+    expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
       method: "chat.history",
       params: { sessionKey: "main", limit: 2, offset: 0 },
     });
@@ -323,7 +292,7 @@ describe("sessions_history redaction", () => {
       sessionId: "matching-session",
     });
 
-    expect(requests[0]).toMatchObject({
+    expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
       method: "chat.history",
       params: {
         sessionKey: "main",
@@ -476,7 +445,7 @@ describe("sessions_history redaction", () => {
         sessionKey: targetSessionKey,
         messages: [{ role: "assistant", content: "visible" }],
       });
-      expect(requests.map((request) => request.method)).toEqual(["chat.history"]);
+      expect(requests.map((request) => request.method)).toEqual(["sessions.list", "chat.history"]);
     } finally {
       unregister();
     }
@@ -530,7 +499,7 @@ describe("sessions_history redaction", () => {
       await expect(
         tool.execute("scoped-grant-race", { sessionKey: targetSessionKey }),
       ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
-      expect(requests).toEqual([]);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
     } finally {
       unregister();
     }
@@ -581,7 +550,7 @@ describe("sessions_history redaction", () => {
       await expect(
         tool.execute("scoped-grant-archive-race", { sessionKey: targetSessionKey }),
       ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
-      expect(requests).toEqual([]);
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
     } finally {
       unregister();
     }

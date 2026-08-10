@@ -52,10 +52,12 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { resolveLiveEditToolKind } from "./embedded-agent-live-edit-diff.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
   readMessageToolSourceReplyText,
+  resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -95,6 +97,7 @@ import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
+  type ProcessTerminalDiagnostic,
 } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -191,6 +194,90 @@ function isMiddlewareToolResultError(result: unknown): boolean {
     !Array.isArray(details) &&
     (details as { middlewareError?: unknown }).middlewareError === true,
   );
+}
+
+function hasTerminalControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const PROCESS_TERMINATION_REASONS = new Set([
+  "manual-cancel",
+  "overall-timeout",
+  "no-output-timeout",
+  "spawn-error",
+  "signal",
+  "exit",
+]);
+
+function readSafeProcessSessionId(value: unknown): string | undefined {
+  const sessionId = readStringValue(value)?.trim();
+  if (!sessionId || sessionId.length > 160 || hasTerminalControlCharacter(sessionId)) {
+    return undefined;
+  }
+  return sessionId;
+}
+
+function buildProcessTerminalDiagnostic(
+  toolName: string,
+  args: Record<string, unknown>,
+  sanitizedResult: unknown,
+): ProcessTerminalDiagnostic | undefined {
+  if (toolName !== "process") {
+    return undefined;
+  }
+  const action = normalizeOptionalLowercaseString(args.action);
+  if (action !== "poll" && action !== "log") {
+    return undefined;
+  }
+  const details = readToolResultDetails(sanitizedResult);
+  const sessionId = readSafeProcessSessionId(details?.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+
+  const exitReason = normalizeOptionalLowercaseString(details?.exitReason);
+  const hasCanonicalExitReason = PROCESS_TERMINATION_REASONS.has(exitReason ?? "");
+  if (action === "log" && !hasCanonicalExitReason) {
+    return undefined;
+  }
+  const timeoutKind =
+    exitReason === "overall-timeout" || exitReason === "no-output-timeout" ? exitReason : undefined;
+  let reason: ProcessTerminalDiagnostic["reason"] | undefined;
+  if (details?.timedOut === true || timeoutKind) {
+    reason = { kind: "timeout", ...(timeoutKind ? { timeoutKind } : {}) };
+  } else if (
+    (typeof details?.exitSignal === "string" &&
+      details.exitSignal.trim().length > 0 &&
+      details.exitSignal.trim().length <= 32) ||
+    (typeof details?.exitSignal === "number" && Number.isFinite(details.exitSignal))
+  ) {
+    const signal =
+      typeof details.exitSignal === "string" ? details.exitSignal.trim() : details.exitSignal;
+    if (!hasTerminalControlCharacter(String(signal))) {
+      reason = { kind: "signal", signal };
+    }
+  } else if (
+    typeof details?.exitCode === "number" &&
+    Number.isSafeInteger(details.exitCode) &&
+    details.exitCode !== 0
+  ) {
+    reason = { kind: "exit", exitCode: details.exitCode };
+  }
+  if (!reason) {
+    return undefined;
+  }
+
+  return {
+    kind: "process",
+    sessionId,
+    reason,
+  };
 }
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
@@ -363,10 +450,6 @@ function buildToolItemTitle(toolName: string, meta?: string): string {
 
 function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
-}
-
-function isPatchToolName(toolName: string): boolean {
-  return toolName === "apply_patch";
 }
 
 function buildCommandItemId(toolCallId: string): string {
@@ -1002,6 +1085,7 @@ export function handleToolExecutionStart(
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolName(evt.toolName);
+  ctx.state.liveEditDiffStateById?.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
       ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
@@ -1181,7 +1265,7 @@ export function handleToolExecutionStart(
         toolCallId,
         startedAt,
       });
-    } else if (isPatchToolName(toolName)) {
+    } else if (resolveLiveEditToolKind(toolName) === "patch") {
       emitTrackedItemEvent(ctx, {
         itemId: buildPatchItemId(toolCallId),
         phase: "start",
@@ -1399,6 +1483,7 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
+  ctx.state.liveEditDiffStateById?.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
@@ -1481,6 +1566,13 @@ export async function handleToolExecutionEnd(
   ctx.state.toolSummaryById.delete(toolCallId);
   const errorMessage = isToolError ? extractToolErrorMessage(sanitizedResult) : undefined;
   const errorCode = isToolError ? extractToolErrorCode(sanitizedResult) : undefined;
+  const terminalDiagnostic = isToolError
+    ? buildProcessTerminalDiagnostic(toolName, startArgs, sanitizedResult)
+    : undefined;
+  const terminalErrorMessage =
+    terminalDiagnostic && errorMessage && hasTerminalControlCharacter(errorMessage)
+      ? undefined
+      : errorMessage;
   const validationErrorSummary =
     isToolError && evt.executionStarted === false && evt.errorKind === "argument-validation"
       ? createToolValidationErrorSummary(toolName)
@@ -1496,7 +1588,8 @@ export async function handleToolExecutionEnd(
       ? {
           failure: {
             ...(errorCode ? { errorCode } : {}),
-            ...(errorMessage ? { error: errorMessage } : {}),
+            ...(terminalErrorMessage ? { error: terminalErrorMessage } : {}),
+            ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
             ...(validationErrorSummary ? { validationErrorSummary } : {}),
             timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
             middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
@@ -1552,6 +1645,18 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
+  const deliveredCurrentSourceReply =
+    didDeliverMessagingResult &&
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
+  const sourceReplyFinal = deliveredCurrentSourceReply
+    ? resolveMessageToolSourceReplyFinal(startArgs)
+    : undefined;
   ctx.state.pendingMessagingTexts.delete(toolCallId);
   ctx.state.pendingMessagingTargets.delete(toolCallId);
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
@@ -1569,18 +1674,10 @@ export async function handleToolExecutionEnd(
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
+      ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     });
     ctx.trimMessagingToolSent();
   }
-  const deliveredCurrentSourceReply =
-    didDeliverMessagingResult &&
-    isDeliveredMessageToolOnlySourceReplyResult({
-      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
-      toolName,
-      args: startArgs,
-      result,
-      isError: isToolError,
-    });
   if (deliveredCurrentSourceReply) {
     ctx.state.messageToolOnlySourceReplyDelivered = true;
     const sourceReplyText = readMessageToolSourceReplyText(startArgs);
@@ -1600,7 +1697,10 @@ export async function handleToolExecutionEnd(
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
-      ctx.state.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+      ctx.state.messagingToolSourceReplyPayloads.push({
+        ...sourceReplyPayload,
+        ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+      });
       ctx.trimMessagingToolSent();
     }
   }
@@ -1828,7 +1928,7 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  if (isPatchToolName(toolName)) {
+  if (resolveLiveEditToolKind(toolName) === "patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;

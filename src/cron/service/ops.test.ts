@@ -11,6 +11,7 @@ import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCronExecutionId } from "../run-id.js";
 import * as cronSchedule from "../schedule.js";
+import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
@@ -23,6 +24,7 @@ import {
   removeAgentJobsTransactional,
   removeStaleJobFamily,
   update,
+  updateWithPrecondition,
 } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
@@ -36,6 +38,127 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("scheduled tool policy provenance", () => {
+  it("consumes add authority only after candidate validation and immediately before mutation", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const commitGuard = vi.fn();
+    const invalid = {
+      name: "invalid",
+      enabled: true,
+      schedule: { kind: "cron" as const, expr: "0 0 30 2 *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+    };
+
+    await expect(add(state, invalid, { commitGuard })).rejects.toThrow(/no upcoming run time/);
+    expect(commitGuard).not.toHaveBeenCalled();
+    expect(state.store?.jobs).toEqual([]);
+
+    const valid = { ...invalid, schedule: { kind: "cron" as const, expr: "0 0 * * *" } };
+    commitGuard.mockImplementation(() => {
+      expect(state.store?.jobs).toEqual([]);
+    });
+    await add(state, valid, { commitGuard });
+    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(state.store?.jobs).toHaveLength(1);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("preserves update authority across a failed precondition and consumes at mutation", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const job = await add(state, {
+      name: "original",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    const commitGuard = vi.fn(() => {
+      expect(state.store?.jobs[0]?.name).toBe("original");
+    });
+
+    await expect(
+      updateWithPrecondition(
+        state,
+        job.id,
+        { name: "updated" },
+        () => {
+          throw new Error("revision conflict");
+        },
+        { commitGuard },
+      ),
+    ).rejects.toThrow("revision conflict");
+    expect(commitGuard).not.toHaveBeenCalled();
+    expect(state.store?.jobs[0]?.name).toBe("original");
+
+    await updateWithPrecondition(state, job.id, { name: "updated" }, () => undefined, {
+      commitGuard,
+    });
+    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(state.store?.jobs[0]?.name).toBe("updated");
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("stores final-surface provenance privately and never synthesizes it from the default marker", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const base = {
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+    };
+    const proven = await add(
+      state,
+      {
+        ...base,
+        name: "proven",
+        payload: {
+          kind: "agentTurn" as const,
+          message: "run",
+          toolsAllow: ["notes__read"],
+          toolsAllowIsDefault: true,
+        },
+      },
+      {
+        toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+      },
+    );
+    expect(proven.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+    });
+
+    const legacy = await add(state, {
+      ...base,
+      name: "legacy-default",
+      payload: {
+        kind: "agentTurn",
+        message: "run",
+        toolsAllow: ["notes__read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+    expect(legacy.toolsAllowProvenance).toBeUndefined();
+
+    const routine = await update(state, proven.id, { description: "keep" });
+    expect(routine.toolsAllowProvenance).toEqual(proven.toolsAllowProvenance);
+    const explicit = await update(state, proven.id, {
+      payload: { kind: "agentTurn", toolsAllow: ["read"] },
+    });
+    expect(explicit.toolsAllowProvenance).toBeUndefined();
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("stamps trusted and authenticated-account creates", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-23T12:00:00.000Z");
@@ -713,6 +836,84 @@ describe("cron service ops seam coverage", () => {
       });
     },
   );
+
+  it("prunes scratch when startup deletes a finalized delete-after-run one-shot", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const endedAt = startedAt + 4_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createDueIsolatedJob(now);
+      job.id = "startup-finalized-delete-after-run";
+      job.name = "startup finalized delete after run";
+      job.deleteAfterRun = true;
+      job.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      job.state = { runningAtMs: startedAt, nextRunAtMs: startedAt };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      expect(
+        writeCronJobScratch({
+          storePath,
+          jobId: job.id,
+          content: "completed one-shot scratch",
+          nowMs: startedAt,
+        }),
+      ).toMatchObject({ ok: true, currentRevision: 1 });
+
+      const events: CronEvent[] = [];
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        onEvent: (event) => events.push(structuredClone(event)),
+      });
+      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      if (!taskRunId) {
+        throw new Error("expected cron task run");
+      }
+      tryFinishCronTaskRun(state, {
+        taskRunId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "ok",
+          summary: "completed before restart",
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+        },
+      });
+
+      try {
+        await start(state);
+
+        expect((await loadCronStore(storePath)).jobs).toEqual([]);
+        expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
+        expect(
+          events.filter((event) => event.action === "finished" || event.action === "removed"),
+        ).toEqual([]);
+
+        const replacement = await add(state, {
+          id: job.id,
+          name: "same-id replacement",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "replacement work" },
+        });
+        expect(replacement.id).toBe(job.id);
+        expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
+      } finally {
+        stop(state);
+      }
+    });
+  });
 
   it("keeps a finalized one-shot disabled when startup restores its stale marker", async () => {
     const { storePath } = await makeStorePath();
@@ -1646,6 +1847,37 @@ describe("cron service ops persist rollback", () => {
     } as const;
   }
 
+  it("does not persist, re-arm, or notify when removing a missing job", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const onEvent = vi.fn();
+    const state = createOkIsolatedCronState({ storePath, now, onEvent });
+    const job = await add(state, makeCreateInput("daily cleanup"));
+    const previousRevision = cronStoreModule.getCronJobsStoreRevision(storePath);
+    const originalTimer = state.timer;
+    onEvent.mockClear();
+    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    persist.mockClear();
+
+    await expect(remove(state, "missing-job")).resolves.toEqual({ ok: true, removed: false });
+
+    expect(persist).not.toHaveBeenCalled();
+    expect(cronStoreModule.getCronJobsStoreRevision(storePath)).toBe(previousRevision);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.timer).toBe(originalTimer);
+    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
+    expect((await loadCronStore(storePath)).jobs.map((entry) => entry.id)).toEqual([job.id]);
+
+    await expect(remove(state, job.id)).resolves.toEqual({ ok: true, removed: true });
+
+    expect(persist).toHaveBeenCalledOnce();
+    expect(cronStoreModule.getCronJobsStoreRevision(storePath)).toBeGreaterThan(previousRevision);
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.id, action: "removed" }),
+    );
+    expect((await loadCronStore(storePath)).jobs).toEqual([]);
+  });
+
   it("rolls back an added job from the live store when persist fails", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
@@ -1687,6 +1919,26 @@ describe("cron service ops persist rollback", () => {
     expect(stored?.name).toBe("daily cleanup");
   });
 
+  it("does not clone the store before a missing or invalid update reaches commit", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const job = await add(state, makeCreateInput("daily cleanup"));
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    await expect(update(state, "missing-job", { name: "missing" })).rejects.toThrow(
+      "unknown cron job id",
+    );
+    await expect(
+      update(state, job.id, { schedule: { kind: "cron", expr: "0 0 30 2 *" } }),
+    ).rejects.toThrow(/no upcoming run time/);
+
+    expect(clone).not.toHaveBeenCalledWith(state.store);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("keeps a removed job in the live store when persist fails", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
@@ -1723,6 +1975,37 @@ describe("cron service ops persist rollback", () => {
 
     expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
     expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
+  });
+
+  it("restores read-maintenance fields in place when persist fails", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const job = await add(state, {
+      ...makeCreateInput("read repair"),
+      schedule: { kind: "every", everyMs: 60_000 },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    job.schedule = { kind: "every", everyMs: 60_000 };
+    job.state.nextRunAtMs = Number.NaN;
+    job.state.startupCatchupAtMs = now - 1;
+    const storeIdentity = state.store;
+    const jobIdentity = job;
+    const before = structuredClone({
+      enabled: job.enabled,
+      schedule: job.schedule,
+      state: job.state,
+    });
+
+    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(list(state, { includeDisabled: true })).rejects.toThrow("disk full");
+
+    expect(state.store).toBe(storeIdentity);
+    expect(state.store?.jobs[0]).toBe(jobIdentity);
+    expect({ enabled: job.enabled, schedule: job.schedule, state: job.state }).toEqual(before);
   });
 
   it("recovers after a failed persist so the next mutation succeeds", async () => {
@@ -1823,6 +2106,16 @@ describe("cron service ops persist rollback", () => {
         ...makeCreateInput("deleted agent job"),
         agentId: "doomed",
       });
+      expect(
+        writeCronJobScratch({
+          storePath,
+          jobId: removed.id,
+          content: "deleted agent scratch",
+          sourceSha256: "deleted-agent-source",
+          nowMs: now - 1,
+        }),
+      ).toMatchObject({ ok: true, currentRevision: 1 });
+      const scratchBefore = readCronJobScratchState(storePath, removed.id);
       const malformed = await add(state, {
         ...makeCreateInput("malformed surviving job"),
         agentId: "survivor",
@@ -1881,6 +2174,21 @@ describe("cron service ops persist rollback", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs.some((job) => job.id === removed.id)).toBe(rolledBack);
       expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(rolledBack);
+      expect(readCronJobScratchState(storePath, removed.id)).toEqual(
+        rolledBack ? scratchBefore : { currentRevision: 0 },
+      );
+      if (!rolledBack) {
+        const replacement = await add(state, {
+          ...makeCreateInput("same-id replacement"),
+          id: removed.id,
+          agentId: "survivor",
+        });
+        expect(replacement.id).toBe(removed.id);
+        expect(readCronJobScratchState(storePath, removed.id)).toEqual({ currentRevision: 0 });
+        if (state.timer) {
+          clearTimeout(state.timer);
+        }
+      }
     },
   );
 

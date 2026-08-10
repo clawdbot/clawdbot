@@ -1,4 +1,5 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
@@ -215,10 +216,6 @@ function recordValue(record: Record<string, unknown>, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
   return value === "running" ||
     value === "done" ||
@@ -405,9 +402,6 @@ export function reconcileSessionChanged(
   }
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
-  }
-  if (rowFields.icon === null) {
-    delete row.icon;
   }
   if (rowFields.label === null) {
     delete row.label;

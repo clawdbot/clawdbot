@@ -538,6 +538,7 @@ async function compactResolvedContextEngine(
     provider: ceContextConfigProvider,
     modelId: ceModelId,
     model: effectiveRuntimeModel,
+    agentId: runtimeTarget.agentId,
     requestedTokenBudget: params.contextTokenBudget,
   });
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({

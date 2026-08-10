@@ -4,6 +4,7 @@
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
  */
+import { sleepWithAbort } from "@openclaw/retry";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   createIngressDrainOwnerId,
@@ -35,7 +36,6 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_MS,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
-  sleepIngressRetryDelay,
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
@@ -328,7 +328,7 @@ export function createChannelIngressDrain<
           log(`completion retry ${attempt} scheduled for event ${displayId}`);
         }
         // Abortable sleep: webhook stop aborts options.abortSignal mid-backoff.
-        await sleepIngressRetryDelay(delayMs, options.abortSignal);
+        await sleepWithAbort(delayMs, options.abortSignal, { ref: false });
       }
     }
   };

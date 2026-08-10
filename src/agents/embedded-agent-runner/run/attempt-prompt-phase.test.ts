@@ -32,16 +32,14 @@ vi.mock("../stream-resolution.js", () => ({
 vi.mock("./attempt-before-agent-run.js", () => ({
   runEmbeddedAttemptBeforeAgentRun: mocks.beforeAgentRun,
 }));
-vi.mock("./attempt-prompt-assembly.js", () => ({
+vi.mock("./attempt-prompt-build.js", () => ({
   prepareEmbeddedAttemptPromptAssembly: mocks.preparePromptAssembly,
-}));
-vi.mock("./attempt-prompt-context.js", () => ({
   prepareEmbeddedAttemptPromptContext: mocks.preparePromptContext,
 }));
 vi.mock("./attempt-prompt-dispatch.js", () => ({
   dispatchEmbeddedAttemptPrompt: mocks.dispatchPrompt,
 }));
-vi.mock("./attempt-prompt-error.js", () => ({
+vi.mock("./attempt-prompt-submit.js", () => ({
   handleEmbeddedAttemptPromptError: mocks.handlePromptError,
 }));
 vi.mock("./attempt-prompt-preflight.js", () => ({
@@ -163,7 +161,6 @@ function createFixture() {
     appendCustomEntry: vi.fn(),
     getEntries: vi.fn(() => []),
   };
-  const sessionLockController = {};
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },
@@ -174,8 +171,7 @@ function createFixture() {
     },
     activeSession,
     sessionManager,
-    sessionLockController,
-    withOwnedSessionWriteLock: async <T>(operation: () => Promise<T> | T) => await operation(),
+    withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
     getCompactionReserveTokens: () => 77,
     assembly: {
       hookRunner: null,

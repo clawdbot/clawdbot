@@ -95,7 +95,7 @@ suite.define(() => {
 
         const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });
         const transcriptInput = transcriptSearch.getByRole("searchbox", {
-          name: "Search thread transcripts",
+          name: "Search session transcripts",
         });
         await transcriptInput.fill("deployment history");
         await transcriptInput.press("Enter");
@@ -122,10 +122,10 @@ suite.define(() => {
           .locator(".session-data-row")
           .filter({ has: page.locator(`.session-label-chip[title="${research.label}"]`) });
         await actionRow.waitFor({ state: "visible", timeout: 10_000 });
-        await actionRow.getByRole("button", { name: "Open thread menu" }).click();
+        await actionRow.getByRole("button", { name: "Open session menu" }).click();
         await activateMenuItem(
           page.locator("openclaw-session-menu").getByRole("menuitem", {
-            name: "Archive thread",
+            name: "Archive session",
           }),
         );
         const patch = await waitForPatch(
@@ -138,7 +138,7 @@ suite.define(() => {
         });
         const toast = page
           .locator("openclaw-toast-host .app-toast")
-          .filter({ hasText: "Thread archived" });
+          .filter({ hasText: "Session archived" });
         await toast.waitFor({ state: "visible", timeout: 10_000 });
         await toast.getByRole("button", { name: "Undo" }).waitFor({ state: "visible" });
         await captureUiProof(page, "03-session-archive-feedback.png");

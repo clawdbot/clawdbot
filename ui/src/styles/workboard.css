@@ -1355,7 +1355,7 @@ openclaw-workboard-card-dashboard {
   border: 0;
   color: var(--muted);
   background: transparent;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .workboard-card-dashboard__toggle:focus-visible {

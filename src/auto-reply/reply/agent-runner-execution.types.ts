@@ -105,7 +105,6 @@ export type AgentTurnParams = {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  confirmRestartRecoveryArmedAfterLeaseLoss?: () => Promise<boolean>;
   isRestartRecoveryArmed?: () => boolean;
 };
 

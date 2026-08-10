@@ -20,6 +20,7 @@ import {
   runIncompleteTurnOwnerHarness,
 } from "./run.incomplete-turn.test-support.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
@@ -37,7 +38,9 @@ import {
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run/run-attempt-result.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
@@ -262,6 +265,69 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       message: "Blocked by before-run policy.",
     });
     expect(result.meta?.livenessState).toBe("blocked");
+  });
+
+  it("keeps carried usage ahead of transcript history on before_agent_run hook blocks", async () => {
+    const historicalAssistant = makeLastAssistant({
+      usage: { input: 128_814, output: 3_000, total: 131_814 },
+    });
+    const carriedUsage = { input: 42_000, output: 1_000, total: 43_000 };
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      promptError: new Error("Blocked by before-run policy."),
+      promptErrorSource: "hook:before_agent_run",
+      lastAssistant: historicalAssistant,
+      currentAttemptAssistant: undefined,
+    });
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant: historicalAssistant,
+    });
+
+    const recovery = await recoverEmbeddedRunAttempt({
+      runInput: {
+        runParams: makeBaseRunParams("run-before-agent-run-hook-block-usage"),
+        resolvedSessionKey: "agent:main:test-key",
+        startedAtMs: Date.now(),
+      },
+      preparedRuntime: {
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        model: { id: "gpt-5.6-luna" },
+        genericCompactionRecoveryAllowed: false,
+        snapshot: () => ({
+          thinkLevel: "off",
+          agentHarness: { id: "codex" },
+          outerContextTokenMeta: {},
+        }),
+      },
+      normalizedAttempt: {
+        attempt,
+        sessionIdUsed: attempt.sessionIdUsed,
+        attemptAssistant: historicalAssistant,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: undefined,
+        terminalState,
+        setTerminalLifecycleMeta: vi.fn(),
+        attemptCompactionCount: 0,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        resolveReplayInvalidForAttempt: () => false,
+        canRestartForLiveSwitch: false,
+      },
+      runtimePlan: { auth: {} },
+      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: carriedUsage,
+    } as never);
+
+    expect(recovery).toMatchObject({
+      action: "complete",
+      result: {
+        meta: {
+          agentMeta: { lastCallUsage: carriedUsage, promptTokens: 42_000 },
+        },
+      },
+    });
   });
 
   it("warns before retrying when an incomplete turn already sent a message", async () => {

@@ -192,6 +192,22 @@ describe("qa scenario catalog", () => {
     expect(cronAuthorityFlow).not.toContain("waitForCronRunCompletion");
   });
 
+  it("keeps the audited parallel script allowlist exact", () => {
+    const expected =
+      "active-talk-agent-run-status agent-run-identity-inspection cached-health-snapshot-boundaries channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-rpc-account-health gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
+        " ",
+      );
+    const marked = readQaScenarioPack().scenarios.filter(
+      (scenario) =>
+        scenario.execution.kind === "script" && scenario.execution.parallelSafe === true,
+    );
+
+    expect(marked.map((scenario) => scenario.id).toSorted()).toEqual(expected);
+    const ssh = readQaScenarioById("gateway-ssh-tunnels");
+    expect(ssh.execution).toMatchObject({ kind: "script", parallelSafe: true });
+    expect(ssh.execution).not.toHaveProperty("allowBlockedEvidence");
+  });
+
   it("rejects invalid provider metadata at the catalog boundary", () => {
     const scenario = structuredClone(
       requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback")),
@@ -276,11 +292,6 @@ describe("qa scenario catalog", () => {
       "goal-context-survives-compaction",
       { agents: { defaults: { compaction: { keepRecentTokens: 64 } } } },
       ["agents.defaults.compaction.reserveTokens", "agents.defaults.compaction.reserveTokensFloor"],
-    ],
-    [
-      "commitments-heartbeat-target-none",
-      { agents: { defaults: { heartbeat: { every: "30m", target: "none" } } } },
-      ["commitments"],
     ],
     [
       "active-memory-preprompt-recall",
@@ -803,8 +814,6 @@ describe("qa scenario catalog", () => {
     ) as { requiredProviderMode?: string } | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
     const retryFailure = readQaScenarioById("message-tool-stranded-final-retry-failure");
-    const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
-    const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
     expect(retryFailureConfig?.requiredProviderMode).toBe("mock-openai");
@@ -814,9 +823,6 @@ describe("qa scenario catalog", () => {
     expect(JSON.stringify(retryFailure.execution.flow)).toContain(
       "this seeded scenario is mock-openai only",
     );
-    expect(heartbeatFlow).toContain("sessionKey");
-    expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
-    expect(heartbeatFlow).not.toContain("waitForNoOutbound");
   });
 
   it.each([

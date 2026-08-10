@@ -102,8 +102,6 @@ export type ChatPageHost = ChatHost &
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
     chatModelsLoading: boolean;
-    chatViewMenuOpen: boolean;
-    chatViewMenuTrigger: HTMLElement | null;
     sessionsLoading: boolean;
     lastErrorCode: string | null;
     chatScrollCommitCleanup: (() => void) | null;
@@ -133,10 +131,6 @@ export type ChatPageHost = ChatHost &
     resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
-    setChatViewMenuOpen: (
-      open: boolean,
-      options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
-    ) => void;
     loadAssistantIdentity: () => Promise<void>;
     applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;

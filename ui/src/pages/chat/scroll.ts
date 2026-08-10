@@ -5,8 +5,8 @@ import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
-const LATEST_MESSAGE_THRESHOLD = 1;
-const FOLLOW_REACQUIRE_THRESHOLD = 8;
+/** Shared semantic boundary for treating the transcript as settled at its end. */
+export const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
 // Route navigation may replace a pane element while retaining its logical id.
 // Bound both dimensions so those short-lived owners cannot leak scroll state.
 const MAX_CACHED_TRANSCRIPT_SCROLL_PANES = 8;
@@ -82,7 +82,7 @@ export function captureChatSessionScrollPosition(target: {
   const scrollTop = Math.min(Math.max(0, target.scrollTop), maxScrollTop);
   return {
     scrollTop,
-    anchorToEnd: maxScrollTop - scrollTop <= FOLLOW_REACQUIRE_THRESHOLD,
+    anchorToEnd: maxScrollTop - scrollTop <= CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   };
 }
 
@@ -157,7 +157,7 @@ function scheduleProgrammaticScrollGuardClear(
       return;
     }
     const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-    if (waitForTarget && distanceFromBottom > LATEST_MESSAGE_THRESHOLD) {
+    if (waitForTarget && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
       host.chatScrollGuardFrame = requestAnimationFrame(check);
       return;
     }
@@ -201,7 +201,9 @@ export function scheduleCommittedChatScroll(
       manualScroll ||
       effectiveForce ||
       (!host.chatFollowLocked &&
-        (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+        (options.source === "resize" ||
+          host.chatUserNearBottom ||
+          distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
 
     if (!shouldStick) {
       if (contentChanged || (options.source === "resize" && contentGrew)) {
@@ -285,17 +287,17 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
     host.chatIsProgrammaticScroll = false;
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (isUserScrollUp && distanceFromBottom > FOLLOW_REACQUIRE_THRESHOLD) {
+  if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
     host.chatFollowLocked = true;
-  } else if (distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD) {
+  } else if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
     host.chatFollowLocked = false;
   }
   host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
 
   setNewMessagesBelow(
     host,
-    container.scrollHeight - container.clientHeight > LATEST_MESSAGE_THRESHOLD &&
-      distanceFromBottom > LATEST_MESSAGE_THRESHOLD,
+    container.scrollHeight - container.clientHeight > CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
+      distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   );
 }
 
@@ -314,7 +316,8 @@ export function restoreChatScroll(
   host.chatHasAutoScrolled = true;
   // A virtualized transcript may not expose its final scroll height yet. Keep
   // the restored viewport locked until the requested offset becomes reachable.
-  host.chatFollowLocked = scrollTop > maxScrollTop || distanceFromBottom > LATEST_MESSAGE_THRESHOLD;
+  host.chatFollowLocked =
+    scrollTop > maxScrollTop || distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX;
   host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
   host.chatIsProgrammaticScroll = false;
   host.chatProgrammaticScrollTarget = restoredScrollTop;

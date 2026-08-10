@@ -1435,6 +1435,46 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 
+  it("clears a failed multi-file patch after every target is recovered", async () => {
+    const { ctx } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "apply_patch",
+      toolCallId: "tool-patch-failed",
+      args: {
+        input: [
+          " *** Begin Patch",
+          " *** Add File: /tmp/day-1.md",
+          "+new",
+          " *** Add File: /tmp/day-2.md",
+          "+new",
+          " *** End Patch",
+        ].join("\n"),
+      },
+      isError: true,
+      result: { error: "Path escapes sandbox root" },
+    });
+
+    await executeTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-recovery",
+      args: { path: "/tmp/day-2.md", content: "new" },
+      isError: false,
+      result: { ok: true },
+    });
+    expect(ctx.state.lastToolError?.toolName).toBe("apply_patch");
+
+    await executeTool(ctx, {
+      toolName: "edit",
+      toolCallId: "tool-edit-recovery",
+      args: { path: "/tmp/day-1.md", edits: [{ oldText: "old", newText: "new" }] },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
   it("emits a prepared validation diagnostic without model arguments", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =
@@ -2074,6 +2114,177 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       expect.objectContaining({ toolName: "exec", isError: true }),
     ]);
   });
+
+  async function executeProcessResult(
+    ctx: ToolHandlerContext,
+    params: {
+      action?: string;
+      details?: Record<string, unknown>;
+      isError?: boolean;
+      output?: string;
+    } = {},
+  ) {
+    const action = params.action ?? "poll";
+    const output = params.output ?? "SAFE_PROCESS_STDERR";
+    await executeTool(ctx, {
+      toolName: "process",
+      toolCallId: `tool-process-${action}`,
+      args: { action, sessionId: "wild-lagoon" },
+      isError: params.isError ?? true,
+      result: {
+        content: [{ type: "text", text: output }],
+        details: {
+          status: "completed",
+          sessionId: "wild-lagoon",
+          exitReason: "exit",
+          aggregated: output,
+          ...params.details,
+        },
+      },
+    });
+  }
+
+  it.each(["poll", "log"])(
+    "projects a structured terminal process diagnostic from %s",
+    async (action) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
+
+      expect(ctx.state.lastToolError).toMatchObject({
+        toolName: "process",
+        terminalDiagnostic: {
+          kind: "process",
+          sessionId: "wild-lagoon",
+          reason: { kind: "exit", exitCode: 7 },
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "signal",
+      details: { exitCode: 0, exitSignal: "SIGKILL", exitReason: "signal" },
+      reason: { kind: "signal", signal: "SIGKILL" },
+    },
+    {
+      label: "overall timeout",
+      details: {
+        exitCode: 0,
+        exitSignal: "SIGTERM",
+        exitReason: "overall-timeout",
+        timedOut: true,
+      },
+      reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+    },
+    {
+      label: "no-output timeout",
+      details: {
+        exitCode: 0,
+        exitSignal: "SIGTERM",
+        exitReason: "no-output-timeout",
+        timedOut: true,
+      },
+      reason: { kind: "timeout", timeoutKind: "no-output-timeout" },
+    },
+  ])(
+    "preserves a typed process $label without fabricating exit status",
+    async ({ details, reason }) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, { details });
+
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toMatchObject({ reason });
+      expect(ctx.state.lastToolError?.terminalDiagnostic?.reason).not.toHaveProperty("exitCode");
+    },
+  );
+
+  it("keeps child output out of the terminal diagnostic while retaining a safe full-verbosity error", async () => {
+    const { ctx } = createTestContext();
+    const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
+    await executeProcessResult(ctx, {
+      output: `${dummyTelegramToken} ${"x".repeat(500)}`,
+      details: { exitCode: 7 },
+    });
+
+    const diagnostic = ctx.state.lastToolError?.terminalDiagnostic;
+    expect(diagnostic).toEqual({
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason: { kind: "exit", exitCode: 7 },
+    });
+    expect(ctx.state.lastToolError?.error?.length).toBeLessThanOrEqual(401);
+    expect(ctx.state.lastToolError?.error).toMatch(/…$/u);
+    expect(JSON.stringify(ctx.state.lastToolError)).not.toContain(dummyTelegramToken);
+  });
+
+  it("omits full-verbosity process output containing terminal control characters", async () => {
+    const { ctx } = createTestContext();
+    await executeProcessResult(ctx, {
+      output: "SAFE\u001b[31m_PROCESS_STDERR",
+      details: { exitCode: 7 },
+    });
+
+    expect(ctx.state.lastToolError?.terminalDiagnostic).toEqual({
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason: { kind: "exit", exitCode: 7 },
+    });
+    expect(ctx.state.lastToolError?.error).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "running poll",
+      isError: false,
+      details: { status: "running", exitReason: undefined, exitCode: undefined },
+    },
+    {
+      label: "failed process operation",
+      details: { status: "failed", exitReason: undefined, exitCode: undefined },
+    },
+    {
+      label: "missing session",
+      details: { status: "failed", sessionId: undefined, exitReason: undefined, exitCode: 7 },
+    },
+    {
+      label: "successful poll",
+      isError: false,
+      details: { exitCode: 0 },
+    },
+    {
+      label: "log without terminal provenance",
+      action: "log",
+      details: { exitReason: undefined, exitCode: 7, exitSignal: "SIGKILL" },
+    },
+    {
+      label: "non-observing process action",
+      action: "write",
+      details: { status: "failed", sessionId: "wild-lagoon", exitCode: 7 },
+    },
+    {
+      label: "kill result",
+      action: "kill",
+      details: {
+        status: "failed",
+        sessionId: undefined,
+        exitReason: undefined,
+        name: "node command.js",
+      },
+    },
+  ])(
+    "does not project a terminal diagnostic for a $label",
+    async ({ label, action, details, isError }) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, {
+        action,
+        details,
+        isError,
+        output: `No terminal process result for ${label}.`,
+      });
+
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toBeUndefined();
+    },
+  );
 
   it("projects outcome-unknown exec results as errors with typed details", async () => {
     resetAgentEventsForTest();
@@ -3274,6 +3485,7 @@ describe("messaging tool media URL tracking", () => {
 
   it("commits internal-ui source replies from successful message sends", async () => {
     const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
 
     const startEvt: ToolExecutionStartEvent = {
       toolName: "message",
@@ -3308,6 +3520,7 @@ describe("messaging tool media URL tracking", () => {
         mediaUrls: ["file:///tmp/reply.png"],
         channelData: { source: "tui" },
         idempotencyKey: "stable-source-reply",
+        sourceReplyFinal: true,
       },
     ]);
   });

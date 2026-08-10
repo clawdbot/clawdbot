@@ -123,6 +123,8 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # Intentionally separate: the candidate is the selected open PR head SHA, with fork
+      # heads allowed as fork-pr-head, while only the baseline uses main-ancestor trust.
       - name: Validate refs are trusted
         id: validate
         env:

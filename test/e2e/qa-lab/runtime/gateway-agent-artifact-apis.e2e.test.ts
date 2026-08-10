@@ -210,7 +210,6 @@ describe("Gateway agent and artifact APIs", () => {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      sidecarStartup: "defer",
     });
     cleanup.push(() => server.close());
 
@@ -231,7 +230,6 @@ describe("Gateway agent and artifact APIs", () => {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
-        sidecarStartup: "defer",
       });
       client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
@@ -291,6 +289,21 @@ describe("Gateway agent and artifact APIs", () => {
       workspace: createdWorkspace,
     });
     await restartGateway("gateway agent artifact APIs after create");
+    const createdEnvironmentAfterRestart = await client.request<{ id: string }>(
+      "environments.create",
+      {
+        profileId: "qa-provider",
+        idempotencyKey: "qa-environment-request-after-restart",
+      },
+    );
+    await expect(client.request("environments.list", {})).resolves.toMatchObject({
+      environments: expect.arrayContaining([
+        expect.objectContaining({
+          id: createdEnvironmentAfterRestart.id,
+          status: "available",
+        }),
+      ]),
+    });
     await expect(client.request("agents.list", {})).resolves.toMatchObject({
       agents: expect.arrayContaining([
         expect.objectContaining({

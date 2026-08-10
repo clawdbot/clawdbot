@@ -16,19 +16,6 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
-    @Test @MainActor func `settings pro tab builds A view hierarchy`() {
-        let appModel = NodeAppModel()
-        let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-        let root = SettingsProTab()
-            .environment(AppAppearanceModel())
-            .environment(appModel)
-            .environment(appModel.voiceWake)
-            .environment(gatewayController)
-
-        _ = Self.host(root)
-    }
-
     @Test @MainActor func `settings pro tab builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
@@ -765,31 +752,26 @@ struct SwiftUIRenderSmokeTests {
     private static func rootTabsShellScenarios() -> [RootTabsShellScenario] {
         [
             RootTabsShellScenario(
-                idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
                 verticalSizeClass: .regular,
                 sidebarVisible: false),
             RootTabsShellScenario(
-                idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
                 verticalSizeClass: .regular,
                 sidebarVisible: true),
             RootTabsShellScenario(
-                idiom: .phone,
                 size: CGSize(width: 852, height: 393),
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .compact,
                 sidebarVisible: false),
             RootTabsShellScenario(
-                idiom: .pad,
                 size: CGSize(width: 1024, height: 1366),
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular,
                 sidebarVisible: true),
             RootTabsShellScenario(
-                idiom: .pad,
                 size: CGSize(width: 1366, height: 1024),
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular,
@@ -798,7 +780,6 @@ struct SwiftUIRenderSmokeTests {
     }
 
     private struct RootTabsShellScenario {
-        let idiom: UIUserInterfaceIdiom
         let size: CGSize
         let horizontalSizeClass: UserInterfaceSizeClass
         let verticalSizeClass: UserInterfaceSizeClass

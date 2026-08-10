@@ -81,7 +81,11 @@ function alertCallArg(
   if (!value || typeof value !== "object") {
     throw new Error(`expected failure alert call ${callIndex}`);
   }
-  return value as Record<string, unknown>;
+  const alert = value as Record<string, unknown>;
+  const payload = alert.payload;
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...alert, ...(payload as Record<string, unknown>) }
+    : alert;
 }
 
 function expectAlertFields(
@@ -649,6 +653,64 @@ describe("CronService failure alerts", () => {
             "Cause: timeout\n" +
             "Last error: cron: job execution timed out",
         );
+      },
+    );
+  });
+
+  it("adds Codex login recovery to OpenAI OAuth refresh failures", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: {
+          status: "error",
+          provider: "openai",
+          errorClassification: { kind: "reason", reason: "auth_permanent" },
+          error:
+            'FailoverError: OAuth token refresh failed for openai: OpenAI Codex token refresh failed (401): {"error":{"message":"Your session has ended. Please log in again.","type":"invalid_request_error"}}',
+        },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("Sunday Magic Drop (Tax Payers)", {
+          delivery: createTelegramDelivery(),
+        });
+
+        await cron.run(job.id, "force");
+
+        const alert = alertCallArg(sendCronFailureAlert);
+        expect(alert.text).toContain("Cause: auth_permanent");
+        expect(alert.presentation).toEqual({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        });
+      },
+    );
+  });
+
+  it("does not offer Codex login for non-OAuth authentication failures", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: {
+          status: "error",
+          provider: "openai",
+          error: "401 invalid API key",
+        },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("API key job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+
+        expect(alertCallArg(sendCronFailureAlert).presentation).toBeUndefined();
       },
     );
   });

@@ -10,7 +10,6 @@ import {
   createGitHubApi,
   createGuardApproverChecks,
   createIssueMutationHelpers,
-  guardCommentHeadSha,
   guardTrustedActorCandidates,
   isCommentNewerThan,
   readBoundedGitHubErrorText,
@@ -55,6 +54,21 @@ const dependencyManifestFields = [
   "libc",
 ];
 
+/**
+ * @typedef {{
+ *   body?: string,
+ *   created_at?: string,
+ *   html_url?: string,
+ *   user?: { login?: string },
+ * }} GuardComment
+ * @typedef {{ login: string, source: string }} GuardActorCandidate
+ * @typedef {{ path: string, fields: string[] }} DependencyManifestChange
+ * @typedef {{ kind: "not-attempted" } |
+ *   { kind: "blocked-by-dependency-manifest-fields", changes: DependencyManifestChange[] } |
+ *   { kind: "blocked-by-other-dependency-files", files: string[] } |
+ *   { kind: "failed", reason: string }} AutoscrubStatus
+ */
+
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
@@ -86,6 +100,13 @@ export function isRemovalOnlyDependencyGraphChange(changes) {
   return changes.length > 0 && changes.every((change) => change.change_type === "removed");
 }
 
+/**
+ * @param {{
+ *   dependencyFiles?: string[],
+ *   lockfileChanges: string[],
+ *   dependencyManifestChanges?: DependencyManifestChange[],
+ * }} options
+ */
 export function shouldAutoscrubDependencyLockfiles({
   dependencyFiles = [],
   lockfileChanges,
@@ -174,6 +195,14 @@ function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
   }
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => boolean,
+ *   newerThan?: string,
+ * }} options
+ */
 export function findDependencyOverrideCommand({
   comments,
   expectedSha,
@@ -188,6 +217,14 @@ export function findDependencyOverrideCommand({
   return null;
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => Promise<boolean>,
+ *   newerThan?: string,
+ * }} input
+ */
 export async function findDependencyOverrideCommandAsync(input) {
   for (const candidate of dependencyOverrideCandidates(input)) {
     if (await input.isSecurityMember(candidate.login)) {
@@ -197,36 +234,33 @@ export async function findDependencyOverrideCommandAsync(input) {
   return null;
 }
 
-export function dependencyGuardCommentHeadSha(comment) {
-  return guardCommentHeadSha(comment);
+function dependencyGraphGuardStateMarker(state, headSha) {
+  return `<!-- openclaw:dependency-graph-guard state=${state} sha=${headSha ?? "<head-sha>"} -->`;
+}
+
+function hasDependencyGraphGuardState(comment, state, headSha) {
+  // Only the machine-owned comment prefix carries reusable guard state. PR-controlled paths
+  // rendered later in the comment must never be able to create an allow decision.
+  return (
+    Boolean(headSha) &&
+    comment?.body?.startsWith(
+      `${dependencyGraphGuardMarker}\n${dependencyGraphGuardStateMarker(state, headSha)}\n`,
+    ) === true
+  );
 }
 
 export function dependencyOverrideExpectedSha(existingGuardComment, currentHeadSha) {
-  if (
-    !currentHeadSha ||
-    existingGuardComment?.body?.includes("### Dependency graph changes are blocked") !== true
-  ) {
-    return null;
-  }
-  return dependencyGuardCommentHeadSha(existingGuardComment) === currentHeadSha
+  return hasDependencyGraphGuardState(existingGuardComment, "blocked", currentHeadSha)
     ? currentHeadSha
     : null;
 }
 
 export function isDependencyGuardAuthorizedForHead(comment, currentHeadSha) {
-  return (
-    Boolean(currentHeadSha) &&
-    comment?.body?.includes("### Dependency graph change authorized") === true &&
-    dependencyGuardCommentHeadSha(comment) === currentHeadSha
-  );
+  return hasDependencyGraphGuardState(comment, "authorized", currentHeadSha);
 }
 
 export function isDependencyGuardTrustedForHead(comment, currentHeadSha) {
-  return (
-    Boolean(currentHeadSha) &&
-    comment?.body?.includes("### Dependency graph changes noted") === true &&
-    dependencyGuardCommentHeadSha(comment) === currentHeadSha
-  );
+  return hasDependencyGraphGuardState(comment, "trusted", currentHeadSha);
 }
 
 export function securityApproverSet(value) {
@@ -281,6 +315,7 @@ function renderDependencyAwarenessComment(dependencyFiles) {
 export function renderAuthorizedDependencyComment(override) {
   const lines = [
     dependencyGraphGuardMarker,
+    dependencyGraphGuardStateMarker("authorized", override.sha),
     "",
     "### Dependency graph change authorized",
     "",
@@ -299,6 +334,7 @@ export function renderAuthorizedDependencyComment(override) {
 export function renderTrustedDependencyComment({ actor, headSha }) {
   return [
     dependencyGraphGuardMarker,
+    dependencyGraphGuardStateMarker("trusted", headSha),
     "",
     "### Dependency graph changes noted",
     "",
@@ -368,6 +404,15 @@ export function renderClearedDependencyGuardComment({ headSha }) {
   ].join("\n");
 }
 
+/**
+ * @param {{
+ *   baseBranch?: string,
+ *   headSha?: string,
+ *   lockfileChanges: string[],
+ *   dependencyManifestChanges: DependencyManifestChange[],
+ *   autoscrubStatus?: AutoscrubStatus | null,
+ * }} options
+ */
 export function renderBlockedDependencyComment({
   baseBranch,
   headSha,
@@ -401,6 +446,7 @@ export function renderBlockedDependencyComment({
       : [];
   return [
     dependencyGraphGuardMarker,
+    dependencyGraphGuardStateMarker("blocked", headSha),
     "",
     "### Dependency graph changes are blocked",
     "",
@@ -462,6 +508,12 @@ export function dependencyGuardTrustedActorCandidates({ pullRequest, event, curr
   return guardTrustedActorCandidates({ pullRequest, event, currentHeadSha });
 }
 
+/**
+ * @param {{
+ *   candidates: GuardActorCandidate[],
+ *   isDependencyApprover: (login: string) => Promise<string | null>,
+ * }} options
+ */
 export async function findTrustedDependencyGuardActor({ candidates, isDependencyApprover }) {
   for (const candidate of candidates) {
     const role = await isDependencyApprover(candidate.login);

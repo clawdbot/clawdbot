@@ -1,5 +1,4 @@
-// API baseline helpers hash public SDK exports for contract drift checks.
-import { createHash } from "node:crypto";
+// API baseline helpers render public SDK exports for contract drift checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +8,26 @@ import {
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import {
+  diffPluginSdkApiBaselineContract,
+  type PluginSdkApiBaselineContractDiff,
+} from "./api-baseline-contract.js";
+import {
+  attachPluginSdkDeclarationClosures,
+  createDeclarationClosureRenderer,
+  formatPluginSdkDiagnostics,
+  type PluginSdkDeclarationClosure,
+} from "./api-baseline-declaration-closure.js";
+import {
+  normalizePluginSdkApiDeclarationText,
+  normalizePluginSdkApiSourcePath as relativePath,
+} from "./api-baseline-normalization.js";
+import { publicPluginSdkEntrypoints } from "./entrypoints.ts";
+
+export {
+  normalizePluginSdkApiDeclarationText,
+  normalizePluginSdkApiSourcePath,
+} from "./api-baseline-normalization.js";
 
 /** Declaration kind recorded for each public SDK export in the API baseline. */
 export type PluginSdkApiExportKind =
@@ -75,22 +93,21 @@ export type PluginSdkApiBaselineRender = {
 
 /** Result returned when writing SDK API baseline artifacts. */
 export type PluginSdkApiBaselineWriteResult = {
-  /** True when the generated contract manifest differs from disk. */
+  /** True when the generated JSONL contract differs from disk. */
   changed: boolean;
+  /** Bounded record-level diff when a check finds contract drift. */
+  contractDiff: PluginSdkApiBaselineContractDiff | null;
+  /** Committed JSONL contract path. */
+  contractPath: string;
   /** True when generated artifacts were actually written. */
   wrote: boolean;
   /** JSON baseline artifact path. */
   jsonPath: string;
-  /** JSONL statefile artifact path. */
-  statefilePath: string;
-  /** Per-record SHA-256 contract manifest path. */
-  hashPath: string;
 };
 
 const GENERATED_BY = "scripts/generate-plugin-sdk-api-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.json";
-const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
-const DEFAULT_HASH_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.sha256";
+const DEFAULT_CONTRACT_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -100,60 +117,6 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-}
-
-/** Normalize compiler source paths into stable repo-relative or node_modules-relative paths. */
-export function normalizePluginSdkApiSourcePath(repoRoot: string, filePath: string): string {
-  const resolvedPath = path.resolve(filePath);
-  const relative = path.relative(repoRoot, resolvedPath);
-  const relativePosix = relative.split(path.sep).join(path.posix.sep);
-  if (
-    !relative.startsWith("..") &&
-    !path.isAbsolute(relative) &&
-    !relativePosix.startsWith("node_modules/")
-  ) {
-    return relativePosix;
-  }
-
-  const pathParts = resolvedPath.split(/[\\/]+/);
-  const nodeModulesIndex = pathParts.lastIndexOf("node_modules");
-  if (nodeModulesIndex >= 0 && nodeModulesIndex < pathParts.length - 1) {
-    return ["node_modules", ...pathParts.slice(nodeModulesIndex + 1)].join(path.posix.sep);
-  }
-
-  return relativePosix;
-}
-
-function relativePath(repoRoot: string, filePath: string): string {
-  return normalizePluginSdkApiSourcePath(repoRoot, filePath);
-}
-
-function isAbsoluteImportPath(value: string): boolean {
-  return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
-}
-
-function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): string {
-  if (!isAbsoluteImportPath(value)) {
-    return value;
-  }
-
-  const resolvedPath = path.resolve(value);
-  const relative = path.relative(repoRoot, resolvedPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return value;
-  }
-  return relative.split(path.sep).join(path.posix.sep);
-}
-
-/** Strip machine-local absolute paths from declaration text before hashing baseline output. */
-export function normalizePluginSdkApiDeclarationText(repoRoot: string, value: string): string {
-  return value.replaceAll(
-    /import\("([^"]+)"((?:\s*,[^)]*)?)\)/g,
-    (match, specifier: string, suffix: string) => {
-      const normalized = normalizeDeclarationImportSpecifier(repoRoot, specifier);
-      return normalized === specifier ? match : `import("${normalized}"${suffix})`;
-    },
-  );
 }
 
 function createCompilerContext(repoRoot: string, entrypoints: readonly string[]) {
@@ -168,6 +131,9 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
     throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
   }
   const parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, repoRoot);
+  if (parsedConfig.errors.length > 0) {
+    throw new Error(formatPluginSdkDiagnostics(parsedConfig.errors, repoRoot));
+  }
   const fileNames = entrypoints
     .map((entrypoint) => path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`))
     .toSorted((left, right) =>
@@ -176,10 +142,26 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
         relativePath(repoRoot, path.resolve(right)),
       ),
     );
-  const program = ts.createProgram(fileNames, parsedConfig.options);
+  const program = ts.createProgram(fileNames, {
+    ...parsedConfig.options,
+    declaration: true,
+    declarationMap: false,
+    emitDeclarationOnly: true,
+    noEmit: false,
+    // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
+    noEmitOnError: false,
+    removeComments: true,
+    sourceMap: false,
+  });
+  const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true });
   return {
     checker: program.getTypeChecker(),
-    printer: ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true }),
+    declarationClosure: createDeclarationClosureRenderer({
+      printer,
+      program,
+      repoRoot,
+    }),
+    printer,
     program,
   };
 }
@@ -187,12 +169,6 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
 /** List canonical public SDK entrypoints included in the API baseline. */
 export function listPluginSdkApiBaselineEntrypoints(): string[] {
   return [...publicPluginSdkEntrypoints];
-}
-
-function buildSourceLink(repoRoot: string, filePath: string): PluginSdkApiSourceLink {
-  return {
-    path: relativePath(repoRoot, filePath),
-  };
 }
 
 function inferExportKind(
@@ -571,20 +547,27 @@ function compareDeclarations(
 
 function buildExportSurface(params: {
   checker: ts.TypeChecker;
+  declarationClosure: (sourceFile: ts.SourceFile) => PluginSdkDeclarationClosure;
   printer: ts.Printer;
   repoRoot: string;
   symbol: ts.Symbol;
-}): PluginSdkApiExport {
-  const { checker, printer, repoRoot, symbol } = params;
+}): { closure: PluginSdkDeclarationClosure; surface: PluginSdkApiExport } {
+  const { checker, declarationClosure, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
   const exportName = symbol.getName();
+  const declarationText = declaration
+    ? printNode(repoRoot, checker, printer, declaration, exportName)
+    : null;
   return {
-    declaration: declaration
-      ? printNode(repoRoot, checker, printer, declaration, exportName)
-      : null,
-    exportName,
-    kind: inferExportKind(resolvedSymbol, declaration),
-    source: declaration ? buildSourceLink(repoRoot, declaration.getSourceFile().fileName) : null,
+    closure: declaration ? declarationClosure(declaration.getSourceFile()) : { hash: "" },
+    surface: {
+      declaration: declarationText,
+      exportName,
+      kind: inferExportKind(resolvedSymbol, declaration),
+      source: declaration
+        ? { path: relativePath(repoRoot, declaration.getSourceFile().fileName) }
+        : null,
+    },
   };
 }
 
@@ -608,12 +591,13 @@ function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): numbe
 
 function buildModuleSurface(params: {
   checker: ts.TypeChecker;
+  declarationClosure: (sourceFile: ts.SourceFile) => PluginSdkDeclarationClosure;
   printer: ts.Printer;
   program: ts.Program;
   repoRoot: string;
   entrypoint: string;
 }): PluginSdkApiModule {
-  const { checker, printer, program, repoRoot, entrypoint } = params;
+  const { checker, declarationClosure, printer, program, repoRoot, entrypoint } = params;
   const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
     ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
     : undefined;
@@ -625,25 +609,27 @@ function buildModuleSurface(params: {
   const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
   assert(moduleSymbol, `Unable to resolve module symbol for ${importSpecifier}`);
 
-  const exports = checker
+  const builtExports = checker
     .getExportsOfModule(moduleSymbol)
     .filter((symbol) => symbol.getName() !== "__esModule")
     .map((symbol) =>
       buildExportSurface({
         checker,
+        declarationClosure,
         printer,
         repoRoot,
         symbol,
       }),
     )
-    .toSorted(sortExports);
+    .toSorted((left, right) => sortExports(left.surface, right.surface));
+  const exports = attachPluginSdkDeclarationClosures(builtExports);
 
   return {
     category: metadata?.category ?? null,
     entrypoint,
     exports,
     importSpecifier,
-    source: buildSourceLink(repoRoot, moduleSourcePath),
+    source: { path: relativePath(repoRoot, moduleSourcePath) },
   };
 }
 
@@ -687,10 +673,14 @@ export async function renderPluginSdkApiBaseline(params?: {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   validateMetadata();
-  const { checker, printer, program } = createCompilerContext(repoRoot, entrypoints);
-  const modules = entrypoints.map((entrypoint) =>
+  const { checker, declarationClosure, printer, program } = createCompilerContext(
+    repoRoot,
+    entrypoints,
+  );
+  const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
     buildModuleSurface({
       checker,
+      declarationClosure,
       printer,
       program,
       repoRoot,
@@ -730,22 +720,6 @@ async function loadCurrentFile(filePath: string): Promise<string | null> {
   }
 }
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
-
-/** Build a mergeable per-entrypoint sha256 manifest for the Plugin SDK API contract. */
-export function computePluginSdkApiBaselineHashFileContent(
-  rendered: PluginSdkApiBaselineRender,
-): string {
-  return `${rendered.baseline.modules
-    .map((moduleSurface) => {
-      const label = `module/${encodeURIComponent(moduleSurface.entrypoint)}`;
-      return `${sha256(JSON.stringify(moduleSurface))}  ${label}`;
-    })
-    .join("\n")}\n`;
-}
-
 function validateMetadata(): void {
   const canonicalEntrypoints = new Set<string>(publicPluginSdkEntrypoints);
   const metadataEntrypoints = new Set<string>(Object.keys(pluginSdkDocMetadata));
@@ -758,44 +732,54 @@ function validateMetadata(): void {
   }
 }
 
-/** Write or check SDK API contract artifacts used by CI and release checks. */
-export async function writePluginSdkApiBaselineArtifacts(params?: {
-  repoRoot?: string;
+/** Compare or write an already-rendered SDK API contract. */
+export async function writeRenderedPluginSdkApiBaselineArtifacts(params: {
   check?: boolean;
-  jsonPath?: string;
-  statefilePath?: string;
-  hashPath?: string;
+  contractPath: string;
+  jsonPath: string;
+  rendered: PluginSdkApiBaselineRender;
 }): Promise<PluginSdkApiBaselineWriteResult> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
-  const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
-  const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
-  const rendered = await renderPluginSdkApiBaseline({ repoRoot });
-  const nextHashContent = computePluginSdkApiBaselineHashFileContent(rendered);
-  const currentHashContent = await loadCurrentFile(hashPath);
-  const changed = currentHashContent !== nextHashContent;
+  const currentContract = await loadCurrentFile(params.contractPath);
+  const changed = currentContract !== params.rendered.jsonl;
 
-  if (params?.check) {
+  if (params.check) {
     return {
       changed,
+      contractDiff: changed
+        ? diffPluginSdkApiBaselineContract(currentContract, params.rendered.jsonl)
+        : null,
+      contractPath: params.contractPath,
       wrote: false,
-      jsonPath,
-      statefilePath,
-      hashPath,
+      jsonPath: params.jsonPath,
     };
   }
 
-  await fs.mkdir(path.dirname(hashPath), { recursive: true });
-  await fs.writeFile(hashPath, nextHashContent, "utf8");
-  await fs.mkdir(path.dirname(jsonPath), { recursive: true });
-  await fs.writeFile(jsonPath, rendered.json, "utf8");
-  await fs.writeFile(statefilePath, rendered.jsonl, "utf8");
+  await fs.mkdir(path.dirname(params.contractPath), { recursive: true });
+  await fs.writeFile(params.contractPath, params.rendered.jsonl, "utf8");
+  await fs.mkdir(path.dirname(params.jsonPath), { recursive: true });
+  await fs.writeFile(params.jsonPath, params.rendered.json, "utf8");
 
   return {
     changed,
+    contractDiff: null,
+    contractPath: params.contractPath,
     wrote: true,
-    jsonPath,
-    statefilePath,
-    hashPath,
+    jsonPath: params.jsonPath,
   };
+}
+
+/** Render, then write or check SDK API contract artifacts used by CI and release checks. */
+export async function writePluginSdkApiBaselineArtifacts(params?: {
+  repoRoot?: string;
+  check?: boolean;
+  contractPath?: string;
+  jsonPath?: string;
+}): Promise<PluginSdkApiBaselineWriteResult> {
+  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  return writeRenderedPluginSdkApiBaselineArtifacts({
+    check: params?.check,
+    contractPath: path.resolve(repoRoot, params?.contractPath ?? DEFAULT_CONTRACT_OUTPUT),
+    jsonPath: path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT),
+    rendered: await renderPluginSdkApiBaseline({ repoRoot }),
+  });
 }

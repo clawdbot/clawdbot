@@ -95,6 +95,7 @@ export async function activateCodexAttemptTurn(
     resourceState.thread.threadId,
     activeTurnId,
     {
+      initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
@@ -179,6 +180,7 @@ export async function activateCodexAttemptTurn(
         text,
       });
       if (claimed) {
+        optionsLocal?.onQueueAccepted?.(true);
         return undefined;
       }
     } else if (isInboundUserMessage) {
@@ -212,7 +214,11 @@ export async function activateCodexAttemptTurn(
     runId: params.runId,
     queueMessage,
     messageInjection: {
-      isAvailable: () => !state.completed && !state.timedOut && !runAbortController.signal.aborted,
+      isAvailable: () =>
+        !state.completed &&
+        !state.terminalTurnNotificationQueued &&
+        !state.timedOut &&
+        !runAbortController.signal.aborted,
       queueMessage,
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,

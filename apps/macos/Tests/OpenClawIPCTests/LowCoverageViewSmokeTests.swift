@@ -93,12 +93,4 @@ struct LowCoverageViewSmokeTests {
         DockIconManager.shared.updateDockVisibility()
         DockIconManager.shared.temporarilyShowDock()
     }
-
-    @Test func `voice wake settings exercises helpers`() {
-        VoiceWakeSettings.exerciseForTesting()
-    }
-
-    @Test func `debug settings exercises helpers`() async {
-        await DebugSettings.exerciseForTesting()
-    }
 }

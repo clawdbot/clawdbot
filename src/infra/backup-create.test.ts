@@ -372,6 +372,37 @@ describe("writeTarArchiveWithRetry", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it("reports the actual attempt count when bailing out before the retry limit", async () => {
+    const nonEofErr = new Error("permission denied");
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/logs/gateway.jsonl",
+    });
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const singleAttempt = vi.fn<() => Promise<void>>().mockRejectedValue(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: singleAttempt,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 1 attempt\)/);
+    expect(singleAttempt).toHaveBeenCalledOnce();
+
+    const twoAttempts = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: twoAttempts,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 2 attempts\)/);
+    expect(twoAttempts).toHaveBeenCalledTimes(2);
+  });
+
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/sessions/s-abc/transcript.jsonl",
@@ -984,7 +1015,7 @@ describe("createBackupArchive", () => {
             INSERT INTO state_leases (
               scope, lease_key, owner, expires_at, heartbeat_at,
               payload_json, created_at, updated_at
-            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+            ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 10, NULL, 10, 10)
           `,
         ).run();
 
@@ -1168,7 +1199,7 @@ describe("createBackupArchive", () => {
                 INSERT INTO state_leases (
                   scope, lease_key, owner, expires_at, heartbeat_at,
                   payload_json, created_at, updated_at
-                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
+                ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
               `,
             )
             .run();
@@ -2376,7 +2407,7 @@ describe("createBackupArchive", () => {
           PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
-          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('core:test-fixture', 'write');
         `);
         await fs.symlink(backingDbPath, linkedDbPath);
         await fs.link(backingDbPath, hardlinkedDbPath);

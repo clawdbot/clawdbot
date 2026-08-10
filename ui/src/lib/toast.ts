@@ -1,12 +1,17 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 
-type ToastOptions = {
-  message: string;
+type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
+
+export type ToastOptions = {
+  /** A template lets a message name a destination the operator can actually open,
+   * instead of spelling out a settings path the toast then makes them find. */
+  message: string | TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
+  onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;
 };
 
@@ -17,15 +22,15 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   override disconnectedCallback() {
-    this.clearDismissTimer();
+    this.dismiss("disconnected");
     super.disconnectedCallback();
   }
 
   show(options: ToastOptions) {
-    this.clearDismissTimer();
+    this.dismiss("replaced");
     this.toast = options;
     this.dismissTimer = globalThis.setTimeout(
-      () => this.dismiss(),
+      () => this.dismiss("timeout"),
       options.durationMs ?? DEFAULT_TOAST_DURATION_MS,
     );
   }
@@ -37,9 +42,11 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
-  private dismiss() {
+  private dismiss(reason: ToastDismissReason) {
+    const toast = this.toast;
     this.clearDismissTimer();
     this.toast = null;
+    toast?.onDismiss?.(reason);
   }
 
   override render() {
@@ -56,7 +63,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
                 type="button"
                 class="app-toast__action"
                 @click=${() => {
-                  this.dismiss();
+                  this.dismiss("action");
                   toast.onAction?.();
                 }}
               >
@@ -68,7 +75,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           type="button"
           class="app-toast__dismiss"
           aria-label=${t("common.dismiss")}
-          @click=${() => this.dismiss()}
+          @click=${() => this.dismiss("dismiss")}
         >
           ×
         </button>
@@ -77,8 +84,13 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 }
 
-export function showToast(options: ToastOptions): void {
-  document.querySelector<OpenClawToastHost>("openclaw-toast-host")?.show(options);
+export function showToast(options: ToastOptions): boolean {
+  const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
+  if (!host) {
+    return false;
+  }
+  host.show(options);
+  return true;
 }
 
 if (!customElements.get("openclaw-toast-host")) {

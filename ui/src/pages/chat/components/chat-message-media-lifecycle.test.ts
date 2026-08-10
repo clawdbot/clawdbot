@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAssistantAttachmentAvailability } from "./chat-message-attachments.ts";
+import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   isChatMediaResourceCurrent,
