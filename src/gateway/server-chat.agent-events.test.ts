@@ -1715,7 +1715,10 @@ describe("agent event handler", () => {
     expect(broadcast).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
     expectRecordFields(
-      requireRecord(requireMockPayload(broadcastToConnIds, 0, 1, "run tool payload").data),
+      requireRecord(
+        requireMockPayload(broadcastToConnIds, 0, 1, "run tool payload").data,
+        "run tool data",
+      ),
       {
         phase: "input_delta",
         name: "edit",

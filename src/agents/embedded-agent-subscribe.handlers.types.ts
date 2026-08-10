@@ -13,7 +13,6 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
-import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -85,7 +84,16 @@ export type EmbeddedAgentSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
-  liveEditDiffStateById: Map<string, LiveEditDiffProgressState>;
+  liveEditDiffStateById: Map<
+    string,
+    {
+      added: number;
+      removed: number;
+      emittedAdded: number;
+      emittedRemoved: number;
+      lastEmittedAtMs: number;
+    }
+  >;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;

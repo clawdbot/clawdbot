@@ -5,9 +5,9 @@ const LIVE_EDIT_DIFF_MIN_INTERVAL_MS = 250;
 const LIVE_EDIT_DIFF_MAX_PARTIAL_JSON_CHARS = 1024 * 1024;
 const LIVE_EDIT_DIFF_MAX_TRACKED_CALLS = 64;
 
-export type LiveEditToolKind = "write" | "edit" | "patch";
+type LiveEditToolKind = "write" | "edit" | "patch";
 
-export type LiveEditDiffProgressState = {
+type LiveEditDiffProgressState = {
   added: number;
   removed: number;
   emittedAdded: number;
@@ -15,7 +15,7 @@ export type LiveEditDiffProgressState = {
   lastEmittedAtMs: number;
 };
 
-export type LiveEditDiffProgress = {
+type LiveEditDiffProgress = {
   toolCallId: string;
   name: string;
   diff: { added: number; removed: number };

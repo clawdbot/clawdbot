@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  type LiveEditDiffProgressState,
-  updateLiveEditDiffProgress,
-} from "./embedded-agent-live-edit-diff.js";
+import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 
 function toolCallEvent(params: {
   type?: "toolcall_delta" | "toolcall_end";
@@ -33,7 +30,7 @@ describe("updateLiveEditDiffProgress", () => {
   it("keeps streamed edit counts monotonic, throttled, and scoped to tool completion", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const state = new Map<string, LiveEditDiffProgressState>();
+    const state = new Map();
 
     const first = updateLiveEditDiffProgress(
       state,
@@ -78,7 +75,7 @@ describe("updateLiveEditDiffProgress", () => {
   it("counts canonical write and patch arguments but ignores non-edit tools", () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
-    const state = new Map<string, LiveEditDiffProgressState>();
+    const state = new Map();
 
     expect(
       updateLiveEditDiffProgress(
