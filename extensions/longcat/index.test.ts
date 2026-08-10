@@ -31,7 +31,7 @@ function requireLongCatModel(): Model<"openai-completions"> {
   return {
     ...model,
     api: "openai-completions",
-    baseUrl: "https://api.longcat.chat/openai",
+    baseUrl: "https://api.longcat.chat/openai/v1",
     provider: "longcat",
     input: ["text"],
     cost: { ...model.cost },
@@ -66,7 +66,7 @@ describe("LongCat provider plugin", () => {
 
   it("exposes the hosted LongCat-2.0 catalog", () => {
     expect(buildLongCatProvider()).toMatchObject({
-      baseUrl: "https://api.longcat.chat/openai",
+      baseUrl: "https://api.longcat.chat/openai/v1",
       api: "openai-completions",
       models: [
         expect.objectContaining({
