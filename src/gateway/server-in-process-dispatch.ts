@@ -121,8 +121,15 @@ export async function waitForGatewayDispatch<T>(
   promise: Promise<T>,
   timeoutMs?: number,
   signal?: AbortSignal,
+  onSignalAbort?: () => Promise<void> | void,
 ): Promise<T> {
-  return await waitForDispatch(method, promise, resolveDispatchDeadlineMs(timeoutMs), signal);
+  return await waitForDispatch(
+    method,
+    promise,
+    resolveDispatchDeadlineMs(timeoutMs),
+    signal,
+    onSignalAbort,
+  );
 }
 
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */

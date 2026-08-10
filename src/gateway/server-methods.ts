@@ -292,7 +292,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
 );
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
-function createRequestGatewayMethodRegistry(
+export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
   // Attached gateway methods must not be shadowed by agent-scoped registry loads.

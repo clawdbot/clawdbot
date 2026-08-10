@@ -80,6 +80,43 @@ vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
 }));
 
+vi.mock("./agent-turn/internal-facade.js", () => ({
+  createInternalAgentTurnFacade: (options: {
+    client: GatewayRequestOptions["client"];
+    getContext: () => GatewayRequestContext;
+    isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
+  }) => ({
+    dispatch: async (
+      request: Record<string, unknown>,
+      dispatchOptions?: {
+        expectFinal?: boolean;
+        onAccepted?: (payload: unknown) => void;
+        onSignalAbort?: () => Promise<void> | void;
+        signal?: AbortSignal;
+        timeoutMs?: number;
+      },
+    ) => {
+      const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
+      return await dispatchGatewayRequestInProcess("agent", request, {
+        client: options.client,
+        context: options.getContext(),
+        isWebchatConnect: options.isWebchatConnect,
+        ...dispatchOptions,
+      });
+    },
+    wait: async (params: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal) => {
+      const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
+      return await dispatchGatewayRequestInProcess("agent.wait", params, {
+        client: options.client,
+        context: options.getContext(),
+        isWebchatConnect: options.isWebchatConnect,
+        signal,
+        timeoutMs,
+      });
+    },
+  }),
+}));
+
 vi.mock("../channels/registry.js", () => ({
   CHAT_CHANNEL_ORDER: [],
   CHANNEL_IDS: [],

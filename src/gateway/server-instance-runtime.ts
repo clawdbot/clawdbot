@@ -89,9 +89,23 @@ export function createGatewayInstanceRuntime(
   const approvalRouteMethods = new Set(["send"]);
 
   const recovery: GatewayRecoveryRuntime = {
-    dispatchAgent: async <T>(payload: AgentRunRequest, timeoutMs?: number) => {
+    dispatchAgent: async <T>(
+      payload: AgentRunRequest,
+      timeoutMs?: number,
+      dispatchOptions?: { allowModelOverride?: boolean; scopes?: string[] },
+    ) => {
       assertDispatchAvailable("agent");
-      return await recoveryAgentTurns.dispatch<T>(payload, timeoutMs);
+      const agentTurns = dispatchOptions
+        ? createInternalAgentTurnFacade({
+            client: createSyntheticPluginRuntimeClient({
+              allowModelOverride: dispatchOptions.allowModelOverride,
+              scopes: dispatchOptions.scopes,
+            }),
+            getContext: options.getContext,
+            getMethodRegistry: options.getMethodRegistry,
+          })
+        : recoveryAgentTurns;
+      return await agentTurns.dispatch<T>(payload, timeoutMs);
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number) => {
       assertDispatchAvailable("agent.wait");

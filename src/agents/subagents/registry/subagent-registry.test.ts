@@ -100,7 +100,15 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn<(request: { method?: string }) => Promise<Record<string, unknown>>>(),
+  callGateway:
+    vi.fn<
+      (request: {
+        method?: string;
+        params?: Record<string, unknown>;
+        scopes?: string[];
+        timeoutMs?: number | null;
+      }) => Promise<Record<string, unknown>>
+    >(),
   onAgentEvent: vi.fn<(_handler: (event: AgentEventPayload) => void) => typeof noop>(() => noop),
   getAgentRunContext: vi.fn<(_runId: string) => unknown>(() => undefined),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(() => ({
@@ -197,7 +205,7 @@ const mocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
   removeInternalSessionEffectsSession: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
-  dispatchRecoveryAgent: vi.fn(async () => ({ runId: "recovered-run" })),
+  dispatchRecoveryAgent: vi.fn(),
   getGatewayRecoveryRuntime: vi.fn(() => ({
     dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(),
@@ -495,7 +503,7 @@ describe("subagent registry seam flow", () => {
     mocks.runSubagentEnded.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
     });
-    mocks.dispatchRecoveryAgent.mockReset().mockResolvedValue({ runId: "recovered-run" });
+    mocks.dispatchRecoveryAgent.mockReset();
     mocks.resolveAgentTimeoutMs.mockReturnValue(1_000);
     mocks.getSubagentRunsSnapshotForChildSession
       .mockReset()
@@ -510,6 +518,14 @@ describe("subagent registry seam flow", () => {
         endedAt: 222,
       },
     });
+    mocks.dispatchRecoveryAgent.mockImplementation(async (params, timeoutMs, options) =>
+      mocks.callGateway({
+        method: "agent",
+        params: params as unknown as Record<string, unknown>,
+        timeoutMs,
+        ...(options?.scopes ? { scopes: options.scopes } : {}),
+      }),
+    );
     mod.testing.setDepsForTest({
       callGateway: mocks.callGateway as typeof import("../../../gateway/call.js").callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
