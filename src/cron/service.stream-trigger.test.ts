@@ -242,7 +242,9 @@ describe("cron stream trigger composition", () => {
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
         expect.objectContaining({
           payload: expect.objectContaining({
-            text: 'Automation "failing stream payload" failed 1 times\nCheck automation history for details.',
+            text:
+              'Automation "failing stream payload" failed 1 times\n' +
+              "Check automation history for details.",
           }),
         }),
       );
