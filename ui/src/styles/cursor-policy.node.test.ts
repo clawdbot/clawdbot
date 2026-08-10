@@ -47,6 +47,7 @@ function selectorFor(lines: readonly string[], declarationIndex: number): string
 }
 
 const ANCHOR_SELECTOR = /(^|[\s,(>~+])a([.#:[]|\b)/u;
+const UNCONDITIONAL_POINTER_ACTION_SELECTORS = new Set([".chat-image-action"]);
 
 describe("Control UI cursor policy", () => {
   it("selects the cursor token by display mode and leaves fullscreen alone", () => {
@@ -103,7 +104,7 @@ describe("Control UI cursor policy", () => {
     }
   });
 
-  it("keeps the unconditional pointer hand on link rules only", () => {
+  it("keeps the unconditional pointer hand on links and explicit action controls only", () => {
     const offenders = collectStyleSources(path.join(stylesDir, ".."))
       .flatMap((filePath) => {
         const lines = fs.readFileSync(filePath, "utf8").split("\n");
@@ -113,10 +114,14 @@ describe("Control UI cursor policy", () => {
             : [],
         );
       })
-      .filter((hit) => !ANCHOR_SELECTOR.test(hit.selector));
+      .filter(
+        (hit) =>
+          !ANCHOR_SELECTOR.test(hit.selector) &&
+          !UNCONDITIONAL_POINTER_ACTION_SELECTORS.has(hit.selector),
+      );
 
-    // Controls consume var(--cursor-action); a hardcoded hand is how the policy
-    // drifted apart before (92 declarations by the time it was caught).
+    // Ordinary controls consume var(--cursor-action). Managed-image action buttons are
+    // deliberately browser-like overlays, so their exact selector retains the hand.
     expect(offenders).toEqual([]);
   });
 });
