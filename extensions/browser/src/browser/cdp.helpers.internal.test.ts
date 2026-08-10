@@ -1,10 +1,10 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { toErrorObject } from "../infra/errors.js";
-import { rawDataToString } from "../infra/ws.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const sleepWithAbortMock = vi.hoisted(() =>

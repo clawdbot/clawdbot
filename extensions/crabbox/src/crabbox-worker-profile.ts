@@ -15,6 +15,7 @@ const PROFILE_KEYS = new Set([
 const GO_DURATION_PATTERN = /^\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/u;
 const GO_DURATION_TOKEN_PATTERN = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gu;
 const MAX_GO_DURATION_NANOSECONDS = 9_223_372_036_854_775_807n;
+const CRABBOX_LEASE_ID_DOMAIN = "openclaw:crabbox-worker-lease-id:v1\0";
 const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
   h: 3_600_000_000_000n,
   m: 60_000_000_000n,
@@ -121,7 +122,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   return { binary, class: machineClass, desktop, idleTimeout, provider, setup, ttl };
 }
 
-export function buildCrabboxWarmupArgs(profile: CrabboxProfile, slug: string): string[] {
+export function buildCrabboxWarmupArgs(
+  profile: CrabboxProfile,
+  leaseId: string,
+  slug: string,
+): string[] {
   const args = [
     "warmup",
     "--provider",
@@ -135,6 +140,8 @@ export function buildCrabboxWarmupArgs(profile: CrabboxProfile, slug: string): s
     profile.ttl,
     "--idle-timeout",
     profile.idleTimeout,
+    "--lease-id",
+    leaseId,
     "--slug",
     slug,
     "--keep=true",
@@ -215,6 +222,14 @@ export function resolveOpenClawRoot(pluginRoot: string | undefined): string {
 
 export function operationSlug(operationId: string): string {
   return `openclaw-${createHash("sha256").update(operationId).digest("hex").slice(0, 32)}`;
+}
+
+export function operationLeaseId(operationId: string): string {
+  return `cbx_${createHash("sha256")
+    .update(CRABBOX_LEASE_ID_DOMAIN)
+    .update(operationId)
+    .digest("hex")
+    .slice(0, 12)}`;
 }
 
 export function identityRefId(leaseId: string): string {

@@ -4,7 +4,7 @@
  */
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../config/sessions/lifecycle.js";
 import type { callGateway } from "../gateway/call.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
 
 type CallGateway = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";

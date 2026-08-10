@@ -98,7 +98,7 @@ const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
 const PLUGIN_SDK_API_BASELINE_PATH_RE =
   /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
-  /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+  /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
@@ -429,13 +429,16 @@ const DELEGATION_OUTPUT_TAIL_LIMIT = 64 * 1024;
 
 /**
  * Signatures of a failure that happened before the remote command was dispatched:
- * the broker or its API was unreachable, or no lease was ever obtained.
+ * the broker or its API was unreachable, no lease was ever obtained, or workload
+ * routing exhausted its provider chain (every provider doctor failed).
  */
 const BACKEND_UNAVAILABLE_SIGNATURES = [
   /request failed: \w+ "https?:\/\/[^"]*blacksmith[^"]*"/iu,
   /context deadline exceeded/iu,
   /(?:no such host|dial tcp|connection refused|network is unreachable)/iu,
   /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
+  // crabbox-wrapper prints this and exits before dispatching anything remote.
+  /\[crabbox\] no ready provider for workload=/u,
 ];
 
 /**
@@ -1257,7 +1260,7 @@ async function main() {
           // Say this loudly: the proof below is local, so whoever reads the run
           // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] Blacksmith never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
           );
         }
         process.exitCode = delegated.backendUnavailable

@@ -642,7 +642,7 @@ describe.sequential("TUI PTY harness", () => {
 
       await fixture.run.write("\x1b[A", { delay: false });
       await fixture.run.write("\r", { delay: false });
-      await fixture.run.waitForOutput("Press Enter again to start this task in a worktree.");
+      await fixture.run.waitForOutput("Press Enter again to start this task.");
       await fixture.run.write("\r", { delay: false });
       await fixture.waitForLogEntry(
         (entry) =>

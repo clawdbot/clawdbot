@@ -125,7 +125,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
-  const settingsTakeover = isSettingsNavigationRoute(activeRoute);
+  // Onboarding renders without any navigation chrome, so the settings takeover
+  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  const settingsTakeover = isSettingsNavigationRoute(activeRoute) && !host.onboardingMode;
   const runtimeConfig = context.runtimeConfig.state;
   const settingsSearchBlocks = findSettingsSearchBlocks({
     query: host.settingsSearchQuery,

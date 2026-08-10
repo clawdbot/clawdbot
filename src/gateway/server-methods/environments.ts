@@ -114,7 +114,7 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     return [];
   }
 }
-function listWorkerProfiles(context: GatewayRequestContext) {
+export function listWorkerProfiles(context: GatewayRequestContext) {
   if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
     return [];
   }

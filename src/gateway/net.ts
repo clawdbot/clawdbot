@@ -19,6 +19,7 @@ import {
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
 /** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
@@ -465,11 +466,6 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
     }
   }
   return true;
-}
-
-/** Normalize HTTP aliases accepted by WebSocket clients to their WebSocket protocol. */
-export function normalizeWebSocketProtocol(protocol: string): string {
-  return protocol === "https:" ? "wss:" : protocol === "http:" ? "ws:" : protocol;
 }
 
 function parseHostForAddressChecks(

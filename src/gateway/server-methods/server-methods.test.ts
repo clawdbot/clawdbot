@@ -28,6 +28,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
@@ -39,7 +40,6 @@ import {
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
-import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";

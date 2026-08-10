@@ -2144,6 +2144,7 @@ describe("sqlite session normalization", () => {
     const result = await branchSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
+      expectedState: sourceEntry,
       storePath: paths.sqlitePath,
       sourceKey: sourceEntryScope.sessionKey,
       nextKey: branchKey,
@@ -2232,6 +2233,7 @@ describe("sqlite session normalization", () => {
     const result = await branchSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
+      expectedState: { sessionId: "source-session", lifecycleRevision: undefined },
       storePath: paths.sqlitePath,
       sourceKey: sourceEntryScope.sessionKey,
       nextKey: "agent:main:checkpoint-post-fallback",
@@ -2312,6 +2314,7 @@ describe("sqlite session normalization", () => {
     const result = await restoreSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
+      expectedState: { sessionId: "current-session", lifecycleRevision: undefined },
       storePath: paths.sqlitePath,
       sessionKey: sourceEntryScope.sessionKey,
       checkpointId: checkpoint.checkpointId,

@@ -28,6 +28,7 @@ import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
 } from "./session-event-payload.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessageCountAsync,
@@ -89,23 +90,6 @@ function readTranscriptUpdateLifecycleOwner(
   }
   const lifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
   return lifecycleRevision ? { lifecycleRevision } : {};
-}
-
-function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
-  // Global sessions can be subscribed through either the raw global key or the
-  // default-agent scoped key; non-default agent global sessions stay scoped.
-  const normalizedAgentId = normalizeOptionalString(agentId);
-  if (sessionKey === "global") {
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
-    if (normalizedAgentId) {
-      const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
-      return normalizeAgentId(normalizedAgentId) === defaultAgentId
-        ? [scopedKey, sessionKey]
-        : [scopedKey];
-    }
-    return [`agent:${defaultAgentId}:global`, sessionKey];
-  }
-  return [sessionKey];
 }
 
 function buildGatewaySessionSnapshot(params: {
@@ -280,7 +264,16 @@ async function handleTranscriptUpdateBroadcast(
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, routingAgentId)) {
+  let broadcastKeys = [sessionKey];
+  if (sessionKey === "global") {
+    const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+    broadcastKeys = resolveSessionSubscriptionKeys(
+      sessionKey,
+      routingAgentId ?? defaultAgentId,
+      defaultAgentId,
+    );
+  }
+  for (const broadcastKey of broadcastKeys) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
     }

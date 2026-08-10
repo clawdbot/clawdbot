@@ -190,7 +190,6 @@ Modernized core doctor checks stay attached to the ordered doctor contribution t
 ```bash
 openclaw doctor --lint --only core/doctor/gateway-config --json
 openclaw doctor --lint --skip core/doctor/skills-readiness
-openclaw doctor --lint --all --skip core/doctor/session-locks
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only` id is not registered, no check runs for that id; use `checksRun`/`checksSkipped` in the output to confirm a focused gate selects the checks you expect.

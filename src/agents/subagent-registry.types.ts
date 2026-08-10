@@ -6,7 +6,7 @@ import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
 
 export type SubagentCompletionRequest = {
   runId: string;

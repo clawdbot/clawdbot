@@ -114,7 +114,12 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
       "session.observer",
       expect.objectContaining({ health: "done" }),
       harness.subscribers.get("agent:main:session-1"),
-      { dropIfSlow: true },
+      expect.objectContaining({
+        agentId: "main",
+        dropIfSlow: true,
+        sessionKeys: ["agent:main:session-1"],
+        sessionSubscriptionVerified: true,
+      }),
     );
   });
 

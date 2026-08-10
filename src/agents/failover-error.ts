@@ -10,7 +10,6 @@ import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
-  inferSignalStatus,
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
@@ -18,7 +17,6 @@ import {
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
-import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
@@ -390,49 +388,15 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   };
 }
 
-function hasSessionWriteLockContention(err: unknown, seen: Set<object> = new Set()): boolean {
-  if (isSessionWriteLockAcquireError(err)) {
-    return true;
-  }
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (seen.has(err)) {
-    return false;
-  }
-  seen.add(err);
-  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
-  return (
-    hasSessionWriteLockContention(candidate.error, seen) ||
-    hasSessionWriteLockContention(candidate.cause, seen) ||
-    hasSessionWriteLockContention(candidate.reason, seen)
-  );
-}
-
-function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
-  // Match by name to avoid importing embedded-agent-runner here (would create a cycle).
-  return Boolean(
-    err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
-  );
-}
-
-function hasPreservedTakeoverPromptError(err: unknown): err is Record<"promptError", unknown> {
-  return Boolean(
-    isEmbeddedAttemptSessionTakeover(err) &&
+function hasSessionTranscriptWriterClaimRebound(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): boolean {
+  if (
     err &&
     typeof err === "object" &&
-    Object.hasOwn(err, "promptError"),
-  );
-}
-
-function resolveFailoverSourceError(err: unknown): unknown {
-  // Cleanup takeover is a secondary failure when the wrapper preserves the
-  // prompt error. Classify and report that provider-facing source instead.
-  return hasPreservedTakeoverPromptError(err) ? err.promptError : err;
-}
-
-function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
-  if (isEmbeddedAttemptSessionTakeover(err)) {
+    readErrorName(err) === "SessionTranscriptWriterClaimReboundError"
+  ) {
     return true;
   }
   if (!err || typeof err !== "object") {
@@ -444,9 +408,9 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
   seen.add(err);
   const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
   return (
-    hasEmbeddedAttemptSessionTakeover(candidate.error, seen) ||
-    hasEmbeddedAttemptSessionTakeover(candidate.cause, seen) ||
-    hasEmbeddedAttemptSessionTakeover(candidate.reason, seen)
+    hasSessionTranscriptWriterClaimRebound(candidate.error, seen) ||
+    hasSessionTranscriptWriterClaimRebound(candidate.cause, seen) ||
+    hasSessionTranscriptWriterClaimRebound(candidate.reason, seen)
   );
 }
 
@@ -534,9 +498,6 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (hasSessionWriteLockContention(err)) {
-    return false;
-  }
   if (readErrorName(err) === "TimeoutError") {
     return true;
   }
@@ -553,9 +514,6 @@ export function isTimeoutError(err: unknown): boolean {
     return false;
   }
   if (readErrorName(err) !== "AbortError") {
-    return false;
-  }
-  if (hasSessionWriteLockContention(err)) {
     return false;
   }
   const message = getErrorMessage(err);
@@ -667,14 +625,6 @@ function resolveFailoverClassificationFromErrorInternal(
     };
   }
   const signal = normalizeErrorSignal(err, providerHint);
-  const codeReason = signal.code
-    ? failoverReasonFromClassification(classifyFailoverSignal({ code: signal.code }))
-    : null;
-  const hasExplicitFailoverMetadata =
-    typeof inferSignalStatus(signal) === "number" ||
-    (codeReason !== null && codeReason !== "timeout");
-  const hasSessionLock = hasSessionWriteLockContention(err);
-
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
 
@@ -687,9 +637,6 @@ function resolveFailoverClassificationFromErrorInternal(
         providerHint,
       );
       if (nestedClassification) {
-        if (hasSessionLock && !hasExplicitFailoverMetadata) {
-          return null;
-        }
         return nestedClassification;
       }
     }
@@ -713,14 +660,7 @@ function resolveFailoverClassificationFromErrorInternal(
   }
 
   if (classification) {
-    if (hasSessionLock && !hasExplicitFailoverMetadata) {
-      return null;
-    }
     return classification;
-  }
-
-  if (hasSessionLock) {
-    return null;
   }
 
   if (isTimeoutError(err)) {
@@ -865,7 +805,7 @@ export function coerceToFailoverError(
   err: unknown,
   context?: FailoverErrorContext,
 ): FailoverError | null {
-  const sourceError = resolveFailoverSourceError(err);
+  const sourceError = err;
   if (isFailoverError(sourceError)) {
     if (context?.authMode && !sourceError.authMode) {
       const message =
@@ -938,22 +878,16 @@ export function resolveModelFallbackError(
   ) {
     return { kind: "coordination", error: err };
   }
-  // A direct takeover remains a coordination failure unless the dedicated
-  // cleanup wrapper owns a preserved prompt error. Its message alone must not
-  // reclassify session-state loss as a provider failure.
-  if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
+  // The in-transaction transcript fence owns writer supersession. A rebound is
+  // local coordination failure even when provider-looking wrappers contain it.
+  if (hasSessionTranscriptWriterClaimRebound(err)) {
     return { kind: "coordination", error: err };
   }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {
     return { kind: "failover", error: failoverError };
   }
-  if (
-    hasSessionWriteLockContention(err) ||
-    hasEmbeddedAttemptSessionTakeover(err) ||
-    hasMissingToolResultFailure(err) ||
-    staleLifecycleFailure
-  ) {
+  if (hasMissingToolResultFailure(err) || staleLifecycleFailure) {
     return { kind: "coordination", error: err };
   }
   return { kind: "unknown", error: err };

@@ -5050,7 +5050,7 @@ describe("deliverOutboundPayloads", () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
-      new Error("session file changed while embedded prompt lock was released"),
+      new Error("transcript mirror failed after channel delivery"),
     );
 
     const results = await deliverMatrix({

@@ -1,4 +1,6 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -108,6 +110,37 @@ function collectMediaProviderIds(root: Record<string, unknown>, ids: Set<string>
   }
 }
 
+function collectConfiguredModelProviderIds(params: {
+  root: Record<string, unknown>;
+  ids: Set<string>;
+}): void {
+  const addRef = (value: unknown) => {
+    const parsed = typeof value === "string" ? parseProviderModelRef(value) : null;
+    if (parsed) {
+      params.ids.add(normalizeProviderId(parsed.provider));
+    }
+  };
+  for (const ref of collectConfiguredModelRefs(params.root)) {
+    addRef(ref.value);
+  }
+  const collectAgentPolicy = (value: unknown) => {
+    const allow = asNullableRecord(asNullableRecord(value)?.modelPolicy)?.allow;
+    if (Array.isArray(allow)) {
+      allow.forEach(addRef);
+    }
+  };
+  const agents = asNullableRecord(params.root.agents) ?? {};
+  collectAgentPolicy(agents.defaults);
+  if (Object.hasOwn(agents, "entries")) {
+    const entries = asNullableRecord(agents.entries);
+    if (entries) {
+      Object.values(entries).forEach(collectAgentPolicy);
+    }
+  } else if (Array.isArray(agents.list)) {
+    agents.list.forEach(collectAgentPolicy);
+  }
+}
+
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   const ids = new Set<string>();
   const root = asNullableRecord(raw);
@@ -140,6 +173,7 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   }
 
   collectMediaProviderIds(root, ids);
+  collectConfiguredModelProviderIds({ root, ids });
 
   if (hasLegacyElevenLabsTalkFields(root)) {
     ids.add("elevenlabs");
@@ -158,6 +192,7 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
   }
 
   const ids = new Set<string>();
+  collectConfiguredModelProviderIds({ root, ids });
   for (const touchedPath of params.touchedPaths) {
     const [first, second, third] = touchedPath;
     if (first === "channels") {

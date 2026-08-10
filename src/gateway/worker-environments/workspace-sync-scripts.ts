@@ -4,6 +4,8 @@ import {
 } from "./workspace-manifest-remote-script.js";
 export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
 export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
+import { MAX_WORKSPACE_HASH_MEMO_BYTES, workspaceStatIdentity } from "./workspace-hash-memo.js";
+import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
   DERIVED_WORKSPACE_FILE_NAMES,
@@ -68,16 +70,46 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIR
 const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
 const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
 const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
+const workspaceStatIdentity = ${workspaceStatIdentity.toString()};
+const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};
+const MAX_HASH_MEMO_BYTES = ${MAX_WORKSPACE_HASH_MEMO_BYTES};
 const root = fs.realpathSync(process.argv[1]);
 const requestedBaseCommit = process.argv[2] || null;
 const eligibleOnly = process.argv[3] === "eligible";
 const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
 const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
-const priorManifestDigests = [...new Set(process.argv.slice(4).filter(Boolean))];
+const memoMode = process.argv.at(-1) === "memo-v1";
+const priorManifestDigests = [
+  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
+];
 const entriesByPath = new Map();
+const usedHashMemo = new Map();
+const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+const startedAt = performance.now();
 function fail(message) {
   throw new Error(message);
 }
+function readHashMemo() {
+  if (!memoMode) return new Map();
+  const raw = fs.readFileSync(0, "utf8");
+  if (Buffer.byteLength(raw) > MAX_HASH_MEMO_BYTES) {
+    fail("workspace hash memo exceeds its byte limit");
+  }
+  let entries;
+  try {
+    entries = JSON.parse(raw);
+  } catch {
+    fail("invalid workspace hash memo");
+  }
+  if (
+    !Array.isArray(entries) ||
+    entries.length > MAX_RECONCILIATION_ENTRIES
+  ) {
+    fail("invalid workspace hash memo");
+  }
+  return new Map(entries);
+}
+const hashMemo = readHashMemo();
 ${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
 function addEntry(relative) {
   if (
@@ -213,12 +245,40 @@ async function hashFiles() {
     if (entry.type !== "file") {
       continue;
     }
-    const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(path.join(root, entry.path));
-    for await (const chunk of stream) {
-      hash.update(chunk);
+    const absolute = path.join(root, entry.path);
+    const handle = await fs.promises.open(
+      absolute,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
+    try {
+      const before = await handle.stat({ bigint: true });
+      if (!before.isFile()) fail("worker workspace file changed while it was being read");
+      const identity = workspaceStatIdentity("worker", before);
+      let sha256 = hashMemo.get(identity);
+      if (sha256) {
+        metrics.memoHitCount += 1;
+      } else {
+        const hashStartedAt = performance.now();
+        const hash = crypto.createHash("sha256");
+        const stream = handle.createReadStream({ autoClose: false });
+        for await (const chunk of stream) {
+          hash.update(chunk);
+        }
+        sha256 = hash.digest("hex");
+        metrics.contentHashCount += 1;
+        metrics.contentHashDurationMs += performance.now() - hashStartedAt;
+      }
+      const after = await handle.stat({ bigint: true });
+      if (workspaceStatIdentity("worker", after) !== identity) {
+        fail("worker workspace file changed while it was being read");
+      }
+      entry.mode = Number(after.mode & 0o777n);
+      entry.size = Number(after.size);
+      entry.sha256 = sha256;
+      usedHashMemo.set(identity, sha256);
+    } finally {
+      await handle.close();
     }
-    entry.sha256 = hash.digest("hex");
   }
   return entries;
 }
@@ -267,7 +327,20 @@ async function main() {
   const baseCommit = requestedBaseCommit;
   const manifest = serializeManifest(baseCommit, entries);
   const digest = publishManifest(manifestRoot, manifest);
-  process.stdout.write("sha256:" + digest + "\n");
+  const manifestRef = "sha256:" + digest;
+  const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };
+  if (memoMode) {
+    process.stdout.write(JSON.stringify({
+      version: 1,
+      manifestRef,
+      memo: [...usedHashMemo].sort((left, right) =>
+        left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0,
+      ),
+      metrics: measured,
+    }) + "\n");
+  } else {
+    process.stdout.write(manifestRef + "\n");
+  }
 }
 main().catch((error) => {
   process.stderr.write(String(error && error.stack ? error.stack : error) + "\n");

@@ -111,28 +111,6 @@ vi.mock("../../infra/channel-summary.js", () => ({
   buildChannelSummary: channelSummaryMocks.buildChannelSummary,
 }));
 
-// Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
-vi.mock("../../agents/session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
-    "../../agents/session-write-lock.js",
-  );
-  return {
-    ...actual,
-    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(
-      ({
-        timeoutMs,
-        graceMs = 2 * 60 * 1000,
-        minMs = 5 * 60 * 1000,
-      }: {
-        timeoutMs: number;
-        graceMs?: number;
-        minMs?: number;
-      }) => Math.max(minMs, timeoutMs + graceMs),
-    ),
-  };
-});
-
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(async () => [
@@ -5115,6 +5093,75 @@ describe("initSessionState stale threadId fallback", () => {
 
     expect(result.sessionEntry.lastThreadId).toBe("650.000");
     expect(result.sessionEntry.deliveryContext?.threadId).toBe("650.000");
+  });
+
+  it("preserves external thread routing for internal turns and clears it for external non-thread turns", async () => {
+    const storePath = await createStorePath("internal-thread-route-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-internal-thread-route",
+        updatedAt: Date.now(),
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "imessage",
+            accountId: "imessage-default",
+            target: { to: "+15551234567", chatType: "direct" },
+            thread: { id: "thread-42", kind: "thread", source: "session" },
+          },
+          context: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
+          origin: {
+            provider: "webchat",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+            chatType: "direct",
+            surface: "webchat",
+          },
+        },
+      },
+    });
+
+    const internal = await initSessionState({
+      ctx: {
+        Body: "internal control-ui turn",
+        SessionKey: sessionKey,
+        OriginatingChannel: "webchat",
+      },
+      cfg,
+    });
+    expect(internal.sessionEntry.lastThreadId).toBe("thread-42");
+    expect(internal.sessionEntry.deliveryContext).toEqual({
+      channel: "imessage",
+      to: "+15551234567",
+      accountId: "imessage-default",
+      threadId: "thread-42",
+    });
+
+    const plainExternal = await initSessionState({
+      ctx: {
+        Body: "plain external turn",
+        SessionKey: sessionKey,
+        OriginatingChannel: "imessage",
+        OriginatingTo: "+15551234567",
+        AccountId: "imessage-default",
+      },
+      cfg,
+    });
+    expect(plainExternal.sessionEntry.lastThreadId).toBeUndefined();
+    expect(plainExternal.sessionEntry.deliveryContext).toEqual({
+      channel: "imessage",
+      to: "+15551234567",
+      accountId: "imessage-default",
+    });
   });
 
   it("preserves lastThreadId within the same thread session", async () => {

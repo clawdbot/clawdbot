@@ -1253,7 +1253,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1261,7 +1261,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, sidebarVisible: true)
+    RootTabsPreviewHost(sidebarVisible: true)
 }
 
 #Preview(
@@ -1269,7 +1269,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1277,7 +1277,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 #Preview(
@@ -1285,7 +1285,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 852, height: 393),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
         .environment(\.horizontalSizeClass, .regular)
         .environment(\.verticalSizeClass, .compact)
 }
@@ -1295,7 +1295,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1024, height: 1366),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .pad)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1303,7 +1303,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1311,7 +1311,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connecting)
+    RootTabsPreviewHost(gatewayState: .connecting)
 }
 
 #Preview(
@@ -1319,24 +1319,21 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 private struct RootTabsPreviewHost: View {
     @State private var appearanceModel = AppAppearanceModel()
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
-    private let idiom: UIUserInterfaceIdiom
     private let sidebarVisible: Bool?
 
     init(
-        idiom: UIUserInterfaceIdiom,
         gatewayState: RootTabsPreviewGatewayState = .offline,
         sidebarVisible: Bool? = nil)
     {
         let appModel = NodeAppModel()
         gatewayState.apply(to: appModel)
-        self.idiom = idiom
         self.sidebarVisible = sidebarVisible
         _appModel = State(initialValue: appModel)
         _gatewayController = State(

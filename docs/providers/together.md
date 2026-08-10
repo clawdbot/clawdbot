@@ -88,8 +88,10 @@ To use Together as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+      mediaModels: {
+        video: {
+          primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+        },
       },
     },
   },

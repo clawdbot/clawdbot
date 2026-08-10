@@ -52,7 +52,6 @@ import type {
   SessionsCatalogStartTerminalParams,
   TalkEvent,
 } from "./index.js";
-import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import * as validatorRegistry from "./validator-registry.js";
@@ -111,11 +110,9 @@ const talkSession = (overrides: Record<string, unknown>) => ({
 });
 
 describe("protocol export registries", () => {
-  it("re-exports every runtime registry symbol by identity", () => {
-    for (const registry of [schemaExportRegistry, validatorRegistry]) {
-      for (const [name, value] of Object.entries(registry)) {
-        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
-      }
+  it("re-exports every validator registry symbol by identity", () => {
+    for (const [name, value] of Object.entries(validatorRegistry)) {
+      expect((protocol as Record<string, unknown>)[name], name).toBe(value);
     }
   });
 
@@ -129,16 +126,16 @@ describe("protocol export registries", () => {
 
   it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
     expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
+      protocol.SkillsProposalEvaluateParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEvaluateResult).toBe(
-      schemaExportRegistry.SkillsProposalEvaluateResultSchema,
+      protocol.SkillsProposalEvaluateResultSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListParams).toBe(
-      schemaExportRegistry.SkillsProposalEventsListParamsSchema,
+      protocol.SkillsProposalEventsListParamsSchema,
     );
     expect(ProtocolSchemas.SkillsProposalEventsListResult).toBe(
-      schemaExportRegistry.SkillsProposalEventsListResultSchema,
+      protocol.SkillsProposalEventsListResultSchema,
     );
   });
 });
@@ -214,7 +211,6 @@ describe("lazy protocol validators", () => {
       label: "Label",
       category: "Category",
       boardFace: "dashboard",
-      icon: "name:spark",
       statusNote: "Working",
       attention: "hand",
       ttlMinutes: 30,

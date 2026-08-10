@@ -317,3 +317,27 @@ export async function createGitTransferList(params: {
   });
   return outputPath;
 }
+
+export async function filterExistingGitTransferList(params: {
+  gitRoot: string;
+  preparedListPath: string;
+  outputPath: string;
+}): Promise<string> {
+  const output = await fs.open(params.outputPath, "wx", 0o600);
+  try {
+    for await (const file of readNulFile(params.preparedListPath)) {
+      const stats = await fs.lstat(path.join(params.gitRoot, file)).catch((error: unknown) => {
+        if (hasNodeErrorCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (stats?.isFile() || stats?.isSymbolicLink()) {
+        await output.write(`${file}\0`);
+      }
+    }
+  } finally {
+    await output.close();
+  }
+  return params.outputPath;
+}
