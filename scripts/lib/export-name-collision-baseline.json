@@ -1933,56 +1933,6 @@
     "sdk": true
   },
   {
-    "name": "testApi",
-    "files": [
-      "src/cli/program/config-guard.ts",
-      "src/commands/backup-verify.ts",
-      "src/config/schema.hints.ts",
-      "src/gateway/server-methods/audit.ts",
-      "src/gateway/server-methods/tasks.ts",
-      "src/gateway/server-methods/usage.ts",
-      "src/infra/http-body.ts",
-      "src/logging/logger.ts",
-      "src/tts/runtime-api.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "testing",
-    "files": [
-      "src/acp/control-plane/manager.ts",
-      "src/acp/runtime/registry.ts",
-      "src/agents/agent-bundle-mcp-runtime.ts",
-      "src/agents/agent-command.ts",
-      "src/agents/embedded-agent-runner/compact.ts",
-      "src/agents/harness/native-hook-relay.ts",
-      "src/agents/mcp-connection-resolver.ts",
-      "src/agents/subagent-announce.requester-settle-wake.ts",
-      "src/agents/subagent-announce.ts",
-      "src/cli/banner.ts",
-      "src/cli/exec-approvals-cli.ts",
-      "src/commands/agents.commands.add.ts",
-      "src/commands/onboard-helpers.ts",
-      "src/gateway/call.ts",
-      "src/gateway/openresponses-http.ts",
-      "src/gateway/server-methods/agents.ts",
-      "src/gateway/server-methods/tools-effective.ts",
-      "src/gateway/server-startup-bootstrap.ts",
-      "src/gateway/server-startup-post-attach.ts",
-      "src/gateway/server/ws-connection/message-handler.ts",
-      "src/infra/heartbeat-runner.ts",
-      "src/infra/outbound/current-conversation-bindings.ts",
-      "src/infra/outbound/session-binding-service.ts",
-      "src/logging/diagnostic-stuck-session-recovery.runtime.ts",
-      "src/plugin-sdk/acp-runtime.ts",
-      "src/plugin-sdk/facade-runtime.ts",
-      "src/plugins/provider-runtime.ts",
-      "src/secrets/apply.ts",
-      "src/skills/loading/workspace.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "textToSpeech",
     "files": [
       "src/tts/tts-synthesis.ts",

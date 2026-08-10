@@ -380,6 +380,11 @@ function collectTransitiveExportNames(
   return names;
 }
 
+// Per-module test-hook namespaces are an intentional same-name family: each module
+// exports its own `testing`/`testApi` object and tests import it qualified from that
+// exact module. Flagging them would push burn-down work to "fix" a deliberate idiom.
+const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
+
 /** Finds duplicate exported function/const definitions across source modules. */
 export function findExportNameCollisions(modules: SourceModule[]): ExportNameCollision[] {
   const filesByName = new Map<string, Set<string>>();
@@ -410,7 +415,7 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
 
   const collisions: ExportNameCollision[] = [];
   for (const [name, fileSet] of filesByName) {
-    if (fileSet.size < 2) {
+    if (fileSet.size < 2 || intentionalSameNameFamilies.has(name)) {
       continue;
     }
     const collision: ExportNameCollision = {
