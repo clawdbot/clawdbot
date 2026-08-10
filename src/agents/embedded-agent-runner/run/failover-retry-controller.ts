@@ -86,8 +86,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
       failoverModel: string;
       logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
     }) => {
-      rateLimitProfileRotations += 1;
-      if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
+      if (!fallbackConfigured) {
+        return;
+      }
+      if (rateLimitProfileRotations < rateLimitProfileRotationLimit) {
+        // This state gates same-model retries, so skipped rotations must not consume it;
+        // otherwise one rate-limit response can disable the remaining retry budget.
+        rateLimitProfileRotations += 1;
         return;
       }
       const status = resolveFailoverStatus("rate_limit");
