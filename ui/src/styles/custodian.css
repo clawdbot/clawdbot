@@ -109,6 +109,14 @@ openclaw-custodian-page {
   gap: 8px;
 }
 
+/* Onboarding: the thread already introduces the mascot, so the header keeps
+   only its actions as a quiet top-right row. */
+.custodian__header--minimal {
+  justify-content: flex-end;
+  padding-bottom: 8px;
+  border-bottom: 0;
+}
+
 .custodian__identity {
   display: flex;
   align-items: center;
