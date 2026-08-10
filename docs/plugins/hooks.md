@@ -563,7 +563,8 @@ Use the phase-specific hooks for new plugins:
   messages, and any exactly-once queued injections drained for this session.
   Return `prependContext` or `appendContext`.
 - `before_prompt_build`: receives the current prompt and session messages.
-  Return `prependContext`, `appendContext`, `systemPrompt`,
+  Return `prompt` to replace the current user prompt before transcript persistence
+  and model submission. Return `prependContext`, `appendContext`, `systemPrompt`,
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
   submits no optional tools, while omitting it leaves the existing surface unchanged.

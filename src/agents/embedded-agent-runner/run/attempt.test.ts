@@ -143,6 +143,7 @@ describe("resolvePromptBuildHookResult", () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
+        prompt: "redacted prompt",
         prependContext: "prompt context",
         appendContext: "prompt append context",
         prependSystemContext: "prompt prepend",
@@ -158,6 +159,7 @@ describe("resolvePromptBuildHookResult", () => {
       hookRunner,
     });
 
+    expect(result.prompt).toBe("redacted prompt");
     expect(result.prependContext).toBe("prompt context");
     expect(result.appendContext).toBe("prompt append context");
     expect(result.prependSystemContext).toBe(wrappedPluginSystemContext("prompt prepend"));

@@ -169,6 +169,11 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           hookRunner: input.hookRunner,
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,
         });
+  if (hookResult?.prompt !== undefined) {
+    effectivePrompt = hookResult.prompt;
+    attempt.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(hookResult.prompt);
+    log.debug(`hooks: replaced current prompt (${hookResult.prompt.length} chars)`);
+  }
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
   const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;
@@ -178,9 +183,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     finalize: attempt.finalizePromptForResolvedTools,
   });
   const effectiveTranscriptPrompt =
-    attempt.finalizePromptForResolvedTools && attempt.transcriptPrompt === undefined
+    hookResult?.prompt ??
+    (attempt.finalizePromptForResolvedTools && attempt.transcriptPrompt === undefined
       ? promptBeforeResolvedToolFinalization
-      : attempt.transcriptPrompt;
+      : attempt.transcriptPrompt);
   const promptCacheTools = input.cache.tools.filter((tool) =>
     promptCacheToolNameSet.has(normalizeToolName(tool.name)),
   );

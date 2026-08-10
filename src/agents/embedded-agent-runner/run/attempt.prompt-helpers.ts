@@ -177,6 +177,7 @@ export async function resolvePromptBuildHookResult(params: {
         })
     : undefined;
   return {
+    ...(promptBuildResult?.prompt !== undefined ? { prompt: promptBuildResult.prompt } : {}),
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }

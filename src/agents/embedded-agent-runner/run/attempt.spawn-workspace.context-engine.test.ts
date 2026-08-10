@@ -1228,8 +1228,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
+  it("replaces the prompt while keeping before_prompt_build context out of transcript messages", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({
+      prompt: "redacted ask",
       prependContext: "dynamic hook context",
       appendContext: "dynamic hook tail",
     }));
@@ -1279,8 +1280,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seen.prompt).toBe("visible ask");
-    expect(result.finalPromptText).toBe("visible ask");
+    expect(seen.prompt).toBe("redacted ask");
+    expect(result.finalPromptText).toBe("redacted ask");
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook context");
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.preprocessedModelMessages)).toContain("dynamic hook context");
@@ -1292,6 +1293,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook tail");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
+    expect(JSON.stringify(seen.modelMessages)).not.toContain("visible ask");
   });
 
   it("keeps hook context model-only when orphan repair merges the prompt", async () => {

@@ -31,6 +31,27 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(result.toolsAllow).toEqual([]);
   });
 
+  it("replaces the user prompt before native harness submission", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ prompt: "redacted prompt", prependContext: "policy context" }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "secret prompt",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+    });
+
+    expect(result.prompt).toBe("policy context\n\nredacted prompt");
+    expect(result.promptInputRange).toEqual({ start: 16, end: 31 });
+  });
+
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "",

@@ -1735,6 +1735,7 @@ describe("prepareCliRunContext", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async ({ messages }: { messages: unknown[] }) => ({
+        prompt: "redacted ask",
         prependContext: `history:${messages.length}`,
         systemPrompt: "hook system",
         prependSystemContext: "prepend system",
@@ -1757,8 +1758,9 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    expect(context.params.prompt).toBe("history:2\n\nlatest ask");
-    expect(context.contextEngineTurnPrompt).toBe("latest ask");
+    expect(context.params.prompt).toBe("history:2\n\nredacted ask");
+    expect(context.params.transcriptPrompt).toBe("redacted ask");
+    expect(context.contextEngineTurnPrompt).toBe("redacted ask");
     expect(context.systemPrompt).toBe(
       `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. Model question: answer this current-run value.`,
     );

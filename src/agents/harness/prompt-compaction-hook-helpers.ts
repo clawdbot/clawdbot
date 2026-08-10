@@ -92,10 +92,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
   ]);
-  const prompt =
-    joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
+  const promptInput = promptBuildResult?.prompt ?? params.prompt;
+  const prompt = joinPresentTextSegments([promptPrefix, promptInput, promptSuffix]) ?? promptInput;
   const promptInputStart =
-    params.prompt.length === 0
+    promptInput.length === 0
       ? (promptPrefix?.length ?? 0)
       : promptPrefix
         ? promptPrefix.length + 2
@@ -113,7 +113,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ]) ?? systemPrompt,
     promptInputRange: {
       start: promptInputStart,
-      end: promptInputStart + params.prompt.length,
+      end: promptInputStart + promptInput.length,
     },
   };
 }

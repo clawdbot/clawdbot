@@ -768,6 +768,16 @@ export async function prepareCliRunContext(
       return undefined;
     }
   })();
+  if (promptBuildHookResult?.prompt !== undefined) {
+    params = {
+      ...params,
+      prompt: promptBuildHookResult.prompt,
+      transcriptPrompt: promptBuildHookResult.prompt,
+    };
+    cliBackendLog.debug(
+      `hooks: replaced current CLI prompt (${promptBuildHookResult.prompt.length} chars)`,
+    );
+  }
   const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
     promptBuildHookResult?.toolsAllow,
     {

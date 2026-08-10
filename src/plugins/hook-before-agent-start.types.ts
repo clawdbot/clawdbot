@@ -26,6 +26,8 @@ export type PluginHookBeforePromptBuildEvent = {
 };
 
 export type PluginHookBeforePromptBuildResult = {
+  /** Replaces the current user prompt before transcript persistence and model submission. */
+  prompt?: string;
   systemPrompt?: string;
   prependContext?: string;
   appendContext?: string;

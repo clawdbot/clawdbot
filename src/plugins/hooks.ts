@@ -444,7 +444,10 @@ export function createHookRunner(
             ],
             toolRestrictions,
           );
+    const prompt = firstDefined(acc?.prompt, next.prompt);
     return {
+      // Keep the first replacement so higher-priority hooks win.
+      ...(prompt !== undefined ? { prompt } : {}),
       // Keep the first defined system prompt so higher-priority hooks win.
       systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
       prependContext: concatOptionalTextSegments({
