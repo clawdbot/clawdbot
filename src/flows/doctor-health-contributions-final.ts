@@ -24,7 +24,6 @@ import {
   collectMemorySearchHealthFindings,
   collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
-  runExtraBootstrapGlobEscapeMigrationHealth,
   runHeartbeatCadenceMigrationHealth,
   runHeartbeatScratchMigrationHealth,
   runHeartbeatTaskMigrationHealth,
@@ -334,21 +333,6 @@ export function resolveFinalDoctorHealthContributions(params: {
         },
       },
       run: runHeartbeatTaskMigrationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:extra-bootstrap-glob-escape-migration",
-      label: "Extra bootstrap glob escape migration",
-      healthChecks: {
-        description:
-          "Literal bracket/extglob characters in bootstrap-extra-files patterns must be escaped after the walker adopted Node glob grammar.",
-        defaultEnabled: true,
-        async detect(ctx) {
-          const { collectExtraBootstrapGlobEscapeFindings } =
-            await import("../commands/doctor-extra-bootstrap-glob-escape-migration.js");
-          return collectExtraBootstrapGlobEscapeFindings(ctx.cfg, ctx.env);
-        },
-      },
-      run: runExtraBootstrapGlobEscapeMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",

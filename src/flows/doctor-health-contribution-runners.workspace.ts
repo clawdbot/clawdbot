@@ -178,21 +178,6 @@ export async function runToolsMdMigrationHealth(ctx: DoctorHealthFlowContext): P
   });
 }
 
-export async function runExtraBootstrapGlobEscapeMigrationHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  const { maybeEscapeExtraBootstrapGlobs } =
-    await import("../commands/doctor-extra-bootstrap-glob-escape-migration.js");
-  const result = await maybeEscapeExtraBootstrapGlobs({
-    cfg: ctx.cfg,
-    shouldRepair: ctx.prompter.shouldRepair,
-    env: ctx.env,
-  });
-  // The doctor:write-config contribution diffs ctx.cfg against cfgForPersistence
-  // and persists the escaped pattern list.
-  ctx.cfg = result.cfg;
-}
-
 export async function runHeartbeatTaskMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeMigrateHeartbeatTasksToCron } =
     await import("../commands/doctor-heartbeat-task-migration.js");

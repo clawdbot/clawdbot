@@ -1,22 +1,16 @@
-// Parity tests for the cooperative extra-bootstrap glob walker. These pin the
-// walker to Node fs.glob's platform case rules and symlink-descent semantics,
-// the two spots where a hand-rolled walker most easily drifts from fs.glob and
-// silently drops a configured bootstrap file. Symlink cases compare the walker's
-// match set directly against `fs.glob` over the same real tree so the fixtures
-// stay anchored to actual Node behavior rather than a transcribed expectation.
+// Behavior tests for fs.glob-backed extra-bootstrap pattern resolution. The
+// resolver delegates matching to Node fs.glob and only adds a workspace
+// realpath-containment filter, so these cases compare the resolver's match set
+// directly against `fs.glob` over the same real tree (the parity oracle) and pin
+// the two places the containment filter must diverge from fs.glob: a match whose
+// realpath escapes the workspace, and a literal-named symlink pointing outside.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveExtraBootstrapPatternPaths } from "./workspace-extra-bootstrap-walker.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
-
-const realPlatform = process.platform;
-
-function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", { value: platform, configurable: true });
-}
 
 async function nodeGlobRelative(workspaceDir: string, pattern: string): Promise<string[]> {
   const matches: string[] = [];
@@ -26,7 +20,7 @@ async function nodeGlobRelative(workspaceDir: string, pattern: string): Promise<
   return matches.toSorted();
 }
 
-describe("resolveExtraBootstrapPatternPaths platform case parity", () => {
+describe("resolveExtraBootstrapPatternPaths glob semantics", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
 
@@ -46,64 +40,10 @@ describe("resolveExtraBootstrapPatternPaths platform case parity", () => {
     }
   });
 
-  afterEach(() => {
-    setPlatform(realPlatform);
-  });
-
-  // Node fs.glob builds its Minimatch with `nocase: isWindows || isMacOS` plus
-  // `nocaseMagicOnly`, so a case-differing MAGIC segment like `**/*.MD` still
-  // matches `AGENTS.md` on macOS/Windows but not on Linux. Without this the
-  // walker would silently drop the file on mac/win where fs.glob would have
-  // matched it.
-  for (const platform of ["darwin", "win32"] as const) {
-    it(`matches a case-differing magic segment on ${platform}`, async () => {
-      const workspaceDir = await createWorkspaceDir(`nocase-${platform}`);
-      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents", "utf-8");
-
-      setPlatform(platform);
-      const matches = await resolveExtraBootstrapPatternPaths(workspaceDir, "**/*.MD", false);
-
-      expect(matches).toStrictEqual(["AGENTS.md"]);
-    });
-  }
-
-  it("does not match a case-differing magic segment on linux", async () => {
-    const workspaceDir = await createWorkspaceDir("nocase-linux");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents", "utf-8");
-
-    setPlatform("linux");
-    const matches = await resolveExtraBootstrapPatternPaths(workspaceDir, "**/*.MD", false);
-
-    expect(matches).toStrictEqual([]);
-  });
-
-  it("keeps literal path segments case-sensitive even on macOS (nocaseMagicOnly)", async () => {
-    // nocase applies only to the magic portion of the pattern; a literal segment
-    // must still match byte-for-byte, matching Node. `**/AGENTS.MD` carries a
-    // magic `**` (so it routes through the walker) but the literal `AGENTS.MD`
-    // must not match the on-disk `AGENTS.md` even where nocase is on, while the
-    // fully-magic `**/*.MD` must.
-    const workspaceDir = await createWorkspaceDir("literal-case");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents", "utf-8");
-
-    setPlatform("darwin");
-    const literalSegment = await resolveExtraBootstrapPatternPaths(
-      workspaceDir,
-      "**/AGENTS.MD",
-      false,
-    );
-    const magicSegment = await resolveExtraBootstrapPatternPaths(workspaceDir, "**/*.MD", false);
-
-    expect(literalSegment).toStrictEqual([]);
-    expect(magicSegment).toStrictEqual(["AGENTS.md"]);
-  });
-
   it("matches Node fs.glob for optimized globstar parent traversal", async () => {
-    // Regression: without optimizationLevel: 2 (which Node fs.glob's createMatcher
-    // sets) the walk matcher classifies `*/**/../b/AGENTS.md` such that it matches
-    // nothing, while real fs.glob returns `a/x/b/AGENTS.md`. Mirroring the option
-    // realigns the matcher with fs.glob so a configured bootstrap file is not
-    // silently dropped.
+    // `*/**/../b/AGENTS.md` is a reducible parent-traversal shape fs.glob resolves
+    // to `a/x/b/AGENTS.md`; delegating to fs.glob returns the same set with no
+    // matcher plumbing to keep in sync.
     const workspaceDir = await createWorkspaceDir("optimized-parent");
     await fs.mkdir(path.join(workspaceDir, "a", "x", "b"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "a", "x", "b", "AGENTS.md"), "agents", "utf-8");
@@ -567,10 +507,12 @@ describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
   it.runIf(process.platform !== "win32")(
     "refuses an initial walk root that is a directory symlink escaping the workspace",
     async () => {
-      // Containment guard for the seed/initial root (P1-E): when a pattern's
-      // literal prefix is itself a directory symlink pointing outside the
-      // workspace, the seed frame never passes through resolveSymlinkDescent, so
-      // the walker must reject the external initial root before any readdir.
+      // Containment guard for a pattern whose literal prefix is itself a directory
+      // symlink pointing outside the workspace: fs.glob would follow the link, but
+      // the realpath filter drops every match whose canonical path escapes the
+      // workspace, so the resolver returns nothing. (The loader additionally
+      // rejects this pattern up front via patternWalkRootStaysInWorkspace, surfacing
+      // a security diagnostic — see workspace.load-extra-bootstrap-files.test.ts.)
       const rootDir = await createWorkspaceDir("escape-initial-root");
       const workspaceDir = path.join(rootDir, "workspace");
       const outsideDir = path.join(rootDir, "outside");
@@ -581,28 +523,14 @@ describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
       if (!(await trySymlink(path.join("..", "outside"), linkPath))) {
         return;
       }
-      const outsideRealpath = await fs.realpath(outsideDir);
 
-      const readdirSpy = vi.spyOn(fs, "readdir");
-      try {
-        const matches = await resolveExtraBootstrapPatternPaths(
-          workspaceDir,
-          "outside-link/**/AGENTS.md",
-          false,
-        );
+      const matches = await resolveExtraBootstrapPatternPaths(
+        workspaceDir,
+        "outside-link/**/AGENTS.md",
+        false,
+      );
 
-        expect(matches).toStrictEqual([]);
-        // The reject must happen before any readdir of the escaped root, not as a
-        // later per-file guard: prove readdir never touched the link or its target.
-        for (const call of readdirSpy.mock.calls) {
-          const readPath = call[0] as string;
-          expect(readPath).not.toBe(linkPath);
-          expect(readPath).not.toBe(outsideDir);
-          expect(readPath).not.toBe(outsideRealpath);
-        }
-      } finally {
-        readdirSpy.mockRestore();
-      }
+      expect(matches).toStrictEqual([]);
     },
   );
 

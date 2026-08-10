@@ -41,7 +41,6 @@ import {
   hasGlobPattern,
   patternWalkRootStaysInWorkspace,
   resolveExtraBootstrapPatternPaths,
-  unescapeWorkspacePatternLiteral,
 } from "./workspace-extra-bootstrap-walker.js";
 import {
   assertNoUnmigratedWorkspaceState,
@@ -1455,12 +1454,11 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
           resolvedPaths.add(match);
         }
       } else {
-        // A magic-free pattern is a literal path. Reverse any glob-escape wraps
-        // (e.g. `pkg[[]ab[]]` -> `pkg[ab]`) so a directory whose literal name
-        // contains bracket/extglob characters — escaped by `openclaw doctor
-        // --fix` after the walker adopted Node glob grammar — still opens its
-        // real on-disk path.
-        resolvedPaths.add(unescapeWorkspacePatternLiteral(pattern));
+        // A magic-free pattern is a literal path — a plain path, or a collapsed
+        // single-char class like `pkg[1]` whose `1` is not a metacharacter.
+        // path.resolve below normalizes separators, so the raw pattern opens its
+        // real on-disk path directly.
+        resolvedPaths.add(pattern);
       }
     } catch (error) {
       diagnostics.push({
