@@ -8,13 +8,12 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  computePluginSdkApiBaselineHashFileContent,
   formatPluginSdkApiTypeAlias,
   listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
-  renderPluginSdkApiBaselineModules,
+  writeRenderedPluginSdkApiBaselineArtifacts,
   type PluginSdkApiBaselineRender,
 } from "./api-baseline.js";
 
@@ -124,9 +123,11 @@ function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean
 describe("Plugin SDK API baseline", () => {
   let rendered: PluginSdkApiBaselineRender;
 
+  // Rendering builds a TS program across SDK entrypoints. Loaded CI runners can
+  // exceed the default hook budget; this work is compile-bound, not a hang.
   beforeAll(async () => {
     rendered = await renderPluginSdkApiBaseline({ entrypoints: TEST_ENTRYPOINTS });
-  });
+  }, 300_000);
 
   it("normalizes declaration import paths to repo-relative paths", () => {
     const repoRoot = process.cwd();
@@ -272,40 +273,47 @@ describe("Plugin SDK API baseline", () => {
     expect(rendered.jsonl).not.toContain('"sourceLine":');
   });
 
-  it("renders snapshots independently of entrypoint discovery order", () => {
-    const reverse = renderPluginSdkApiBaselineModules(rendered.baseline.modules.toReversed());
+  it("renders byte-identical JSONL deterministically", async () => {
+    const firstRender = await renderPrivateDeclarationFixture();
+    const secondRender = await renderPrivateDeclarationFixture();
 
-    expect(reverse.json).toBe(rendered.json);
-    expect(reverse.jsonl).toBe(rendered.jsonl);
+    expect(secondRender.jsonl).toBe(firstRender.jsonl);
   });
 
-  it("hashes entrypoints independently so unrelated API changes merge", () => {
-    const target = rendered.baseline.modules[0];
-    expect(target?.exports.length).toBeGreaterThan(0);
-    const changed = renderPluginSdkApiBaselineModules(
-      rendered.baseline.modules.map((moduleSurface) =>
-        moduleSurface === target
-          ? {
-              ...moduleSurface,
-              exports: moduleSurface.exports.map((exportSurface, index) =>
-                index === 0
-                  ? { ...exportSurface, declaration: `${exportSurface.declaration ?? ""} changed` }
-                  : exportSurface,
-              ),
-            }
-          : moduleSurface,
-      ),
-    );
-    const before = computePluginSdkApiBaselineHashFileContent(rendered).split("\n");
-    const after = computePluginSdkApiBaselineHashFileContent(changed).split("\n");
+  it("fails checks on contract drift and passes after write", async () => {
+    const outputDir = tempDirs.make("openclaw-plugin-sdk-api-output-");
+    const contractPath = path.join(outputDir, "plugin-sdk-api-baseline.jsonl");
+    const jsonPath = path.join(outputDir, "plugin-sdk-api-baseline.json");
+    fs.writeFileSync(contractPath, "stale\n");
+    const options = {
+      contractPath,
+      jsonPath,
+      rendered,
+    } as const;
 
-    expect(after[0]).not.toBe(before[0]);
-    expect(after.slice(1)).toEqual(before.slice(1));
+    const drifted = await writeRenderedPluginSdkApiBaselineArtifacts({
+      ...options,
+      check: true,
+    });
+    expect(drifted).toEqual(expect.objectContaining({ changed: true, wrote: false }));
+
+    await writeRenderedPluginSdkApiBaselineArtifacts(options);
+
+    const current = await writeRenderedPluginSdkApiBaselineArtifacts({
+      ...options,
+      check: true,
+    });
+    expect(current).toEqual(expect.objectContaining({ changed: false, wrote: false }));
+    expect(fs.readFileSync(contractPath, "utf8")).toContain(
+      '"importSpecifier":"openclaw/plugin-sdk/agent-harness-runtime"',
+    );
+    expect(fs.readFileSync(jsonPath, "utf8")).toContain(
+      '"generatedBy": "scripts/generate-plugin-sdk-api-baseline.ts"',
+    );
   });
 
   it("captures transitive private declaration changes deterministically", async () => {
     const baseline = await renderPrivateDeclarationFixture();
-    const unchanged = await renderPrivateDeclarationFixture();
     const optionChanged = await renderPrivateDeclarationFixture({ optionalOption: true });
     const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
     const declaration = baseline.baseline.modules[0]?.exports[0];
@@ -323,18 +331,10 @@ describe("Plugin SDK API baseline", () => {
     expect(declaration?.declaration).not.toContain("required: string;");
     expect(declaration?.declaration).not.toContain("value: string;");
     expect(declaration?.declaration).not.toContain("externalOnly: string;");
-    expect(unchanged.json).toBe(baseline.json);
-    expect(unchanged.jsonl).toBe(baseline.jsonl);
-    expect(computePluginSdkApiBaselineHashFileContent(unchanged)).toBe(
-      computePluginSdkApiBaselineHashFileContent(baseline),
-    );
 
     for (const changed of [optionChanged, resultChanged]) {
       expect(changed.baseline.modules[0]?.exports[0]?.declaration).not.toBe(
         declaration?.declaration,
-      );
-      expect(computePluginSdkApiBaselineHashFileContent(changed)).not.toBe(
-        computePluginSdkApiBaselineHashFileContent(baseline),
       );
     }
   });

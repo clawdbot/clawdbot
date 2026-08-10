@@ -2369,6 +2369,8 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
       publishedRunner.indexOf("phase assert-prepublish-requests node"),
     );
+    expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
+    expect(publishedRunner).toContain('"$clawhub_security_mode"');
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
       publishedRunner.indexOf("phase doctor run_doctor"),
     );

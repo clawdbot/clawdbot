@@ -21,6 +21,7 @@ import {
   type WizardStep,
 } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
+import { createAdmittedWizardSession, SETUP_ADMISSION_BUSY_MESSAGE } from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -109,14 +110,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
-    const running = context.findRunningWizard();
-    if (running) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
-      return;
-    }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
-    const session =
+    const createSession = () =>
       flow === "channels"
         ? new WizardSession((prompter, _signal, wizardSession) =>
             runHostedWizard((runtime) =>
@@ -146,6 +142,15 @@ export const wizardHandlers: GatewayRequestHandlers = {
               ),
             ),
           );
+    const session = await createAdmittedWizardSession(createSession, flow === "setup");
+    if (!session) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, { retryable: true }),
+      );
+      return;
+    }
     retainGatewayWorkUntilSettled(session);
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();

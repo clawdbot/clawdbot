@@ -52,6 +52,7 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { resolveLiveEditToolKind } from "./embedded-agent-live-edit-diff.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -448,10 +449,6 @@ function buildToolItemTitle(toolName: string, meta?: string): string {
 
 function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
-}
-
-function isPatchToolName(toolName: string): boolean {
-  return toolName === "apply_patch";
 }
 
 function buildCommandItemId(toolCallId: string): string {
@@ -1087,6 +1084,7 @@ export function handleToolExecutionStart(
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolName(evt.toolName);
+  ctx.state.liveEditDiffStateById?.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
       ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
@@ -1266,7 +1264,7 @@ export function handleToolExecutionStart(
         toolCallId,
         startedAt,
       });
-    } else if (isPatchToolName(toolName)) {
+    } else if (resolveLiveEditToolKind(toolName) === "patch") {
       emitTrackedItemEvent(ctx, {
         itemId: buildPatchItemId(toolCallId),
         phase: "start",
@@ -1484,6 +1482,7 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
+  ctx.state.liveEditDiffStateById?.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
@@ -1921,7 +1920,7 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  if (isPatchToolName(toolName)) {
+  if (resolveLiveEditToolKind(toolName) === "patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;

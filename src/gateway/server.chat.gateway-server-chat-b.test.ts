@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -35,6 +36,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -5062,6 +5064,171 @@ describe("gateway server chat", () => {
         __openclaw: { id: "msg-huge", truncated: true, reason: "oversized" },
       });
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+    });
+  });
+
+  test("projects persisted media facts through Gateway history and sessions_history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const invalidClaims = [
+        "media://inbound/nested/file.png",
+        "media://inbound/nested%2Ffile.png",
+        "media://inbound/nested%5Cfile.png",
+        "media://inbound/file%00.png",
+        "media://inbound/",
+        "media://inbound/.",
+        "media://inbound/..",
+        ["media://user", "password@inbound/claim.png"].join(":"),
+        "media://inbound/claim.png?signature=private-secret",
+        "media://inbound/claim.png#private-fragment",
+      ];
+      const persisted = buildPersistedUserTurnMessage({
+        text: "inspect mixed attachments",
+        timestamp: Date.now(),
+        media: [
+          {
+            kind: "image",
+            path: "/private/media/local-image.png",
+            workspaceDir: "/private/workspace",
+            contentType: "image/png",
+            fileName: "local-image.png",
+            sizeBytes: 42,
+            width: 640,
+            height: 480,
+            messageId: "local-source-id",
+          },
+          {
+            kind: "audio",
+            url: "https://media-user@media.example/audio.wav?signature=private-signature#audio-fragment",
+            contentType: "audio/wav",
+            fileName: "remote-audio.wav",
+            durationMs: 1234,
+          },
+          {
+            kind: "video",
+            path: "media://inbound/video-claim",
+            contentType: "video/mp4",
+            fileName: "managed-video.mp4",
+            durationMs: 5678,
+          },
+          {
+            kind: "document",
+            url: "not a media reference",
+            contentType: "application/pdf",
+            fileName: "metadata-only.pdf",
+          },
+          ...invalidClaims.map((claim, index) => ({
+            kind: "image" as const,
+            path: claim,
+            contentType: "image/png",
+            fileName: `invalid-claim-${index}.png`,
+          })),
+        ],
+      }) as unknown as Record<string, unknown>;
+      const metadata = persisted["__openclaw"] as Record<string, unknown>;
+      const facts = metadata.media as Array<Record<string, unknown>>;
+      Object.assign(expectDefined(facts[0], "local media fact"), {
+        data: "private-inline-data",
+        blob: "private-inline-blob",
+        filePath: "/private/media/alternate-image.png",
+        source: "telegram-attachment-1",
+      });
+      metadata.upstreamUserText = "private upstream prompt";
+      metadata.keepMe = { durable: true };
+      await writeMainSessionTranscript([{ id: "persisted-media", message: persisted }]);
+
+      const historyMessages = await fetchHistoryMessages(ws);
+      const tool = createSessionsHistoryTool({
+        config: {},
+        callGateway: async <T = Record<string, unknown>>(request: {
+          method: string;
+          params?: unknown;
+        }) => {
+          const response = await rpcReq<T & Record<string, unknown>>(
+            ws,
+            request.method,
+            request.params,
+          );
+          expect(response.ok).toBe(true);
+          return expectDefined(response.payload, `${request.method} payload`);
+        },
+      });
+      const toolResult = await tool.execute("persisted-media", { sessionKey: "main" });
+      const sessionsHistory = (toolResult.details as { messages: unknown[] }).messages;
+
+      for (const [boundary, messages] of [
+        ["chat.history", historyMessages],
+        ["sessions_history", sessionsHistory],
+      ] as const) {
+        expect(messages, boundary).toHaveLength(1);
+        expect(messages[0], boundary).toMatchObject({
+          role: "user",
+          content: "inspect mixed attachments",
+          __openclaw: {
+            keepMe: { durable: true },
+            media: [
+              {
+                kind: "image",
+                contentType: "image/png",
+                fileName: "local-image.png",
+                sizeBytes: 42,
+                width: 640,
+                height: 480,
+                messageId: "local-source-id",
+                source: "telegram-attachment-1",
+              },
+              {
+                kind: "audio",
+                url: "https://media.example/audio.wav",
+                contentType: "audio/wav",
+                fileName: "remote-audio.wav",
+                durationMs: 1234,
+              },
+              {
+                kind: "video",
+                path: "media://inbound/video-claim",
+                contentType: "video/mp4",
+                fileName: "managed-video.mp4",
+                durationMs: 5678,
+              },
+              {
+                kind: "document",
+                contentType: "application/pdf",
+                fileName: "metadata-only.pdf",
+              },
+              ...invalidClaims.map((_, index) => ({
+                kind: "image",
+                contentType: "image/png",
+                fileName: `invalid-claim-${index}.png`,
+              })),
+            ],
+          },
+        });
+        const projectedMedia = (
+          (messages[0] as { __openclaw?: { media?: Array<Record<string, unknown>> } })["__openclaw"]
+            ?.media ?? []
+        ).map((fact) => fact.path ?? fact.url ?? null);
+        expect(projectedMedia, boundary).toEqual([
+          null,
+          "https://media.example/audio.wav",
+          "media://inbound/video-claim",
+          ...Array.from({ length: invalidClaims.length + 1 }, () => null),
+        ]);
+        const serialized = JSON.stringify(messages);
+        for (const privateValue of [
+          "/private/media",
+          "/private/workspace",
+          "private-inline-data",
+          "private-inline-blob",
+          "media-user",
+          "private-signature",
+          "audio-fragment",
+          "private upstream prompt",
+          "not a media reference",
+        ]) {
+          expect(serialized, `${boundary}: ${privateValue}`).not.toContain(privateValue);
+        }
+      }
     });
   });
 

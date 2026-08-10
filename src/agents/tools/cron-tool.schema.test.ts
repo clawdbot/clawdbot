@@ -2,6 +2,7 @@ import {
   findLlamacppGbnfSchemaViolations,
   normalizeToolParameterSchema,
 } from "@openclaw/ai/internal/openai";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
@@ -205,16 +206,27 @@ describe("createCronToolSchema", () => {
 
   it("advertises numeric cron params with runtime bounds", () => {
     for (const path of ["job.schedule.everyMs", "patch.schedule.everyMs"]) {
-      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+      expect(propertyAt(schemaRecord, path)).toMatchObject({
+        type: "integer",
+        minimum: 1,
+        maximum: MAX_DATE_TIMESTAMP_MS,
+      });
     }
-    for (const path of [
-      "job.schedule.anchorMs",
-      "job.schedule.staggerMs",
-      "patch.schedule.anchorMs",
-      "patch.schedule.staggerMs",
-      "job.failureAlert.cooldownMs",
-      "patch.failureAlert.cooldownMs",
-    ]) {
+    for (const path of ["job.schedule.anchorMs", "patch.schedule.anchorMs"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_DATE_TIMESTAMP_MS,
+      });
+    }
+    for (const path of ["job.schedule.staggerMs", "patch.schedule.staggerMs"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_DATE_TIMESTAMP_MS,
+      });
+    }
+    for (const path of ["job.failureAlert.cooldownMs", "patch.failureAlert.cooldownMs"]) {
       expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 0 });
     }
     for (const path of ["job.failureAlert.after", "patch.failureAlert.after"]) {
@@ -247,18 +259,95 @@ describe("createCronToolSchema", () => {
     }
   });
 
-  it("job.delivery exposes mode, channel, to, threadId, bestEffort, accountId, failureDestination", () => {
+  it("job.delivery exposes all supported delivery destinations", () => {
     expect(keysAt(schemaRecord, "job.delivery")).toEqual(
       [
         "accountId",
         "bestEffort",
         "channel",
+        "completionDestination",
         "failureDestination",
         "mode",
         "threadId",
         "to",
       ].toSorted(),
     );
+    const jobCompletion = propertyAt(schemaRecord, "job.delivery.completionDestination");
+    expect(keysAt(schemaRecord, "job.delivery.completionDestination")).toEqual(["mode", "to"]);
+    expect(jobCompletion?.required).toEqual(["mode", "to"]);
+    expect(propertyAt(schemaRecord, "job.delivery.completionDestination.to")).toMatchObject({
+      type: "string",
+      minLength: 1,
+    });
+    const patchCompletion = propertyAt(schemaRecord, "patch.delivery.completionDestination");
+    const patchCompletionObject = (
+      patchCompletion?.anyOf as Array<Record<string, unknown>> | undefined
+    )?.find((entry) => entry.type === "object");
+    expect(
+      Object.keys(
+        (patchCompletionObject?.properties as Record<string, unknown> | undefined) ?? {},
+      ).toSorted(),
+    ).toEqual(["mode", "to"]);
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: {
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "agentTurn", message: "run" },
+          delivery: {
+            mode: "announce",
+            completionDestination: { mode: "webhook", to: "https://example.invalid/done" },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        id: "job-1",
+        patch: { delivery: { completionDestination: null } },
+      }),
+    ).toBe(true);
+    for (const completionDestination of [
+      null,
+      {},
+      { mode: "webhook" },
+      { to: "https://example.invalid/done" },
+      { mode: "announce", to: "https://example.invalid/done" },
+      { mode: "webhook", to: "" },
+      "https://example.invalid/done",
+    ]) {
+      expect(
+        Value.Check(schema, {
+          action: "add",
+          job: {
+            schedule: { kind: "every", everyMs: 60_000 },
+            payload: { kind: "agentTurn", message: "run" },
+            delivery: { mode: "announce", completionDestination },
+          },
+        }),
+      ).toBe(false);
+    }
+    for (const providerSchema of [
+      providerSchemaRecord,
+      jjccGeminiSchemaRecord,
+      llamacppSchemaRecord,
+    ]) {
+      expect(propertyAt(providerSchema, "job.delivery.completionDestination")).toMatchObject({
+        type: "object",
+        required: ["mode", "to"],
+      });
+    }
+    for (const providerSchema of [providerSchemaRecord, jjccGeminiSchemaRecord]) {
+      expect(propertyAt(providerSchema, "patch.delivery.completionDestination")).toMatchObject({
+        type: "object",
+        required: ["mode", "to"],
+        description: expect.stringContaining("null clears"),
+      });
+    }
+    expect(
+      propertyAt(llamacppSchemaRecord, "patch.delivery.completionDestination")?.anyOf,
+    ).toContainEqual({ type: "null" });
   });
 
   it("job.payload exposes conversational and script payload fields", () => {

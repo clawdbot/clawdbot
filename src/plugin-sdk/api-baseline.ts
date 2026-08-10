@@ -1,5 +1,4 @@
-// API baseline helpers hash public SDK exports for contract drift checks.
-import { createHash } from "node:crypto";
+// API baseline helpers render public SDK exports for contract drift checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +8,10 @@ import {
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
+import {
+  diffPluginSdkApiBaselineContract,
+  type PluginSdkApiBaselineContractDiff,
+} from "./api-baseline-contract.js";
 import {
   attachPluginSdkDeclarationClosures,
   createDeclarationClosureRenderer,
@@ -90,22 +93,21 @@ export type PluginSdkApiBaselineRender = {
 
 /** Result returned when writing SDK API baseline artifacts. */
 export type PluginSdkApiBaselineWriteResult = {
-  /** True when the generated contract manifest differs from disk. */
+  /** True when the generated JSONL contract differs from disk. */
   changed: boolean;
+  /** Bounded record-level diff when a check finds contract drift. */
+  contractDiff: PluginSdkApiBaselineContractDiff | null;
+  /** Committed JSONL contract path. */
+  contractPath: string;
   /** True when generated artifacts were actually written. */
   wrote: boolean;
   /** JSON baseline artifact path. */
   jsonPath: string;
-  /** JSONL statefile artifact path. */
-  statefilePath: string;
-  /** Per-record SHA-256 contract manifest path. */
-  hashPath: string;
 };
 
 const GENERATED_BY = "scripts/generate-plugin-sdk-api-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.json";
-const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
-const DEFAULT_HASH_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.sha256";
+const DEFAULT_CONTRACT_OUTPUT = "docs/.generated/plugin-sdk-api-baseline.jsonl";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -675,7 +677,7 @@ export async function renderPluginSdkApiBaseline(params?: {
     repoRoot,
     entrypoints,
   );
-  const modules = entrypoints.map((entrypoint) =>
+  const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
     buildModuleSurface({
       checker,
       declarationClosure,
@@ -718,22 +720,6 @@ async function loadCurrentFile(filePath: string): Promise<string | null> {
   }
 }
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
-
-/** Build a mergeable per-entrypoint sha256 manifest for the Plugin SDK API contract. */
-export function computePluginSdkApiBaselineHashFileContent(
-  rendered: PluginSdkApiBaselineRender,
-): string {
-  return `${rendered.baseline.modules
-    .map((moduleSurface) => {
-      const label = `module/${encodeURIComponent(moduleSurface.entrypoint)}`;
-      return `${sha256(JSON.stringify(moduleSurface))}  ${label}`;
-    })
-    .join("\n")}\n`;
-}
-
 function validateMetadata(): void {
   const canonicalEntrypoints = new Set<string>(publicPluginSdkEntrypoints);
   const metadataEntrypoints = new Set<string>(Object.keys(pluginSdkDocMetadata));
@@ -746,44 +732,54 @@ function validateMetadata(): void {
   }
 }
 
-/** Write or check SDK API contract artifacts used by CI and release checks. */
-export async function writePluginSdkApiBaselineArtifacts(params?: {
-  repoRoot?: string;
+/** Compare or write an already-rendered SDK API contract. */
+export async function writeRenderedPluginSdkApiBaselineArtifacts(params: {
   check?: boolean;
-  jsonPath?: string;
-  statefilePath?: string;
-  hashPath?: string;
+  contractPath: string;
+  jsonPath: string;
+  rendered: PluginSdkApiBaselineRender;
 }): Promise<PluginSdkApiBaselineWriteResult> {
-  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
-  const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
-  const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
-  const rendered = await renderPluginSdkApiBaseline({ repoRoot });
-  const nextHashContent = computePluginSdkApiBaselineHashFileContent(rendered);
-  const currentHashContent = await loadCurrentFile(hashPath);
-  const changed = currentHashContent !== nextHashContent;
+  const currentContract = await loadCurrentFile(params.contractPath);
+  const changed = currentContract !== params.rendered.jsonl;
 
-  if (params?.check) {
+  if (params.check) {
     return {
       changed,
+      contractDiff: changed
+        ? diffPluginSdkApiBaselineContract(currentContract, params.rendered.jsonl)
+        : null,
+      contractPath: params.contractPath,
       wrote: false,
-      jsonPath,
-      statefilePath,
-      hashPath,
+      jsonPath: params.jsonPath,
     };
   }
 
-  await fs.mkdir(path.dirname(hashPath), { recursive: true });
-  await fs.writeFile(hashPath, nextHashContent, "utf8");
-  await fs.mkdir(path.dirname(jsonPath), { recursive: true });
-  await fs.writeFile(jsonPath, rendered.json, "utf8");
-  await fs.writeFile(statefilePath, rendered.jsonl, "utf8");
+  await fs.mkdir(path.dirname(params.contractPath), { recursive: true });
+  await fs.writeFile(params.contractPath, params.rendered.jsonl, "utf8");
+  await fs.mkdir(path.dirname(params.jsonPath), { recursive: true });
+  await fs.writeFile(params.jsonPath, params.rendered.json, "utf8");
 
   return {
     changed,
+    contractDiff: null,
+    contractPath: params.contractPath,
     wrote: true,
-    jsonPath,
-    statefilePath,
-    hashPath,
+    jsonPath: params.jsonPath,
   };
+}
+
+/** Render, then write or check SDK API contract artifacts used by CI and release checks. */
+export async function writePluginSdkApiBaselineArtifacts(params?: {
+  repoRoot?: string;
+  check?: boolean;
+  contractPath?: string;
+  jsonPath?: string;
+}): Promise<PluginSdkApiBaselineWriteResult> {
+  const repoRoot = params?.repoRoot ?? resolveRepoRoot();
+  return writeRenderedPluginSdkApiBaselineArtifacts({
+    check: params?.check,
+    contractPath: path.resolve(repoRoot, params?.contractPath ?? DEFAULT_CONTRACT_OUTPUT),
+    jsonPath: path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT),
+    rendered: await renderPluginSdkApiBaseline({ repoRoot }),
+  });
 }

@@ -149,14 +149,16 @@ export function createTelegramTextSender(config: {
       withTelegramNativeQuoteFallback({
         label,
         requestParams,
-        request: (effectiveParams, retryLabel) =>
-          requestWithChatNotFound(
+        request: async (effectiveParams, retryLabel) => {
+          await opts.onPlatformSendDispatch?.();
+          return await requestWithChatNotFound(
             () =>
               Object.keys(effectiveParams).length > 0
                 ? api.sendMessage(chatId, messageText, effectiveParams)
                 : api.sendMessage(chatId, messageText),
             retryLabel,
-          ),
+          );
+        },
       });
     const requestPlain = (label: string) =>
       requestSendMessage(label, chunk.plainText, plainParams ?? {});

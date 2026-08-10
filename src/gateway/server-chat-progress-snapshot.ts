@@ -25,7 +25,9 @@ export function updateChatRunProgressSnapshot(
         ? data.id.trim()
         : "";
   const isTool =
-    event.stream === "tool" && Boolean(toolCallId) && ["start", "update", "result"].includes(phase);
+    event.stream === "tool" &&
+    Boolean(toolCallId) &&
+    ["start", "input_delta", "update", "result"].includes(phase);
   const isPreamble = event.stream === "item" && data.kind === "preamble";
   if (!isTool && !isPreamble) {
     return snapshot;
@@ -59,7 +61,7 @@ export function updateChatRunProgressSnapshot(
       if (candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
       }
-      return phase !== "update" || candidate.data?.phase === "update";
+      return phase === "start" || phase === "result" || candidate.data?.phase === phase;
     });
     if (phase === "result") {
       return next;
@@ -81,6 +83,7 @@ export function updateChatRunProgressSnapshot(
         ...(phase === "update" && Object.hasOwn(data, "partialResult")
           ? { partialResult: data.partialResult }
           : {}),
+        ...(phase === "input_delta" && Object.hasOwn(data, "diff") ? { diff: data.diff } : {}),
       }
     : {
         kind: "preamble",
