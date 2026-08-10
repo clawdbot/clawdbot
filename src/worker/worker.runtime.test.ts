@@ -757,6 +757,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       },
     },
     assignment: {
+      agentId: "worker-agent",
       runId: RUN_ID,
       operationalRunInstance: createOperationalRunInstanceRef(RUN_ID),
       agentRuntimeIdentityToken: "test-agent-runtime-token",

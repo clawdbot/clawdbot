@@ -333,6 +333,7 @@ class ComposedGatewayHarness {
         handshake: HANDSHAKE,
       },
       assignment: {
+        agentId: "worker-agent",
         runId: params.runId ?? RUN_ID,
         operationalRunInstance: createOperationalRunInstanceRef(params.runId ?? RUN_ID),
         agentRuntimeIdentityToken: "test-agent-runtime-token",

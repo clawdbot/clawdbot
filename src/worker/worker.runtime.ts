@@ -124,6 +124,7 @@ export async function runWorkerDescriptor(
     try {
       turnStarted = true;
       await runWorkerEmbeddedTurn({
+        agentId: descriptor.assignment.agentId,
         operationalRunInstance: descriptor.assignment.operationalRunInstance,
         agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
         cwd: workspaceDir,

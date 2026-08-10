@@ -27,7 +27,6 @@ import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
@@ -69,6 +68,7 @@ type WorkerEmbeddedLiveClient = {
 };
 
 type RunWorkerEmbeddedTurnParams = {
+  agentId: string;
   operationalRunInstance: OperationalRunInstanceRef;
   agentRuntimeIdentityToken: string;
   cwd: string;
@@ -160,7 +160,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       ask: "off",
       config: WORKER_TOOL_CONFIG,
       commandHighlighting: false,
-      agentId: DEFAULT_AGENT_ID,
+      agentId: params.agentId,
       allowBackground: true,
       scopeKey: params.sessionKey,
       sessionKey: params.sessionKey,
@@ -186,7 +186,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         modelProvider: params.modelRef.provider,
         modelId: params.modelRef.model,
         hookContext: {
-          agentId: DEFAULT_AGENT_ID,
+          agentId: params.agentId,
           config: WORKER_TOOL_CONFIG,
           cwd: params.cwd,
           workspaceDir: params.cwd,
@@ -196,14 +196,14 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           requester: { senderIsOwner: true },
           loopDetection: resolveToolLoopDetectionConfig({
             cfg: WORKER_TOOL_CONFIG,
-            agentId: DEFAULT_AGENT_ID,
+            agentId: params.agentId,
           }),
         },
-        agentId: DEFAULT_AGENT_ID,
+        agentId: params.agentId,
       }).filter((tool) => localToolNameSet.has(tool.name));
       const localTools = unboundLocalTools.map((tool) =>
         wrapToolWithGatewayCallerIdentity(tool, {
-          agentId: DEFAULT_AGENT_ID,
+          agentId: params.agentId,
           sessionKey: params.sessionKey,
           operationalRunInstance: params.operationalRunInstance,
           signedAgentRuntimeIdentityToken: params.agentRuntimeIdentityToken,

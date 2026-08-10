@@ -349,6 +349,7 @@ async function executeWorkerTurn(params: {
           handshake: environment.bootstrapReceipt,
         },
         assignment: {
+          agentId: placement.agentId,
           operationalRunInstance: admittedRunContext.operationalRunInstance,
           agentRuntimeIdentityToken,
           runId: turn.runId,

@@ -204,8 +204,8 @@ describe("worker turn launcher", () => {
   function seedActivePlacement(): void {
     let placement = placements.startDispatch({
       sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
+      sessionKey: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
     });
     placement = placements.transition({
       sessionId: SESSION_ID,
@@ -381,13 +381,13 @@ describe("worker turn launcher", () => {
         operationalRunInstance: createOperationalRunInstanceRef(runId),
         facts: {
           runId,
-          agentId: "main",
+          agentId: sessionTarget.agentId,
           ingress: { kind: "worker", boundary: "test.worker-turn", state: "present" },
         },
       }),
       sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
+      sessionKey: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
       messageChannel: "telegram",
       currentMessagingTarget: "chat-worker",
       agentAccountId: "worker-account",
@@ -675,11 +675,21 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
-  it("reports keep-local workspace conflicts and releases its claim", async () => {
+  it("carries a non-main placement identity while reporting keep-local conflicts", async () => {
     let admissionWork: ExecutionIdentityAdmissionWork | undefined;
     cleanupAdmissionSink = configureExecutionIdentityAdmissionSink((work) => {
       admissionWork = work;
       return true;
+    });
+    sessionTarget = {
+      ...sessionTarget,
+      agentId: "worker-agent",
+      sessionKey: "agent:worker-agent:worker-turn",
+    };
+    sessionFile = sessionTarget.sessionKey;
+    await upsertSessionEntry(sessionTarget, {
+      sessionId: SESSION_ID,
+      updatedAt: Date.now(),
     });
     const initialized = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
       timeoutMs: 10_000,
@@ -826,8 +836,8 @@ describe("worker turn launcher", () => {
     const result = await provider.executeTurn(
       {
         sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+        sessionKey: sessionTarget.sessionKey,
+        agentId: sessionTarget.agentId,
         runId: "run-worker-turn",
       },
       {
@@ -843,8 +853,8 @@ describe("worker turn launcher", () => {
     expect(runLocal).not.toHaveBeenCalled();
     expect(resolveWorkspacePath).toHaveBeenCalledWith({
       sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
+      sessionKey: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
     });
     expect(reconcileWorkspace).toHaveBeenCalledWith(expect.objectContaining({ localPath: root }));
     const conflictSummary =
@@ -874,6 +884,7 @@ describe("worker turn launcher", () => {
     ).toBe(true);
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
+    expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
     expect(descriptor?.version).toBe(2);
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
@@ -883,13 +894,14 @@ describe("worker turn launcher", () => {
     );
     expect(verifiedRuntimeIdentity?.executionIdentity?.runId).toBe("run-worker-turn");
     expect(verifiedRuntimeIdentity).toMatchObject({
-      agentId: "main",
-      sessionKey: SESSION_KEY,
+      agentId: sessionTarget.agentId,
+      sessionKey: sessionTarget.sessionKey,
       turnSourceChannel: "telegram",
       turnSourceTo: "chat-worker",
       turnSourceAccountId: "worker-account",
       turnSourceThreadId: "thread-worker",
     });
+    expect(descriptor?.assignment.agentId).toBe(verifiedRuntimeIdentity?.agentId);
     expect(
       verifiedRuntimeIdentity &&
         createAgentRuntimeApprovalAuthorityValidator(placements)(verifiedRuntimeIdentity),

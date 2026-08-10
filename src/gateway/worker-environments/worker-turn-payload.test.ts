@@ -97,6 +97,7 @@ function buildDescriptor(
       },
     },
     assignment: {
+      agentId: "main",
       operationalRunInstance,
       agentRuntimeIdentityToken,
       runId: "run",
