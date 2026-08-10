@@ -47,7 +47,6 @@ describe("managed image actions Gateway E2E", () => {
     if (!block || typeof block.artifactId !== "string" || typeof block.url !== "string") {
       throw new Error("managed image fixture did not produce an artifact");
     }
-
     const sessionId = "managed-image-actions-session";
     const transcriptPath = path.join(stateDir, `${sessionId}.jsonl`);
     const timestamp = new Date().toISOString();
