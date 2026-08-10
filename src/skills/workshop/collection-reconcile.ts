@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sha256Hex } from "../../infra/crypto-digest.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { PluginHookSkillArtifact } from "../../plugins/hook-types.js";
@@ -25,8 +23,13 @@ import {
   assertCollectionReadsCurrent,
   assertResultCollectionBytes,
 } from "./collection-byte-limits.js";
+import {
+  canonicalSkillCollectionWorkspace,
+  resolveSkillCollectionBackupRoot,
+} from "./collection-paths.js";
 import { validateSkillCollectionPlan } from "./collection-plan.js";
 import { recordSkillCollectionReviewSuccess } from "./collection-review-state.js";
+import { rollbackSkillCollectionMutation } from "./collection-rollback.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
@@ -36,7 +39,6 @@ import { withSkillCollectionLock } from "./target-lock.js";
 import { assertWritableSkillTarget } from "./workspace-skill-read.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
-const BACKUP_REL_DIR = path.join("skill-workshop", "collection-backups");
 export const MAX_RECONCILED_SKILLS = 200;
 export const MAX_RECONCILED_SKILL_BYTES = 240_000;
 
@@ -130,7 +132,7 @@ export async function reconcileSkillCollection(params: {
   approvedSkillNamesByAgent?: readonly ReadonlySet<string>[];
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionReconcileResult> {
-  const workspaceDir = path.resolve(params.workspaceDir);
+  const workspaceDir = canonicalSkillCollectionWorkspace(params.workspaceDir);
   const commit = await withSkillCollectionLock(
     workspaceDir,
     async () => {
@@ -156,7 +158,7 @@ export async function reconcileSkillCollection(params: {
         MAX_RECONCILED_SKILL_BYTES,
       );
       if (plan.every((entry) => entry.action === "keep")) {
-        const backupRoot = collectionBackupRoot(workspaceDir, params.env);
+        const backupRoot = resolveSkillCollectionBackupRoot(workspaceDir, params.env);
         let backupId = await latestCommittedBackupId(backupRoot);
         if (!backupId) {
           const backup = await createCollectionBackup({
@@ -227,9 +229,12 @@ export async function reconcileSkillCollection(params: {
         await discardPendingCollectionBackup(backup);
         throw error;
       }
+      const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
+      const droppedSkills: WritableSkillCollectionEntry[] = [];
       try {
         for (const mutation of prepared) {
           await applyWorkspaceSkillMutation(mutation);
+          appliedWrites.push(mutation);
         }
         for (const entry of plan) {
           if (entry.action !== "drop") {
@@ -237,14 +242,16 @@ export async function reconcileSkillCollection(params: {
           }
           const skill = currentByName.get(entry.name)!;
           await removeSkillDirectory(workspaceDir, skill.baseDir);
+          droppedSkills.push(skill);
         }
         await commitCollectionBackup(workspaceDir, backup);
       } catch (error) {
         try {
-          await restoreCollectionBackup({
+          await rollbackSkillCollectionMutation({
             workspaceDir,
             backupDir: backup.backupDir,
-            manifest: backup.manifest,
+            appliedWrites,
+            droppedSkills,
           });
         } catch (restoreError) {
           throw new Error(
@@ -319,11 +326,11 @@ export async function restoreLatestSkillCollectionBackup(params: {
   workspaceDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionRestoreResult> {
-  const workspaceDir = path.resolve(params.workspaceDir);
+  const workspaceDir = canonicalSkillCollectionWorkspace(params.workspaceDir);
   const commit = await withSkillCollectionLock(
     workspaceDir,
     async () => {
-      const backupRoot = collectionBackupRoot(workspaceDir, params.env);
+      const backupRoot = resolveSkillCollectionBackupRoot(workspaceDir, params.env);
       if (!(await pathExists(backupRoot))) {
         throw new Error("No skill collection backup is available.");
       }
@@ -479,7 +486,7 @@ async function createCollectionBackup(params: {
   backupRoot: string;
   manifest: CollectionBackupManifest;
 }> {
-  const backupRoot = collectionBackupRoot(params.workspaceDir, params.env);
+  const backupRoot = resolveSkillCollectionBackupRoot(params.workspaceDir, params.env);
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
@@ -597,7 +604,7 @@ async function readCollectionBackupManifest(params: {
     record.id !== params.backupId ||
     typeof record.createdAt !== "string" ||
     typeof record.workspaceDir !== "string" ||
-    path.resolve(record.workspaceDir) !== params.workspaceDir ||
+    canonicalSkillCollectionWorkspace(record.workspaceDir) !== params.workspaceDir ||
     !resultSkillHashes ||
     Object.keys(resultSkillHashes).some((relativeDir) => !resultSkillDirs.includes(relativeDir))
   ) {
@@ -673,14 +680,6 @@ function readBackupSkillDirs(value: unknown, label: string, workspaceDir: string
     }
   }
   return [...new Set(value)];
-}
-
-function collectionBackupRoot(workspaceDir: string, env?: NodeJS.ProcessEnv): string {
-  return path.join(
-    resolveStateDir(env),
-    BACKUP_REL_DIR,
-    sha256Hex(path.resolve(workspaceDir)).slice(0, 16),
-  );
 }
 
 async function latestCommittedBackupId(backupRoot: string): Promise<string | undefined> {

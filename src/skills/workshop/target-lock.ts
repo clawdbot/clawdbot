@@ -1,5 +1,5 @@
-import { canonicalizePath } from "../../agents/utils/paths.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import { canonicalSkillCollectionWorkspace } from "./collection-paths.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import {
   databaseOptions,
@@ -21,7 +21,7 @@ export async function withSkillCollectionLock<T>(
   return await withOpenClawStateLease(
     {
       scope: "skill-collection",
-      key: hashSkillProposalContent(canonicalizePath(workspaceDir)),
+      key: hashSkillProposalContent(canonicalSkillCollectionWorkspace(workspaceDir)),
       database: { scope: "shared", options: databaseOptions(options) },
       leaseMs: COLLECTION_LEASE_MS,
       waitMs: TARGET_LEASE_WAIT_MS,

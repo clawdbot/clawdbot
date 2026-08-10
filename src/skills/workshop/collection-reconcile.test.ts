@@ -440,6 +440,40 @@ describe("skill collection reconciliation", () => {
     expect(getArchivedSkillFiles({ env: testState.env })).toEqual(new Set([skillFile]));
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
   });
+
+  it("preserves a concurrent edit when backup commit and rollback fail", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Original procedure", body: "# Original\n" },
+    ]);
+    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
+    const rename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (String(oldPath).includes(`${path.sep}.pending-`)) {
+        await fs.appendFile(skillFile, "\nManual improvement.\n");
+        throw new Error("forced backup commit failure");
+      }
+      await rename(oldPath, newPath);
+    });
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...(await readCollectionReceipt()),
+        plan: [
+          {
+            action: "write",
+            name: "procedure",
+            description: "Rewritten procedure",
+            content: "# Rewritten\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("could not be restored");
+    renameSpy.mockRestore();
+
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
+  });
 });
 
 async function readCollectionReceipt() {
