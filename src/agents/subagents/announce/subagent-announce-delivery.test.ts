@@ -313,6 +313,9 @@ async function deliverDiscordDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
+  requesterSessionKey?: string;
+  requesterAgentId?: string;
+  runtimeConfig?: Record<string, unknown>;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceSessionKey?: string;
   sourceTool?: string;
@@ -325,13 +328,14 @@ async function deliverDiscordDirectMessageCompletion(params: {
     to: "dm:U123",
     accountId: "acct-1",
   };
+  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:discord:dm:U123";
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
       isActive: params.isActive === true,
     }),
-    getRuntimeConfig: () => ({}) as never,
+    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
@@ -339,8 +343,9 @@ async function deliverDiscordDirectMessageCompletion(params: {
   });
 
   return deliverSubagentAnnouncement({
-    requesterSessionKey: "agent:main:discord:dm:U123",
-    targetRequesterSessionKey: "agent:main:discord:dm:U123",
+    requesterSessionKey,
+    requesterAgentId: params.requesterAgentId,
+    targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterOrigin: origin,
@@ -1560,6 +1565,38 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(onDeliveryResult).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the caller owner for direct completion delivery to a bare requester key", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterSessionKey: "global",
+      requesterAgentId: "research",
+      runtimeConfig: {
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+      },
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "global",
+        agentId: "research",
+        mirror: expect.objectContaining({
+          sessionKey: "global",
+          agentId: "research",
+        }),
+      }),
+    );
   });
 
   it("sanitizes and bounds text before direct completion fallback delivery", async () => {

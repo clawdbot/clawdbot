@@ -191,8 +191,58 @@ describe("resolveSessionKeyForRequest", () => {
         sessionId: "ops-session",
       }),
     ).toMatchObject({
+      agentId: "ops",
       sessionKey: "main",
       sessionStore: sharedStore,
+      storePath: "/stores/shared.sqlite",
+    });
+  });
+
+  it("rejects an explicit agent that conflicts with an unscoped direct session-id match", () => {
+    const sharedStore = {
+      main: { sessionId: "ops-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { research: {}, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveStoredSessionKeyForSessionId({
+        cfg,
+        sessionId: "ops-session",
+        agentId: "research",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
+  it("resolves a scoped direct session-id match despite a retired fixed-store owner", () => {
+    const researchStore = {
+      "agent:research:work": { sessionId: "research-session", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/shared.sqlite": researchStore });
+
+    expect(
+      resolveStoredSessionKeyForSessionId({
+        cfg: {
+          session: { store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { research: {} },
+          },
+        },
+        sessionId: "research-session",
+      }),
+    ).toMatchObject({
+      agentId: "research",
+      sessionKey: "agent:research:work",
+      sessionStore: researchStore,
       storePath: "/stores/shared.sqlite",
     });
   });

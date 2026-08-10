@@ -299,21 +299,16 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
+  const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const persistedStoreOwner = resolvePersistedSessionStoreOwner(opts.cfg);
-  if (!opts.agentId?.trim() && persistedStoreOwner.kind === "retired") {
-    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+  const storeAgentId =
+    requestedAgentId ??
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
+    resolveDefaultAgentId(opts.cfg, {
       surface: "stored session lookup",
-      hint: `The shared fixed-store rows belong to retired agent "${persistedStoreOwner.agentId}".`,
+      hint: "Pass an explicit agent id when looking up a session by id.",
     });
-  }
-  const storeAgentId = opts.agentId?.trim()
-    ? normalizeAgentId(opts.agentId)
-    : ((persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-      tryResolveLegacyCompatibilityAgentId(opts.cfg) ??
-      resolveDefaultAgentId(opts.cfg, {
-        surface: "stored session lookup",
-        hint: "Pass an explicit agent id when looking up a session by id.",
-      }));
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
@@ -329,8 +324,38 @@ export function resolveStoredSessionKeyForSessionId(opts: {
     Object.entries(sessionStore).filter(([, entry]) => entry?.sessionId === sessionId),
     sessionId,
   );
+  if (selection.kind !== "selected") {
+    return { agentId: requestedAgentId, sessionKey: undefined, sessionStore, storePath };
+  }
+
+  const sessionKey = selection.sessionKey;
+  const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const persistedRowOwner = resolvePersistedSessionStoreOwnerForKey(opts.cfg, sessionKey);
+  const resolvedAgentId = scopedAgentId
+    ? normalizeAgentId(scopedAgentId)
+    : persistedRowOwner.kind === "configured"
+      ? persistedRowOwner.agentId
+      : persistedRowOwner.kind === "retired"
+        ? undefined
+        : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
+  if (!resolvedAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `stored session key "${sessionKey}"`,
+      hint:
+        persistedRowOwner.kind === "retired"
+          ? `The shared fixed-store row belongs to retired agent "${persistedRowOwner.agentId}".`
+          : "Pass an explicit agent id when looking up an unscoped session by id.",
+    });
+  }
+  if (requestedAgentId && requestedAgentId !== resolvedAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(opts.cfg), {
+      surface: `stored session key "${sessionKey}"`,
+      hint: `The matching row belongs to agent "${resolvedAgentId}", not agent "${requestedAgentId}".`,
+    });
+  }
   return {
-    sessionKey: selection.kind === "selected" ? selection.sessionKey : undefined,
+    agentId: resolvedAgentId,
+    sessionKey,
     sessionStore,
     storePath,
   };

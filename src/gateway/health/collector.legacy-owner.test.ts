@@ -108,4 +108,25 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
     expect(explicit.agents.every((agent) => !agent.isDefault)).toBe(true);
     expect(explicit.agents.every((agent) => !agent.heartbeat.enabled)).toBe(true);
   });
+
+  it("projects the configured heartbeat owner's cadence", async () => {
+    testConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { agentId: "research", every: "30m" } },
+        entries: {
+          ops: {},
+          research: { heartbeat: { every: "5m" } },
+        },
+      },
+    };
+
+    const health = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+
+    expect(health.agents.map((agent) => agent.agentId)).toEqual(["ops", "research"]);
+    expect(health.agents.find((agent) => agent.agentId === "research")?.heartbeat.enabled).toBe(
+      true,
+    );
+    expect(health.heartbeatSeconds).toBe(5 * 60);
+  });
 });

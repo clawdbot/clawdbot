@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -220,8 +221,17 @@ export async function collectGatewayHealthSnapshot(params: {
     });
   }
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const heartbeatSeconds = summaryAgent?.heartbeat.everyMs
-    ? Math.round(summaryAgent.heartbeat.everyMs / 1000)
+  const configuredHeartbeatAgentId = normalizeOptionalString(
+    cfg.agents?.defaults?.heartbeat?.agentId,
+  );
+  const heartbeatSummaryAgent =
+    (configuredHeartbeatAgentId
+      ? agents.find((agent) => agent.agentId === normalizeAgentId(configuredHeartbeatAgentId))
+      : undefined) ??
+    agents.find((agent) => agent.heartbeat.enabled) ??
+    summaryAgent;
+  const heartbeatSeconds = heartbeatSummaryAgent?.heartbeat.everyMs
+    ? Math.round(heartbeatSummaryAgent.heartbeat.everyMs / 1000)
     : 0;
   const sessions =
     summaryAgent?.sessions ??

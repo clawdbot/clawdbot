@@ -583,6 +583,11 @@ async function normalizeSessionKeyOptsForDispatch(
       opts.local === true
         ? await loadRuntimeConfig()
         : (selectionCfg ?? readGatewayDispatchConfig());
+    if (opts.local !== true && rawSessionKey && usesRemoteGateway(cfg)) {
+      // The remote gateway owns its roster and durable session-store metadata. Forward bare keys
+      // unchanged so it can resolve a persisted/compatibility owner or reject ambiguity itself.
+      return normalizedOpts;
+    }
     if (opts.local !== true && usesRemoteGateway(cfg)) {
       const loaded = await loadRemoteGatewayRosterWithShellEnvFallback(cfg);
       cfg = loaded.config;

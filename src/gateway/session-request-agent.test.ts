@@ -27,4 +27,29 @@ describe("requested session agent ownership", () => {
     );
     expect(resolveRequestedSessionAgentId(fixedStoreConfig("retired"), "global").ok).toBe(false);
   });
+
+  it("uses a legacy compatibility owner for a bare key", () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { ops: { default: true }, research: {} } },
+    };
+
+    expect(resolveRequestedSessionAgentId(cfg, "global")).toEqual({
+      ok: true,
+      agentId: "ops",
+    });
+  });
+
+  it("returns a typed selection error for an ownerless bare key", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+
+    expect(resolveRequestedSessionAgentId(cfg, "global")).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
+      },
+    });
+  });
 });

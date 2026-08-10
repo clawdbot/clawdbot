@@ -4,7 +4,8 @@ import {
   type ErrorShape,
   errorShape,
 } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../agents/agent-scope.js";
+import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -66,9 +67,21 @@ export function resolveRequestedSessionAgentId(
     return { ok: true, agentId };
   }
   if (!parsed?.agentId) {
-    return persistedStoreOwner.kind === "configured"
-      ? { ok: true, agentId: persistedStoreOwner.agentId }
-      : { ok: true };
+    const inferredAgentId =
+      persistedStoreOwner.kind === "configured"
+        ? persistedStoreOwner.agentId
+        : tryResolveLegacyCompatibilityAgentId(cfg);
+    if (inferredAgentId) {
+      return { ok: true, agentId: inferredAgentId };
+    }
+    const selectionError = new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `session key "${key}"`,
+      hint: "Pass agentId or use an agent-prefixed session key.",
+    });
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, selectionError.message),
+    };
   }
   const inferredAgentId = normalizeAgentId(parsed.agentId);
   if (canonicalKey === "global" && !listAgentIds(cfg).includes(inferredAgentId)) {

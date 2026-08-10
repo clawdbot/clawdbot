@@ -504,12 +504,45 @@ describe("agentCliCommand", () => {
   it.each([
     { ownership: "sole" as const, agents: ["ops"] },
     { ownership: "legacy" as const, agents: ["ops", "research"] },
-  ])("keeps a remote $ownership owner implicit for a sentinel", async ({ ownership, agents }) => {
-    mockRemoteGatewayRoster(ownership, agents);
+  ])(
+    "delegates a remote $ownership sentinel owner to the gateway",
+    async ({ ownership, agents }) => {
+      mockRemoteGatewayRoster(ownership, agents);
+      await withTempStore(async () => {
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledOnce();
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({ agentId: undefined, sessionKey: "global" });
+      }, remoteGatewayConfig);
+    },
+  );
+
+  it.each(["global", "work"])(
+    "delegates remote bare session key %s ownership to the gateway",
+    async (sessionKey) => {
+      mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+      await withTempStore(async () => {
+        await agentCliCommand({ message: "hi", sessionKey }, runtime);
+
+        expect(callGateway).toHaveBeenCalledOnce();
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.method).toBe("agent");
+        expect(request.params).toMatchObject({ agentId: undefined, sessionKey });
+      }, remoteGatewayConfig);
+    },
+  );
+
+  it("still resolves a remote recipient through the remote roster", async () => {
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
     await withTempStore(async () => {
-      await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
-      const request = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
-      expect(request.params).toMatchObject({ agentId: undefined, sessionKey: "global" });
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").method).toBe(
+        "agents.list",
+      );
     }, remoteGatewayConfig);
   });
 
