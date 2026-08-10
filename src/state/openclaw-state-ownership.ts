@@ -157,21 +157,6 @@ function inspectImmutableOwnership(databasePath: string): OpenClawExternalStateO
   );
 }
 
-function inspectImmutableOwnershipWithJournalAwareFallback(
-  databasePath: string,
-): OpenClawExternalStateOwnership | null {
-  try {
-    return inspectImmutableOwnership(databasePath);
-  } catch (error) {
-    // A writer can create WAL after the sidecar probe but before immutable open.
-    // Only corruption retries through SQLite's journal-aware read-only path.
-    if (!isSqliteCorruptionError(error)) {
-      throw error;
-    }
-    return inspectOwnershipThroughConnection(databasePath, databasePath);
-  }
-}
-
 function captureOwnershipSqliteGeneration(databasePath: string): OwnershipSqliteGeneration {
   const database = statSync(databasePath, { bigint: true, throwIfNoEntry: false });
   if (database && !database.isFile()) {
@@ -240,13 +225,7 @@ function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  if (existsSync(`${resolvedPath}-wal`)) {
-    return inspectOwnershipThroughConnection(resolvedPath, resolvedPath);
-  }
-  // The coordinator excludes ownership transitions, so this is only a non-mutating fence.
-  // Rollback recovery belongs to the later writable open, whose canonical write path
-  // rechecks ownership on its opened handle or inside its SQLite transaction before mutation.
-  return inspectImmutableOwnershipWithJournalAwareFallback(resolvedPath);
+  return inspectStablePublicImmutableOwnership(resolvedPath);
 }
 
 function resolveOpenClawStateOwnershipCoordinatorPath(databasePath: string): string {

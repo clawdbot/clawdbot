@@ -29,6 +29,7 @@ import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
   runWithOpenClawStateOwnershipCoordinator,
+  runWithOpenClawStateWriteAccess,
   STATE_SUPERVISION_KEY,
 } from "./openclaw-state-ownership.js";
 
@@ -288,6 +289,7 @@ describe("external shared-state ownership", () => {
     }
     let transactionStarted = false;
     let transientOwnershipObserved = false;
+    let insertTransientOwnership = false;
     const get = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
       this: import("node:sqlite").StatementSync,
       ...params: unknown[]
@@ -295,6 +297,18 @@ describe("external shared-state ownership", () => {
       if (!transactionStarted && params[0] === STATE_SUPERVISION_KEY) {
         transactionStarted = true;
         writer.exec("BEGIN IMMEDIATE;");
+        if (insertTransientOwnership) {
+          writer
+            .prepare(
+              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+               VALUES (?, ?, ?)`,
+            )
+            .run(
+              STATE_SUPERVISION_KEY,
+              JSON.stringify(transientOwnership),
+              transientOwnership.claimedAt,
+            );
+        }
         writer
           .prepare(
             `UPDATE config_machine_state
@@ -334,6 +348,22 @@ describe("external shared-state ownership", () => {
       expect(transactionStarted).toBe(true);
       expect(transientOwnershipObserved).toBe(true);
       expect(inspected).toEqual(baselineOwnership);
+
+      writer
+        .prepare("DELETE FROM config_machine_state WHERE state_key = ?")
+        .run(STATE_SUPERVISION_KEY);
+      transactionStarted = false;
+      transientOwnershipObserved = false;
+      insertTransientOwnership = true;
+      expect(
+        runWithOpenClawStateWriteAccess(
+          { databasePath, env },
+          "rollback-journal admission test",
+          () => inspectOpenClawStateOwnershipAtPath(databasePath),
+        ),
+      ).toBeNull();
+      expect(transactionStarted).toBe(true);
+      expect(transientOwnershipObserved).toBe(true);
     } finally {
       get.mockRestore();
       if (writer.isTransaction) {
