@@ -365,7 +365,8 @@ profiles; send actions individually there.
 --actions-file plan.json`, or `openclaw browser batch --actions-file -` to
   read the JSON array from stdin. `--continue` sets `stopOnError=false`; the
   default is to stop on first error. `--target-id` scopes the whole batch to
-  one tab.
+  one tab. `--actions-file` and stdin input are capped at 1,000,000 bytes;
+  split larger plans into multiple batch commands.
 - Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is
   not a nested action). A nested action that changes page state — such as a
   `click` that triggers navigation, or an `evaluate` that mutates the DOM — can
