@@ -77,7 +77,7 @@ import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
@@ -752,12 +752,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
   ): Promise<SessionsPatchResult> {
     await this.ready;
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key: opts.key,
       agentId: opts.agentId,
+      exactRead: true,
     });
     const applied = await applySessionPatchProjection({
+      ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
       storePath: target.storePath,
       resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({

@@ -38,7 +38,16 @@ function createContext(
   };
   const subscribe = () => () => undefined;
   return {
-    gateway: { snapshot, subscribe },
+    gateway: {
+      snapshot,
+      connection: {
+        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe,
+    },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext<RouteId>;
@@ -281,7 +290,11 @@ it("falls back to the text avatar when the hero image fails to load", async () =
     agents: [
       {
         id: "main",
-        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+        identity: {
+          name: "Molty",
+          emoji: "🦞",
+          avatarUrl: "data:image/png;base64,unloadable",
+        },
       },
     ],
   };
@@ -292,7 +305,7 @@ it("falls back to the text avatar when the hero image fails to load", async () =
 
   await page.updateComplete;
   const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
-  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
   expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
 
   image?.dispatchEvent(new Event("error"));
@@ -300,6 +313,60 @@ it("falls back to the text avatar when the hero image fails to load", async () =
 
   expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
   expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+});
+
+it("fetches a protected hero avatar with the current Control UI credential", async () => {
+  const createObjectURL = vi.fn(() => "blob:hero-avatar");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    blob: async () => new Blob(["avatar"], { type: "image/svg+xml" }),
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const harness = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
+  harness.context.gateway.connection.token = "profile-token";
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/avatar/main" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => {
+    expect(fetchMock).toHaveBeenCalledWith("/avatar/main", {
+      headers: { Authorization: "Bearer profile-token" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(
+      page.querySelector<HTMLImageElement>(".profile-hero__avatar-image")?.getAttribute("src"),
+    ).toBe("blob:hero-avatar");
+  });
+
+  page.remove();
+  await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar"));
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {

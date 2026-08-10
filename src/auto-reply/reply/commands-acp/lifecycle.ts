@@ -15,11 +15,11 @@ import {
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
+import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
-} from "../../../agents/acp-spawn.js";
-import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
+} from "../../../agents/subagents/spawn/acp-spawn.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";

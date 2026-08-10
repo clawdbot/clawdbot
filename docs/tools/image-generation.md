@@ -37,9 +37,11 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openai/gpt-image-2",
-            timeoutMs: 180_000,
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-2",
+              timeoutMs: 180000,
+            },
           },
         },
       },
@@ -209,14 +211,16 @@ translation.
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "openai/gpt-image-2",
-        timeoutMs: 180_000,
-        fallbacks: [
-          "openrouter/google/gemini-3.1-flash-image-preview",
-          "google/gemini-3.1-flash-image",
-          "fal/fal-ai/flux/dev",
-        ],
+      mediaModels: {
+        image: {
+          primary: "openai/gpt-image-2",
+          timeoutMs: 180000,
+          fallbacks: [
+            "openrouter/google/gemini-3.1-flash-image-preview",
+            "google/gemini-3.1-flash-image",
+            "fal/fal-ai/flux/dev",
+          ],
+        },
       },
     },
   },
@@ -228,8 +232,8 @@ translation.
 OpenClaw tries providers in this order:
 
 1. **`model` parameter** from the tool call (if the agent specifies one).
-2. **`imageGenerationModel.primary`** from config.
-3. **`imageGenerationModel.fallbacks`** in order.
+2. **`agents.defaults.mediaModels.image.primary`** from config.
+3. **`agents.defaults.mediaModels.image.fallbacks`** in order.
 4. **Auto-detection** - auth-backed provider defaults only:
    - current default provider first;
    - remaining registered image-generation providers in provider-id order.
@@ -360,9 +364,11 @@ and ComfyUI support 1.
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "microsoft-foundry/<deployment-name>",
-            timeoutMs: 600_000,
+          mediaModels: {
+            image: {
+              primary: "microsoft-foundry/<deployment-name>",
+              timeoutMs: 600000,
+            },
           },
         },
       },
@@ -400,8 +406,10 @@ and ComfyUI support 1.
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openrouter/google/gemini-3.1-flash-image-preview",
+          mediaModels: {
+            image: {
+              primary: "openrouter/google/gemini-3.1-flash-image-preview",
+            },
           },
         },
       },
@@ -431,8 +439,10 @@ and ComfyUI support 1.
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/krea/v2/medium/text-to-image",
+          mediaModels: {
+            image: {
+              primary: "fal/krea/v2/medium/text-to-image",
+            },
           },
         },
       },
@@ -567,5 +577,5 @@ as ignored for them.
 - [OpenAI](/providers/openai) - OpenAI Images provider setup
 - [Vydra](/providers/vydra) - Vydra image, video, and speech setup
 - [xAI](/providers/xai) - Grok image, video, search, code execution, and TTS setup
-- [Configuration reference](/gateway/config-agents#agent-defaults) - `imageGenerationModel` config
+- [Configuration reference](/gateway/config-agents#agent-defaults) - `agents.defaults.mediaModels.image` config
 - [Models](/concepts/models) - model configuration and failover

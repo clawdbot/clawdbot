@@ -1652,7 +1652,7 @@ openclaw-chat-video-player {
   border-radius: 6px;
   background: color-mix(in srgb, var(--bg) 70%, transparent);
   color: var(--text);
-  font: 11px/1.4 var(--font-mono);
+  font: 11px/1.4 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1946,7 +1946,7 @@ openclaw-chat-video-player {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font: 12px/1.4 var(--font-mono);
+  font: 12px/1.4 var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1961,7 +1961,7 @@ openclaw-chat-video-player {
 .chat-pr__diff {
   display: inline-flex;
   gap: 5px;
-  font: 12px/1.4 var(--font-mono);
+  font: 12px/1.4 var(--mono);
 }
 
 .chat-pr__additions {
@@ -5293,7 +5293,7 @@ openclaw-chat-video-player {
   display: inline-block;
   padding: 1px 6px;
   font-size: 12px; /* was 11px */
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

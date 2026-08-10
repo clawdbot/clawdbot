@@ -90,15 +90,15 @@ For one agent only:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "local",
+    entries: {
+      local: {
+        default: true,
         model: "lmstudio/gemma-4-e4b-it",
         experimental: {
           localModelLean: true,
         },
       },
-    ],
+    },
   },
 }
 ```

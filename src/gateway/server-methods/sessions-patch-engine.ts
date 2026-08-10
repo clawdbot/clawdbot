@@ -314,8 +314,17 @@ async function executeSessionPatchMutations(params: {
             [...groups.values()].map(async (group) => {
               const first = group[0]!;
               try {
+                // Labels need store-wide uniqueness. Other single patches retain every resolver
+                // candidate so writer-queued legacy aliases remain visible to revalidation.
+                const selectedSessionKeys =
+                  group.length === 1 && first.fullPatch.label === undefined
+                    ? Array.from(
+                        new Set([first.key, first.canonicalKey, ...first.initialStoreKeys]),
+                      )
+                    : undefined;
                 const groupOutcomes = await applySqliteSessionEntryCanonicalReplacements({
                   agentId: first.targetAgentId,
+                  ...(selectedSessionKeys ? { sessionKeys: selectedSessionKeys } : {}),
                   storePath: first.storePath,
                   skipMaintenance: true,
                   update: async (entries) => {

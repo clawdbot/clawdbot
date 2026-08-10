@@ -61,6 +61,9 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
+        .onChange(of: GatewayProcessManager.shared.status) { _, status in
+            self.reviseCLIActivationFailureIfGatewayReady(status)
+        }
         .onDisappear {
             self.onboardingDidDisappear()
         }

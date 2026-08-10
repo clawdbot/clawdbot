@@ -234,6 +234,29 @@ struct OnboardingViewSmokeTests {
             installing: true))
     }
 
+    @Test func `later gateway readiness revises a pinned CLI activation failure`() {
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .attachedExisting(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .failed("still unavailable"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: nil),
+            isLocal: false,
+            executableReady: true,
+            installed: false))
+    }
+
     @Test func `connection mode change restarts full page monitoring`() {
         let state = AppState(preview: true)
         let view = OnboardingView(state: state)

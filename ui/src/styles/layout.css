@@ -324,7 +324,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--card) 70%, transparent);
   color: var(--muted);
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 10px;
   font-weight: 550;
   letter-spacing: 0.04em;
@@ -3472,7 +3472,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__metadata-value--mono {
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 11px;
 }
 
@@ -3594,7 +3594,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3620,7 +3620,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   color: var(--danger);
 }
 

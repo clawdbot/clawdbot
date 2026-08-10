@@ -5,6 +5,11 @@ import path from "node:path";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import {
+  activeWorkspaceHashContext,
+  withWorkspaceHashContext,
+  withWorkspaceHashMemo,
+} from "./workspace-hash-memo.js";
+import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -440,6 +445,14 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     conflictPaths: string[];
   }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
+  return await withWorkspaceHashContext(
+    async () => await applyStagedWorkerWorkspaceResultWithMemo(params),
+  );
+}
+
+async function applyStagedWorkerWorkspaceResultWithMemo(
+  params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
+): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
   const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
   if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
@@ -523,6 +536,9 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     throw new Error("Cloud workspace durable result staging was not requested");
   }
   const candidateRef = preparedWorkerWorkspaceResultRef(stagedResult.ref);
+  const active = activeWorkspaceHashContext();
+  const hashMemo = active?.memo ?? new Map();
+  const metrics = active?.metrics;
   let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
   await stageWorkerWorkspaceResult({
     root: params.request.localPath,
@@ -536,13 +552,18 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   return {
     applyPreparedStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
-      appliedWorkspaceResult = await applyStagedWorkerWorkspaceResult({
-        root,
-        stagedResultRef: candidateRef,
-        expectedBaseManifestRef: params.request.baseManifestRef,
-        journal: params.request.journal,
-        publishAcceptedManifest: params.publishAcceptedManifest,
-      });
+      appliedWorkspaceResult = await withWorkspaceHashMemo(
+        hashMemo,
+        async () =>
+          await applyStagedWorkerWorkspaceResult({
+            root,
+            stagedResultRef: candidateRef,
+            expectedBaseManifestRef: params.request.baseManifestRef,
+            journal: params.request.journal,
+            publishAcceptedManifest: params.publishAcceptedManifest,
+          }),
+        metrics,
+      );
     },
     getAppliedWorkspaceResult: () => appliedWorkspaceResult,
     verifyLocalStable: async () => {

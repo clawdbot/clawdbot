@@ -408,7 +408,10 @@ normalized agent id:
 ```json5
 {
   agents: {
-    list: [{ id: "support" }, { id: "marketing" }],
+    entries: {
+      support: { default: true },
+      marketing: {},
+    },
   },
   plugins: {
     entries: {

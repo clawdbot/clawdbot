@@ -294,10 +294,12 @@ workspace-qualified outbound messages. Add any shortcuts to the app manifest's
 interaction path. The manifest examples register the single `/openclaw`
 command; native command mode still requires the administrator-managed command
 entries described below. Relay mode, channel-ID-change events, App Home, Agent
-and Assistant lifecycle events, Slack-native approvals, and bindings remain
-unavailable for an enterprise account. Slack action tools are supported for
-enterprise accounts across every group listed in
-[Actions and gates](#actions-and-gates); the configured
+and Assistant lifecycle events, and bindings
+remain unavailable for an enterprise account. Slack-native approvals that
+originate from a delivered, workspace-qualified Slack turn are supported;
+approval buttons use the same listener-owned, workspace-scoped interaction
+path. Slack action tools are supported for enterprise accounts across every
+group listed in [Actions and gates](#actions-and-gates); the configured
 `channels.slack.actions.*` gates and OAuth scopes still apply. Inbound
 membership, reaction, pin, channel-created, and channel-renamed notifications
 use validated listener-owned, workspace-scoped event routing. Outbound
@@ -1798,6 +1800,11 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Plugin approval DMs use Slack plugin approvers from `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
 - Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
 
+For Enterprise Grid org installs, the originating event's validated workspace
+is retained for the approval prompt, approver DM, button callback, and final
+message update. Approval delivery fails closed when an org-installed account
+does not have that event-owned workspace scope.
+
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 When those buttons are present, they are the primary approval UX; OpenClaw
 should only include a manual `/approve` command when the tool result says chat
@@ -2010,8 +2017,10 @@ openclaw pairing list slack
 
     Slack does not create or remove slash commands automatically. `commands.native: "auto"` does not enable Slack native commands; use `true` and create the matching commands in the Slack app. In HTTP mode, every Slack slash command must include the Gateway URL. In Socket Mode, command payloads arrive over the websocket and Slack ignores `slash_commands[].url`.
 
-    Also check `commands.useAccessGroups`, DM authorization, channel allowlists,
-    and per-channel `users` allowlists. Slack returns ephemeral errors for
+    Also check `commands.allowFrom` (when configured), DM authorization,
+    channel allowlists, and per-channel `users` allowlists. Access-group
+    entries in channel allowlists are resolved automatically. Slack returns
+    ephemeral errors for
     blocked slash-command senders, including:
 
     - `This channel is not allowed.`

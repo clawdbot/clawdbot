@@ -767,25 +767,20 @@ extension GatewayProcessManager {
         var latestRetryDisposition: GatewayProbeFailureDisposition?
         var readinessPID = context.readinessPID
         var freshInstallGraceAuthorized = false
+        var responsiveStartupProgressObserved = false
         readinessLoop: while true {
             guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
             while Date() >= deadline {
                 guard deadline < finalProbeDeadline else { break readinessLoop }
-                if freshInstallGraceAuthorized {
-                    // Repeating launchd status at every boundary would expand the wall-clock budget.
-                    // Generation/revision guard intermediate windows; success and final repair re-check ownership.
-                    guard self.isCurrentFreshInstallReadiness(
-                        context: context,
-                        startGeneration: startGeneration)
-                    else { return }
-                } else {
-                    guard let reusablePID = await self.currentInstallReusableLaunchdPID(
-                        context: context,
-                        startGeneration: startGeneration)
-                    else { break readinessLoop }
-                    readinessPID = reusablePID
-                    freshInstallGraceAuthorized = true
-                }
+                let extensionAuthorization = await self.authorizeReadinessExtension(
+                    context: context,
+                    startGeneration: startGeneration,
+                    responsiveStartupProgressObserved: responsiveStartupProgressObserved,
+                    freshInstallGraceAuthorized: freshInstallGraceAuthorized,
+                    readinessPID: readinessPID)
+                guard extensionAuthorization.allowed else { break readinessLoop }
+                readinessPID = extensionAuthorization.readinessPID
+                freshInstallGraceAuthorized = true
                 deadline = min(
                     deadline.addingTimeInterval(readinessWindow),
                     finalProbeDeadline)
@@ -821,6 +816,9 @@ extension GatewayProcessManager {
                 case .retryWithoutRepair:
                     // A responsive transient invalidates older connection-failure evidence.
                     latestRetryDisposition = .retryWithoutRepair
+                    if self.probeFailureShowsStartupProgress(error) {
+                        responsiveStartupProgressObserved = true
+                    }
                 }
                 let retryDelay = min(0.4, max(0, deadline.timeIntervalSinceNow))
                 if retryDelay > 0 {
@@ -841,6 +839,27 @@ extension GatewayProcessManager {
                 startGeneration: startGeneration,
                 expectedReadinessRevision: context.readinessRevision)
         }
+    }
+
+    private func authorizeReadinessExtension(
+        context: LaunchAgentStartupContext,
+        startGeneration: UInt64,
+        responsiveStartupProgressObserved: Bool,
+        freshInstallGraceAuthorized: Bool,
+        readinessPID: Int32?) async -> (allowed: Bool, readinessPID: Int32?)
+    {
+        if responsiveStartupProgressObserved || freshInstallGraceAuthorized {
+            // One live response or verified launchd owner authorizes the bounded migration window;
+            // repeating launchd status at every boundary would expand the wall-clock budget.
+            let isCurrent = !Task.isCancelled &&
+                self.isCurrentGatewayStart(startGeneration) &&
+                self.launchAgentReadinessRevision == context.readinessRevision
+            return (isCurrent, readinessPID)
+        }
+        let reusablePID = await self.currentInstallReusableLaunchdPID(
+            context: context,
+            startGeneration: startGeneration)
+        return (reusablePID != nil, reusablePID)
     }
 
     private func currentInstallReusableLaunchdPID(
@@ -996,6 +1015,11 @@ extension GatewayProcessManager {
         default:
             return .fail
         }
+    }
+
+    private func probeFailureShowsStartupProgress(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.code.uppercased() == "UNAVAILABLE"
     }
 
     private func probeFailureIsCancellation(_ error: Error) -> Bool {
