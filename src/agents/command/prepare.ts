@@ -343,12 +343,10 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       cliSessionBindingFacts: {
         sourceReplyDeliveryMode: resolveSessionStableReplyMode({
           cfg,
+          ctx: { CommandAuthorized: false },
           sessionEntry: sessionEntryRaw,
           sessionAgentId,
           sessionKey,
-          defaultProvider: configuredModel.provider,
-          defaultModel: configuredModel.model,
-          inputProvenance: commandOpts.inputProvenance,
         }),
       },
     };

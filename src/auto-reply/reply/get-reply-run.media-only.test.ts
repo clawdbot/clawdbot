@@ -3192,11 +3192,31 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "heartbeat",
         },
       });
+      // Response-tool heartbeats carry an effective message_tool_only turn
+      // mode; that is per-turn enforcement and must not become the session
+      // policy fact, or these heartbeats keep ping-ponging the binding.
+      await runPrepared({
+        cfg: caseCfg,
+        opts: { isHeartbeat: true, sourceReplyDeliveryMode: "message_tool_only" },
+        isNewSession: false,
+        systemSent: true,
+        sessionEntry,
+        ctx: {
+          ...createInboundBody("scheduled wake"),
+          Provider: "heartbeat",
+          SessionKey: "agent:main:telegram:-100123",
+        },
+        sessionCtx: {
+          ...createSessionBody("scheduled wake"),
+          Provider: "heartbeat",
+        },
+      });
 
       const roomEventRun = requireRunReplyAgentCall(0).followupRun.run;
       const primaryRun = requireRunReplyAgentCall(1).followupRun.run;
       const heartbeatRun = requireRunReplyAgentCall(2).followupRun.run;
       const directHeartbeatRun = requireRunReplyAgentCall(3).followupRun.run;
+      const responseToolHeartbeatRun = requireRunReplyAgentCall(4).followupRun.run;
       expect(roomEventRun.sourceReplyDeliveryMode).toBe("message_tool_only");
       expect(primaryRun.sourceReplyDeliveryMode).toBe(stableMode);
       expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
@@ -3216,8 +3236,62 @@ describe("runPreparedReply media-only handling", () => {
       expect(directHeartbeatRun.cliSessionBindingFacts).toEqual(
         roomEventRun.cliSessionBindingFacts,
       );
+      expect(responseToolHeartbeatRun.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(responseToolHeartbeatRun.cliSessionBindingFacts).toEqual(
+        roomEventRun.cliSessionBindingFacts,
+      );
     },
   );
+
+  it("downgrades the synthetic stable mode when the message tool is policy-denied", async () => {
+    vi.mocked(buildGroupChatContext).mockImplementation(({ sourceReplyDeliveryMode }) =>
+      ["group", sourceReplyDeliveryMode ?? "automatic"].join(":"),
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-telegram-group",
+      updatedAt: 1,
+      systemSent: true,
+      chatType: "group",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "-100123" },
+        origin: {
+          provider: "telegram",
+          surface: "telegram",
+          chatType: "group",
+          to: "-100123",
+        },
+      }),
+    };
+
+    // Tool-only delivery configured, but the message tool is denied: dispatch
+    // downgrades its stable mode to automatic, so the synthetic fallback must
+    // record automatic too or the binding hashes diverge again.
+    await runPrepared({
+      cfg: {
+        session: {},
+        channels: {},
+        agents: { defaults: {} },
+        messages: { visibleReplies: "message_tool" as const },
+        tools: { deny: ["message"] },
+      },
+      opts: { isHeartbeat: true },
+      isNewSession: false,
+      systemSent: true,
+      sessionEntry,
+      ctx: {
+        ...createInboundBody("scheduled wake"),
+        Provider: "heartbeat",
+        SessionKey: "agent:main:telegram:-100123",
+      },
+      sessionCtx: {
+        ...createSessionBody("scheduled wake"),
+        Provider: "heartbeat",
+      },
+    });
+
+    const run = requireRunReplyAgentCall(0).followupRun.run;
+    expect(run.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
+  });
 
   it("keeps per-message room-event metadata out of CLI binding facts", async () => {
     vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx, sourceReplyDeliveryMode }) =>
