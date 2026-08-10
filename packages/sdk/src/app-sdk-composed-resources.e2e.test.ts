@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +41,6 @@ import {
 } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
-import { rawDataToString } from "../../../src/infra/ws.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
 

@@ -398,7 +398,7 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
-  registerTelegramNativeCommands({
+  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
     bot,
     cfg,
     runtime,
@@ -434,6 +434,7 @@ export function createTelegramBotCore(
     processMessage,
     logger,
     telegramDeps,
+    nativeCommandCallbackDispatcher,
   });
 
   const originalStop = bot.stop.bind(bot);

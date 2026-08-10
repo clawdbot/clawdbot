@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
 
 const {
   applyParallelVitestCachePaths,
@@ -17,15 +18,8 @@ const {
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
-} = await import("../../scripts/test-projects.test-support.mjs");
+} = await import("../../scripts/test-projects.test-support.mts");
 
-const runVitestModulePath = "../../scripts/run-vitest.mjs";
-const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
-  runVitestModulePath
-)) as unknown as {
-  resolveVitestCliEntry: () => string;
-  resolveVitestNodeArgs: (env: NodeJS.ProcessEnv) => string[];
-};
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
@@ -346,6 +340,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
+          "src/agents/openai-transport-stream.failed-sse.test.ts",
           "src/agents/openai-transport-stream.incomplete-output.test.ts",
           "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",

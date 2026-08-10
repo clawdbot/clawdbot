@@ -82,7 +82,9 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       invalidEntries: [],
     };
     const authorization = {
-      authorizeInboundMessage: vi.fn(async () => ({
+      authorizeInboundMessage: vi.fn<
+        Parameters<typeof registerTelegramMessageHandlers>[2]["authorizeInboundMessage"]
+      >(async (params) => ({
         allowed: true as const,
         effectiveDmAllow: emptyAllow,
         context: {
@@ -90,6 +92,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
           telegramCfg: {},
           allowFrom: [],
           dmPolicy: "open" as const,
+          threadSpec: params.isGroup ? ({ scope: "none" } as const) : ({ scope: "dm" } as const),
           storeAllowFrom: [],
           effectiveGroupAllow: emptyAllow,
           hasGroupAllowOverride: false,

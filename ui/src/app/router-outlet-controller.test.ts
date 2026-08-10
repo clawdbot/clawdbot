@@ -250,4 +250,32 @@ describe("RouterOutletController not-found boundary", () => {
     controller.disconnect();
     router.stop();
   });
+
+  it("retries a declined fallback once recovery becomes ready", async () => {
+    const router = createTestRouter();
+    const onNotFound = vi.fn(() => false);
+    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
+      vi.fn(),
+    );
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: false });
+    controller.connect();
+
+    await router.navigateLocation(location("/missing"), { label: "test" });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(1);
+
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: false });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(1);
+
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: true });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(2);
+
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: true });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(2);
+    controller.disconnect();
+    router.stop();
+  });
 });

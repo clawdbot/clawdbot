@@ -351,6 +351,12 @@ describe("Control UI Vite config", () => {
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
     expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/agent-id"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/agent-id",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/agent-id.ts"),
+    });
+    expect(
       aliases.find((alias) => alias.find === "@openclaw/normalization-core/json-schema"),
     )?.toEqual({
       find: "@openclaw/normalization-core/json-schema",

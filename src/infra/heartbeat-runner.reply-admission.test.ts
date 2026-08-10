@@ -35,6 +35,9 @@ const heartbeatDeps = {
   getReplyFromConfig,
 } satisfies HeartbeatDeps;
 
+// This case cold-loads the full reply stack to verify production admission and registry cleanup.
+const FULL_REPLY_ADMISSION_TEST_TIMEOUT_MS = 240_000;
+
 function modelPrompt(index: number): string {
   const prompt = runEmbeddedAgentMock.mock.calls[index]?.[0]?.prompt;
   if (typeof prompt !== "string") {
@@ -64,81 +67,85 @@ describe("heartbeat reply admission", () => {
     vi.unstubAllEnvs();
   });
 
-  it("keeps global events isolated through production reply admission", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
-      const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json");
-      const cfg = markCompleteReplyConfig(
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-6",
-              workspace: tmpDir,
+  it(
+    "keeps global events isolated through production reply admission",
+    async () => {
+      await withTempHeartbeatSandbox(async ({ tmpDir }) => {
+        const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json");
+        const cfg = markCompleteReplyConfig(
+          {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+                workspace: tmpDir,
+              },
+              entries: { main: { default: true }, alpha: {}, beta: {} },
             },
-            entries: { main: { default: true }, alpha: {}, beta: {} },
-          },
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "https://api.anthropic.test",
-                apiKey: "test-key",
-                models: [
-                  {
-                    id: "claude-opus-4-6",
-                    name: "Claude Opus 4.6",
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 200_000,
-                    maxTokens: 8192,
-                  },
-                ],
+            models: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.test",
+                  apiKey: "test-key",
+                  models: [
+                    {
+                      id: "claude-opus-4-6",
+                      name: "Claude Opus 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 200_000,
+                      maxTokens: 8192,
+                    },
+                  ],
+                },
               },
             },
+            session: { scope: "global", store: storeTemplate },
           },
-          session: { scope: "global", store: storeTemplate },
-        },
-        { runtimeMode: "full" },
-      ) as OpenClawConfig;
-      await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "alpha" }), "global", {});
-      await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "beta" }), "global", {});
-      enqueueSystemEvent(
-        "Alpha hook finished",
-        withSystemEventOwner({ sessionKey: "global" }, "alpha"),
-      );
-      enqueueSystemEvent(
-        "Beta hook finished",
-        withSystemEventOwner({ sessionKey: "global" }, "beta"),
-      );
+          { runtimeMode: "full" },
+        ) as OpenClawConfig;
+        await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "alpha" }), "global", {});
+        await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "beta" }), "global", {});
+        enqueueSystemEvent(
+          "Alpha hook finished",
+          withSystemEventOwner({ sessionKey: "global" }, "alpha"),
+        );
+        enqueueSystemEvent(
+          "Beta hook finished",
+          withSystemEventOwner({ sessionKey: "global" }, "beta"),
+        );
 
-      const alphaResult = await runHeartbeatOnce({
-        cfg,
-        agentId: "alpha",
-        source: "hook",
-        intent: "immediate",
-        reason: "hook:wake",
-        deps: heartbeatDeps,
+        const alphaResult = await runHeartbeatOnce({
+          cfg,
+          agentId: "alpha",
+          source: "hook",
+          intent: "immediate",
+          reason: "hook:wake",
+          deps: heartbeatDeps,
+        });
+
+        expect(alphaResult.status).toBe("ran");
+        expect(modelPrompt(0)).toContain("Alpha hook finished");
+        expect(modelPrompt(0)).not.toContain("Beta hook finished");
+        expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+          "Beta hook finished",
+        ]);
+
+        const betaResult = await runHeartbeatOnce({
+          cfg,
+          agentId: "beta",
+          source: "hook",
+          intent: "immediate",
+          reason: "hook:wake",
+          deps: heartbeatDeps,
+        });
+
+        expect(betaResult.status).toBe("ran");
+        expect(modelPrompt(1)).toContain("Beta hook finished");
+        expect(modelPrompt(1)).not.toContain("Alpha hook finished");
+        expect(peekSystemEventEntries("global")).toEqual([]);
       });
-
-      expect(alphaResult.status).toBe("ran");
-      expect(modelPrompt(0)).toContain("Alpha hook finished");
-      expect(modelPrompt(0)).not.toContain("Beta hook finished");
-      expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
-        "Beta hook finished",
-      ]);
-
-      const betaResult = await runHeartbeatOnce({
-        cfg,
-        agentId: "beta",
-        source: "hook",
-        intent: "immediate",
-        reason: "hook:wake",
-        deps: heartbeatDeps,
-      });
-
-      expect(betaResult.status).toBe("ran");
-      expect(modelPrompt(1)).toContain("Beta hook finished");
-      expect(modelPrompt(1)).not.toContain("Alpha hook finished");
-      expect(peekSystemEventEntries("global")).toEqual([]);
-    });
-  });
+    },
+    FULL_REPLY_ADMISSION_TEST_TIMEOUT_MS,
+  );
 });

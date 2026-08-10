@@ -33,7 +33,6 @@ import {
 } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -58,7 +57,7 @@ export function deliveryKindForPayload(
 }
 
 export function emitMessageDeliveryStarted(params: {
-  channel: OutboundChannel;
+  channel: string;
   deliveryKind: DiagnosticMessageDeliveryKind;
   sessionKey?: string;
 }): void {
@@ -71,7 +70,7 @@ export function emitMessageDeliveryStarted(params: {
 }
 
 export function emitMessageDeliveryCompleted(params: {
-  channel: OutboundChannel;
+  channel: string;
   deliveryKind: DiagnosticMessageDeliveryKind;
   durationMs: number;
   resultCount: number;
@@ -88,7 +87,7 @@ export function emitMessageDeliveryCompleted(params: {
 }
 
 export function emitMessageDeliveryError(params: {
-  channel: OutboundChannel;
+  channel: string;
   deliveryKind: DiagnosticMessageDeliveryKind;
   durationMs: number;
   error: unknown;

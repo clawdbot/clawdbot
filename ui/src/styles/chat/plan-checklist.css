@@ -40,7 +40,7 @@
   min-width: 0;
   padding: 7px 9px;
   color: var(--text);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
   user-select: none;
 }

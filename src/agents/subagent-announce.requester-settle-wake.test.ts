@@ -437,6 +437,63 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
   });
 
+  it.each([
+    ["is running without an end timestamp", { status: "running", startedAt: 2_000 }],
+    [
+      "is still marked running with an end timestamp",
+      { status: "running", startedAt: 2_000, endedAt: 3_000 },
+    ],
+    ["has no end timestamp", { status: "terminal", startedAt: 2_000 }],
+  ] as const)(
+    "does not wake a yielded requester while its only frozen child %s",
+    async (_description, execution) => {
+      const activeChild = makeSettledChild({
+        runId: "run-b",
+        execution,
+        delivery: { status: "pending" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-b"],
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([activeChild]);
+
+      const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: activeChild }),
+      );
+
+      expect(woke).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("wakes after a retired frozen member disappears from the registry", async () => {
+    const remainingChild = makeSettledChild({
+      runId: "run-a",
+      delivery: { status: "delivered" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["run-a", "run-b"],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([remainingChild]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: remainingChild }),
+    );
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-a"], 1);
+  });
+
   it("wakes after a requester yields with one already-delivered completion", async () => {
     const child = makeSettledChild({
       runId: "run-b",

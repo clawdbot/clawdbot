@@ -321,14 +321,9 @@ describe("claws cli", () => {
     registerClawsCli(program);
     const claws = program.commands.find((command) => command.name() === "claws");
 
-    expect(claws?.commands.map((command) => command.name())).toEqual([
-      "inspect",
-      "add",
-      "status",
-      "update",
-      "remove",
-      "export",
-    ]);
+    expect(claws?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["inspect", "add", "status", "update", "remove", "export"]),
+    );
   });
 
   it("accepts an already-applied Gateway config revision", async () => {

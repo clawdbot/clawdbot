@@ -53,11 +53,6 @@ const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
 
-type GatewayMemoryStartupPolicy =
-  | { mode: "off" }
-  | { mode: "immediate" }
-  | { mode: "idle"; delayMs: number };
-
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
   () => import("../agents/main-session-restart-recovery.js"),
 );
@@ -126,35 +121,6 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
-function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  void cfg;
-  return { mode: "off" };
-}
-
-function scheduleGatewayMemoryBackend(params: {
-  cfg: OpenClawConfig;
-  log: { warn: (msg: string) => void };
-  policy: GatewayMemoryStartupPolicy;
-}): void {
-  if (params.policy.mode === "off") {
-    return;
-  }
-  const start = () => {
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      const { startGatewayMemoryBackend } = await import("./server-startup-memory.js");
-      await startGatewayMemoryBackend({ cfg: params.cfg, log: params.log });
-    }).catch((err: unknown) => {
-      params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
-    });
-  };
-  if (params.policy.mode === "immediate") {
-    setImmediate(start);
-    return;
-  }
-  const timer = setTimeout(start, params.policy.delayMs);
-  timer.unref?.();
 }
 
 function schedulePostAttachUpdateSentinelRefresh(params: {
@@ -482,6 +448,67 @@ async function prewarmConfiguredPrimaryModel(params: {
   await publishConfiguredModelRuntimeSnapshots(params);
 }
 
+type StartupExternalAuthHydrationDeps = {
+  listAgentIds: (cfg: OpenClawConfig) => string[];
+  resolveAgentDir: (cfg: OpenClawConfig, agentId: string) => string;
+  collectConfiguredRefs: (cfg: OpenClawConfig, agentId: string) => readonly { value: string }[];
+  hydrate: (agentDir: string, providers: readonly string[]) => void;
+};
+
+async function hydrateConfiguredExternalCliAuth(params: {
+  cfg: OpenClawConfig;
+  log: { warn: (msg: string) => void };
+  deps?: StartupExternalAuthHydrationDeps;
+}): Promise<void> {
+  const deps: StartupExternalAuthHydrationDeps =
+    params.deps ??
+    (await Promise.all([
+      import("../agents/agent-scope.js"),
+      import("../agents/prepared-model-runtime.configured.js"),
+      import("../agents/auth-profiles/store.js"),
+      import("../agents/auth-profiles/external-cli-discovery.js"),
+    ]).then(([scope, configured, store, external]) => ({
+      listAgentIds: scope.listAgentIds,
+      resolveAgentDir: scope.resolveAgentDir,
+      collectConfiguredRefs: configured.collectPreparedModelRuntimeConfiguredRefs,
+      hydrate: (agentDir: string, providers: readonly string[]) => {
+        const discovery = external.externalCliDiscoveryForProviders({
+          cfg: params.cfg,
+          providers,
+        });
+        if (discovery.mode === "none") {
+          return;
+        }
+        store.ensureAuthProfileStore(agentDir, {
+          config: params.cfg,
+          externalCli: discovery,
+          allowKeychainPrompt: false,
+          readOnly: true,
+          syncExternalCli: false,
+        });
+      },
+    })));
+  const hydratedDirs = new Set<string>();
+  for (const agentId of deps.listAgentIds(params.cfg)) {
+    const providers = deps.collectConfiguredRefs(params.cfg, agentId).flatMap(({ value }) => {
+      const separator = value.indexOf("/");
+      return separator > 0 ? [value.slice(0, separator)] : [];
+    });
+    const agentDir = deps.resolveAgentDir(params.cfg, agentId);
+    if (providers.length === 0 || hydratedDirs.has(agentDir)) {
+      continue;
+    }
+    hydratedDirs.add(agentDir);
+    try {
+      deps.hydrate(agentDir, providers);
+    } catch (error) {
+      params.log.warn(
+        `startup external CLI auth hydration failed for agent ${agentId}: ${String(error)}`,
+      );
+    }
+  }
+}
+
 async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -621,6 +648,9 @@ export async function startGatewaySidecars(params: {
       );
     }
   });
+  await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
+    hydrateConfiguredExternalCliAuth({ cfg: params.cfg, log: params.log }),
+  );
   // Agent RPC remains available when transports are disabled. Publish configured/static facts before
   // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
@@ -748,14 +778,6 @@ export async function startGatewaySidecars(params: {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
   }
-
-  await measureStartup(params.startupTrace, "sidecars.memory", async () => {
-    const policy = resolveGatewayMemoryStartupPolicy(params.cfg);
-    if (policy.mode === "off") {
-      return;
-    }
-    scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
-  });
 
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
   postReadySidecars.push(
@@ -1143,11 +1165,9 @@ export async function startGatewayPostAttachRuntime(
   };
   await loadStartupPluginsIfNeeded();
 
-  const memoryStartupPolicy = resolveGatewayMemoryStartupPolicy(params.gatewayPluginConfigAtStart);
   const startupOutcomes = createGatewayStartupOutcomeRecorder({
     cfg: params.gatewayPluginConfigAtStart,
     gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
-    memoryStartupMode: memoryStartupPolicy.mode,
   });
 
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
@@ -1429,10 +1449,10 @@ export const testing = {
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,
+  hydrateConfiguredExternalCliAuth,
   publishConfiguredModelRuntimeSnapshots,
   publishStartupModelRuntime,
   refreshLatestUpdateRestartSentinelIfPresent,
-  resolveGatewayMemoryStartupPolicy,
   scheduleProviderAuthStatePrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,

@@ -1,4 +1,5 @@
 import { migrateOrphanedSessionKeys } from "../../infra/state-migrations.js";
+import type { PreparedLegacySessionSurfaces } from "../../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
@@ -15,6 +16,11 @@ export type SessionStartupMigrationLogger = {
   warn: (message: string) => void;
 };
 
+type PrepareLegacySessionSurfaces = (params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}) => PreparedLegacySessionSurfaces;
+
 /**
  * Run session migration and orphan-temp cleanup before runtime store reads.
  *
@@ -27,15 +33,21 @@ export async function runSessionStartupMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: {
     migrateOrphanedSessionKeys?: typeof migrateOrphanedSessionKeys;
+    prepareLegacySessionSurfaces?: PrepareLegacySessionSurfaces;
     resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
     sweepOrphanSessionStoreTemps?: typeof sweepOrphanSessionStoreTemps;
   };
 }): Promise<void> {
   const migrate = params.deps?.migrateOrphanedSessionKeys ?? migrateOrphanedSessionKeys;
   try {
+    const env = params.env ?? process.env;
+    const prepareSurfaces =
+      params.deps?.prepareLegacySessionSurfaces ??
+      (await import("../../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces;
     const result = await migrate({
       cfg: params.cfg,
-      env: params.env ?? process.env,
+      env,
+      legacySessionSurfaces: prepareSurfaces({ config: params.cfg, env }),
     });
     if (result.changes.length > 0) {
       params.log.info(

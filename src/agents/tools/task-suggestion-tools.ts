@@ -33,7 +33,7 @@ const SpawnTaskToolSchema = Type.Object(
       Type.String({
         minLength: 1,
         maxLength: 4_096,
-        description: "Absolute project directory; defaults to the current project.",
+        description: "Absolute path inside a git checkout; defaults to the current project.",
       }),
     ),
   },
@@ -75,7 +75,7 @@ export function createTaskSuggestionTools(params: {
       displaySummary: SPAWN_TASK_TOOL_DISPLAY_SUMMARY,
       description: [
         "Suggest confirmed valuable out-of-scope follow-up: dead code, stale docs, missing coverage, verified TODO, security issue.",
-        "Operator suggestion only; does not start work.",
+        "Operator suggestion only; does not start work. cwd must be an absolute path inside a git checkout.",
       ].join(" "),
       parameters: SpawnTaskToolSchema,
       outputSchema: SpawnTaskOutputSchema,

@@ -113,6 +113,7 @@ final class GatewayProcessManager {
     private var launchAgentReadinessRevision: UInt64 = 0
     private var launchAgentInstallGeneration: UInt64?
     private var launchAgentFreshInstallGeneration: UInt64?
+    private var profilePortConflict: String?
     private var lastObservedGatewayPID: Int32?
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
@@ -146,6 +147,16 @@ final class GatewayProcessManager {
             self.logger.info("gateway process skipped: remote mode active")
             return
         }
+        if active, self.profilePortConflict != nil {
+            self.profilePortConflict = nil
+            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(nil) }
+        }
+        if active, let conflict = GatewayEnvironment.profileGatewayPortConflict() {
+            self.desiredActive = false
+            self.recordProfilePortConflict(conflict)
+            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+            return
+        }
         self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
         self.refreshEnvironmentStatus()
@@ -159,6 +170,7 @@ final class GatewayProcessManager {
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
         guard !CommandResolver.connectionModeIsRemote() else { return false }
         guard self.desiredActive else { return false }
+        guard self.profilePortConflict == nil else { return false }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
@@ -522,6 +534,11 @@ final class GatewayProcessManager {
         guard self.isCurrentGatewayStart(startGeneration) else { return true }
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
+        if hasListener,
+           await !(self.profileOwnsGateway(instance, port: port))
+        {
+            return true
+        }
 
         let attemptAttach = {
             try await self.probeGatewayHealth(timeoutMs: 2000)
@@ -534,6 +551,9 @@ final class GatewayProcessManager {
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let attachedInstance = await PortGuardian.shared.describe(port: port)
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
+                if await !(self.profileOwnsGateway(attachedInstance, port: port)) {
+                    return true
+                }
                 let snap = decodeHealthSnapshot(from: data)
                 let attachedInstanceText = attachedInstance.map { self.describe(instance: $0) }
                 let details = self.describe(details: attachedInstanceText, port: port, snap: snap)
@@ -579,6 +599,45 @@ final class GatewayProcessManager {
 
         self.existingGatewayDetails = nil
         return false
+    }
+
+    static func profileAllowsExistingGatewayAttachment(
+        profile: AppProfile,
+        listenerPID: Int32?,
+        managedServicePID: Int32?) -> Bool
+    {
+        guard profile.isActive else { return true }
+        guard let listenerPID, let managedServicePID else { return false }
+        return listenerPID == managedServicePID
+    }
+
+    private func profileOwnsGateway(_ instance: PortGuardian.Descriptor?, port: Int) async -> Bool {
+        guard AppProfile.current.isActive else { return true }
+        let managedPID = await GatewayLaunchAgentManager.runningGatewayPID()
+        guard Self.profileAllowsExistingGatewayAttachment(
+            profile: .current,
+            listenerPID: instance?.pid,
+            managedServicePID: managedPID)
+        else {
+            await self.failProfilePortOwnership(port: port)
+            return false
+        }
+        return true
+    }
+
+    private func failProfilePortOwnership(port: Int) async {
+        let message = "Gateway port \(port) is already owned by another process or OpenClaw profile. " +
+            "Set gateway.port to a free port for profile \(AppProfile.current.name ?? "named")."
+        self.recordProfilePortConflict(message)
+        await GatewayEndpointStore.shared.setLocalUnavailableReason(message)
+    }
+
+    private func recordProfilePortConflict(_ message: String) {
+        self.profilePortConflict = message
+        self.status = .failed(message)
+        self.lastFailureReason = message
+        self.appendLog("[gateway] \(message)\n")
+        self.logger.error("\(message, privacy: .public)")
     }
 
     private func describe(details instance: String?, port: Int, snap: HealthSnapshot?) -> String {
@@ -698,14 +757,13 @@ extension GatewayProcessManager {
         context: LaunchAgentStartupContext,
         startGeneration: UInt64,
         readinessWindow: TimeInterval = 6,
-        // A fresh install gets ten six-second probe windows for Local Network authorization.
-        firstInstallReadinessGraceWindows: Int = 9) async
+        // Fresh installs keep probing through the same first-run migration budget as the CLI.
+        firstInstallReadinessBudget: TimeInterval = GatewayLaunchAgentManager.startupMigrationTolerance) async
     {
         let startedAt = Date()
         var deadline = startedAt.addingTimeInterval(readinessWindow)
-        let graceWindowCount = max(0, firstInstallReadinessGraceWindows)
         let finalProbeDeadline = startedAt.addingTimeInterval(
-            readinessWindow * (Double(graceWindowCount) + 1))
+            max(readinessWindow, firstInstallReadinessBudget))
         var latestRetryDisposition: GatewayProbeFailureDisposition?
         var readinessPID = context.readinessPID
         var freshInstallGraceAuthorized = false
@@ -738,6 +796,7 @@ extension GatewayProcessManager {
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return }
                 let instance = await PortGuardian.shared.describe(port: context.port)
+                guard await self.profileOwnsGateway(instance, port: context.port) else { return }
                 guard self.publishLaunchdGatewayReady(
                     instance: instance,
                     context: context,
@@ -983,7 +1042,8 @@ extension GatewayProcessManager {
         launchAgentInstalled: Bool = false) async -> Bool
     {
         let startGeneration = self.gatewayStartGeneration
-        if let result = await self.observeCurrentGatewayStart(generation: startGeneration) { return result }
+        if await self.observeCurrentGatewayStart(generation: startGeneration) == true { return true }
+        guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return false }
         let readinessCandidate = self.launchAgentReadinessCandidate
         let readinessFailure = self.launchAgentReadinessFailure
         let readinessRevision = self.launchAgentReadinessRevision
@@ -1000,6 +1060,7 @@ extension GatewayProcessManager {
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return false }
                 let instance = await PortGuardian.shared.describe(port: readinessPort)
+                guard await self.profileOwnsGateway(instance, port: readinessPort) else { return false }
                 return self.publishGatewayReadinessSuccess(
                     instance: instance,
                     startGeneration: startGeneration,
@@ -1337,7 +1398,7 @@ extension GatewayProcessManager {
         port: Int,
         pid: Int32,
         readinessWindow: TimeInterval,
-        firstInstallReadinessGraceWindows: Int)
+        firstInstallReadinessBudget: TimeInterval)
     {
         self.desiredActive = true
         self.status = .starting
@@ -1354,7 +1415,7 @@ extension GatewayProcessManager {
                     readinessRevision: readinessRevision),
                 startGeneration: generation,
                 readinessWindow: readinessWindow,
-                firstInstallReadinessGraceWindows: firstInstallReadinessGraceWindows)
+                firstInstallReadinessBudget: firstInstallReadinessBudget)
         }
     }
 }

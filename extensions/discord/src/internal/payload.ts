@@ -5,6 +5,7 @@ import { Embed } from "./embeds.js";
 export type MessagePayloadFile = {
   name: string;
   data: Blob | Uint8Array | ArrayBuffer;
+  contentType?: string;
   description?: string;
   duration_secs?: number;
   waveform?: string;

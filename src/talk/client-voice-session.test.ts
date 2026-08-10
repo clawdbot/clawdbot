@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -58,14 +59,6 @@ vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
-
-function createDeferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((accept) => {
-    resolve = accept;
-  });
-  return { promise, resolve };
-}
 
 async function seedSession(sessionKey: string, context: DeliveryContext = {}): Promise<void> {
   await replaceSessionEntry(

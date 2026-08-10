@@ -41,9 +41,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'EOF'
+          node --import tsx --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
+          import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mts";
 
           // Warm the selected planner envelopes for the striped unit-fast graph
           // plus import-bound graphs that remained cold in protected-cache readers.
@@ -90,4 +90,4 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
-        run: node scripts/ci-run-node-test-shard.mjs
+        run: node --import tsx scripts/ci-run-node-test-shard.mts

@@ -1,15 +1,9 @@
 // Descendant-settle wake replaces an ended nested orchestrator run while
 // preserving lifecycle ownership.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  getAgentEventLifecycleGeneration,
-  isAgentEventLifecycleGenerationCurrent,
-} from "../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import {
-  buildAnnounceIdFromChildRun,
-  buildAnnounceIdempotencyKey,
-} from "./announce-idempotency.js";
+import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
@@ -22,13 +16,11 @@ import type {
 } from "./subagent-announce.runtime.js";
 import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 
-type SubagentRegistryRuntime = typeof import("./subagent-registry-runtime.js");
-
-export type DescendantWakeDeps = {
+type DescendantWakeDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
-  loadSubagentRegistryRuntime: () => Promise<SubagentRegistryRuntime>;
+  replaceSubagentRunAfterSteer: typeof import("./subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
 };
 
 type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;
@@ -64,25 +56,21 @@ function buildDescendantWakeMessage(params: { findings: string; taskLabel: strin
 }
 
 export async function runDescendantWake(params: {
-  enabled: boolean;
   runId: string;
   childSessionKey: string;
   taskLabel: string;
-  findings?: string;
+  findings: string;
+  announceId: string;
   isChildSessionEffectsAllowed: () => boolean;
   hasUsableSessionEntry: UsableSessionEntryGuard;
   deps: DescendantWakeDeps;
   signal?: AbortSignal;
 }): Promise<boolean> {
   if (
-    !params.enabled ||
+    params.signal?.aborted ||
     !params.isChildSessionEffectsAllowed() ||
-    !params.findings?.trim() ||
     isWakeContinuation(params.runId)
   ) {
-    return false;
-  }
-  if (params.signal?.aborted || !params.isChildSessionEffectsAllowed()) {
     return false;
   }
 
@@ -98,20 +86,14 @@ export async function runDescendantWake(params: {
     findings: params.findings,
     taskLabel: params.taskLabel,
   });
-  const announceId = buildAnnounceIdFromChildRun({
-    childSessionKey: params.childSessionKey,
-    childRunId: stripWakeRunSuffixes(params.runId),
-  });
 
   let wakeRunId;
   try {
     const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
       operation: "descendant wake agent call",
       signal: params.signal,
+      isAttemptAllowed: params.isChildSessionEffectsAllowed,
       run: async () => {
-        if (!params.isChildSessionEffectsAllowed()) {
-          return {};
-        }
         return await params.deps.dispatchGatewayMethodInProcess(
           "agent",
           {
@@ -124,7 +106,7 @@ export async function runDescendantWake(params: {
               sourceChannel: INTERNAL_MESSAGE_CHANNEL,
               sourceTool: "subagent_announce",
             },
-            idempotencyKey: buildAnnounceIdempotencyKey(`${announceId}:wake`),
+            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
           {
             timeoutMs: announceTimeoutMs,
@@ -160,15 +142,11 @@ export async function runDescendantWake(params: {
     });
   };
 
-  const { replaceSubagentRunAfterSteer } = await params.deps.loadSubagentRegistryRuntime();
-  if (
-    !params.isChildSessionEffectsAllowed() ||
-    !isAgentEventLifecycleGenerationCurrent(wakeLifecycleGeneration)
-  ) {
+  if (!params.isChildSessionEffectsAllowed()) {
     await terminateUnownedWake();
     return false;
   }
-  const replaced = await replaceSubagentRunAfterSteer({
+  const replaced = await params.deps.replaceSubagentRunAfterSteer({
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     lifecycleGeneration: wakeLifecycleGeneration,

@@ -874,7 +874,7 @@ describe("provider-runtime", () => {
       plugins: {
         entries: {
           demo: { enabled: true, config: { endpoint: "https://demo.example" } },
-          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+          "active-memory": { enabled: true, config: { queryMode: "recent" } },
         },
       },
     } as OpenClawConfig;
@@ -1168,7 +1168,7 @@ describe("provider-runtime", () => {
       plugins: {
         entries: {
           demo: { enabled: true, config: { endpoint: "https://demo.example" } },
-          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+          "active-memory": { enabled: true, config: { queryMode: "recent" } },
         },
       },
     } as OpenClawConfig;

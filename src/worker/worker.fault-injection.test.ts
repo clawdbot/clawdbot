@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
@@ -13,6 +14,7 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
@@ -48,7 +50,6 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -110,16 +111,6 @@ type Deferred<T> = {
   resolve(value: T): void;
   reject(error: Error): void;
 };
-
-function createDeferred<T = void>(): Deferred<T> {
-  let resolvePromise!: (value: T) => void;
-  let rejectPromise!: (error: Error) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return { promise, resolve: resolvePromise, reject: rejectPromise };
-}
 
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 

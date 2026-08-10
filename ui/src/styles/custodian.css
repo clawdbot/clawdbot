@@ -209,7 +209,7 @@ openclaw-custodian-page {
 .custodian__nudge-action {
   padding: 5px 2px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .custodian__nudge-action:disabled {
@@ -225,7 +225,7 @@ openclaw-custodian-page {
   place-items: center;
   border-radius: 50%;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .custodian__nudge-action:focus-visible,
@@ -418,7 +418,7 @@ openclaw-custodian-page {
 
 .custodian__change-paths summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .custodian__change-paths ul {

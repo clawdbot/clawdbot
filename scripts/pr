@@ -49,7 +49,9 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.sh
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
+  scripts/lib/tsx-cli-shim.mjs
   scripts/watch-pr-ci.mjs
+  scripts/watch-pr-ci.mts
 )
 if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"

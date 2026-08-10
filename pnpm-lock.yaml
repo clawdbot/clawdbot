@@ -257,6 +257,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@openclaw/session-url-contract':
+        specifier: workspace:*
+        version: link:packages/session-url-contract
       '@opentelemetry/sdk-node':
         specifier: 0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)(supports-color@10.2.2)
@@ -278,6 +281,9 @@ importers:
       '@types/markdown-it':
         specifier: 14.1.2
         version: 14.1.2
+      '@types/mdast':
+        specifier: 4.0.4
+        version: 4.0.4
       '@types/ms':
         specifier: 2.1.0
         version: 2.1.0
@@ -347,6 +353,9 @@ importers:
       sigstore:
         specifier: 5.0.0
         version: 5.0.0(supports-color@10.2.2)
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
       stylelint:
         specifier: 17.14.1
         version: 17.14.1(supports-color@10.2.2)(typescript@6.0.3)
@@ -2334,7 +2343,11 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
 
-  packages/session-url-contract: {}
+  packages/session-url-contract:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/terminal-core:
     dependencies:
@@ -2397,6 +2410,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@novnc/novnc':
+        specifier: 1.7.0
+        version: 1.7.0
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../packages/gateway-client
@@ -4066,6 +4082,9 @@ packages:
   '@nolyfill/domexception@1.0.28':
     resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
     engines: {node: '>=12.4.0'}
+
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@npmcli/agent@5.0.2':
     resolution: {integrity: sha512-EkzGmEsgbQ1rqWkRJe2P0oQHx/ylZozDUNPMXCklLuSFL3GY+QyEfBUjhjCsgGXzh4OGpnHvkboSQgczjP/jJg==}
@@ -11353,6 +11372,8 @@ snapshots:
       fastq: 1.20.1
 
   '@nolyfill/domexception@1.0.28': {}
+
+  '@novnc/novnc@1.7.0': {}
 
   '@npmcli/agent@5.0.2(supports-color@10.2.2)':
     dependencies:

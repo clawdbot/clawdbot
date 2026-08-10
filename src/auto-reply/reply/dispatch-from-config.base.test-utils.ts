@@ -52,6 +52,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -91,7 +92,7 @@ describe("dispatchReplyFromConfig", () => {
     };
   }
 
-  it("loads a registry handle before reading inbound hook state", async () => {
+  it("falls back to a live registry handle when the Gateway dispatch runtime is inactive", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -100,8 +101,29 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:main",
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const replyResolver = vi.fn(
+      async (
+        _ctx: MsgContext,
+        _opts?: GetReplyOptions,
+        _cfg?: OpenClawConfig,
+        _preparedRuntime?: unknown,
+      ) => ({ text: "hi" }) satisfies ReplyPayload,
+    );
+    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(undefined);
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     const pluginLoadOptions = firstMockArg(
       runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
@@ -117,55 +139,60 @@ describe("dispatchReplyFromConfig", () => {
         "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
       ),
     );
+    expect(replyResolver.mock.calls[0]?.[3]).toBeUndefined();
   });
 
-  it("uses zero per-turn registry loads after Gateway publication and preserves cold fallback", async () => {
+  it("keeps a raw three-argument resolver on one prepared generation across replacement", async () => {
     setNoAbort();
     const cfg = emptyConfig;
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    for (let index = 0; index < 3; index += 1) {
+    let receivedPreparedRuntime: unknown;
+    let replacementPreparedRuntime: unknown;
+    const preparedRegistry = createTestRegistry([]);
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedRuntime = Object.freeze({
+      agentId: "main",
+      agentDir: "/tmp/prepared-agent",
+      workspaceDir: "/tmp/prepared-workspace",
+      config: cfg,
+      modelCatalog: { entries: [], routeVariants: [] },
+      inboundPluginRegistry: preparedRegistry,
+    });
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValueOnce(preparedRuntime)
+      .mockResolvedValue(
+        Object.freeze({
+          ...preparedRuntime,
+          workspaceDir: "/tmp/replacement-workspace",
+        }),
+      );
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, _opts?: GetReplyOptions, configOverride?: OpenClawConfig) => {
+        expect(configOverride).toBeUndefined();
+        receivedPreparedRuntime = getPreparedReplyDispatchRuntime();
+        replacementPreparedRuntime = await preparedLookup({ agentId: "main" });
+        expect(getPreparedReplyDispatchRuntime()).toBe(receivedPreparedRuntime);
+        return { text: "hi" } satisfies ReplyPayload;
+      },
+    );
+    try {
       await dispatchReplyFromConfig({
         ctx: buildTestCtx({
           Provider: "whatsapp",
           SessionKey: "agent:main:main",
-          MessageSid: `cold-${index}`,
+          MessageSid: "prepared",
         }),
         cfg,
         dispatcher: createDispatcher(),
         replyResolver,
+        usePublishedModelRuntime: true,
       });
-    }
-    expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(3);
-
-    const preparedRegistry = createTestRegistry([]);
-    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
-    const preparedLookup = vi
-      .spyOn(preparedRuntime, "loadPublishedGatewayInboundPluginRegistry")
-      .mockResolvedValue(preparedRegistry);
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockClear();
-    try {
-      for (let index = 0; index < 3; index += 1) {
-        await dispatchReplyFromConfig({
-          ctx: buildTestCtx({
-            Provider: "whatsapp",
-            SessionKey: "agent:main:main",
-            MessageSid: `prepared-${index}`,
-          }),
-          cfg,
-          dispatcher: createDispatcher(),
-          replyResolver,
-          usePublishedModelRuntime: true,
-        });
-      }
-      expect(preparedLookup).toHaveBeenCalledTimes(3);
-      expect(
-        preparedLookup.mock.calls.every(
-          ([input]) =>
-            Object.keys(input as object).length === 1 &&
-            (input as { agentId?: string }).agentId === "main",
-        ),
-      ).toBe(true);
+      expect(preparedLookup).toHaveBeenCalledTimes(2);
+      expect(preparedLookup).toHaveBeenNthCalledWith(1, { agentId: "main" });
+      expect(preparedLookup).toHaveBeenNthCalledWith(2, { agentId: "main" });
       expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+      expect(receivedPreparedRuntime).toBe(preparedRuntime);
+      expect(replacementPreparedRuntime).not.toBe(preparedRuntime);
     } finally {
       preparedLookup.mockRestore();
     }
@@ -431,6 +458,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       agentId: "main",
+      expectedWriterRunId: "slack-run-1",
       text: "Slack command reply",
       mediaUrls: undefined,
       idempotencyKey: "channel-final:slack-message-1:0",

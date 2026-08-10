@@ -122,6 +122,12 @@ async function runEmbeddedAgentViaCliBackend(
     model: params.model,
     cwd: params.cwd ?? params.workspaceDir,
     config: params.config,
+    ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+      : {}),
+    ...(params.sessionTarget?.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+      : {}),
     ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
   });
   // CLI tool results arrive as agent events with transport-prefixed MCP
@@ -194,8 +200,15 @@ async function runEmbeddedAgentViaCliBackend(
     const result = await runCliAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+        : {}),
+      ...(params.sessionTarget?.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+        : {}),
       chatType: params.chatType,
       agentId: params.agentId,
+      ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,

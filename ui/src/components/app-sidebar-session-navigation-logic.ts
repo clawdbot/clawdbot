@@ -44,12 +44,12 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
+import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import {
   listSessionCreators,
   type SessionCreatedActor,
   type SessionCreatorOption,
 } from "./session-owner-chip.ts";
-import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -164,7 +164,7 @@ export function buildSidebarSessionNavigationState(input: {
               row.placement.workspaceResultConflict?.totalCount ?? 0,
             ) || undefined
           : undefined,
-      cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
+      cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxCount: input.outboxCountForSessionKey(row.key),

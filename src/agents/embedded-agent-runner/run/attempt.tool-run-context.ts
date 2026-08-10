@@ -1,3 +1,4 @@
+import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 /**
  * Builds tool run context passed to embedded-agent tool handlers.
  */
@@ -15,12 +16,14 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   jobId?: string;
   memoryFlushWritePath?: string;
   toolsAllow?: string[];
+  conversationToolPolicy?: GroupToolPolicyConfig;
   trace?: DiagnosticTraceContext;
 }): {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
   runtimeToolAllowlist?: string[];
+  conversationToolPolicy?: GroupToolPolicyConfig;
   trace?: DiagnosticTraceContext;
 } {
   return {
@@ -28,6 +31,9 @@ export function buildEmbeddedAttemptToolRunContext(params: {
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
     ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
+    ...(params.conversationToolPolicy
+      ? { conversationToolPolicy: params.conversationToolPolicy }
+      : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.
     ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),

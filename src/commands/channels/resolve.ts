@@ -4,7 +4,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelResolveKind,
   ChannelResolveResult,
@@ -161,14 +160,13 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   const selection = explicitChannel
     ? {
         channel: resolvedExplicit?.channelId,
+        plugin: resolvedExplicit?.plugin,
       }
     : await resolveMessageChannelSelection({
         cfg,
         channel: opts.channel ?? null,
       });
-  const plugin =
-    (explicitChannel ? resolvedExplicit?.plugin : undefined) ??
-    (selection.channel ? getChannelPlugin(selection.channel) : undefined);
+  const plugin = selection.plugin;
   if (!plugin?.resolver?.resolveTargets) {
     const channelText = selection.channel ?? explicitChannel ?? "";
     throw new Error(

@@ -14,6 +14,7 @@ import { applySessionEntryReplacements } from "../config/sessions/session-access
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import type { AgentRunRequest } from "../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
@@ -513,7 +514,7 @@ export async function resumeMainSession(params: {
         ? "failed"
         : "skipped";
     }
-    const agentParams: Record<string, unknown> = {
+    const agentParams: AgentRunRequest = {
       message: buildResumeMessage(sanitizedPendingText),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,

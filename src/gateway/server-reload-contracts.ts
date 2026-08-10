@@ -170,6 +170,8 @@ export type GatewayReloadHandlerParams = {
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;
+  /** Revalidate successor-owned startup state before the current listener is closed. */
+  assertRestartReady?: () => Promise<void> | void;
 };
 
 export type ManagedGatewayConfigReloaderParams = Omit<

@@ -3423,15 +3423,22 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           defaults: {
             model: "sonnet-4.6",
           },
+          modelByChannel: {
+            "demo-channel": { default: "openai/gpt-5.6-luna" },
+          },
+          " ": { token: "dummy" },
           "demo-channel": {
-            token: "configured",
+            token: "test-token",
+          },
+          " trimmed-channel ": {
+            token: "test-token",
           },
           "demo-other-channel": {
             enabled: false,
           },
         },
       } as OpenClawConfig),
-    ).toEqual(["demo-channel"]);
+    ).toEqual(["demo-channel", "trimmed-channel"]);
   });
 
   it("does not let disabled mixed-case channel config announce ambient matches", () => {

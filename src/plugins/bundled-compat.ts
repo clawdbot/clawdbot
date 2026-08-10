@@ -9,6 +9,9 @@ export function withBundledPluginEnablementCompat(params: {
   config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
 }): OpenClawConfig | undefined {
+  if (params.pluginIds.length === 0) {
+    return params.config;
+  }
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
   const allow = params.config?.plugins?.allow;
@@ -51,10 +54,7 @@ export function withBundledPluginEnablementCompat(params: {
       ...params.config?.plugins,
       ...(forcePluginsEnabled ? { enabled: true } : {}),
       ...(nextAllow ? { allow: [...nextAllow] } : {}),
-      entries: {
-        ...existingEntries,
-        ...nextEntries,
-      },
+      entries: nextEntries,
     },
   };
 }

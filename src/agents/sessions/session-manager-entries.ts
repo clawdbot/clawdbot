@@ -87,11 +87,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.pendingDeliberateAppend = false;
     if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
       this.appendMode = "side";
-      this.promptReleasedSideBranchParentId = canonicalEntry.id;
     } else {
       this.leafId = canonicalEntry.id;
       this.appendMode = undefined;
-      this.promptReleasedSideBranchParentId = undefined;
     }
     return persistenceResult && typeof persistenceResult === "object"
       ? persistenceResult.anchor
@@ -304,8 +302,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = params.targetId;
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
-    this.promptReleasedSideBranchParentId =
-      params.appendMode === "side" ? params.appendParentId : undefined;
     this.pendingDeliberateAppend = false;
     return entry;
   }
@@ -441,7 +437,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
   }
 
@@ -449,7 +444,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
   }
 

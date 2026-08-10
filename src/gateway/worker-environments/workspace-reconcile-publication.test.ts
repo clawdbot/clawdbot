@@ -12,18 +12,14 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function temporaryDirectory(name: string): Promise<string> {
-  return await fs.realpath(tempDirs.make(`openclaw-${name}-`));
-}
-
 async function manifestFor(root: string) {
   return (await readActualWorkspaceManifest({ root, baseCommit: null })).manifest;
 }
 
 describe("worker workspace reconciliation publication", () => {
   it("keeps local bytes and the journal pending when accepted publication is indeterminate", async () => {
-    const local = await temporaryDirectory("workspace-indeterminate-publication");
-    const staged = await temporaryDirectory("workspace-indeterminate-publication-staged");
+    const local = tempDirs.make("openclaw-workspace-indeterminate-publication-");
+    const staged = tempDirs.make("openclaw-workspace-indeterminate-publication-staged-");
     await fs.writeFile(path.join(local, "result.txt"), "base\n");
     const base = await manifestFor(local);
     await Promise.all([
@@ -83,8 +79,8 @@ describe("worker workspace reconciliation publication", () => {
   });
 
   it("rolls local bytes back immediately when accepted publication fails definitively", async () => {
-    const local = await temporaryDirectory("workspace-definitive-publication-failure");
-    const staged = await temporaryDirectory("workspace-definitive-publication-failure-staged");
+    const local = tempDirs.make("openclaw-workspace-definitive-publication-failure-");
+    const staged = tempDirs.make("openclaw-workspace-definitive-publication-failure-staged-");
     await fs.writeFile(path.join(local, "result.txt"), "base\n");
     const base = await manifestFor(local);
     await fs.writeFile(path.join(staged, "result.txt"), "worker\n");

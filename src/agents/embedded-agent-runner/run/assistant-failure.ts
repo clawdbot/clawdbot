@@ -74,8 +74,6 @@ export async function handleEmbeddedAssistantFailure(input: {
   emptyErrorRetries: number;
   overloadProfileRotations: number;
   overloadProfileRotationLimit: number;
-  rateLimitProfileRotations: number;
-  rateLimitProfileRotationLimit: number;
   sameModelIdleTimeoutRetries: number;
   previousRetryFailoverReason: FailoverReason | null;
   maybeMarkAuthProfileFailure: (failure: {
@@ -83,12 +81,12 @@ export async function handleEmbeddedAssistantFailure(input: {
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
   }) => Promise<void>;
-  maybeEscalateRateLimitProfileFallback: Parameters<
-    typeof handleAssistantFailover
-  >[0]["maybeEscalateRateLimitProfileFallback"];
   maybeRetrySameModelRateLimit: (retry?: { retryAfterSeconds?: number }) => Promise<boolean>;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
-  advanceAttemptAuthProfile: () => Promise<boolean>;
+  advanceAuthProfile: Parameters<typeof handleAssistantFailover>[0]["advanceAuthProfile"];
+  advanceRateLimitAuthProfile: Parameters<
+    typeof handleAssistantFailover
+  >[0]["advanceRateLimitAuthProfile"];
   traceAttempts: TraceAttempt[];
   suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
   suspensionSessionId: string;
@@ -268,8 +266,6 @@ export async function handleEmbeddedAssistantFailure(input: {
       !input.fallbackConfigured &&
       input.canRestartForLiveSwitch &&
       input.sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
-    allowSameModelRateLimitRetry:
-      input.rateLimitProfileRotations < input.rateLimitProfileRotationLimit,
     assistantProfileFailureReason,
     lastProfileId: input.authProfileId,
     modelId: input.modelId,
@@ -292,10 +288,10 @@ export async function handleEmbeddedAssistantFailure(input: {
     logAssistantFailoverDecision: logFailoverDecision,
     warn: (message) => log.warn(message),
     maybeMarkAuthProfileFailure: input.maybeMarkAuthProfileFailure,
-    maybeEscalateRateLimitProfileFallback: input.maybeEscalateRateLimitProfileFallback,
     maybeRetrySameModelRateLimit: input.maybeRetrySameModelRateLimit,
     maybeBackoffBeforeOverloadFailover: input.maybeBackoffBeforeOverloadFailover,
-    advanceAuthProfile: input.advanceAttemptAuthProfile,
+    advanceAuthProfile: input.advanceAuthProfile,
+    advanceRateLimitAuthProfile: input.advanceRateLimitAuthProfile,
   });
   if (outcome.action === "retry") {
     const retryTraceResult =

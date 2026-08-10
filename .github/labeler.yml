@@ -709,10 +709,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/sglang/**"
-"extensions: thread-ownership":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/thread-ownership/**"
 "extensions: vllm":
   - changed-files:
       - any-glob-to-any-file:

@@ -141,6 +141,20 @@ function createDispatch(
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
 
+function dispatchTestAssembledTurn(
+  overrides: Omit<
+    Parameters<typeof dispatchAssembledChannelTurn>[0],
+    "cfg" | "agentId" | "storePath"
+  >,
+) {
+  return dispatchAssembledChannelTurn({
+    cfg,
+    agentId: "main",
+    storePath: "/tmp/sessions.json",
+    ...overrides,
+  });
+}
+
 function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
   const call = mock.mock.calls[0];
   if (!call) {
@@ -612,13 +626,10 @@ describe("channel turn kernel", () => {
     const recordInboundSession = createRecordInboundSession();
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
-    const result = await dispatchAssembledChannelTurn({
-      cfg,
+    const result = await dispatchTestAssembledTurn({
       channel: "telegram",
       accountId: "acct",
-      agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({
         To: "123",
         OriginatingTo: "123",
@@ -677,13 +688,10 @@ describe("channel turn kernel", () => {
       },
     ) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "telegram",
       accountId: "acct",
-      agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -749,13 +757,10 @@ describe("channel turn kernel", () => {
     const onDelivered = vi.fn();
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "tlon",
       accountId: "acct",
-      agentId: "main",
       routeSessionKey: "agent:main:tlon:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "chat/~nec/general", OriginatingTo: "chat/~nec/general" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -810,13 +815,10 @@ describe("channel turn kernel", () => {
       },
     ) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "telegram",
       accountId: "acct",
-      agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -843,13 +845,10 @@ describe("channel turn kernel", () => {
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "telegram",
         accountId: "acct",
-        agentId: "main",
         routeSessionKey: "agent:main:telegram:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -879,13 +878,10 @@ describe("channel turn kernel", () => {
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "telegram",
         accountId: "acct",
-        agentId: "main",
         routeSessionKey: "agent:main:telegram:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -905,13 +901,10 @@ describe("channel turn kernel", () => {
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "telegram",
         accountId: "acct",
-        agentId: "main",
         routeSessionKey: "agent:main:telegram:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -948,12 +941,9 @@ describe("channel turn kernel", () => {
       },
     ) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "test",
-      agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1002,13 +992,10 @@ describe("channel turn kernel", () => {
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "feishu",
       accountId: "acct",
-      agentId: "main",
       routeSessionKey: "agent:main:feishu:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu", OriginatingTo: "oc_chat" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1046,12 +1033,9 @@ describe("channel turn kernel", () => {
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "feishu",
-      agentId: "main",
       routeSessionKey: "agent:main:feishu:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1075,12 +1059,9 @@ describe("channel turn kernel", () => {
     const onError = vi.fn();
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "feishu",
-        agentId: "main",
         routeSessionKey: "agent:main:feishu:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
@@ -1137,12 +1118,9 @@ describe("channel turn kernel", () => {
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "feishu",
-        agentId: "main",
         routeSessionKey: "agent:main:feishu:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -1190,12 +1168,9 @@ describe("channel turn kernel", () => {
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "feishu",
-        agentId: "main",
         routeSessionKey: "agent:main:feishu:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -1246,12 +1221,9 @@ describe("channel turn kernel", () => {
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "feishu",
-        agentId: "main",
         routeSessionKey: "agent:main:feishu:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -1284,12 +1256,9 @@ describe("channel turn kernel", () => {
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "feishu",
-      agentId: "main",
       routeSessionKey: "agent:main:feishu:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1310,13 +1279,10 @@ describe("channel turn kernel", () => {
     const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "telegram",
       accountId: "acct",
-      agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1332,12 +1298,9 @@ describe("channel turn kernel", () => {
     const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "test",
-      agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1377,12 +1340,9 @@ describe("channel turn kernel", () => {
       },
     ) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "test",
-      agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1402,12 +1362,9 @@ describe("channel turn kernel", () => {
     const recordInboundSession = createRecordInboundSession(events);
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch(events);
 
-    const result = await dispatchAssembledChannelTurn({
-      cfg,
+    const result = await dispatchTestAssembledTurn({
       channel: "test",
-      agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession,
       dispatchReplyWithBufferedBlockDispatcher,
@@ -1435,12 +1392,9 @@ describe("channel turn kernel", () => {
     const commandSessionKey = "agent:main:command:telegram:42";
     const targetSessionKey = "agent:main:telegram:group:42:topic:7";
 
-    const result = await dispatchAssembledChannelTurn({
-      cfg,
+    const result = await dispatchTestAssembledTurn({
       channel: "telegram",
-      agentId: "main",
       routeSessionKey: commandSessionKey,
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({
         AgentId: "main",
         SessionKey: commandSessionKey,
@@ -1486,12 +1440,9 @@ describe("channel turn kernel", () => {
     const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
 
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "telegram",
-        agentId: "main",
         routeSessionKey: "agent:main:command:telegram:42",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx(),
         recordInboundSession,
         dispatchReplyWithBufferedBlockDispatcher,
@@ -1505,12 +1456,9 @@ describe("channel turn kernel", () => {
 
   it("rejects surrounding whitespace in an explicit record session", async () => {
     await expect(
-      dispatchAssembledChannelTurn({
-        cfg,
+      dispatchTestAssembledTurn({
         channel: "telegram",
-        agentId: "main",
         routeSessionKey: "agent:main:command:telegram:42",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx(),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
@@ -1865,13 +1813,10 @@ describe("channel turn kernel", () => {
     });
 
     // Unbinding removes Discord's thread route, not the core-owned outbound identity.
-    const result = await dispatchAssembledChannelTurn({
-      cfg,
+    const result = await dispatchTestAssembledTurn({
       channel: "discord",
       accountId: "default",
-      agentId: "main",
       routeSessionKey: "agent:main:discord:channel:thread-1",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({
         Provider: "discord",
         Surface: "discord",
@@ -2086,12 +2031,9 @@ describe("channel turn kernel", () => {
       },
     ) as DispatchReplyWithBufferedBlockDispatcher;
 
-    await dispatchAssembledChannelTurn({
-      cfg,
+    await dispatchTestAssembledTurn({
       channel: "test",
-      agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(events),
       dispatchReplyWithBufferedBlockDispatcher,

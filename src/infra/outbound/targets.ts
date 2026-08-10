@@ -30,15 +30,9 @@ import {
   type OutboundTargetResolution,
 } from "./targets-resolve-shared.js";
 
-/** Deliverable channel id accepted by outbound target resolution. */
-export type OutboundChannel = string;
-
-/** Heartbeat target channel id from agent/default heartbeat config. */
-type HeartbeatTarget = OutboundChannel;
-
 /** Resolved outbound delivery destination and routing hints. */
 type OutboundTarget = {
-  channel: OutboundChannel;
+  channel: string;
   to?: string;
   chatType?: ChatType;
   reason?: string;
@@ -63,6 +57,7 @@ import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targ
 /** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
   channel: string;
+  plugin?: ChannelPlugin;
   to?: string;
   allowFrom?: string[];
   allowBootstrap?: boolean;
@@ -72,11 +67,13 @@ export function resolveOutboundTarget(params: {
 }): OutboundTargetResolution {
   return (
     resolveOutboundTargetWithPlugin({
-      plugin: resolveOutboundChannelPlugin({
-        channel: params.channel,
-        cfg: params.cfg,
-        allowBootstrap: params.allowBootstrap,
-      }),
+      plugin:
+        params.plugin ??
+        resolveOutboundChannelPlugin({
+          channel: params.channel,
+          cfg: params.cfg,
+          allowBootstrap: params.allowBootstrap,
+        }),
       target: params,
       onMissingPlugin: () =>
         params.channel === INTERNAL_MESSAGE_CHANNEL
@@ -102,7 +99,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
   const rawTarget = heartbeat?.target;
-  let target: HeartbeatTarget = "none";
+  let target = "none";
   let preparedExplicitPlugin: ChannelPlugin | undefined;
   let preparedExplicitTo: string | undefined;
   if (rawTarget === "none" || rawTarget === "last") {
@@ -120,7 +117,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
           allowBootstrap: true,
         });
         if (preparedExplicitPlugin) {
-          target = preparedExplicitPlugin.id as HeartbeatTarget;
+          target = preparedExplicitPlugin.id;
           preparedExplicitTo = explicitTo;
         }
       }
@@ -459,7 +456,7 @@ function resolveHeartbeatDeliveryChatType(params: {
 
 function shouldReuseHeartbeatRouteThreadId(params: {
   cfg: OpenClawConfig;
-  target: HeartbeatTarget;
+  target: string;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
   entry?: SessionEntry;

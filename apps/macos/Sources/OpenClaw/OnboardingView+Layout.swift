@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow has no full-page chat; OpenClaw opens in its own sheet.
+    /// The inference-first flow hands off to the dashboard as soon as AI connects.
     var usesCompactHero: Bool {
         false
     }
@@ -93,7 +93,6 @@ extension OnboardingView {
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        systemAgentState.resetForGatewayChange()
         stopPermissionMonitoring()
         stopDiscovery()
     }
@@ -139,9 +138,6 @@ extension OnboardingView {
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        // OpenClaw sessions belong to one Gateway. Dismiss and replace the chat so
-        // changing routes cannot send an old session ID to the new endpoint.
-        systemAgentState.resetForGatewayChange()
     }
 
     @discardableResult

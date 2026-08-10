@@ -17,6 +17,7 @@ import {
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
 import {
   parseManifestRef,
+  WORKER_WORKSPACE_RSYNC_DESTINATION,
   workerAcceptedWorkspaceRsyncReceiverPath,
   workerWorkspaceCommandSucceeded,
   workspaceSyncError,
@@ -62,6 +63,7 @@ function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   runRsync: (argv: (rsyncSsh: string) => string[]) => Promise<SpawnResult>;
   scpTarget: string;
+  receiverEntryPath: string;
   localPath: string;
   remoteWorkspaceDir: string;
   remoteManifest: WorkerWorkspaceManifest;
@@ -246,6 +248,7 @@ function createAcceptedWorkspacePublisher(params: {
             "--from0",
             `--files-from=${transferListPath}`,
             `--rsync-path=${workerAcceptedWorkspaceRsyncReceiverPath({
+              receiverEntryPath: params.receiverEntryPath,
               remoteWorkspaceDir: params.remoteWorkspaceDir,
               nonce: transactionNonce,
             })}`,
@@ -253,7 +256,7 @@ function createAcceptedWorkspacePublisher(params: {
             rsyncSsh,
             "--",
             localSource,
-            `${params.scpTarget}:${remoteStagingRoot}/`,
+            `${params.scpTarget}:${WORKER_WORKSPACE_RSYNC_DESTINATION}`,
           ]);
           if (!workerWorkspaceCommandSucceeded(transferred)) {
             throw workspaceSyncError(transferred);

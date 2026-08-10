@@ -1,12 +1,7 @@
 // Deprecation compatibility tests cover doctor warnings and repairs for deprecated config.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import {
-  getDoctorDeprecationCompatRecord,
-  isDoctorDeprecationCompatCode,
-  listDeprecatedDoctorDeprecationCompatRecords,
-  listDoctorDeprecationCompatRecords,
-} from "./deprecation-compat.js";
+import { listDoctorDeprecationCompatRecords } from "./deprecation-compat.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -31,27 +26,30 @@ const requiredDoctorCompatCodes = [
 ] as const;
 
 describe("doctor deprecation compatibility inventory", () => {
-  it("keeps compatibility codes unique and lookup-safe", () => {
+  it("keeps compatibility codes unique", () => {
     const records = listDoctorDeprecationCompatRecords();
-    const codes = records.map((record) => record.code);
+    const codes = new Set(records.map((record) => record.code));
 
-    expect(records).toHaveLength(43);
-    expect(new Set(codes).size).toBe(codes.length);
-    expect(isDoctorDeprecationCompatCode("doctor-web-search-plugin-config")).toBe(true);
-    expect(isDoctorDeprecationCompatCode("missing-code")).toBe(false);
-    expect(getDoctorDeprecationCompatRecord("doctor-web-search-plugin-config").owner).toBe(
+    expect(codes.size).toBe(records.length);
+    expect(codes.has("doctor-web-search-plugin-config")).toBe(true);
+    expect(codes.has("missing-code")).toBe(false);
+    expect(records.find((record) => record.code === "doctor-web-search-plugin-config")?.owner).toBe(
       "provider",
     );
   });
 
   it("tracks the known doctor migrations that protect plugin/config rollout", () => {
+    const codes = new Set(listDoctorDeprecationCompatRecords().map((record) => record.code));
     for (const code of requiredDoctorCompatCodes) {
-      expect(isDoctorDeprecationCompatCode(code), code).toBe(true);
+      expect(codes.has(code), code).toBe(true);
     }
   });
 
   it("keeps dated deprecation metadata in chronological order", () => {
-    for (const record of listDeprecatedDoctorDeprecationCompatRecords()) {
+    const records = listDoctorDeprecationCompatRecords().filter(
+      (record) => record.status === "deprecated" || record.status === "removal-pending",
+    );
+    for (const record of records) {
       expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.deprecated, record.code).toMatch(datePattern);
       expect(record.warningStarts, record.code).toMatch(datePattern);

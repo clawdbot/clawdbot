@@ -144,6 +144,8 @@ export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreatePara
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
 export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);
 export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusParamsSchema);
+export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserveParamsSchema);
+export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
@@ -173,6 +175,9 @@ export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListPa
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
 export const validateSessionsCatalogArchiveParams = compile(S.SessionsCatalogArchiveParamsSchema);
+export const validateSessionsCatalogStartTerminalParams = compile(
+  S.SessionsCatalogStartTerminalParamsSchema,
+);
 export const validateSessionsSearchParams = compile(S.SessionsSearchParamsSchema);
 export const validateSessionsCleanupParams = compile(S.SessionsCleanupParamsSchema);
 export const validateSessionsPreviewParams = compile(S.SessionsPreviewParamsSchema);

@@ -30,10 +30,10 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
   withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
 }));
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }): T[] {
   const call = mock.mock.calls[0];
   if (!call) {
-    throw new Error(`expected ${label} call`);
+    throw new Error("expected gateway client call");
   }
   return call;
 }
@@ -62,7 +62,6 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(1);
     const [gatewayClientOptions, gatewayClientRunner] = requireFirstMockCall(
       hoisted.withOperatorApprovalsGatewayClient,
-      "gateway client",
     );
     expect(gatewayClientOptions).toEqual({
       config: { gateway: { auth: { token: "cfg-token" } } },
@@ -101,13 +100,28 @@ describe("resolveApprovalOverGateway", () => {
 
       const [gatewayClientOptions] = requireFirstMockCall(
         hoisted.withOperatorApprovalsGatewayClient,
-        "gateway client",
       );
       expect(gatewayClientOptions).toMatchObject({
         clientDisplayName: `${label} approval (owner)`,
       });
     },
   );
+
+  it("preserves the raw id in the approval label for unknown channels", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "approval-1",
+      approvalKind: "exec",
+      decision: "deny",
+      channel: "external-chat",
+      senderId: "owner",
+    });
+
+    const [gatewayClientOptions] = requireFirstMockCall(hoisted.withOperatorApprovalsGatewayClient);
+    expect(gatewayClientOptions).toMatchObject({
+      clientDisplayName: "external-chat approval (owner)",
+    });
+  });
 
   it("uses explicit plugin kind without inspecting the approval id", async () => {
     await resolveApprovalOverGateway({

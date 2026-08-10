@@ -129,6 +129,8 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
+        const labsLink = page.locator('.settings-sidebar__item[href="/settings/labs"]');
+        await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
         const codeModeRow = settingsRow(page, "Code Mode");
         await codeModeRow.getByRole("switch", { name: "Code Mode", exact: true }).waitFor();
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Enabled");
@@ -151,14 +153,18 @@ suite.define(() => {
         });
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBeGreaterThan(configGetsBeforePatch);
+          .toBe(configGetsBeforePatch + 1);
         await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Enabled");
+        await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
+        await capture(page, "00-labs-canonical-refresh.png");
 
         expect(
           (
             await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
           )?.status(),
         ).toBe(200);
+        const advancedLink = page.locator('.settings-sidebar__item[href="/settings/advanced"]');
+        await expect.poll(() => advancedLink.getAttribute("aria-current")).toBe("page");
         const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
         await expect.poll(() => endpoint.inputValue()).toBe("local-api");
 

@@ -11,7 +11,10 @@ import {
   prepareSessionConversation,
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  publishSqliteSessionEntryCacheInvalidation,
+  trackSqliteSessionEntryCacheWrite,
+} from "./session-accessor.sqlite-entry-cache.js";
 import {
   clearSessionCollaborationForKey,
   deleteSessionDeliveryArtifacts,
@@ -633,11 +636,7 @@ export function writeSessionEntry(
   const transcriptObservedAt =
     readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId).updatedAt ??
     updatedAt;
-  const boundSessionRoot = bindSqliteSessionRoot({
-    entry: normalizedEntry,
-    sessionKey,
-    updatedAt,
-  });
+  const boundSessionRoot = bindSqliteSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
   const conversation = prepareSessionConversation({
     entry: normalizedEntry,
     sessionScope: boundSessionRoot.session_scope,
@@ -657,48 +656,46 @@ export function writeSessionEntry(
     entry: normalizedEntry,
     previousEntry,
   });
-  const sessionNode = bindSqliteSessionNode({
-    entry: normalizedEntry,
-    sessionKey,
-    updatedAt,
+  const sessionNode = bindSqliteSessionNode({ entry: normalizedEntry, sessionKey, updatedAt });
+  const writeGeneration = trackSqliteSessionEntryCacheWrite(database, () => {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("session_nodes")
+        .values(sessionNode)
+        .onConflict((conflict) =>
+          conflict.column("session_key").doUpdateSet({
+            current_session_id: sessionNode.current_session_id,
+            entry_json: sessionNode.entry_json,
+            entry_valid: sessionNode.entry_valid,
+            updated_at: sessionNode.updated_at,
+            status: sessionNode.status,
+            created_at: sessionNode.created_at,
+            created_via: sessionNode.created_via,
+            created_actor_type: sessionNode.created_actor_type,
+            created_actor_id: sessionNode.created_actor_id,
+            parent_session_key: sessionNode.parent_session_key,
+            spawned_by: sessionNode.spawned_by,
+            fork_source_session_key: sessionNode.fork_source_session_key,
+            fork_source_session_id: sessionNode.fork_source_session_id,
+            fork_source_entry_id: sessionNode.fork_source_entry_id,
+            label: sessionNode.label,
+            display_name: sessionNode.display_name,
+            category: sessionNode.category,
+            icon: sessionNode.icon,
+            pinned_at: sessionNode.pinned_at,
+            archived_at: sessionNode.archived_at,
+            last_read_at: sessionNode.last_read_at,
+            last_interaction_at: sessionNode.last_interaction_at,
+            last_activity_at: sessionNode.last_activity_at,
+          }),
+        ),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.updateTable("session_nodes").set({ entry_valid: 1 }).where("session_key", "=", sessionKey),
+    );
   });
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_nodes")
-      .values(sessionNode)
-      .onConflict((conflict) =>
-        conflict.column("session_key").doUpdateSet({
-          current_session_id: sessionNode.current_session_id,
-          entry_json: sessionNode.entry_json,
-          entry_valid: sessionNode.entry_valid,
-          updated_at: sessionNode.updated_at,
-          status: sessionNode.status,
-          created_at: sessionNode.created_at,
-          created_via: sessionNode.created_via,
-          created_actor_type: sessionNode.created_actor_type,
-          created_actor_id: sessionNode.created_actor_id,
-          parent_session_key: sessionNode.parent_session_key,
-          spawned_by: sessionNode.spawned_by,
-          fork_source_session_key: sessionNode.fork_source_session_key,
-          fork_source_session_id: sessionNode.fork_source_session_id,
-          fork_source_entry_id: sessionNode.fork_source_entry_id,
-          label: sessionNode.label,
-          display_name: sessionNode.display_name,
-          category: sessionNode.category,
-          icon: sessionNode.icon,
-          pinned_at: sessionNode.pinned_at,
-          archived_at: sessionNode.archived_at,
-          last_read_at: sessionNode.last_read_at,
-          last_interaction_at: sessionNode.last_interaction_at,
-          last_activity_at: sessionNode.last_activity_at,
-        }),
-      ),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    db.updateTable("session_nodes").set({ entry_valid: 1 }).where("session_key", "=", sessionKey),
-  );
   executeSqliteQuerySync(
     database.db,
     db
@@ -740,7 +737,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
-  publishSqliteSessionEntryCacheInvalidation(database, sessionNode);
+  publishSqliteSessionEntryCacheInvalidation(database, sessionNode, writeGeneration);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

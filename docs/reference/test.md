@@ -95,7 +95,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
-- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node scripts/lib/openclaw-test-state.mjs -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
+- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
 
 ## Control UI, TUI, and extension lanes
 
@@ -118,11 +118,11 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 
 ## Full Docker suite (`pnpm test:docker:all`)
 
-Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes through a weighted scheduler. `scripts/package-openclaw-for-docker.mjs` is the single local/CI package packer and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it.
+Builds the shared live-test image, packs OpenClaw once as an npm tarball, builds/reuses a bare Node/Git runner image plus a functional image that installs that tarball into `/app`, then runs Docker smoke lanes through a weighted scheduler. `scripts/package-openclaw-for-docker.mjs` is the stable local/CI package packer entrypoint and validates the tarball plus `dist/postinstall-inventory.json` before Docker consumes it.
 
 - Bare image (`OPENCLAW_DOCKER_E2E_BARE_IMAGE`): installer/update/plugin-dependency lanes; mounts the prebuilt tarball instead of copied repo sources.
 - Functional image (`OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE`): normal built-app functionality lanes.
-- Lane definitions: `scripts/lib/docker-e2e-scenarios.mjs`. Planner: `scripts/lib/docker-e2e-plan.mjs`. Executor: `scripts/test-docker-all.mjs`.
+- Lane definitions: `scripts/lib/docker-e2e-scenarios.mts`. Planner: `scripts/lib/docker-e2e-plan.mts`. Executor: `scripts/test-docker-all.mjs`.
 - `node scripts/test-docker-all.mjs --plan-json` emits the scheduler-owned CI plan (lanes, image kinds, package/live-image needs, state scenarios, credential checks) without building or running Docker.
 
 Scheduling knobs (env vars, defaults in parentheses):

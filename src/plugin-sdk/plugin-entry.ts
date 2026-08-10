@@ -1,8 +1,7 @@
 // Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+export type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
-  OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
   ProviderBuiltInModelSuppressionContext as ProviderBuiltInModelSuppressionContextType,
@@ -132,6 +131,7 @@ export type {
   TranscriptSourceProvider,
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
+  WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
   WorkerProfile,
@@ -141,15 +141,15 @@ export type {
   WorkerSshIdentityRequest,
 } from "../plugins/types.js";
 
-// Direct re-exports inherit the upstream @deprecated tag, while this entrypoint's
-// established surface exposes the same type without deprecating the export.
+// A direct re-export would inherit upstream @deprecated metadata, while this
+// entrypoint's established surface exposes the same type without deprecating it.
 export type ProviderBuiltInModelSuppressionContext = ProviderBuiltInModelSuppressionContextType;
 
-export type OpenClawPluginGatewayEventScope =
-  import("../plugins/gateway-events.js").OpenClawPluginGatewayEventScope;
-export type OpenClawPluginGatewayEvents =
-  import("../plugins/gateway-events.js").OpenClawPluginGatewayEvents;
-export { WorkerProviderError } from "../plugins/types.js";
+export type {
+  OpenClawPluginGatewayEventScope,
+  OpenClawPluginGatewayEvents,
+} from "../plugins/gateway-events.js";
+export { WorkerProviderError } from "../plugins/capability-provider.types.js";
 
 export type {
   PluginConversationBinding,
@@ -182,7 +182,6 @@ export type {
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
-export type { OpenClawConfig };
 
 export {
   buildJsonPluginConfigSchema,
@@ -205,20 +204,13 @@ type DefinePluginEntryOptions = {
   reload?: OpenClawPluginDefinition["reload"];
   nodeHostCommands?: OpenClawPluginDefinition["nodeHostCommands"];
   securityAuditCollectors?: OpenClawPluginDefinition["securityAuditCollectors"];
-  register: (api: OpenClawPluginApi) => void;
+  register: NonNullable<OpenClawPluginDefinition["register"]>;
 };
 
 /** Normalized object shape that OpenClaw loads from a plugin entry module. */
-type DefinedPluginEntry = {
-  id: string;
-  name: string;
-  description: string;
+type DefinedPluginEntry = Omit<DefinePluginEntryOptions, "configSchema"> & {
   configSchema: OpenClawPluginConfigSchema;
-  register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<
-  OpenClawPluginDefinition,
-  "kind" | "reload" | "nodeHostCommands" | "securityAuditCollectors"
->;
+};
 
 /**
  * Canonical entry helper for non-channel plugins.

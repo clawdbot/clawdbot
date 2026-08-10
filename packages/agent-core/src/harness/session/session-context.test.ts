@@ -1,5 +1,6 @@
 import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry } from "../types.js";
 import { buildSessionContext } from "./session.js";
 
@@ -56,6 +57,54 @@ function replayState(type: string, data: string): ProviderReplayState {
     api: "openai-responses",
     model: "gpt-5.6-luna",
     baseUrlHash: "route-a",
+  };
+}
+
+function assistantToolEntry(id: string, parentId: string, toolCallId: string): SessionTreeEntry {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp,
+    message: {
+      role: "assistant",
+      api: "openai-responses",
+      content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: {} }],
+      provider: "test-provider",
+      model: "test-model",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.parse(timestamp),
+    },
+  };
+}
+
+function toolResultEntry(
+  id: string,
+  parentId: string,
+  toolCallId: string,
+  content: string,
+): SessionTreeEntry {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp,
+    message: {
+      role: "toolResult",
+      toolCallId,
+      toolName: "read",
+      content: [{ type: "text", text: content }],
+      isError: false,
+      timestamp: Date.parse(timestamp),
+    },
   };
 }
 
@@ -183,6 +232,194 @@ describe("buildSessionContext", () => {
         }
       )[Symbol.for("openclaw.sessionHistoryPrelude")],
     ).toBe(true);
+  });
+
+  it("retains reset tool results by call occurrence while excluding an orphan", () => {
+    const entries: SessionTreeEntry[] = [
+      userEntry("discarded", null, "discarded"),
+      userEntry("kept", "discarded", "kept"),
+      assistantToolEntry("assistant-1", "kept", "call-1"),
+      toolResultEntry("result-1", "assistant-1", "call-1", "first result"),
+      assistantToolEntry("assistant-2", "result-1", "call-1"),
+      toolResultEntry("result-2", "assistant-2", "call-1", "second result"),
+      toolResultEntry("orphan", "result-2", "call-1", "orphan result"),
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "orphan",
+        timestamp,
+        reason: "new",
+        firstKeptEntryId: "kept",
+      },
+      userEntry("new", "reset", "new turn"),
+    ];
+
+    const context = buildSessionContext(entries);
+
+    expect(context.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(JSON.stringify(context.messages)).toContain("first result");
+    expect(JSON.stringify(context.messages)).toContain("second result");
+    expect(JSON.stringify(context.messages)).not.toContain("orphan result");
+  });
+
+  it("pairs reset results only with calls inside the retained tail", () => {
+    const entries: SessionTreeEntry[] = [
+      userEntry("discarded-user", null, "discarded question"),
+      assistantToolEntry("discarded-assistant", "discarded-user", "call-shared"),
+      userEntry("kept", "discarded-assistant", "kept question"),
+      toolResultEntry("discarded-result", "kept", "call-shared", "discarded owner result"),
+      assistantToolEntry("kept-assistant", "discarded-result", "call-shared"),
+      toolResultEntry("kept-result", "kept-assistant", "call-shared", "kept owner result"),
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "kept-result",
+        timestamp,
+        reason: "new",
+        firstKeptEntryId: "kept",
+      },
+      userEntry("new", "reset", "new turn"),
+    ];
+
+    const context = buildSessionContext(entries);
+    const providerMessages = convertToLlm(context.messages);
+
+    expect(providerMessages).toMatchObject([
+      { role: "user", content: "kept question" },
+      { role: "assistant", content: [{ id: "call-shared" }] },
+      { role: "toolResult", toolCallId: "call-shared", content: [{ text: "kept owner result" }] },
+      { role: "user", content: "new turn" },
+    ]);
+    expect(JSON.stringify(providerMessages)).not.toContain("discarded owner result");
+  });
+
+  it("keeps tool ownership within the latest reset when resets repeat", () => {
+    const entries: SessionTreeEntry[] = [
+      userEntry("first-user", null, "first conversation"),
+      assistantToolEntry("first-assistant", "first-user", "first-call"),
+      toolResultEntry("first-result", "first-assistant", "first-call", "first result"),
+      {
+        type: "reset",
+        id: "first-reset",
+        parentId: "first-result",
+        timestamp,
+        reason: "new",
+        firstKeptEntryId: "first-user",
+      },
+      assistantToolEntry("discarded-assistant", "first-reset", "discarded-call"),
+      userEntry("latest-kept", "discarded-assistant", "latest conversation"),
+      toolResultEntry(
+        "latest-orphan",
+        "latest-kept",
+        "discarded-call",
+        "result from discarded conversation",
+      ),
+      {
+        type: "thinking_level_change",
+        id: "thinking",
+        parentId: "latest-orphan",
+        timestamp,
+        thinkingLevel: "high",
+      },
+      assistantToolEntry("latest-assistant", "thinking", "latest-call"),
+      toolResultEntry("latest-result", "latest-assistant", "latest-call", "latest result"),
+      {
+        type: "reset",
+        id: "latest-reset",
+        parentId: "latest-result",
+        timestamp,
+        reason: "reset",
+        firstKeptEntryId: "latest-kept",
+      },
+      userEntry("new", "latest-reset", "new turn"),
+    ];
+
+    const context = buildSessionContext(entries);
+
+    expect(context.thinkingLevel).toBe("high");
+    expect(context.messages).toMatchObject([
+      { role: "user", content: "latest conversation" },
+      { role: "assistant", content: [{ id: "latest-call" }] },
+      { role: "toolResult", toolCallId: "latest-call" },
+      { role: "user", content: "new turn" },
+    ]);
+    expect(JSON.stringify(context.messages)).not.toContain("discarded conversation");
+  });
+
+  it("uses local frame ownership before unique displaced-result recovery", () => {
+    const localResult = toolResultEntry("local-result", "assistant-2", "call-1", "local result");
+    const entries: SessionTreeEntry[] = [
+      userEntry("kept", null, "kept"),
+      assistantToolEntry("assistant-1", "kept", "call-1"),
+      assistantToolEntry("assistant-2", "assistant-1", "call-1"),
+      localResult,
+      toolResultEntry("ambiguous-extra", "local-result", "call-1", "ambiguous extra"),
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "ambiguous-extra",
+        timestamp,
+        reason: "new",
+        firstKeptEntryId: "kept",
+      },
+      userEntry("new", "reset", "new turn"),
+    ];
+
+    const messages = buildSessionContext(entries).messages;
+
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(messages[3]).toBe(localResult.type === "message" ? localResult.message : undefined);
+    expect(JSON.stringify(messages)).not.toContain("ambiguous extra");
+  });
+
+  it("retains a uniquely displaced result in its original branch position", () => {
+    const displacedResult = toolResultEntry(
+      "displaced-result",
+      "intervening-user",
+      "call-1",
+      "displaced result",
+    );
+    const entries: SessionTreeEntry[] = [
+      userEntry("kept", null, "kept"),
+      assistantToolEntry("assistant", "kept", "call-1"),
+      userEntry("intervening-user", "assistant", "intervening"),
+      displacedResult,
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "displaced-result",
+        timestamp,
+        reason: "new",
+        firstKeptEntryId: "kept",
+      },
+      userEntry("new", "reset", "new turn"),
+    ];
+
+    const messages = buildSessionContext(entries).messages;
+
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "toolResult",
+      "user",
+    ]);
+    expect(messages[3]).toBe(
+      displacedResult.type === "message" ? displacedResult.message : undefined,
+    );
   });
 
   it("lets the latest compaction shadow an earlier reset boundary", () => {

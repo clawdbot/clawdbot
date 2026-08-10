@@ -1,6 +1,7 @@
 // Wizard server-method tests cover stable lifecycle errors for process-local sessions.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -8,7 +9,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { createDeferred } from "../../shared/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";

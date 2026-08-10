@@ -7,7 +7,7 @@ import {
   createNodeTestShardBundles,
   createNodeTestShards,
   type NodeTestShard,
-} from "../../scripts/lib/ci-node-test-plan.mjs";
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import {
@@ -90,7 +90,7 @@ function listAllToolingTestFiles(): string[] {
   }
 }
 
-describe("scripts/lib/ci-node-test-plan.mjs", () => {
+describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("assigns one semantic Vitest cache writer without changing shard order", () => {
     const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
@@ -130,7 +130,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       includePatterns: number;
       shards: number;
     }>(`
-      const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+      const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mts");
       const shards = createNodeTestShards();
       return {
         includePatterns: shards.reduce(

@@ -13,18 +13,18 @@ Proposal, revision 1. Implementation in progress (autonomous build started
 2026-08-08; this section tracks live status — update it in every PR that
 advances a milestone).
 
-| #   | Milestone                                            | Status      | PRs |
-| --- | ---------------------------------------------------- | ----------- | --- |
-| 0   | This plan                                            | in review   | —   |
-| 1a  | Naming: session copy revert                          | not started | —   |
-| 1b  | Naming: devices consolidation                        | not started | —   |
-| 1c  | Cleanup: node-pairing → device-pairing merge         | not started | —   |
-| 2   | `openclaw resume` + web Continue in terminal         | not started | —   |
-| 3   | `oc-pair://` one-paste pairing                       | not started | —   |
-| 4   | Picker + enrichment + projects read model            | not started | —   |
-| 5   | Device runners                                       | not started | —   |
-| 6   | Stop-and-continue moves                              | not started | —   |
-| 7   | Deletions (ssh sandbox, openshell, exec-host clones) | not started | —   |
+| #   | Milestone                                            | Status      | PRs     |
+| --- | ---------------------------------------------------- | ----------- | ------- |
+| 0   | This plan                                            | landed      | —       |
+| 1a  | Naming: session copy revert                          | landed      | #120667 |
+| 1b  | Naming: devices consolidation                        | landed      | #120689 |
+| 1c  | Cleanup: node-pairing → device-pairing merge         | not started | —       |
+| 2   | `openclaw resume` + web Continue in terminal         | in progress | #120664 |
+| 3   | `oc-pair://` one-paste pairing                       | not started | —       |
+| 4   | Picker + enrichment + projects read model            | not started | —       |
+| 5   | Device runners                                       | not started | —       |
+| 6   | Stop-and-continue moves                              | not started | —       |
+| 7   | Deletions (ssh sandbox, openshell, exec-host clones) | not started | —       |
 
 Proposal history: direction agreed 2026-08-08 after a
 code-evidence investigation (three deep-reads of the worker, exec, and node
@@ -162,6 +162,8 @@ Delta is ergonomics only:
   Codex/Claude session catalogs already have.
 - No new protocol surface; `sessions.list` already carries what the resolver
   needs.
+
+Follow-up: boundary-level resume test (gateway → session list → attach) needs a lightweight CLI-side gateway harness; the existing helper costs ~370s under the CLI vitest config.
 
 ### 2. One-paste device pairing (independent)
 

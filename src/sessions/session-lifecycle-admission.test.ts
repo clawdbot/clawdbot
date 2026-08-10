@@ -1,6 +1,7 @@
 // Tests lifecycle/work admission ordering across canonical keys and backing ids.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   resetGatewayWorkAdmission,
@@ -21,14 +22,6 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
-
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 it("counts one multi-identity admission once", async () => {
   const admission = await beginSessionWorkAdmission({

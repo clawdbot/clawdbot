@@ -58,7 +58,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "reef",
   "talk-voice",
   "teams-meetings",
-  "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",
@@ -426,13 +425,6 @@ describe("bundled plugin metadata", () => {
   it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
-      contains: ["doctor-contract-api.js"],
-    });
-  });
-
-  it("keeps CUA's doctor contract sidecar on the bundled public surface", () => {
-    const cua = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "cua-computer");
-    expectArtifactPresence(cua?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
     });
   });

@@ -9,8 +9,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  type DesktopPanelToggleDetail,
+} from "../../components/panel-toggle-contract.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
@@ -141,6 +146,23 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         : renameAccess.allowed
           ? undefined
           : renameAccess.reason;
+    const desktopPanelAction = isDesktopPanelAvailable(this.context.gateway.snapshot)
+      ? html`<openclaw-tooltip .content=${t("desktop.toggle")}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-desktop-panel-toggle"
+            type="button"
+            aria-label=${t("desktop.toggle")}
+            @click=${() =>
+              window.dispatchEvent(
+                new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true },
+                }),
+              )}
+          >
+            ${icons.monitor}
+          </button>
+        </openclaw-tooltip>`
+      : nothing;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -168,11 +190,11 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      terminalAction: renderChatTerminalButton(
+      panelActions: html`${renderChatTerminalButton(
         this.state,
         this.catalogSession,
         sessionWorkspace.onToggleTerminal,
-      ),
+      )}${desktopPanelAction}`,
       discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),

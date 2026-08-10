@@ -120,6 +120,7 @@ export type ChatComposerProps = {
   onNewSession: () => void;
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onRemoveAttachment?: (attachment: ChatAttachment) => void;
   onGoalCommand?: (command: string) => void;
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;

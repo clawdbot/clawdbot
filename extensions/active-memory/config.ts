@@ -18,7 +18,6 @@ import {
   DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
-  DEFAULT_QMD_SEARCH_MODE,
   DEFAULT_QUERY_MODE,
   DEFAULT_RECENT_ASSISTANT_CHARS,
   DEFAULT_RECENT_ASSISTANT_TURNS,
@@ -34,7 +33,6 @@ import {
   type ActiveMemoryChatType,
   type ActiveMemoryFastMode,
   type ActiveMemoryPromptStyle,
-  type ActiveMemoryQmdSearchMode,
   type ActiveMemoryThinkingLevel,
   type ActiveRecallPluginConfig,
   type ResolvedActiveRecallPluginConfig,
@@ -139,13 +137,6 @@ function normalizePromptConfigText(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
-function resolveQmdSearchMode(value: unknown): ActiveMemoryQmdSearchMode {
-  if (value === "inherit" || value === "search" || value === "vsearch" || value === "query") {
-    return value;
-  }
-  return DEFAULT_QMD_SEARCH_MODE;
-}
-
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
   const raw = asRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
@@ -221,7 +212,6 @@ function normalizePluginConfig(
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
-  const qmd = asRecord(raw.qmd);
   const allowedChatTypes = Array.isArray(raw.allowedChatTypes)
     ? raw.allowedChatTypes.filter(
         (value): value is ActiveMemoryChatType =>
@@ -294,36 +284,6 @@ function normalizePluginConfig(
     ),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
-    qmd: {
-      searchMode: resolveQmdSearchMode(qmd?.searchMode),
-    },
-  };
-}
-
-function applyActiveMemoryRuntimeConfigSnapshot(
-  cfg: OpenClawConfig,
-  pluginConfig: ResolvedActiveRecallPluginConfig,
-): OpenClawConfig {
-  const existingEntry = asRecord(cfg.plugins?.entries?.["active-memory"]);
-  const existingPluginConfig = asRecord(existingEntry?.config);
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        "active-memory": {
-          ...existingEntry,
-          config: {
-            ...existingPluginConfig,
-            qmd: {
-              ...asRecord(existingPluginConfig?.qmd),
-              searchMode: pluginConfig.qmd.searchMode,
-            },
-          },
-        },
-      },
-    },
   };
 }
 
@@ -414,7 +374,6 @@ function applyCliRuntimeRecallTimeoutDefault(
 }
 
 export {
-  applyActiveMemoryRuntimeConfigSnapshot,
   applyCliRuntimeRecallTimeoutDefault,
   clampInt,
   hasDeprecatedModelFallbackPolicy,

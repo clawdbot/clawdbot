@@ -94,6 +94,8 @@ vi.mock("../commands/system-agent-with-inference.js", () => ({
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,
+  GatewayStoredDeviceAuthUnavailableError: class extends Error {},
+  GatewayTransportError: class extends Error {},
   randomIdempotencyKey: () => "idem-test",
   buildGatewayConnectionDetails: () => ({
     url: "ws://127.0.0.1:1234",

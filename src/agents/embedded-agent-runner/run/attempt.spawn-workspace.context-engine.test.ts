@@ -3233,8 +3233,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(false);
   });
 
-  it("releases the session lock even when teardown cleanup throws", async () => {
-    const releaseMock = vi.fn(async () => {});
+  it("disposes the session even when teardown cleanup throws", async () => {
     const disposeMock = vi.fn();
     const flushMock = vi.fn(async () => {
       throw new Error("flush failed");
@@ -3246,12 +3245,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
       bundleLspRuntime: undefined,
-      sessionLock: { release: releaseMock },
     });
 
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
-    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });
 

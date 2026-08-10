@@ -1141,8 +1141,8 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(1).clientCaps).toBeUndefined();
   });
 
-  it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
-    const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host" });
+  it("binds an attach grant's session owner and ignores ALL spoofed context headers", async () => {
+    const grant = mintAttachGrant({ sessionKey: "global", agentId: "ops" });
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
@@ -1168,7 +1168,8 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
-    expect(call.sessionKey).toBe("agent:main:attach-host");
+    expect(call.sessionKey).toBe("global");
+    expect(call.agentId).toBe("ops");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
     expect(call.messageProvider).toBeUndefined();

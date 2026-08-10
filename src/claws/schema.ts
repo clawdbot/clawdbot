@@ -62,9 +62,11 @@ const clawHubPackageName = nonEmptyString.refine(
 );
 const portableEnvKey = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const packageRelativePath = nonEmptyString.refine(isSafeClawRelativePath, {
-  message: "Path must be package-relative and must not contain traversal segments.",
-});
+const packageRelativePath = nonEmptyString
+  .refine(isSafeClawRelativePath, {
+    message: "Path must be package-relative and must not contain traversal segments.",
+  })
+  .transform((value) => value.replaceAll("\\", "/"));
 
 const identitySchema = z
   .object({

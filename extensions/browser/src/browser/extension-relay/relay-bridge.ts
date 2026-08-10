@@ -137,8 +137,8 @@ export class ExtensionRelayBridge {
     return this.extension?.identity ?? null;
   }
 
-  /** Tabs currently shared with OpenClaw (the extension's tab group). */
-  sharedTabs(): RelayTabInfo[] {
+  /** Tabs currently reported as accessible by the extension. */
+  accessibleTabs(): RelayTabInfo[] {
     return [...this.tabs.values()].map((tab) => tab.info);
   }
 
@@ -432,15 +432,15 @@ export class ExtensionRelayBridge {
         existing.info = info;
       } else {
         this.tabs.set(info.tabId, { info });
-        // Newly shared tab: expose it to auto-attach clients right away so an
-        // agent mid-session sees tabs the user shares via the toolbar action.
+        // Newly accessible tabs must reach auto-attach clients immediately;
+        // an access-mode or pause change may happen mid-session.
         if ([...this.clients].some((client) => client.autoAttach)) {
           void this.ensureTabAttached(info.tabId)
             .then(({ targetId, sessionId }) => {
               this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
             })
             .catch((err: unknown) => {
-              log.warn(`auto-attach of shared tab ${info.tabId} failed: ${String(err)}`);
+              log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
             });
         }
       }
@@ -450,7 +450,7 @@ export class ExtensionRelayBridge {
   private async ensureTabAttached(tabId: number): Promise<{ targetId: string; sessionId: string }> {
     const tab = this.tabs.get(tabId);
     if (!tab) {
-      throw new Error(`tab ${tabId} is not shared with OpenClaw`);
+      throw new Error(`tab ${tabId} is not available to OpenClaw`);
     }
     if (tab.attached) {
       return tab.attached;
@@ -465,8 +465,8 @@ export class ExtensionRelayBridge {
       const targetId = typeof result?.targetId === "string" ? result.targetId : `tab-${tabId}`;
       const sessionId = `openclaw-tab-${tabId}-${this.nextSessionOrdinal++}`;
       const attached = { targetId, sessionId };
-      // Identity check, not just presence: the tab could have left the group and
-      // rejoined under the same tabId while this attach was in flight, replacing
+      // Identity check, not just presence: the tab could have lost and regained
+      // access under the same tabId while this attach was in flight, replacing
       // the TabState. Writing onto the new TabState would bind stale attach data.
       const current = this.tabs.get(tabId);
       if (current !== tab) {
@@ -540,7 +540,7 @@ export class ExtensionRelayBridge {
       }
     }
     // Playwright's page-scoped CDP sessions listen on their synthetic parent
-    // browser session, so detach those aliases there when the shared tab goes.
+    // browser session, so detach those aliases there when tab access is revoked.
     for (const [auxiliarySessionId, auxiliary] of this.auxiliaryTabSessions) {
       if (auxiliary.tabId !== tabId) {
         continue;
@@ -870,7 +870,7 @@ export class ExtensionRelayBridge {
       case "Target.attachToTarget": {
         const targetId = request.params?.targetId as string | undefined;
         const found = targetId ? this.tabByTargetId(targetId) : null;
-        // Also allow attach by tab that is shared but not yet debugger-attached.
+        // Also allow attach by tab that is accessible but not yet debugger-attached.
         if (!found && targetId) {
           this.respondError(client, request, `No target with given id found: ${targetId}`, -32602);
           return;

@@ -48,6 +48,7 @@ import {
   type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 type ResponsesConsumedEventType =
   | "error"
@@ -133,7 +134,7 @@ export async function processResponsesStream<TApi extends Api>(
   const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
   const outputItemContentIndexes = createResponsesOutputContentIndex();
   const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
-  let terminalResponseEvent: "finalized" | "failed" | undefined;
+  let terminalResponseEvent: "finalized" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
@@ -254,22 +255,23 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const { finalizeResponse, recoverTerminalOutput } = createResponsesTerminalController({
-    output,
-    stream,
-    model,
-    options,
-    reasoningBlocksById,
-    startedTextBlocksByItemId,
-    outputItemContentIndexes,
-    getLastTextBlock: () => lastTextBlock,
-    setLastTextBlock: (block) => {
-      lastTextBlock = block;
-    },
-    markFinalized: () => {
-      terminalResponseEvent = "finalized";
-    },
-  });
+  const { finalizeResponse, finalizeFailedResponse, recoverTerminalOutput } =
+    createResponsesTerminalController({
+      output,
+      stream,
+      model,
+      options,
+      reasoningBlocksById,
+      startedTextBlocksByItemId,
+      outputItemContentIndexes,
+      getLastTextBlock: () => lastTextBlock,
+      setLastTextBlock: (block) => {
+        lastTextBlock = block;
+      },
+      markFinalized: () => {
+        terminalResponseEvent = "finalized";
+      },
+    });
 
   const guardedStream = adaptResponsesStream(
     withFirstStreamEventTimeout(openaiStream, {
@@ -707,11 +709,14 @@ export async function processResponsesStream<TApi extends Api>(
           event as unknown as Record<string, unknown>,
           model,
         );
-        if (failure.responseId) {
-          output.responseId = failure.responseId;
-        }
+        finalizeFailedResponse(event.response, failure.responseId);
         throw new ResponsesStreamFailure(failure, event.response);
       }
+    }
+    // openai-node turns an aborted SSE iterator into normal completion; preserve
+    // the caller's authoritative reason before classifying terminal stream state.
+    if (options?.signal?.aborted) {
+      throw transportAbortError(options.signal);
     }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");

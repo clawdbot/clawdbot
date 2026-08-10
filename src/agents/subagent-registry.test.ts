@@ -12,7 +12,7 @@ import type {
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
 import {
-  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -63,7 +63,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "./subagent-test-fixtures.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
+import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 
 const noop = () => {};
 
@@ -1992,9 +1992,9 @@ describe("subagent registry seam flow", () => {
     const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
       resolveWait = resolve;
     });
-    const staleWriteLock = vi.fn();
-    const withStaleWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      staleWriteLock();
+    const requesterTranscriptWrite = vi.fn();
+    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+      requesterTranscriptWrite();
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
@@ -2008,16 +2008,16 @@ describe("subagent registry seam flow", () => {
         return {};
       }
       const result = await pendingWait;
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshCompletionWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshCompletionWrite);
       return result;
     });
     mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
-      await runWithOwnedSessionTranscriptWriteLock({ sessionKey }, freshTranscriptWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return true;
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
       async () => {
         mod.registerSubagentRun({
           runId: "run-detached-requester-owner",
@@ -2039,7 +2039,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(staleWriteLock).not.toHaveBeenCalled();
+    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
@@ -3072,13 +3072,17 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("records explicit agent.wait cancellation before session timing is persisted", async () => {
+  it.each([
+    { label: "cancellation", status: "timeout" as const, stopReason: "rpc" },
+    { label: "supersession", status: "error" as const, stopReason: "superseded" },
+  ])("records explicit agent.wait $label without retrying", async ({ status, stopReason }) => {
+    const runId = `run-terminal-${stopReason}`;
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": {
-        status: "timeout",
+        status,
         startedAt: 111,
         endedAt: 222,
-        stopReason: "rpc",
+        stopReason,
       },
     });
     mocks.loadSessionStore.mockReturnValue(
@@ -3088,15 +3092,15 @@ describe("subagent registry seam flow", () => {
     );
 
     mod.registerSubagentRun({
-      runId: "run-terminal-timeout",
-      task: "time out terminally",
+      runId,
+      task: "terminate without retrying",
     });
 
     // Main defers timed-out lifecycle completion behind a retry grace timer.
     await vi.advanceTimersByTimeAsync(20_000);
 
     await waitForFast(() => {
-      const run = findRequesterRun("run-terminal-timeout");
+      const run = findRequesterRun(runId);
       expect(run?.execution.endedAt).toBe(222);
       expectRecordFields(
         run?.execution.outcome,
@@ -4751,7 +4755,7 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  it("does not restore session-write ownership after a successor is released", async () => {
+  it("does not restore a superseded lifecycle after a successor is released", async () => {
     const childSessionKey = "agent:main:subagent:released-timing-owner";
     mockPendingAgentWait();
     mocks.loadSessionStore.mockReturnValue({

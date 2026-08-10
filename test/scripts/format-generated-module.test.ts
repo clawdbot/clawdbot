@@ -7,7 +7,7 @@ import {
   formatGeneratedModule,
   GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
   GENERATED_MODULE_FORMAT_TIMEOUT_MS,
-} from "../../scripts/lib/format-generated-module.mjs";
+} from "../../scripts/lib/format-generated-module.mts";
 
 const tempDirs: string[] = [];
 

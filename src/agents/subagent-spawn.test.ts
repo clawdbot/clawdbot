@@ -11,7 +11,7 @@ import {
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
+import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 const hoisted = vi.hoisted(() => ({

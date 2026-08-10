@@ -6,7 +6,7 @@ import type {
   ApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approvals.js";
-import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { findChatChannelLabel } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { isApprovalNotFoundError } from "./approval-errors.js";
@@ -110,7 +110,7 @@ export async function resolveApprovalOverGateway(
   const channel = params.channel?.trim();
   // Channel manifests own operator-facing labels; using their generated metadata
   // keeps approval clients aligned without importing plugin runtime or hardcoding ids.
-  const channelLabel = channel ? (findChatChannelMeta(channel)?.label ?? channel) : undefined;
+  const channelLabel = channel ? (findChatChannelLabel(channel) ?? channel) : undefined;
   const clientDisplayName =
     params.clientDisplayName ??
     (channelLabel ? `${channelLabel} approval (${senderId})` : `Approval (${senderId})`);

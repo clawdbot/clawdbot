@@ -22,7 +22,7 @@ export function createCopilotSessionController({
   isConfigTransitioning,
   currentReadyEpoch,
   readyEpochIsCurrent,
-  isTabShared,
+  isTabAccessible,
   attachDebugger,
   revokeDebugger,
   restoreDebuggerIfReleased,
@@ -51,9 +51,9 @@ export function createCopilotSessionController({
       return false;
     }
     try {
-      const shared = await isTabShared(tabId);
+      const accessible = await isTabAccessible(tabId);
       return (
-        shared &&
+        accessible &&
         portsByTab.has(tabId) &&
         sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)
       );
@@ -63,13 +63,13 @@ export function createCopilotSessionController({
   }
 
   async function suspendUnauthorizedSetup(tabId) {
-    let shared = false;
+    let accessible = false;
     try {
-      shared = await isTabShared(tabId);
+      accessible = await isTabAccessible(tabId);
     } catch {
       // Missing or unreadable tab state is not authorized to retain CDP access.
     }
-    await suspendTab(tabId, { detachInactive: !shared });
+    await suspendTab(tabId, { detachInactive: !accessible });
     if (portsByTab.has(tabId)) {
       void refreshPanelState(tabId);
     }
@@ -82,7 +82,7 @@ export function createCopilotSessionController({
     gatewayScope,
     hydrateHistory,
   ) {
-    if (!gateway.ready || !(await isTabShared(tabId))) {
+    if (!gateway.ready || !(await isTabAccessible(tabId))) {
       return null;
     }
     const staleActiveSession = registry
@@ -246,8 +246,8 @@ export function createCopilotSessionController({
     if (!readyEpoch) {
       throw new Error("Gateway is still reconciling this tab.");
     }
-    if (!(await isTabShared(tabId))) {
-      throw new Error("This tab is not shared with OpenClaw.");
+    if (!(await isTabAccessible(tabId))) {
+      throw new Error("This tab is not available to OpenClaw.");
     }
     const entry = await ensureSession(tabId, { hydrateHistory: false });
     if (!entry) {
@@ -271,16 +271,16 @@ export function createCopilotSessionController({
     }
     let submitted = false;
     try {
-      const stillShared = await isTabShared(tabId);
+      const stillAccessible = await isTabAccessible(tabId);
       const stillOwnsPanel = panelOwnsSend(tabId, port, portRevision);
       const stillOwnsGateway = readyEpochIsCurrent(readyEpoch);
-      if (!stillShared || !stillOwnsPanel || !stillOwnsGateway) {
-        if (!stillShared || !stillOwnsPanel) {
-          await suspendTab(tabId, { detachInactive: !stillShared });
+      if (!stillAccessible || !stillOwnsPanel || !stillOwnsGateway) {
+        if (!stillAccessible || !stillOwnsPanel) {
+          await suspendTab(tabId, { detachInactive: !stillAccessible });
         }
         throw new Error(
-          !stillShared
-            ? "This tab is not shared with OpenClaw."
+          !stillAccessible
+            ? "This tab is not available to OpenClaw."
             : !stillOwnsPanel
               ? "This panel is no longer attached to the tab."
               : "Gateway connection changed while preparing this tab.",

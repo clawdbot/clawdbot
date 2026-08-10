@@ -1906,7 +1906,12 @@ function toGenericClaudeHost(
 type ClaudeSessionCatalogRuntime = Required<
   Pick<
     SessionCatalogProvider,
-    "list" | "read" | "continueSession" | "openTerminal" | "checkUpstreamActivity"
+    | "list"
+    | "read"
+    | "continueSession"
+    | "startTerminalSession"
+    | "openTerminal"
+    | "checkUpstreamActivity"
   >
 >;
 
@@ -1940,6 +1945,7 @@ export function createClaudeSessionCatalogRuntime(
     },
     continueSession: async (request) =>
       await continueClaudeSession(api, request.hostId, request.threadId),
+    startTerminalSession: (request) => catalogTerminal.startClaudeCatalogTerminal(request),
     openTerminal: (request) =>
       catalogTerminal.openClaudeCatalogTerminal({
         api,

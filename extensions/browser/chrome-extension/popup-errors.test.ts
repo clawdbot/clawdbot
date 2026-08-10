@@ -8,13 +8,20 @@ type PopupMessage = {
   type: string;
   tabId?: number;
   pairingString?: string;
+  accessMode?: string;
+  grant?: boolean;
 };
 
 type PopupState = {
   paired?: boolean;
   shared?: boolean;
+  denied?: boolean;
+  eligible?: boolean;
+  accessMode?: "all" | "selected";
   statusHint?: string;
-  failures: Partial<Record<"getStatus" | "pair" | "unpair" | "toggleShareTab", string>>;
+  failures: Partial<
+    Record<"getStatus" | "pair" | "unpair" | "toggleTabAccess" | "setAccessMode", string>
+  >;
   onFailure?: (message: PopupMessage) => void;
 };
 
@@ -38,14 +45,31 @@ async function loadPopup(params: PopupState) {
         return {
           paired: params.paired !== false,
           state: "on",
-          sharedTabCount: params.shared ? 1 : 0,
+          accessMode: params.accessMode ?? "selected",
+          accessibleTabCount: params.shared ? 1 : 0,
           relayUrl: "ws://127.0.0.1:18797/extension",
           ...(params.statusHint ? { hint: params.statusHint } : {}),
         };
       case "prepareCopilotPanel":
         return { ok: true, path: "sidepanel.html?binding=fixture" };
-      case "isTabShared":
-        return { shared: params.shared === true };
+      case "getTabAccess":
+        return {
+          accessMode: params.accessMode ?? "selected",
+          accessible: params.shared === true,
+          denied: params.denied === true,
+          eligible: params.eligible !== false,
+        };
+      case "setAccessMode":
+        params.accessMode = message.accessMode === "selected" ? "selected" : "all";
+        return { ok: true, accessMode: params.accessMode };
+      case "toggleTabAccess":
+        if ((params.accessMode ?? "selected") === "all") {
+          params.denied = message.grant !== true;
+          params.shared = message.grant === true;
+        } else {
+          params.shared = message.grant === true;
+        }
+        return { ok: true };
       default:
         return { ok: true };
     }
@@ -70,7 +94,7 @@ async function loadPopup(params: PopupState) {
       expect(sendMessage).toHaveBeenCalledWith({ type: "getStatus" });
       return;
     }
-    expect(sendMessage).toHaveBeenCalledWith({ type: "isTabShared", tabId: 44 });
+    expect(sendMessage).toHaveBeenCalledWith({ type: "getTabAccess", tabId: 44 });
   });
 
   return { sendMessage };
@@ -161,15 +185,20 @@ describe("Chrome extension popup action errors", () => {
 
   it("shows a rejected share-toggle error in the visible connected popup", async () => {
     const error = "No tab with id: 44.";
-    const failures: Partial<Record<"getStatus" | "toggleShareTab", string>> = {
-      toggleShareTab: error,
+    const failures: Partial<Record<"getStatus" | "toggleTabAccess", string>> = {
+      toggleTabAccess: error,
     };
     const { sendMessage } = await loadPopup({ failures });
 
     popupElement("shareButton").click();
 
     await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith({ type: "toggleShareTab", tabId: 44 });
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: "toggleTabAccess",
+        tabId: 44,
+        accessMode: "selected",
+        grant: true,
+      });
       expect(popupElement("statusLine").textContent).toBe(error);
       expect(popupElement("statusLine").closest(".hidden")).toBeNull();
       expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
@@ -185,12 +214,60 @@ describe("Chrome extension popup action errors", () => {
     delete failures.getStatus;
     await expectVisibleErrorAfterStatusRefresh(error, sendMessage);
 
-    delete failures.toggleShareTab;
+    delete failures.toggleTabAccess;
     popupElement("shareButton").click();
 
     await vi.waitFor(() => {
-      expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
+      expect(popupElement("statusLine").textContent).toBe("Connected · 1 tab shared");
       expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
+    });
+  });
+
+  it("shows all-mode availability and toggles the tab between Pause and Allow", async () => {
+    const popup: PopupState = { accessMode: "all", shared: true, failures: {} };
+    const { sendMessage } = await loadPopup(popup);
+    expect(popupElement("statusLine").textContent).toBe("Connected · 1 tab available");
+    expect(popupElement("shareButton").textContent).toBe("Pause OpenClaw on this tab");
+
+    popupElement("shareButton").click();
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: "toggleTabAccess",
+        tabId: 44,
+        accessMode: "all",
+        grant: false,
+      });
+      expect(popupElement("shareButton").textContent).toBe("Allow OpenClaw on this tab");
+    });
+  });
+
+  it.each([
+    { accessMode: "all" as const, denied: true, label: "paused all-mode" },
+    { accessMode: "selected" as const, denied: false, label: "unselected selected-mode" },
+  ])("disables Copilot for an inaccessible $label tab", async ({ accessMode, denied }) => {
+    await loadPopup({ accessMode, denied, shared: false, failures: {} });
+
+    await vi.waitFor(() => {
+      expect(popupElement("shareButton").dataset.tabId).toBe("44");
+    });
+    expect((popupElement("copilotButton") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("changes Access immediately in settings and shows the all-tabs warning", async () => {
+    const popup: PopupState = { accessMode: "selected", failures: {} };
+    const { sendMessage } = await loadPopup(popup);
+    popupElement("settingsButton").click();
+    await vi.waitFor(() => {
+      expect(popupElement("settingsSection").classList.contains("hidden")).toBe(false);
+    });
+    const select = popupElement("accessModeSelect") as HTMLSelectElement;
+    select.value = "all";
+    select.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({ type: "setAccessMode", accessMode: "all" });
+      expect(popupElement("accessWarning").classList.contains("hidden")).toBe(false);
     });
   });
 
@@ -203,7 +280,7 @@ describe("Chrome extension popup action errors", () => {
       const error = "Could not reconcile browser tab consent.";
       const popup: PopupState = {
         shared: initiallyShared,
-        failures: { toggleShareTab: error },
+        failures: { toggleTabAccess: error },
       };
       popup.onFailure = () => {
         popup.shared = !popup.shared;
@@ -258,7 +335,11 @@ describe("Chrome extension popup action errors", () => {
     popup.paired = true;
     popupElement("pairButton").click();
     await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith({ type: "pair", pairingString: "" });
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: "pair",
+        pairingString: "",
+        accessMode: "all",
+      });
       expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
       expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
     });
@@ -283,6 +364,7 @@ describe("Chrome extension popup action errors", () => {
       expect(sendMessage).toHaveBeenCalledWith({
         type: "pair",
         pairingString: pairingInput.value,
+        accessMode: "all",
       });
       expect(popupElement("error").textContent).toBe(error);
       expect(popupElement("pairSection").classList.contains("hidden")).toBe(true);
@@ -295,7 +377,7 @@ describe("Chrome extension popup action errors", () => {
     popupElement("shareButton").click();
 
     await vi.waitFor(() => {
-      expect(popupElement("statusLine").textContent).toBe("Connected · 0 tabs shared");
+      expect(popupElement("statusLine").textContent).toBe("Connected · 1 tab shared");
       expect(popupElement("connectedSection").classList.contains("hidden")).toBe(false);
     });
   });
@@ -343,6 +425,7 @@ describe("Chrome extension popup action errors", () => {
       expect(sendMessage).toHaveBeenCalledWith({
         type: "pair",
         pairingString: pairingInput.value,
+        accessMode: "all",
       });
       expect(popupElement("error").textContent).toBe(error);
       expect(popupElement("error").closest(".hidden")).toBeNull();

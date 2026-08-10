@@ -134,6 +134,9 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, 'member-1', 'owner-1', 1)",
         )
         .run(oldKey);
+      expect(listSessionEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(
+        oldKey,
+      );
 
       expect(repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
         found: 1,
@@ -143,6 +146,9 @@ describe("doctor reserved incognito session key repair", () => {
         found: 1,
         repaired: 1,
       });
+      expect(listSessionEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(
+        newKey,
+      );
 
       expect(
         database.db

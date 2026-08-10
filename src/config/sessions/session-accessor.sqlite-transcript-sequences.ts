@@ -75,12 +75,12 @@ export function rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
   }
 }
 
-/** Resolves final cursors while an ordinary turn still owns its writer lock. */
+/** Resolves final cursors while an ordinary turn still owns its writer transaction. */
 export function rememberCommittedSqliteTranscriptMessageSequences(
   scope: SessionTranscriptTurnWriteContext,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
 ): void {
-  if (!scope.agentId || !scope.sessionId || !scope.sessionKey) {
+  if (messages.length === 0 || !scope.agentId || !scope.sessionId || !scope.sessionKey) {
     return;
   }
   const resolved = resolveSqliteTranscriptScope({

@@ -2,14 +2,8 @@ import {
   REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
   REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
 } from "./workspace-manifest-remote-script.js";
-export {
-  REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS,
-  REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
-} from "./workspace-accepted-remote-script.js";
-export {
-  REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
-  REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
-} from "./workspace-mutation-remote-script.js";
+export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
+export { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
   DERIVED_WORKSPACE_FILE_NAMES,

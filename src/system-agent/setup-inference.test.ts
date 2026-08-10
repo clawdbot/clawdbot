@@ -189,12 +189,8 @@ beforeEach(() => {
   pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
-async function makeTempDir(): Promise<string> {
-  return await suiteTempRootTracker.make("case");
-}
-
 async function createMainAgentFixture() {
-  const stateDir = await makeTempDir();
+  const stateDir = await suiteTempRootTracker.make("case");
   const agentDir = path.join(stateDir, "agent");
   const initialConfig = {
     agents: { list: [{ id: "main", default: true, agentDir }] },
@@ -291,9 +287,9 @@ function withSuiteFixtures<
     Object.getOwnPropertyDescriptors(input ?? {}),
   ) as T;
   if (!deps.createTempDir) {
-    deps.createTempDir = makeTempDir;
+    deps.createTempDir = suiteTempRootTracker.make;
   }
-  if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
+  if (deps.createTempDir === suiteTempRootTracker.make && !deps.removeTempDir) {
     deps.removeTempDir = deferSuiteTempDirCleanup;
   }
   if (!deps.readCodexCliActiveApiKey) {
@@ -1597,7 +1593,7 @@ describe("activateSetupInference", () => {
   });
 
   it("disposes the temporary auth database before Windows-style removal", async () => {
-    const tempDir = await makeTempDir();
+    const tempDir = await suiteTempRootTracker.make("case");
     const databasePath = path.join(tempDir, "agent", "openclaw-agent.sqlite");
     let disposed = false;
     const disposeDatabase = vi.fn((pathname: string) => {
@@ -2374,7 +2370,7 @@ describe("activateSetupInference", () => {
         agentId: "execution-agent",
         routeAgentId: "route-agent",
       },
-      tempDir: await makeTempDir(),
+      tempDir: await suiteTempRootTracker.make("case"),
       deps: { runEmbeddedAgent: runEmbeddedAgent as never },
       authProfileStateMode: "read-only",
       requireExecutionOwner: false,
@@ -2796,7 +2792,7 @@ describe("activateSetupInference", () => {
   ])(
     "uses a provider-owned $name method and persists it after a passing test",
     async ({ authKind, credentialType }) => {
-      const stateDir = await makeTempDir();
+      const stateDir = await suiteTempRootTracker.make("case");
       const agentDir = path.join(stateDir, "agent");
       const initialConfig = {
         agents: { list: [{ id: "main", default: true, agentDir }] },
@@ -2975,7 +2971,7 @@ describe("activateSetupInference", () => {
   });
 
   it("scopes provider setup to the selected inference route and one credential", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       gateway: { port: 18_789 },
@@ -3220,7 +3216,7 @@ describe("activateSetupInference", () => {
   });
 
   it("rolls back a staged key when the config commit fails", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       agents: { list: [{ id: "main", default: true, agentDir }] },
@@ -3598,7 +3594,7 @@ describe("activateSetupInference", () => {
   });
 
   it("ignores an unrelated provider patch and preserves a concurrent operator edit", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const auxProvider = {
       baseUrl: "https://aux.example.test/v1",
@@ -3715,7 +3711,7 @@ describe("activateSetupInference", () => {
     },
   ])("$name without starting interactive login", async (testCase) => {
     const { existingModel, starterModel, expectedSetupInputModel } = testCase;
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const runInteractive = vi.fn();
     const runNonInteractive = vi.fn(
@@ -4682,7 +4678,7 @@ describe("activateSetupInference", () => {
         invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
         createTempDir: async () => {
-          tempDir = await makeTempDir();
+          tempDir = await suiteTempRootTracker.make("case");
           return tempDir;
         },
       },
@@ -4800,7 +4796,7 @@ describe("activateSetupInference", () => {
   });
 
   it("marks an unowned Codex package generation retained when the live test fails", async () => {
-    const installProjectDir = await makeTempDir();
+    const installProjectDir = await suiteTempRootTracker.make("case");
     const packageDir = path.join(installProjectDir, "node_modules", "@openclaw", "codex");
     await fs.mkdir(packageDir, { recursive: true });
     const transformConfig = vi.fn();
@@ -5379,7 +5375,7 @@ describe("verifySetupInference", () => {
     ["missing default-agent model", { exists: true, valid: true, config: {} }],
   ])("rejects %s before starting a model", async (_label, snapshot) => {
     const runEmbeddedAgent = vi.fn();
-    const createTempDir = vi.fn(makeTempDir);
+    const createTempDir = vi.fn(suiteTempRootTracker.make);
 
     const result = await verifySetupInference({
       deps: {
@@ -5396,7 +5392,7 @@ describe("verifySetupInference", () => {
 
   it("reports invalid config without starting a live check", async () => {
     const runEmbeddedAgent = vi.fn();
-    const createTempDir = vi.fn(makeTempDir);
+    const createTempDir = vi.fn(suiteTempRootTracker.make);
     const result = await verifySetupInference({
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(
@@ -5578,7 +5574,7 @@ describe("verifySetupInference", () => {
   });
 
   it("binds a runtime-only Codex profile after activation and runs the first OpenClaw turn", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const profileId = "openai:default";
     const credential = {
@@ -5765,7 +5761,7 @@ describe("verifySetupInference", () => {
   });
 
   it("returns a refreshed staged profile without changing the configured agent store", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "configured-agent");
     const profileId = "openai:default";
     seedInMemoryAuthProfileStore(agentDir, {
@@ -6150,7 +6146,7 @@ describe("verifySetupInference", () => {
       },
     },
   ])("resolves $name but rejects Gemini CLI as a setup verifier", async (testCase) => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const runCliAgent = vi.fn(async () =>
       successfulRun("google-gemini-cli", "gemini-3.1-pro-preview"),

@@ -179,6 +179,7 @@ export async function activateCodexAttemptTurn(
         text,
       });
       if (claimed) {
+        optionsLocal?.onQueueAccepted?.(true);
         return undefined;
       }
     } else if (isInboundUserMessage) {
@@ -212,7 +213,11 @@ export async function activateCodexAttemptTurn(
     runId: params.runId,
     queueMessage,
     messageInjection: {
-      isAvailable: () => !state.completed && !state.timedOut && !runAbortController.signal.aborted,
+      isAvailable: () =>
+        !state.completed &&
+        !state.terminalTurnNotificationQueued &&
+        !state.timedOut &&
+        !runAbortController.signal.aborted,
       queueMessage,
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,

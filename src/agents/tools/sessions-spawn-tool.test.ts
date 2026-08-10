@@ -8,7 +8,7 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "../swarm-code-mode.js";
+} from "../subagents/swarm/swarm-code-mode.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const hoisted = vi.hoisted(() => {
