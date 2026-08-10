@@ -196,6 +196,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
         expect(result.failedStep).toBeNull();
         expect(result.afterVersion).toBe("2.0.0");
+        expect(result.packageReplacementVerified).toBe(true);
         expect(result.steps.map((step) => step.name)).toEqual([
           "global update",
           "global install swap",
@@ -258,6 +259,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.failedStep).toBeNull();
       expect(result.verifiedPackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("2.0.0");
+      expect(result.packageReplacementVerified).toBe(true);
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"2.0.0"',
       );
@@ -831,6 +833,8 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.steps.at(-1)?.stderrTail).toContain(
         "expected installed version 2.0.0, found 1.5.0",
       );
+      // Staged tree never reached live swap — do not exempt the future-config guard.
+      expect(result.packageReplacementVerified).toBe(false);
       expect(result.verifiedPackageRoot).toBe(packageRoot);
       expect(result.afterVersion).toBe("1.0.0");
       expect(postVerifyStep).not.toHaveBeenCalled();
@@ -901,6 +905,9 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
 
         expect(result.failedStep?.name).toBe("global install swap");
+        // Staged update succeeded, but live swap rolled back — recovery must
+        // not treat this as a verified package replacement.
+        expect(result.packageReplacementVerified).toBe(false);
         expect(result.verifiedPackageRoot).toBe(packageRoot);
         expect(result.afterVersion).toBe("1.0.0");
         await expect(
