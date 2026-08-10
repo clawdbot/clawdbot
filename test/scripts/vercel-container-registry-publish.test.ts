@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   createVercelContainerRegistryPublishPlan,
+  promoteVercelContainerRegistryAliases,
   publishVercelContainerRegistryImages,
 } from "../../scripts/vercel-container-registry-publish.mjs";
 
@@ -34,6 +35,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  "continue-on-error"?: boolean;
   environment?: string;
   if?: string;
   needs?: string | string[];
@@ -41,6 +43,7 @@ type WorkflowJob = {
   permissions?: Record<string, string>;
   secrets?: Record<string, string>;
   steps?: WorkflowStep[];
+  "timeout-minutes"?: number;
   uses?: string;
   with?: Record<string, string>;
 };
@@ -51,6 +54,7 @@ type Workflow = {
   on?: {
     workflow_call?: {
       inputs?: Record<string, { required?: boolean; type?: string }>;
+      outputs?: Record<string, { description?: string; value?: string }>;
     };
   };
 };
@@ -242,7 +246,7 @@ describe("Vercel Container Registry publishing", () => {
         .map((args) => requireCommandRef(args))
         .every((ref) => ref.includes("@sha256:")),
     ).toBe(true);
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(12);
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
     expect(calls[firstCreate]).toEqual([
       "buildx",
       "imagetools",
@@ -333,6 +337,14 @@ describe("Vercel Container Registry publishing", () => {
       execFileSyncImpl,
       log: () => {},
     });
+    promoteVercelContainerRegistryAliases(
+      {
+        includeBrowser: false,
+        targetImage,
+        version: "2026.7.2",
+      },
+      { execFileSyncImpl, log: () => {} },
+    );
 
     expect(calls.filter((args) => args[2] === "create").slice(-2)).toEqual([
       [
@@ -367,22 +379,28 @@ describe("Vercel Container Registry publishing", () => {
     });
 
     expect(() =>
-      publishVercelContainerRegistryImages(publishParams("2026.7.2", false), {
-        execFileSyncImpl,
-        log: () => {},
-      }),
+      promoteVercelContainerRegistryAliases(
+        {
+          includeBrowser: false,
+          targetImage,
+          version: "2026.7.2",
+        },
+        { execFileSyncImpl, log: () => {} },
+      ),
     ).toThrow(`Refusing to move ${targetImage}:latest backward from 2026.7.3 to 2026.7.2`);
     expect(
       calls.some((args) => args[2] === "create" && args.includes(`${targetImage}:latest`)),
     ).toBe(false);
   });
 
-  it("uses production VCR credentials only from the serialized release workflow", () => {
+  it("isolates best-effort VCR publication from Docker and GitHub release finalization", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
+    const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     const manualPromotion = readWorkflow(".github/workflows/docker-channel-promote.yml");
     const reusablePublish = requireJob(reusable, "publish");
-    const releasePublish = requireJob(dockerRelease, "publish-vcr");
+    const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
+    const finalizeRelease = requireJob(releaseWorkflow, "finalize_github_release");
     const verifyAttestations = requireJob(dockerRelease, "verify-attestations");
     const manualResolve = requireJob(manualPromotion, "resolve");
     const manualApproval = requireJob(manualPromotion, "approve");
@@ -392,20 +410,26 @@ describe("Vercel Container Registry publishing", () => {
       "cancel-in-progress": false,
       queue: "max",
     });
-    expect(releasePublish.needs).toEqual([
-      "resolve_release_policy",
-      "create-manifest",
-      "verify-attestations",
-    ]);
-    expect(releasePublish.if).not.toContain("outputs.channel != 'beta'");
+    expect(reusable.concurrency).toEqual({
+      group: "vcr-release-publish",
+      "cancel-in-progress": false,
+    });
+    expect(dockerRelease.jobs?.["publish-vcr"]).toBeUndefined();
+    expect(releasePublish.needs).toEqual(["publish_docker"]);
+    expect(releasePublish.if).not.toContain("beta");
     expect(releasePublish.uses).toBe("./.github/workflows/vercel-container-registry-publish.yml");
     expect(releasePublish.with).toMatchObject({
-      include_browser: "${{ needs.create-manifest.outputs.browser_supported == 'true' }}",
-      source_refs: "${{ needs.verify-attestations.outputs.vcr_source_refs }}",
+      include_browser: "${{ needs.publish_docker.outputs.include_browser == 'true' }}",
+      source_refs: "${{ needs.publish_docker.outputs.vcr_source_refs }}",
+      version: "${{ needs.publish_docker.outputs.version }}",
     });
     expect(releasePublish.secrets).toEqual({
       VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
     });
+    expect(finalizeRelease.needs).toEqual(["publish", "publish_docker"]);
+    expect(finalizeRelease.if).not.toContain("publish_vcr");
+    expect(reusablePublish["continue-on-error"]).toBe(true);
+    expect(reusablePublish["timeout-minutes"]).toBe(30);
 
     const validateDispatch = manualResolve.steps?.find((step) =>
       step.name?.includes("main-branch dispatch"),
@@ -426,7 +450,7 @@ describe("Vercel Container Registry publishing", () => {
           "uses: ./.github/workflows/vercel-container-registry-publish.yml",
         ),
       );
-    expect(reusableCallers).toEqual(["docker-release.yml"]);
+    expect(reusableCallers).toEqual(["openclaw-release-publish.yml"]);
     expect(reusable.on?.workflow_call?.inputs?.include_browser).toEqual({
       description: "Whether the tagged Docker release includes browser images",
       required: true,
@@ -440,6 +464,17 @@ describe("Vercel Container Registry publishing", () => {
     expect(verifyAttestations.outputs?.vcr_source_refs).toBe(
       "${{ steps.vcr_source_refs.outputs.value }}",
     );
+    expect(dockerRelease.on?.workflow_call?.outputs).toMatchObject({
+      include_browser: {
+        value: "${{ jobs.create-manifest.outputs.browser_supported }}",
+      },
+      vcr_source_refs: {
+        value: "${{ jobs.verify-attestations.outputs.vcr_source_refs }}",
+      },
+      version: {
+        value: "${{ jobs.resolve_release_policy.outputs.version }}",
+      },
+    });
     const immutableSourceStep = verifyAttestations.steps?.find(
       (step) => step.name === "Resolve and verify immutable VCR source refs",
     );
@@ -461,9 +496,22 @@ describe("Vercel Container Registry publishing", () => {
     expect(authenticateVercel?.run).toContain('"${VERCEL_CLI}" vcr login docker');
     expect(JSON.stringify(reusablePublish)).not.toContain("npx --yes");
     expect(JSON.stringify(reusablePublish)).not.toContain("docker-channel-promote.mjs");
-    expect(
-      reusablePublish.steps?.find((step) => step.name === "Run custom-image Sandbox smoke")?.run,
-    ).toContain("sandbox run \\\n");
+    const copyIndex = reusablePublish.steps?.findIndex(
+      (step) => step.name === "Copy and verify immutable release images",
+    );
+    const smokeIndex = reusablePublish.steps?.findIndex(
+      (step) => step.name === "Run custom-image Sandbox smoke",
+    );
+    const promoteIndex = reusablePublish.steps?.findIndex(
+      (step) => step.name === "Promote and verify channel aliases",
+    );
+    expect(copyIndex).toBeGreaterThan(-1);
+    expect(smokeIndex).toBeGreaterThan(copyIndex ?? -1);
+    expect(promoteIndex).toBeGreaterThan(smokeIndex ?? -1);
+    const smokeRun = reusablePublish.steps?.[smokeIndex ?? -1]?.run ?? "";
+    expect(smokeRun).toContain("sandbox run \\\n");
+    expect(smokeRun).toContain("image_not_ready");
+    expect(smokeRun).toContain("retry_deadline");
   });
 
   it("pins the complete Vercel CLI dependency closure", () => {

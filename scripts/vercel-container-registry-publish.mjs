@@ -302,11 +302,10 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       execFileSyncImpl,
       ARCHITECTURES,
     );
-    return { aliasKey, manifestTag, platformDigests };
+    return { manifestTag, platformDigests };
   });
 
-  const publishedVariants = [];
-  for (const { aliasKey, manifestTag, platformDigests } of variants) {
+  for (const { manifestTag, platformDigests } of variants) {
     const manifestTargetRef = `${plan.targetImage}:${manifestTag}`;
     const platformSourceRefs = ARCHITECTURES.map(
       (architecture) => `${plan.sourceImage}@${platformDigests[architecture]}`,
@@ -324,12 +323,6 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       );
     }
     log(`Verified ${manifestTargetRef} as a clean linux/amd64+linux/arm64 index.`);
-    publishedVariants.push({
-      aliasKey,
-      manifestDigest: manifestDescriptor.digest,
-      manifestTag,
-    });
-
     for (const architecture of ARCHITECTURES) {
       const targetRef = `${plan.targetImage}:${manifestTag}-${architecture}`;
       const sourceDigest = platformDigests[architecture];
@@ -359,26 +352,48 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
     }
   }
 
-  // The caller serializes the complete Docker release workflow under
-  // docker-release-publish, so these digest-bound alias writes cannot race a
-  // newer release. Keep this clean-index promotion VCR-local: VCR intentionally
-  // omits upstream attestation descriptors for Sandbox compatibility.
-  const policy = resolveDockerReleasePolicy(plan.version);
-  const promotions = publishedVariants.flatMap(({ aliasKey, manifestDigest, manifestTag }) => {
-    const targetRefs = policy.movingAliases[aliasKey].map(
-      (alias) => `${plan.targetImage}:${alias}`,
+  return plan;
+}
+
+/** Promote moving aliases only after Sandbox proves the immutable image is ready. */
+export function promoteVercelContainerRegistryAliases(params, options = {}) {
+  const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
+  const log = options.log ?? console.log;
+  const policy = resolveDockerReleasePolicy(params.version);
+  const targetImage = requireImageName(params.targetImage, "Target image");
+  const publishedVariants = resolveVariants(params.includeBrowser).map(({ aliasKey, suffix }) => {
+    const manifestTag = `${policy.version}${suffix}`;
+    const manifestTargetRef = `${targetImage}:${manifestTag}`;
+    const platformDigests = resolvePlatformDigests(
+      manifestTargetRef,
+      execFileSyncImpl,
+      ARCHITECTURES,
     );
+    verifyCleanIndex(manifestTargetRef, platformDigests, execFileSyncImpl);
+    const manifestDescriptor = inspectManifestDescriptor(manifestTargetRef, execFileSyncImpl);
+    if (manifestDescriptor.mediaType !== IMAGE_INDEX_MEDIA_TYPE) {
+      throw new Error(
+        `${manifestTargetRef} must resolve to an OCI image index, got ${manifestDescriptor.mediaType}.`,
+      );
+    }
+    return { aliasKey, manifestDigest: manifestDescriptor.digest, manifestTag };
+  });
+
+  // VCR owns a separate release-wide concurrency group, so these read-then-write
+  // alias updates cannot race a newer release without holding the Docker lock.
+  const promotions = publishedVariants.flatMap(({ aliasKey, manifestDigest, manifestTag }) => {
+    const targetRefs = policy.movingAliases[aliasKey].map((alias) => `${targetImage}:${alias}`);
     return targetRefs.length === 0 ? [] : [{ manifestDigest, manifestTag, targetRefs }];
   });
 
   // Preflight every clean source and existing alias before the first moving-tag
   // write so an out-of-order retry cannot partially roll a channel backward.
   for (const { manifestDigest, targetRefs } of promotions) {
-    const sourceDigestRef = `${plan.targetImage}@${manifestDigest}`;
+    const sourceDigestRef = `${targetImage}@${manifestDigest}`;
     const sourceVersion = inspectImageVersion(sourceDigestRef, execFileSyncImpl);
-    if (sourceVersion !== plan.version) {
+    if (sourceVersion !== policy.version) {
       throw new Error(
-        `${sourceDigestRef} reports version ${sourceVersion}, expected ${plan.version}.`,
+        `${sourceDigestRef} reports version ${sourceVersion}, expected ${policy.version}.`,
       );
     }
     for (const targetRef of targetRefs) {
@@ -388,15 +403,15 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       if (currentVersion === null) {
         continue;
       }
-      const comparison = compareReleaseVersions(plan.version, currentVersion);
+      const comparison = compareReleaseVersions(policy.version, currentVersion);
       if (comparison === null) {
         throw new Error(
-          `Cannot compare candidate version ${plan.version} with ${targetRef} version ${currentVersion}.`,
+          `Cannot compare candidate version ${policy.version} with ${targetRef} version ${currentVersion}.`,
         );
       }
       if (comparison < 0) {
         throw new Error(
-          `Refusing to move ${targetRef} backward from ${currentVersion} to ${plan.version}.`,
+          `Refusing to move ${targetRef} backward from ${currentVersion} to ${policy.version}.`,
         );
       }
     }
@@ -404,7 +419,7 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
 
   for (const { manifestDigest, manifestTag, targetRefs } of promotions) {
     const targetArgs = targetRefs.flatMap((targetRef) => ["--tag", targetRef]);
-    const sourceDigestRef = `${plan.targetImage}@${manifestDigest}`;
+    const sourceDigestRef = `${targetImage}@${manifestDigest}`;
     runImagetools(
       ["create", "--prefer-index=false", ...targetArgs, sourceDigestRef],
       execFileSyncImpl,
@@ -423,12 +438,16 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       log(`Verified ${targetRef} -> ${manifestTag} (${manifestDigest}).`);
     }
   }
-  return plan;
+  return {
+    channel: policy.channel,
+    targetImage,
+    version: policy.version,
+  };
 }
 
 function printHelp() {
   console.log(
-    "Usage: node scripts/vercel-container-registry-publish.mjs --version YYYY.M.P --source-ref ALIAS=REGISTRY/IMAGE@sha256:DIGEST [...] --target-image REGISTRY/IMAGE [--include-browser]",
+    "Usage: node scripts/vercel-container-registry-publish.mjs --version YYYY.M.P --target-image REGISTRY/IMAGE [--include-browser] (--source-ref ALIAS=REGISTRY/IMAGE@sha256:DIGEST [...] | --promote-aliases)",
   );
 }
 
@@ -438,6 +457,7 @@ function main() {
     options: {
       help: { type: "boolean", short: "h" },
       "include-browser": { type: "boolean" },
+      "promote-aliases": { type: "boolean" },
       "source-ref": { type: "string", multiple: true },
       "target-image": { type: "string" },
       version: { type: "string" },
@@ -448,8 +468,23 @@ function main() {
     printHelp();
     return;
   }
-  if (!values.version || !values["source-ref"] || !values["target-image"]) {
-    throw new Error("--version, --source-ref, and --target-image are required.");
+  if (!values.version || !values["target-image"]) {
+    throw new Error("--version and --target-image are required.");
+  }
+  if (values["promote-aliases"]) {
+    if (values["source-ref"]) {
+      throw new Error("--promote-aliases cannot be combined with --source-ref.");
+    }
+    const result = promoteVercelContainerRegistryAliases({
+      includeBrowser: values["include-browser"] ?? false,
+      targetImage: values["target-image"],
+      version: values.version,
+    });
+    console.log(`Promoted ${result.channel} aliases for ${result.targetImage}:${result.version}.`);
+    return;
+  }
+  if (!values["source-ref"]) {
+    throw new Error("--source-ref is required when publishing immutable images.");
   }
   const plan = publishVercelContainerRegistryImages({
     includeBrowser: values["include-browser"] ?? false,

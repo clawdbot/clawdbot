@@ -26,3 +26,19 @@ export function publishVercelContainerRegistryImages(
     log?: (message: string) => void;
   },
 ): VercelContainerRegistryPublishPlan;
+
+export function promoteVercelContainerRegistryAliases(
+  params: {
+    includeBrowser: boolean;
+    version: string;
+    targetImage: string;
+  },
+  options?: {
+    execFileSyncImpl?: (command: string, args: string[], options: object) => unknown;
+    log?: (message: string) => void;
+  },
+): {
+  channel: "stable" | "extended-stable" | "beta";
+  targetImage: string;
+  version: string;
+};
