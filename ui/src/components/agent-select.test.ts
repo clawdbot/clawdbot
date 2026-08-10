@@ -12,7 +12,9 @@ customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
 
 afterEach(async () => {
   document.body.replaceChildren();
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 });
 
 type AgentSelectElement = HTMLElement & {
