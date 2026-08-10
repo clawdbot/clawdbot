@@ -58,10 +58,7 @@ function resolveAgentId(
   return null;
 }
 
-function hasAgent(
-  cfg: Awaited<ReturnType<typeof requireValidConfig>>,
-  agentId: string,
-): boolean {
+function hasAgent(cfg: Awaited<ReturnType<typeof requireValidConfig>>, agentId: string): boolean {
   if (!cfg) {
     return false;
   }
