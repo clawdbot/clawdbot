@@ -199,6 +199,38 @@ describe("media-understanding runtime", () => {
     );
   });
 
+  it("falls back to the default agent directory when neither agentDir nor agentId is provided", async () => {
+    // GOTCHA: plugin callers (e.g. a browser tool describing a screenshot)
+    // routinely have neither an explicit agentDir nor an agentId handy --
+    // this must not leave agentDir undefined, or image understanding hard
+    // -fails downstream with "Image understanding requires agentDir"
+    // (openclaw/openclaw#121293). describePreparedImageWithModel already
+    // falls back to resolveDefaultAgentDir in this exact situation;
+    // runMediaUnderstandingFile must do the same.
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "image", outcome: "skipped", attachments: [] },
+    });
+
+    await runMediaUnderstandingFile({
+      capability: "image",
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {
+        agents: {
+          list: [{ id: "main", default: true, agentDir: "/tmp/default-agent" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mocks.runCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/default-agent" }),
+    );
+  });
+
   it("returns the matching capability output", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",

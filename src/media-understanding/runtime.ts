@@ -196,7 +196,8 @@ export async function runMediaUnderstandingFile(
 
   const providerRegistry = buildProviderRegistry(undefined, cfg);
   const agentDir =
-    params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);
+    params.agentDir ??
+    (params.agentId ? resolveAgentDir(cfg, params.agentId) : resolveDefaultAgentDir(cfg));
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
