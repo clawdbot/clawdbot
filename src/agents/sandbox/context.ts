@@ -14,7 +14,7 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
@@ -36,6 +36,7 @@ async function syncSandboxSkillsToWorkspace(params: {
   agentId: string;
   rawSessionKey: string;
   execOverrides?: ExecPolicyOverrides;
+  skillsSnapshot?: SkillSnapshot;
 }): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
     const [
@@ -65,6 +66,7 @@ async function syncSandboxSkillsToWorkspace(params: {
       config: params.config,
       agentId: params.agentId,
       eligibility,
+      skillsSnapshot: params.skillsSnapshot,
     });
     return { eligibility, skillUsagePaths };
   } catch (error) {
@@ -80,6 +82,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   rawSessionKey: string;
   config?: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
+  skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<{
   agentWorkspaceDir: string;
@@ -113,6 +116,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentId: params.agentId,
       rawSessionKey,
       execOverrides: params.execOverrides,
+      skillsSnapshot: params.skillsSnapshot,
     });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -123,6 +127,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentId: params.agentId,
       rawSessionKey,
       execOverrides: params.execOverrides,
+      skillsSnapshot: params.skillsSnapshot,
     });
   }
 
@@ -193,6 +198,7 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 };
 
@@ -221,6 +227,7 @@ async function resolveProvisionedSandboxContext(
     rawSessionKey,
     config: params.config,
     execOverrides: params.execOverrides,
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir: params.workspaceDir,
   });
 
@@ -333,6 +340,7 @@ export async function resolveSandboxContext(params: {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
