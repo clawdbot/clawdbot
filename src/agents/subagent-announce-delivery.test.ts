@@ -10,6 +10,7 @@ import {
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { buildAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type {
   EmbeddedAgentQueueMessageOptions,
   EmbeddedAgentQueueMessageOutcome,
@@ -3524,84 +3525,407 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     path: "direct",
     reason: "visible_reply_missing",
   } as const;
+  const intentionalRequesterQuiet = {
+    delivered: false,
+    path: "direct",
+    reason: "requester_intentional_quiet",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  } as const;
+  const pendingRequesterTurn = {
+    delivered: false,
+    path: "direct",
+    reason: "requester_turn_pending",
+  } as const;
 
   it.each([
     {
       name: "preserves an ordinary non-yielded direct settle turn",
       response: {},
-      requireVisibleReply: false,
+      requireRequesterSettlement: false,
       expected: deliveredRequesterFinal,
     },
     {
       name: "preserves an intentional silent non-yielded settle turn",
       response: { result: { payloads: [{ text: "NO_REPLY" }] } },
-      requireVisibleReply: false,
+      requireRequesterSettlement: false,
       expected: deliveredRequesterFinal,
     },
     {
       name: "accepts a yielded requester's visible final answer",
       response: { result: { payloads: [{ text: "The consolidated answer." }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: deliveredRequesterFinal,
+    },
+    {
+      name: "keeps an accepted yielded requester turn pending",
+      response: { status: "accepted" },
+      requireRequesterSettlement: true,
+      expected: pendingRequesterTurn,
     },
     {
       name: "rejects a yielded turn without a result",
       response: {},
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn with no response payloads",
       response: { result: { payloads: [] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a payload-only silence token without terminal raw-output evidence",
+      response: { result: { payloads: [{ text: "NO_REPLY" }] } },
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only an error",
       response: { result: { payloads: [{ text: "tool failed", isError: true }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a yielded turn that emits only private reasoning",
       response: { result: { payloads: [{ text: "thinking", isReasoning: true }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects pre-tool commentary instead of a final answer",
       response: { result: { payloads: [{ text: "working on it", isCommentary: true }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a compaction notice instead of a final answer",
       response: { result: { payloads: [{ text: "compacting", isCompactionNotice: true }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a provider-fallback notice instead of a final answer",
       response: { result: { payloads: [{ text: "switching providers", isFallbackNotice: true }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a transient status notice instead of a final answer",
       response: { result: { payloads: [{ text: "still working", isStatusNotice: true }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects an explicitly hidden assistant payload",
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
-      name: "rejects a yielded turn that emits only the silent reply token",
-      response: { result: { payloads: [{ text: "NO_REPLY" }] } },
-      requireVisibleReply: true,
+      name: "accepts an explicit yielded requester decision to remain quiet",
+      response: {
+        status: "ok",
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            livenessState: "working",
+            terminalReplyKind: "silent-empty",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: intentionalRequesterQuiet,
+    },
+    {
+      name: "accepts the terminal agent-wait quiet snapshot without replaying raw text",
+      response: {
+        status: "ok",
+        terminalReply: { disposition: "silent" },
+      },
+      requireRequesterSettlement: true,
+      expected: intentionalRequesterQuiet,
+    },
+    ...[
+      { name: "punctuation-wrapped", rawText: "NO_REPLY..." },
+      { name: "repeated", rawText: "NO_REPLY NO_REPLY" },
+      { name: "JSON-wrapped", rawText: '{"action":"NO_REPLY"}' },
+      { name: "reasoning-prefixed", rawText: "Reasoning:\nNO_REPLY" },
+    ].flatMap(({ name, rawText }) => {
+      const terminalReply = buildAgentRunTerminalReplySnapshot({
+        rawText,
+        terminalReplyKind: "silent-empty",
+      });
+      return [
+        {
+          name: `rejects ${name} quiet text in the direct requester result`,
+          response: {
+            result: {
+              payloads: [],
+              meta: { finalAssistantRawText: rawText, terminalReply },
+            },
+          },
+          requireRequesterSettlement: true,
+          expected: missingRequesterFinal,
+        },
+        {
+          name: `rejects the ${name} quiet snapshot after agent-wait normalization`,
+          response: { status: "ok", terminalReply },
+          requireRequesterSettlement: true,
+          expected: missingRequesterFinal,
+        },
+      ];
+    }),
+    {
+      name: "rejects a failed terminal agent-wait snapshot even if its reply is silent",
+      response: {
+        status: "error",
+        terminalReply: { disposition: "silent" },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    ...(["error", "timeout"] as const).map((status) => ({
+      name: `rejects an outer gateway ${status} that wraps stale quiet evidence`,
+      response: {
+        status,
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    })),
+    {
+      name: "accepts the exact quiet token in both raw and internally visible terminal metadata",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            finalAssistantVisibleText: "NO_REPLY",
+            livenessState: "working",
+            terminalReplyKind: "silent-empty",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: intentionalRequesterQuiet,
+    },
+    {
+      name: "rejects a truncated zero-payload quiet result",
+      response: {
+        result: {
+          payloads: [],
+          payloadsTruncated: true,
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            livenessState: "working",
+            terminalReplyKind: "silent-empty",
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects an aborted zero-payload quiet result",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            aborted: true,
+            finalAssistantRawText: "NO_REPLY",
+            livenessState: "blocked",
+            terminalReplyKind: "silent-empty",
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts exact quiet despite stale embedded liveness after outer terminal settlement",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            livenessState: "paused",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: intentionalRequesterQuiet,
+    },
+    {
+      name: "rejects an errored zero-payload quiet result",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            error: { kind: "incomplete_turn", message: "incomplete" },
+            finalAssistantRawText: "NO_REPLY",
+            livenessState: "abandoned",
+            terminalReplyKind: "silent-empty",
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects exact raw quiet without the producer-owned terminal disposition",
+      response: {
+        result: {
+          payloads: [],
+          meta: { finalAssistantRawText: "NO_REPLY", livenessState: "working" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "accepts exact quiet when the harness mechanically classifies filtered output empty",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            agentHarnessResultClassification: "empty",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: intentionalRequesterQuiet,
+    },
+    {
+      name: "rejects reasoning-only harness output carrying stale quiet raw text",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            agentHarnessResultClassification: "reasoning-only",
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a contradictory visible final beside a raw quiet token",
+      response: {
+        result: {
+          payloads: [],
+          meta: {
+            finalAssistantRawText: "NO_REPLY",
+            finalAssistantVisibleText: "A visible answer",
+            livenessState: "working",
+            terminalReplyKind: "silent-empty",
+          },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects an error payload carrying the quiet token",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY", isError: true }],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a reasoning payload carrying the quiet token",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY", isReasoning: true }],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects commentary carrying the quiet token",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY", isCommentary: true }],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a hidden quiet token",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY", visible: false }],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a truncated quiet token",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY", truncated: true }],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects payload-aware JSON silence instead of an exact decision",
+      response: {
+        result: {
+          payloads: [{ text: '{"action":"NO_REPLY"}' }],
+          meta: { finalAssistantRawText: '{"action":"NO_REPLY"}' },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a mixed quiet and commentary payload set",
+      response: {
+        result: {
+          payloads: [{ text: "NO_REPLY" }, { text: "still deciding", isCommentary: true }],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+        },
+      },
+      requireRequesterSettlement: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "rejects a silent token paired with an unrelated completion side effect",
+      response: {
+        result: {
+          payloads: [],
+          meta: { finalAssistantRawText: "NO_REPLY" },
+          successfulCronAdds: 1,
+        },
+      },
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3612,13 +3936,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           deliveryStatus: { status: "suppressed", succeeded: true, resultCount: 0 },
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a messaging-tool flag without a committed source receipt",
       response: { result: { payloads: [], didSendViaMessagingTool: true } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3630,7 +3954,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           messagingToolSentTexts: ["sent somewhere else"],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3641,13 +3965,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
       name: "rejects a cron side effect without a final reply",
       response: { result: { payloads: [], successfulCronAdds: 1 } },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3659,7 +3983,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: false }],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3673,7 +3997,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3688,7 +4012,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: missingRequesterFinal,
     },
     {
@@ -3700,7 +4024,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: true }],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: deliveredRequesterFinal,
     },
     {
@@ -3712,7 +4036,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           messagingToolSentTargets: [requesterSettleSourceTarget],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: deliveredRequesterFinal,
     },
     {
@@ -3727,7 +4051,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: deliveredRequesterFinal,
     },
     {
@@ -3740,10 +4064,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           messagingToolSentTargets: [{ ...requesterSettleSourceTarget, sourceReplyFinal: true }],
         },
       },
-      requireVisibleReply: true,
+      requireRequesterSettlement: true,
       expected: deliveredRequesterFinal,
     },
-  ])("$name", async ({ response, requireVisibleReply, expected }) => {
+  ])("$name", async ({ response, requireRequesterSettlement, expected }) => {
     const callGateway = createGatewayMock(response);
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const origin = {
@@ -3772,7 +4096,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       requireDirectDelivery: true,
-      ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
+      ...(requireRequesterSettlement ? { requireRequesterSettlement: true } : {}),
       directIdempotencyKey: "announce-requester-settle-direct",
       sourceTool: "subagent_announce",
     });

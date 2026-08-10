@@ -112,7 +112,7 @@ State-change events omit repeated session/agent IDs and expose only model-useful
 
 See [Session state awareness](/concepts/session-state) for the full model: event kinds, watcher registration, the anti-spam notice protocol, reconciliation flow, and current limits.
 
-`sessions_yield` intentionally ends the current turn so the next message can be the follow-up event you are waiting for. Use it after spawning sub-agents when you want completion results to arrive as the next message instead of building poll loops.
+`sessions_yield` intentionally ends the current turn so the next message can be the follow-up event you are waiting for. Use it after spawning sub-agents when you want completion results to arrive as the next message instead of building poll loops. For a top-level requester, the yielded child Task remains delivery-pending until the resumed requester produces one visible final reply or explicitly returns exact `NO_REPLY`; empty or ambiguous requester output retries and ultimately projects the Task as blocked.
 
 `subagents` is the session-tree view over native sub-agent runs and the shared background-task ledger. `action: "list"` reports active/recent sub-agents plus scoped ACP, CLI/media, and cron tasks. `action: "cancel"` accepts a returned `taskId` and can stop only work inside the caller's controlled session tree; leaf sub-agents cannot cancel another session's task.
 

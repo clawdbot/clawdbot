@@ -672,6 +672,44 @@ type TerminalRequesterSettleGate = {
   waitUntilSettled: (caseName: string, childSessionKey: string) => Promise<void>;
 };
 
+type RequesterQuietResponseGate = {
+  arm: () => void;
+  release: () => void;
+  snapshot: () => { armed: boolean; pending: boolean };
+  waitIfArmed: () => Promise<void>;
+};
+
+function createRequesterQuietResponseGate(): RequesterQuietResponseGate {
+  let armed = false;
+  let pending = false;
+  let releasePending: (() => void) | undefined;
+  return {
+    arm() {
+      armed = true;
+      pending = false;
+      releasePending = undefined;
+    },
+    release() {
+      armed = false;
+      pending = false;
+      releasePending?.();
+      releasePending = undefined;
+    },
+    snapshot() {
+      return { armed, pending };
+    },
+    async waitIfArmed() {
+      if (!armed) {
+        return;
+      }
+      pending = true;
+      await new Promise<void>((resolve) => {
+        releasePending = resolve;
+      });
+    },
+  };
+}
+
 function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
   const settledChildren = new Set<string>();
   const waiterPromises = new Map<string, Promise<void>>();
@@ -790,6 +828,7 @@ async function buildResponsesPayload(
   scenarioState: MockScenarioState,
   options: {
     waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
+    waitForRequesterQuietRelease?: () => Promise<void>;
     requestKind?: MockOpenAiRequestKind;
     compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
   } = {},
@@ -2142,6 +2181,45 @@ async function buildResponsesPayload(
     });
   }
   const isSubagentFanoutPrompt = /subagent fanout synthesis check/i.test(allInputText);
+  const isSubagentRequesterQuietPrompt = /subagent requester intentional quiet check/i.test(
+    allInputText,
+  );
+  if (/reply exactly `?QUIET-CHILD-OK`?/i.test(prompt)) {
+    return buildAssistantEvents("QUIET-CHILD-OK");
+  }
+  if (
+    !hasCompletedToolOutput &&
+    /subagent requester intentional quiet check/i.test(prompt) &&
+    scenarioState.subagentRequesterQuietPhase !== 0
+  ) {
+    scenarioState.subagentRequesterQuietPhase = 0;
+  }
+  const hasRequesterQuietChildResult =
+    /QUIET-CHILD-OK/i.test(allInputText) && !/reply exactly `?QUIET-CHILD-OK`?/i.test(prompt);
+  if (scenarioState.subagentRequesterQuietPhase === 2 && hasRequesterQuietChildResult) {
+    scenarioState.subagentRequesterQuietPhase = 3;
+    await options.waitForRequesterQuietRelease?.();
+    return buildAssistantEvents("NO_REPLY");
+  }
+  if (scenarioState.subagentRequesterQuietPhase === 3 && hasRequesterQuietChildResult) {
+    return buildAssistantEvents("NO_REPLY");
+  }
+  if (isSubagentRequesterQuietPrompt) {
+    if (!hasCompletedToolOutput && scenarioState.subagentRequesterQuietPhase === 0) {
+      scenarioState.subagentRequesterQuietPhase = 1;
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Reply exactly QUIET-CHILD-OK",
+        label: "qa-requester-intentional-quiet",
+        thread: false,
+      });
+    }
+    if (hasCompletedToolOutput && scenarioState.subagentRequesterQuietPhase === 1) {
+      scenarioState.subagentRequesterQuietPhase = 2;
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for the quiet-path child to finish.",
+      });
+    }
+  }
   const currentFanoutInstructions = extractAllRequestTexts(
     input.filter((item) => item.role === "system" || item.role === "developer"),
     body,
@@ -2389,6 +2467,7 @@ export async function startQaMockOpenAiServer(params?: {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
+  const requesterQuietResponseGate = createRequesterQuietResponseGate();
   const scenarioStates = new Map<string, MockScenarioState>();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
@@ -2404,6 +2483,7 @@ export async function startQaMockOpenAiServer(params?: {
       compactionRetryActive: false,
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
+      subagentRequesterQuietPhase: 0,
       subagentHandoffSpawned: false,
       toolLoopReadAttempts: 0,
     };
@@ -2539,6 +2619,7 @@ export async function startQaMockOpenAiServer(params?: {
       } else {
         events = await buildResponsesPayload(body, scenarioState, {
           waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
+          waitForRequesterQuietRelease: requesterQuietResponseGate.waitIfArmed,
           requestKind,
           compactionSummaryFaultMode,
         });
@@ -2641,6 +2722,20 @@ export async function startQaMockOpenAiServer(params?: {
       }
       if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
         writeJson(res, 200, { cursor: nextRequestCursor - 1 });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/requester-quiet-gate") {
+        writeJson(res, 200, requesterQuietResponseGate.snapshot());
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/debug/requester-quiet-gate/arm") {
+        requesterQuietResponseGate.arm();
+        writeJson(res, 200, requesterQuietResponseGate.snapshot());
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/debug/requester-quiet-gate/release") {
+        requesterQuietResponseGate.release();
+        writeJson(res, 200, requesterQuietResponseGate.snapshot());
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/requests") {

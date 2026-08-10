@@ -1,6 +1,12 @@
 // Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
 // lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { findTaskByRunId } from "../tasks/task-executor.js";
+import { getTaskFlowById } from "../tasks/task-flow-registry.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
@@ -155,6 +161,8 @@ describe("subagent registry lifecycle error grace", () => {
       session: { mainKey: "main", scope: "per-sender" },
     });
     agentCallPlan = [];
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
     sessionStore = new Proxy<Record<string, SessionStoreEntry>>(
@@ -227,6 +235,8 @@ describe("subagent registry lifecycle error grace", () => {
     settleWakeTesting.setDepsForTest();
     mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     vi.useRealTimers();
     if (previousFastTestEnv === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
@@ -463,11 +473,46 @@ describe("subagent registry lifecycle error grace", () => {
         ],
       }),
     ).toBe(true);
+    const pendingTasks = ["run-yield-alpha", "run-yield-beta"].map((runId) => {
+      const task = findTaskByRunId(runId);
+      if (!task) {
+        throw new Error(`expected native Task for ${runId}`);
+      }
+      return task;
+    });
+    expect(pendingTasks.map((task) => task.deliveryStatus)).toEqual(["pending", "pending"]);
+    // Flow status is execution truth; Task deliveryStatus is requester-settlement truth.
+    // The successful child executions may complete before the yielded parent settles them.
+    expect(
+      pendingTasks.map((task) => {
+        const flow = task.parentFlowId ? getTaskFlowById(task.parentFlowId) : undefined;
+        return {
+          taskRunId: task.runId,
+          flowId: flow?.flowId,
+          flowStatus: flow?.status,
+        };
+      }),
+    ).toEqual([
+      {
+        taskRunId: "run-yield-alpha",
+        flowId: expect.any(String),
+        flowStatus: "succeeded",
+      },
+      {
+        taskRunId: "run-yield-beta",
+        flowId: expect.any(String),
+        flowStatus: "succeeded",
+      },
+    ]);
 
     releaseAlphaWakeRuntime?.();
     await vi.advanceTimersByTimeAsync(0);
     await flushAsync();
 
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    expect(
+      ["run-yield-alpha", "run-yield-beta"].map((runId) => findTaskByRunId(runId)?.deliveryStatus),
+    ).toEqual(["delivered", "delivered"]);
     const yieldedBatch = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
     expect(
       yieldedBatch.map((run) => ({
@@ -487,8 +532,8 @@ describe("subagent registry lifecycle error grace", () => {
       },
       {
         runId: "run-yield-beta",
-        delivery: "in_progress",
-        disposition: "intentional_non_delivery",
+        delivery: "delivered",
+        disposition: "delivered",
         nextAttemptAt: undefined,
         rearmGeneration: undefined,
       },
@@ -506,7 +551,7 @@ describe("subagent registry lifecycle error grace", () => {
       | Record<string, unknown>
       | undefined;
     expect(requesterWakeParams?.idempotencyKey).toContain(":yield-1");
-    expect(requesterWakeParams?.message).toContain("visible final answer");
+    expect(requesterWakeParams?.message).toContain("exactly NO_REPLY");
     expect(
       mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
@@ -558,7 +603,7 @@ describe("subagent registry lifecycle error grace", () => {
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         settledEntry: liveChild,
         transitionBatch: noop,
-        completeBatch: noop,
+        completeBatch: () => true,
       }),
     ).toBe(false);
     await flushAsync();
@@ -576,6 +621,54 @@ describe("subagent registry lifecycle error grace", () => {
         .find((run) => run.runId === "run-frozen-live-child")?.execution,
     ).toMatchObject({ status: "terminal", endedAt: expect.any(Number) });
     expect(getRequesterWakeCalls()).toHaveLength(1);
+  });
+
+  it("blocks the native Task and mirrored Flow when a yielded requester cannot settle", async () => {
+    const requesterTurnRunId = "run-requester-unavailable";
+    const childRunId = "run-yield-requester-unavailable";
+    const childSessionKey = "agent:main:subagent:yield-requester-unavailable";
+    registerCompletionRun(
+      childRunId,
+      "yield-requester-unavailable",
+      "yield requester unavailable",
+      requesterTurnRunId,
+    );
+    setAssistantOutput(childSessionKey, "completed child findings");
+
+    expect(
+      mod.markRequesterTurnYielded({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+      }),
+    ).toBe(1);
+    expect(
+      mod.settleRequesterAfterSessionSpawns({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId: childRunId, childSessionKey }],
+      }),
+    ).toBe(true);
+
+    const pendingTask = findTaskByRunId(childRunId);
+    expect(pendingTask?.deliveryStatus).toBe("pending");
+    sessionStore = {};
+    emitLifecycleEvent(childRunId, { phase: "end", endedAt: Date.now() });
+
+    await vi.waitFor(() => {
+      const task = findTaskByRunId(childRunId);
+      expect(task).toMatchObject({
+        status: "succeeded",
+        deliveryStatus: "failed",
+        terminalOutcome: "blocked",
+      });
+      const flow = task?.parentFlowId ? getTaskFlowById(task.parentFlowId) : undefined;
+      expect(flow).toMatchObject({
+        status: "blocked",
+        blockedTaskId: task?.taskId,
+      });
+    });
+    expect(getAgentCalls()).toHaveLength(0);
   });
 
   it("ignores transient lifecycle errors when run retries and then ends successfully", async () => {

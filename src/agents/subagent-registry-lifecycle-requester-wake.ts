@@ -5,16 +5,20 @@ import type {
   SubagentRegistryLifecycleParams,
   SubagentRegistryLifecycleState,
 } from "./subagent-registry-lifecycle-contracts.js";
+import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registry-lifecycle-delivery.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 type RequesterSettleWakeBatchState =
   import("./subagent-announce.requester-settle-wake.js").RequesterSettleWakeBatchState;
+type RequesterSettleWakeResolution =
+  import("./subagent-announce.requester-settle-wake.js").RequesterSettleWakeResolution;
 
 export function createSubagentRegistryLifecycleRequesterWake(
   params: SubagentRegistryLifecycleParams,
   lifecycleState: SubagentRegistryLifecycleState,
   common: ReturnType<typeof createSubagentRegistryLifecycleCommon>,
+  delivery: ReturnType<typeof createSubagentRegistryLifecycleDelivery>,
 ) {
   const {
     pendingRequesterSettleWakeRearms,
@@ -59,7 +63,8 @@ export function createSubagentRegistryLifecycleRequesterWake(
   const completeRequesterSettleWakeBatch = (
     runIds: readonly string[],
     rearmGeneration?: number,
-  ) => {
+    resolution?: RequesterSettleWakeResolution,
+  ): boolean => {
     const entries = runIds
       .map((runId) => [runId, params.runs.get(runId)] as const)
       .filter(
@@ -68,13 +73,32 @@ export function createSubagentRegistryLifecycleRequesterWake(
           pair[1]?.requesterSettleWake?.rearmGeneration === rearmGeneration,
       );
     if (entries.length === 0) {
-      return;
+      return true;
     }
     const requesterSessionKeys = new Set(entries.map(([, entry]) => entry.requesterSessionKey));
     const previousStates = entries.map(([, entry]) => ({
       requesterSettleWake: structuredClone(entry.requesterSettleWake),
       retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+      delivery: structuredClone(entry.delivery),
     }));
+    if (resolution && resolution.status !== "unchanged") {
+      const settledEntries = entries
+        .map(([, entry]) => entry)
+        .filter(
+          (entry) =>
+            entry.expectsCompletionMessage === true &&
+            (entry.requesterSettleWake?.requesterYieldBatch === true ||
+              entry.requesterSettleWake?.afterRequesterYield === true),
+        );
+      for (const entry of settledEntries) {
+        if (!delivery.reconcileSubagentAfterRequesterSettle(entry, resolution)) {
+          entries.forEach(([, candidate], index) => {
+            candidate.delivery = previousStates[index]?.delivery;
+          });
+          return false;
+        }
+      }
+    }
     for (const [runId, entry] of entries) {
       if (entry.requesterTurnRunId) {
         entry.retireAfterRequesterTurn =
@@ -97,6 +121,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
         params.runs.set(runId, entry);
         entry.requesterSettleWake = previous?.requesterSettleWake;
         entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
+        entry.delivery = previous?.delivery;
       });
       throw error;
     }
@@ -116,6 +141,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
         scheduleRequesterSettleWake(runId, entry);
       }
     }
+    return true;
   };
 
   const markRequesterSettleWakePending = (
@@ -139,6 +165,23 @@ export function createSubagentRegistryLifecycleRequesterWake(
         ? { retireAfterSettle: true }
         : {}),
     } satisfies RequesterSettleWakeState;
+  };
+
+  const prepareRequesterSettleWakeBatch = (
+    runIds: readonly string[],
+    rearmGeneration?: number,
+  ): boolean => {
+    const entries = runIds
+      .map((runId) => params.runs.get(runId))
+      .filter(
+        (entry): entry is SubagentRunRecord =>
+          Boolean(entry?.requesterSettleWake) &&
+          entry?.requesterSettleWake?.rearmGeneration === rearmGeneration,
+      );
+    return (
+      entries.length === runIds.length &&
+      entries.every((entry) => delivery.markSubagentTaskDeliveryPendingForRequesterSettle(entry))
+    );
   };
 
   const persistRequesterSettleWakePending = (
@@ -235,6 +278,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
           requesterOrigin: entry.requesterOrigin,
           settledEntry: entry,
           transitionBatch: transitionRequesterSettleWakeBatch,
+          prepareBatch: prepareRequesterSettleWakeBatch,
           completeBatch: completeRequesterSettleWakeBatch,
         }),
       )

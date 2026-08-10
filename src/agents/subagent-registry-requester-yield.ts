@@ -1,5 +1,6 @@
 /** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Persists explicit yield intent before the requester run is aborted. */
@@ -46,6 +47,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   runs: Map<string, SubagentRunRecord>;
   persistOrThrow(...runIds: string[]): void;
   schedule(runId: string, entry: SubagentRunRecord): void;
+  markTaskDeliveryPending(entry: SubagentRunRecord): boolean;
 }): boolean {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
@@ -88,6 +90,8 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
   }));
   let rearmGeneration: number | undefined;
+  const requesterSettlementOwnsDelivery =
+    params.requesterYielded && getSubagentDepthFromSessionStore(requesterSessionKey) < 1;
   if (params.requesterYielded) {
     rearmGeneration =
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
@@ -97,12 +101,19 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       // An in-progress delivery may already target the requester run being aborted.
       // Re-arm it like a delivered result so that completion cannot die with that turn.
       const completionMayBeAttachedToYieldedTurn = completionEnded;
-      if (completionEnded && entry.delivery?.status !== "delivered") {
-        // The persisted yielded batch now owns terminal delivery. Mark the old
-        // per-child attempt terminal so it cannot keep the batch unsettled.
+      if (requesterSettlementOwnsDelivery) {
+        // The top-level requester-settle outbox now owns terminal delivery. Any
+        // earlier credit belonged to the requester turn that just yielded, not
+        // to its eventual visible-final-or-quiet settlement. Nested requesters
+        // resume through the descendant wake/replacement-run lifecycle instead.
         entry.delivery = {
           ...(entry.delivery ?? { status: "pending" }),
+          status: "pending",
+          deliveredAt: undefined,
+          announcedAt: undefined,
           disposition: "intentional_non_delivery",
+          lastError: undefined,
+          lastDropReason: "waiting_for_requester_turn",
         };
       }
       entry.requesterSettleWake = {
@@ -147,6 +158,16 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
     });
     throw error;
+  }
+
+  if (requesterSettlementOwnsDelivery) {
+    // The durable wake is now the recovery owner. Best-effort the matching
+    // Task projection immediately; the wake lifecycle repeats this fence
+    // before requester dispatch, so a crash or transient projection failure
+    // cannot settle the parent while child delivery still appears credited.
+    for (const entry of entries) {
+      params.markTaskDeliveryPending(entry);
+    }
   }
 
   if (

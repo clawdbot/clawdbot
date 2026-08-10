@@ -365,6 +365,7 @@ export type MockScenarioState = {
   compactionRetryActive: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
+  subagentRequesterQuietPhase: number;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;
 };

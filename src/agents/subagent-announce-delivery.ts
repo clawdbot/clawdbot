@@ -8,6 +8,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
@@ -32,7 +33,10 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { sanitizeAgentRunTerminalReplyText } from "./agent-run-terminal-reply.js";
+import {
+  normalizeAgentRunTerminalReplySnapshot,
+  sanitizeAgentRunTerminalReplyText,
+} from "./agent-run-terminal-reply.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
@@ -669,6 +673,69 @@ function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(status);
 }
 
+function hasExplicitRequesterQuietDecision(result: {
+  status?: unknown;
+  terminalReply?: unknown;
+  payloads?: unknown;
+  payloadsTruncated?: unknown;
+  meta?: {
+    aborted?: unknown;
+    error?: unknown;
+    finalAssistantRawText?: unknown;
+    finalAssistantVisibleText?: unknown;
+    livenessState?: unknown;
+    agentHarnessResultClassification?: unknown;
+    terminalReplyKind?: unknown;
+    terminalReply?: unknown;
+  };
+}): boolean {
+  const meta = result.meta;
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(
+    meta?.terminalReply ?? result.terminalReply,
+  );
+  if (
+    (result.status != null && result.status !== "ok") ||
+    result.payloadsTruncated === true ||
+    meta?.aborted === true ||
+    meta?.error != null ||
+    terminalReply?.disposition !== "silent"
+  ) {
+    return false;
+  }
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  if (payloads.length > 1) {
+    return false;
+  }
+  if (payloads.length === 1) {
+    const payload = payloads[0];
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return false;
+    }
+    const record = payload as Record<string, unknown>;
+    if (
+      typeof record.text !== "string" ||
+      record.text.trim() !== SILENT_REPLY_TOKEN ||
+      record.isError === true ||
+      record.isReasoning === true ||
+      record.isCommentary === true ||
+      record.isCompactionNotice === true ||
+      record.isFallbackNotice === true ||
+      record.isStatusNotice === true ||
+      record.visible === false ||
+      record.truncated === true ||
+      record.isTruncated === true ||
+      hasVisibleAgentPayload({ payloads: [{ ...record, text: undefined }] })
+    ) {
+      return false;
+    }
+  }
+  return (
+    meta?.finalAssistantRawText == null ||
+    (typeof meta.finalAssistantRawText === "string" &&
+      meta.finalAssistantRawText.trim() === SILENT_REPLY_TOKEN)
+  );
+}
+
 function isDirectMessageDeliveryTarget(
   target: { channel?: string; to?: string; threadId?: string },
   requesterSessionKey: string,
@@ -854,7 +921,7 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
-  requireVisibleReply?: boolean;
+  requireRequesterSettlement?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
@@ -1158,12 +1225,19 @@ async function sendSubagentAnnounceDirectly(params: {
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
       return {
-        delivered: true,
+        delivered: params.requireRequesterSettlement !== true,
         path: "direct",
+        ...(params.requireRequesterSettlement === true
+          ? { reason: "requester_turn_pending" as const }
+          : {}),
       };
     }
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
+    const directAnnounceStatus =
+      directAnnounceResponse && typeof directAnnounceResponse === "object"
+        ? (directAnnounceResponse as { status?: unknown }).status
+        : undefined;
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
@@ -1271,13 +1345,13 @@ async function sendSubagentAnnounceDirectly(params: {
     }
     const hasVisibleCompletionReply = Boolean(
       directAnnounceResult &&
-      ((params.requireVisibleReply
+      ((params.requireRequesterSettlement
         ? hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
             requireFinalReply: true,
           })
         : hasMessagingToolDelivery) ||
         (hasVisibleAgentPayload(
-          params.requireVisibleReply
+          params.requireRequesterSettlement
             ? {
                 payloads: Array.isArray(directAnnounceResult.payloads)
                   ? directAnnounceResult.payloads.filter((payload) => {
@@ -1295,14 +1369,33 @@ async function sendSubagentAnnounceDirectly(params: {
             : directAnnounceResult,
           { ...completionPayloadVisibility, includeSilentReplyPayloads: false },
         ) &&
-          (!params.requireVisibleReply ||
+          (!params.requireRequesterSettlement ||
             directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
     );
-    const acceptsIntentionalSilentCompletion =
-      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
+    const acceptsIntentionalSilentCompletion = params.requireRequesterSettlement
+      ? Boolean(
+          directAnnounceResult &&
+          (directAnnounceStatus == null || directAnnounceStatus === "ok") &&
+          hasExplicitRequesterQuietDecision(directAnnounceResult),
+        )
+      : hasIntentionalSilentCompletionReply && !isSubagentCompletion;
+    if (
+      params.requireRequesterSettlement &&
+      !hasVisibleCompletionReply &&
+      acceptsIntentionalSilentCompletion &&
+      !hasCompletionSideEffect
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "requester_intentional_quiet",
+        terminal: true,
+        disposition: "intentional_non_delivery",
+      };
+    }
     if (
       !hasVisibleCompletionReply &&
-      (params.requireVisibleReply ||
+      (params.requireRequesterSettlement ||
         (params.expectsCompletionMessage &&
           !shouldDeliverAgentFinal &&
           !requiresMessageToolDelivery &&
@@ -1371,7 +1464,7 @@ export async function deliverSubagentAnnouncement(params: {
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
   requireDirectDelivery?: boolean;
-  requireVisibleReply?: boolean;
+  requireRequesterSettlement?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -1526,7 +1619,7 @@ export async function deliverSubagentAnnouncement(params: {
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
-        requireVisibleReply: params.requireVisibleReply,
+        requireRequesterSettlement: params.requireRequesterSettlement,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,

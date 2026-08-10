@@ -6,7 +6,7 @@
  */
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { logWarn } from "../logger.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronSessionKey, parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   type DeliveryContext,
@@ -56,6 +56,11 @@ export const testing = {
 };
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
+export type RequesterSettleWakeResolution =
+  | { status: "delivered" }
+  | { status: "intentional_non_delivery" }
+  | { status: "failed"; error: string }
+  | { status: "unchanged" };
 
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
@@ -64,14 +69,14 @@ const activeRequesterSettleWakeBatches = new Set<string>();
 
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
-  requireVisibleReply: boolean;
+  requireRequesterSettlement: boolean;
 }): string {
   return [
     "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
-    "[Subagent Context] Review the completion results and send your consolidated final answer to the user now.",
-    params.requireVisibleReply
-      ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer."
+    "[Subagent Context] Review the completion results and decide whether the user needs a consolidated final update.",
+    params.requireRequesterSettlement
+      ? `[Subagent Context] Complete this handoff with either one consolidated user-facing final answer or exactly ${SILENT_REPLY_TOKEN} when no user-visible update is warranted. An empty response does not settle the handoff.`
       : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
     "",
     params.findings ??
@@ -187,13 +192,17 @@ function deferRequesterSettleWakeBatch(params: {
 function completeRequesterSettleWakeBatch(params: {
   runIds: readonly string[];
   state: RequesterSettleWakeBatchState;
-  completeBatch(runIds: readonly string[], rearmGeneration?: number): void;
-}): void {
+  resolution: RequesterSettleWakeResolution;
+  completeBatch(
+    runIds: readonly string[],
+    rearmGeneration?: number,
+    resolution?: RequesterSettleWakeResolution,
+  ): boolean;
+}): boolean {
   if (params.state.rearmGeneration === undefined) {
-    params.completeBatch(params.runIds);
-    return;
+    return params.completeBatch(params.runIds, undefined, params.resolution);
   }
-  params.completeBatch(params.runIds, params.state.rearmGeneration);
+  return params.completeBatch(params.runIds, params.state.rearmGeneration, params.resolution);
 }
 
 /**
@@ -206,33 +215,45 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
-  completeBatch(runIds: readonly string[], rearmGeneration?: number): void;
+  completeBatch(
+    runIds: readonly string[],
+    rearmGeneration?: number,
+    resolution?: RequesterSettleWakeResolution,
+  ): boolean;
+  prepareBatch?(runIds: readonly string[], rearmGeneration?: number): boolean;
   signal?: AbortSignal;
 }): Promise<boolean> {
   if (params.signal?.aborted) {
     return false;
   }
-  const completeBatch = (runIds: readonly string[], rearmGeneration?: number): void => {
-    if (rearmGeneration === undefined) {
-      params.completeBatch(runIds);
-      return;
-    }
-    params.completeBatch(runIds, rearmGeneration);
-  };
+  const completeBatch = (
+    runIds: readonly string[],
+    rearmGeneration?: number,
+    resolution?: RequesterSettleWakeResolution,
+  ): boolean => params.completeBatch(runIds, rearmGeneration, resolution);
   const requesterSessionKey = params.requesterSessionKey.trim();
   const initialState = params.settledEntry.requesterSettleWake;
   if (!requesterSessionKey || !initialState) {
     return false;
   }
-  const admittedRearmGeneration = initialState.rearmGeneration;
-  if (isCronSessionKey(requesterSessionKey)) {
+  if (
+    isCronSessionKey(requesterSessionKey) &&
+    initialState.requesterYieldBatch !== true &&
+    initialState.afterRequesterYield !== true
+  ) {
     completeRequesterSettleWakeBatch({
       runIds: [params.settledEntry.runId],
       state: initialState,
+      resolution: { status: "unchanged" },
       completeBatch,
     });
     return false;
   }
+  const admittedRearmGeneration = initialState.rearmGeneration;
+  // Isolated cron runs own registry/idempotency state, while their resumable
+  // requester transcript is the cache-stable base cron session.
+  const requesterDeliverySessionKey =
+    parseCronRunScopeSuffix(requesterSessionKey).baseSessionKey ?? requesterSessionKey;
 
   const registryRuntime = await requesterSettleWakeDeps.loadSubagentRegistryRuntime();
   const listedRuns = registryRuntime.listSubagentRunsForRequester(requesterSessionKey);
@@ -319,18 +340,43 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     completeRequesterSettleWakeBatch({
       runIds: batchRunIds,
       state: selectedState,
+      resolution: { status: "unchanged" },
       completeBatch,
     });
     return false;
   }
 
-  const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
+  if (
+    requesterYieldedAfterDelivery &&
+    params.prepareBatch &&
+    !params.prepareBatch(batchRunIds, selectedState.rearmGeneration)
+  ) {
+    deferRequesterSettleWakeBatch({
+      batchRunIds,
+      state: { ...selectedState, lastError: "requester settlement projection pending" },
+      transitionBatch: params.transitionBatch,
+    });
+    return false;
+  }
+
+  const { entry: requesterEntry } = loadRequesterSessionEntry(requesterDeliverySessionKey);
   if (!hasUsableSessionEntry(requesterEntry)) {
-    completeRequesterSettleWakeBatch({
+    const resolution: RequesterSettleWakeResolution = requesterYieldedAfterDelivery
+      ? { status: "failed", error: "requester session unavailable" }
+      : { status: "unchanged" };
+    const completed = completeRequesterSettleWakeBatch({
       runIds: batchRunIds,
       state: selectedState,
+      resolution,
       completeBatch,
     });
+    if (!completed) {
+      deferRequesterSettleWakeBatch({
+        batchRunIds,
+        state: { ...selectedState, lastError: "requester settlement projection failed" },
+        transitionBatch: params.transitionBatch,
+      });
+    }
     return false;
   }
 
@@ -345,7 +391,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   );
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings,
-    requireVisibleReply: requesterYieldedAfterDelivery,
+    requireRequesterSettlement: requesterYieldedAfterDelivery,
   });
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
@@ -393,11 +439,24 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       attemptIndex = Math.max(0, state.attemptCount - 1);
     } else {
       if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-        completeRequesterSettleWakeBatch({
+        const completed = completeRequesterSettleWakeBatch({
           runIds: batchRunIds,
           state,
+          resolution: requesterYieldedAfterDelivery
+            ? {
+                status: "failed",
+                error: state.lastError ?? "requester settle wake retry limit reached",
+              }
+            : { status: "unchanged" },
           completeBatch,
         });
+        if (!completed) {
+          deferRequesterSettleWakeBatch({
+            batchRunIds,
+            state: { ...state, lastError: "requester settlement projection failed" },
+            transitionBatch: params.transitionBatch,
+          });
+        }
         return false;
       }
       attemptIndex = state.attemptCount;
@@ -415,7 +474,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
       delivery = await deliverSubagentAnnouncement({
-        requesterSessionKey,
+        requesterSessionKey: requesterDeliverySessionKey,
         triggerMessage: wakeMessage,
         steerMessage: wakeMessage,
         summaryLine: "all spawned subagents settled",
@@ -425,11 +484,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         sourceSessionKey: currentSettledEntry.childSessionKey,
         sourceChannel: INTERNAL_MESSAGE_CHANNEL,
         sourceTool: "subagent_announce",
-        targetRequesterSessionKey: requesterSessionKey,
+        targetRequesterSessionKey: requesterDeliverySessionKey,
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
-        ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
+        ...(requesterYieldedAfterDelivery ? { requireRequesterSettlement: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
@@ -445,11 +504,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
         retryDelayMs === undefined
       ) {
-        completeRequesterSettleWakeBatch({
+        const completed = completeRequesterSettleWakeBatch({
           runIds: batchRunIds,
           state,
+          resolution: requesterYieldedAfterDelivery
+            ? { status: "failed", error: lastError }
+            : { status: "unchanged" },
           completeBatch,
         });
+        if (!completed) {
+          deferRequesterSettleWakeBatch({
+            batchRunIds,
+            state: { ...state, lastError: "requester settlement projection failed" },
+            transitionBatch: params.transitionBatch,
+          });
+        }
         return false;
       }
       const nextAttemptAt = Date.now() + retryDelayMs;
@@ -470,13 +539,54 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       );
       return false;
     }
-    if (delivery.delivered) {
-      completeRequesterSettleWakeBatch({
+    if (
+      delivery.disposition === "intentional_non_delivery" &&
+      delivery.reason === "requester_intentional_quiet"
+    ) {
+      const completed = completeRequesterSettleWakeBatch({
         runIds: batchRunIds,
         state,
+        resolution: requesterYieldedAfterDelivery
+          ? { status: "intentional_non_delivery" }
+          : { status: "unchanged" },
         completeBatch,
       });
+      if (!completed) {
+        deferRequesterSettleWakeBatch({
+          batchRunIds,
+          state: { ...state, lastError: "requester settlement projection failed" },
+          transitionBatch: params.transitionBatch,
+        });
+        return false;
+      }
       return true;
+    }
+    if (delivery.delivered) {
+      const completed = completeRequesterSettleWakeBatch({
+        runIds: batchRunIds,
+        state,
+        resolution: requesterYieldedAfterDelivery
+          ? { status: "delivered" }
+          : { status: "unchanged" },
+        completeBatch,
+      });
+      if (!completed) {
+        deferRequesterSettleWakeBatch({
+          batchRunIds,
+          state: { ...state, lastError: "requester settlement projection failed" },
+          transitionBatch: params.transitionBatch,
+        });
+        return false;
+      }
+      return true;
+    }
+    if (delivery.reason === "requester_turn_pending") {
+      deferRequesterSettleWakeBatch({
+        batchRunIds,
+        state: { ...state, lastError: delivery.reason },
+        transitionBatch: params.transitionBatch,
+      });
+      return false;
     }
     if (
       delivery.disposition === "ambiguous" ||
@@ -484,22 +594,49 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       delivery.disposition === "intentional_non_delivery" ||
       delivery.reason === "requester_abandoned"
     ) {
-      completeRequesterSettleWakeBatch({
+      const completed = completeRequesterSettleWakeBatch({
         runIds: batchRunIds,
         state,
+        resolution: requesterYieldedAfterDelivery
+          ? {
+              status: "failed",
+              error: delivery.error ?? delivery.reason ?? "requester settle wake failed",
+            }
+          : { status: "unchanged" },
         completeBatch,
       });
+      if (!completed) {
+        deferRequesterSettleWakeBatch({
+          batchRunIds,
+          state: { ...state, lastError: "requester settlement projection failed" },
+          transitionBatch: params.transitionBatch,
+        });
+      }
       return false;
     }
 
     const attemptCount = attemptIndex + 1;
     const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
     if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
-      completeRequesterSettleWakeBatch({
+      const completed = completeRequesterSettleWakeBatch({
         runIds: batchRunIds,
         state,
+        resolution: requesterYieldedAfterDelivery
+          ? {
+              status: "failed",
+              error:
+                delivery.error ?? delivery.reason ?? "requester settle wake retry limit reached",
+            }
+          : { status: "unchanged" },
         completeBatch,
       });
+      if (!completed) {
+        deferRequesterSettleWakeBatch({
+          batchRunIds,
+          state: { ...state, lastError: "requester settlement projection failed" },
+          transitionBatch: params.transitionBatch,
+        });
+      }
       return false;
     }
     const lastError = delivery.error ?? delivery.reason ?? "undelivered";

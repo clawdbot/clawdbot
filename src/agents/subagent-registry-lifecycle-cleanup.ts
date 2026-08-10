@@ -6,6 +6,7 @@ import {
   getDeliveryLastError,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
@@ -248,10 +249,15 @@ export function createSubagentRegistryLifecycleCleanup(
     }
     if (didAnnounce) {
       const delivery = ensureDeliveryState(entry);
+      const requesterSettlementPending =
+        delivery.disposition === "intentional_non_delivery" &&
+        delivery.lastDropReason === "waiting_for_requester_turn" &&
+        getSubagentDepthFromSessionStore(entry.requesterSessionKey) < 1;
       const shouldCreditDelivery =
-        !options?.skipAnnounce ||
-        delivery.status === "delivered" ||
-        typeof delivery.announcedAt === "number";
+        !requesterSettlementPending &&
+        (!options?.skipAnnounce ||
+          delivery.status === "delivered" ||
+          typeof delivery.announcedAt === "number");
       if (shouldCreditDelivery) {
         const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
@@ -276,7 +282,9 @@ export function createSubagentRegistryLifecycleCleanup(
         });
       }
       finalDelivery.lastError = undefined;
-      finalDelivery.lastDropReason = undefined;
+      if (!requesterSettlementPending) {
+        finalDelivery.lastDropReason = undefined;
+      }
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
       completion.fallbackResultText = undefined;
@@ -577,7 +585,7 @@ export function createSubagentRegistryLifecycleCleanup(
           latestDeliveryError = undefined;
           return;
         }
-        if (delivery.path === "none") {
+        if (delivery.path === "none" && delivery.reason !== "completion_handoff_pending") {
           ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
         }
         latestDeliveryError = formatAnnounceDeliveryError(delivery);

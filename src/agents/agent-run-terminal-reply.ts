@@ -6,6 +6,7 @@ const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 
 export type AgentRunTerminalReplySnapshot =
   | { disposition: "visible"; text: string }
+  // Only the exact trimmed control token is an intentional silent disposition.
   | { disposition: "silent" }
   | { disposition: "empty" };
 
@@ -18,17 +19,20 @@ export function sanitizeAgentRunTerminalReplyText(text: string): string {
   return `${truncateUtf16Safe(sanitized, AGENT_RUN_TERMINAL_REPLY_MAX_CHARS - 1).trimEnd()}…`;
 }
 
-/** Builds the authoritative terminal reply fact while raw assistant text is still available. */
+/** Builds the authoritative terminal reply fact while exact raw assistant text is available. */
 export function buildAgentRunTerminalReplySnapshot(params: {
   visibleText?: string;
   rawText?: string;
   terminalReplyKind?: "silent-empty";
 }): AgentRunTerminalReplySnapshot {
+  if (params.rawText?.trim() === SILENT_REPLY_TOKEN) {
+    return { disposition: "silent" };
+  }
   if (
     params.terminalReplyKind === "silent-empty" ||
     isSilentReplyText(params.rawText, SILENT_REPLY_TOKEN)
   ) {
-    return { disposition: "silent" };
+    return { disposition: "empty" };
   }
   const text = sanitizeAgentRunTerminalReplyText(params.visibleText ?? "");
   return text ? { disposition: "visible", text } : { disposition: "empty" };
@@ -42,7 +46,10 @@ export function normalizeAgentRunTerminalReplySnapshot(
     return undefined;
   }
   const disposition = (value as { disposition?: unknown }).disposition;
-  if (disposition === "silent" || disposition === "empty") {
+  if (disposition === "silent") {
+    return { disposition };
+  }
+  if (disposition === "empty") {
     return { disposition };
   }
   if (disposition !== "visible") {

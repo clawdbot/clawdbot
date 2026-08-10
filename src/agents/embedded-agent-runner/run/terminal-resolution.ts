@@ -4,6 +4,7 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
@@ -583,6 +584,13 @@ function completeEmbeddedRun(
         finalPromptText: input.attempt.finalPromptText,
         finalAssistantVisibleText: input.finalAssistantVisibleText,
         finalAssistantRawText: input.finalAssistantRawText,
+        terminalReply: buildAgentRunTerminalReplySnapshot({
+          visibleText: input.finalAssistantVisibleText,
+          rawText: input.finalAssistantRawText,
+          ...(input.emptyAssistantReplyIsSilent
+            ? { terminalReplyKind: "silent-empty" as const }
+            : {}),
+        }),
         replayInvalid,
         livenessState,
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
