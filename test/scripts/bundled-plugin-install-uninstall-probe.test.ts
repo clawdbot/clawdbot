@@ -1117,7 +1117,7 @@ describe("bundled plugin install/uninstall probe", () => {
 
   it("allows degraded runtime readiness only for expected channel failures", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
     });
     const server = createHttpServer((_request, response) => {
@@ -1142,7 +1142,7 @@ describe("bundled plugin install/uninstall probe", () => {
 
   it("rejects degraded runtime readiness for unexpected channel failures", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
     });
     const server = createHttpServer((_request, response) => {
@@ -1167,7 +1167,7 @@ describe("bundled plugin install/uninstall probe", () => {
 
   it("rejects generic readyz server errors in degraded runtime mode", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
     });
     const server = createHttpServer((_request, response) => {
@@ -1192,7 +1192,7 @@ describe("bundled plugin install/uninstall probe", () => {
 
   it("keeps readyz HTTP status diagnostics when the body is malformed", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
     });
     const server = createHttpServer((_request, response) => {
@@ -1217,7 +1217,7 @@ describe("bundled plugin install/uninstall probe", () => {
 
   it("bounds readyz diagnostic response bodies", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
     });
     const server = createHttpServer((_request, response) => {
