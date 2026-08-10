@@ -158,7 +158,7 @@ describe("gateway candidate connection", () => {
     });
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
 
-    expect(mocks.options[1]).toMatchObject(manifest);
+    expect(mocks.clients[1]?.updateNodeManifest).toHaveBeenCalledWith(manifest);
   });
 
   it("does not create the queued candidate after stop", async () => {

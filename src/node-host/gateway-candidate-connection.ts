@@ -69,7 +69,6 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     const url = formatGatewayCandidateUrl(candidate);
     const candidateClient = new GatewayClient({
       ...params.clientOptions,
-      ...(latestManifest ?? {}),
       url,
       tlsFingerprint: candidate.tlsFingerprint,
       onEvent: (event) => {
@@ -124,6 +123,9 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         });
       },
     });
+    if (latestManifest) {
+      candidateClient.updateNodeManifest(latestManifest);
+    }
     return candidateClient;
   }
 
