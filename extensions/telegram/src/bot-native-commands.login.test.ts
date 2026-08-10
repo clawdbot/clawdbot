@@ -8,19 +8,39 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
   resetNativeCommandMenuMocks,
-  waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
+
+vi.mock("./bot-native-commands.runtime.js", () => ({
+  ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
+  finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+  getAgentScopedMediaLocalRoots: vi.fn(() => []),
+  getSessionEntry: vi.fn(() => undefined),
+  recordInboundSessionMetaSafe: vi.fn(async () => undefined),
+  resolveChunkMode: vi.fn(() => "length"),
+  resolveThreadSessionKeys: vi.fn(
+    ({
+      baseSessionKey,
+      parentSessionKey,
+    }: {
+      baseSessionKey: string;
+      parentSessionKey?: string;
+    }) => ({
+      sessionKey: baseSessionKey,
+      parentSessionKey,
+    }),
+  ),
+}));
 
 type LoginFlowMock = ReturnType<typeof vi.fn>;
 
@@ -79,9 +99,10 @@ describe("registerTelegramNativeCommands /login", () => {
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
-    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
+
+  afterAll(() => resetPluginRuntimeStateForTest());
 
   it("handles /login codex by sending the device code before login completes", async () => {
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
@@ -114,7 +135,8 @@ describe("registerTelegramNativeCommands /login", () => {
       loginFlow,
     });
 
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(setMyCommands).toHaveBeenCalledOnce();
+    const registeredCommands = setMyCommands.mock.calls[0]?.[0];
     expect(registeredCommands).toContainEqual({
       command: "login",
       description: "Pair Codex login.",

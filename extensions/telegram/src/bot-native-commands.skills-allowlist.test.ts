@@ -9,13 +9,12 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
   listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
-  waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 import { writeSkill } from "./test-support/write-skill.js";
 
@@ -29,17 +28,17 @@ async function makeWorkspace(prefix: string) {
 
 describe("registerTelegramNativeCommands skill allowlist integration", () => {
   beforeEach(() => {
-    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   afterEach(async () => {
     resetNativeCommandMenuMocks();
-    resetPluginRuntimeStateForTest();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
+
+  afterAll(() => resetPluginRuntimeStateForTest());
 
   it("registers only allowlisted skills for the bound agent menu", async () => {
     const workspaceDir = await makeWorkspace("openclaw-telegram-skills-");
@@ -90,7 +89,8 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
       }),
     });
 
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(setMyCommands).toHaveBeenCalledOnce();
+    const registeredCommands = setMyCommands.mock.calls[0]?.[0] ?? [];
 
     expect(registeredCommands.map((entry) => entry.command)).toContain("alpha_skill");
     expect(registeredCommands.map((entry) => entry.command)).not.toContain("beta_skill");
