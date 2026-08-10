@@ -2,12 +2,8 @@ import { asProtocolRecord } from "./protocol-value-normalization.js";
 
 /** Gateway JSON-RPC style error codes shared by clients and server handlers. */
 export const ErrorCodes = {
-  /** Client has not completed account/device linking for this gateway. */
-  NOT_LINKED: "NOT_LINKED",
   /** Device exists but still needs an explicit pairing approval. */
   NOT_PAIRED: "NOT_PAIRED",
-  /** Agent turn exceeded the gateway wait window. */
-  AGENT_TIMEOUT: "AGENT_TIMEOUT",
   /** Request payload failed protocol validation or method preconditions. */
   INVALID_REQUEST: "INVALID_REQUEST",
   /** Authenticated caller lacks permission for the requested operation. */

@@ -906,8 +906,6 @@ async function findAdoptedSessionEntry(params: {
   return (await listAdoptedSessionEntries(params)).get(params.threadId);
 }
 
-class CodexAdoptionBindingCleanupError extends AggregateError {}
-
 async function clearCreatedAdoptionBinding(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: ReturnType<typeof sessionBindingIdentity>;
@@ -934,7 +932,7 @@ async function clearCreatedAdoptionBinding(params: {
   try {
     current = await params.bindingStore.read(params.identity);
   } catch (readError) {
-    throw new CodexAdoptionBindingCleanupError(
+    throw new AggregateError(
       [params.cause, ...(clearError ? [clearError] : []), readError],
       `OpenClaw session creation failed and the Codex binding could not be verified for ${params.sourceThreadId}`,
     );
@@ -944,7 +942,7 @@ async function clearCreatedAdoptionBinding(params: {
   if (!matchesPendingSupervisionOwner(current, params.expectedPending)) {
     return;
   }
-  throw new CodexAdoptionBindingCleanupError(
+  throw new AggregateError(
     [params.cause, ...(clearError ? [clearError] : [])],
     `OpenClaw session creation failed and the Codex binding could not be cleared for ${params.sourceThreadId}`,
   );

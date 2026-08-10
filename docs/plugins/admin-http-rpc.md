@@ -156,14 +156,13 @@ Gateway method errors use:
 
 HTTP status follows the error code:
 
-| Error code                 | HTTP status |
-| -------------------------- | ----------- |
-| `INVALID_REQUEST`          | 400         |
-| `APPROVAL_NOT_FOUND`       | 404         |
-| `NOT_LINKED`, `NOT_PAIRED` | 409         |
-| `UNAVAILABLE`              | 503         |
-| `AGENT_TIMEOUT`            | 504         |
-| any other code             | 500         |
+| Error code           | HTTP status |
+| -------------------- | ----------- |
+| `INVALID_REQUEST`    | 400         |
+| `APPROVAL_NOT_FOUND` | 404         |
+| `NOT_PAIRED`         | 409         |
+| `UNAVAILABLE`        | 503         |
+| any other code       | 500         |
 
 ## Allowed methods
 

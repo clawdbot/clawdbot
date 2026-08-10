@@ -419,7 +419,6 @@ type RunCliAgentWithLifecycleParams = {
   provider: string;
   runParams: RunCliAgentParams;
   startedAt?: number;
-  emitLifecycleStart?: boolean;
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
@@ -521,23 +520,20 @@ async function runCliAgentWithLifecycleInternal(
       fastAutoOnSeconds: fastModeAutoOnSeconds,
     });
   };
-  const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
   params.onAgentRunStart?.();
-  if (emitLifecycleStart) {
-    emitAgentEvent({
-      runId: params.runId,
-      ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
-      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
-      stream: "lifecycle",
-      data: {
-        phase: "start",
-        startedAt,
-      },
-    });
-  }
+  emitAgentEvent({
+    runId: params.runId,
+    ...(params.runParams.agentId ? { agentId: params.runParams.agentId } : {}),
+    ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+    ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
+    ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
+    stream: "lifecycle",
+    data: {
+      phase: "start",
+      startedAt,
+    },
+  });
   // One delivery-independent activity seam for every CLI agent event.
   // Suppressed (silentExpected) runs still emit real events and must keep
   // stamping, or a healthy silent stream looks stale to the takeover window.
