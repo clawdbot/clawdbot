@@ -1291,13 +1291,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
     const idsJson = JSON.stringify(ids);
-    if (this.vector.enabled) {
-      try {
-        this.db
-          .prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT value FROM json_each(?))`)
-          .run(idsJson);
-      } catch {}
-    }
+    this.deleteVectorRowsByIds(ids);
     if (this.fts.enabled && this.fts.available) {
       try {
         deleteMemoryFtsRows({ db: this.db, tableName: FTS_TABLE, ids });

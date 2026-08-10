@@ -523,6 +523,30 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected deleteVectorRowsForSource(pathname: string, source: MemorySource): void {
+    this.deleteVectorRows(() => {
+      this.db
+        .prepare(
+          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (
+             SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
+           )`,
+        )
+        .run(pathname, source);
+    });
+  }
+
+  protected deleteVectorRowsByIds(ids: string[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    const idsJson = JSON.stringify(ids);
+    this.deleteVectorRows(() => {
+      this.db
+        .prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT value FROM json_each(?))`)
+        .run(idsJson);
+    });
+  }
+
+  private deleteVectorRows(runDelete: () => void): void {
     if (!memoryTableExists(this.db, VECTOR_TABLE)) {
       return;
     }
@@ -531,13 +555,7 @@ export abstract class MemoryManagerSyncBase {
       return;
     }
     try {
-      this.db
-        .prepare(
-          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (
-             SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
-           )`,
-        )
-        .run(pathname, source);
+      runDelete();
     } catch {
       this.markVectorRebuildRequired();
     }

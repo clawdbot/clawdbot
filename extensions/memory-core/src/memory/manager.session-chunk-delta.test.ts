@@ -16,6 +16,10 @@ import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js
 // Real sqlite indexing; avoid flaking when sharing a packed CI shard.
 vi.setConfig({ testTimeout: 240_000 });
 
+afterAll(() => {
+  vi.resetConfig();
+});
+
 const embedState = vi.hoisted(() => ({
   batches: [] as string[][],
   failNextBatch: false,
@@ -55,7 +59,12 @@ vi.mock("./embeddings.js", () => ({
         },
 }));
 
-type ChunkRow = { id: string; start_line: number; text: string; updated_at: number };
+type ChunkRow = {
+  id: string;
+  start_line: number;
+  text: string;
+  updated_at: number;
+};
 
 function sessionMessageLine(
   role: "user" | "assistant",
@@ -115,7 +124,9 @@ describe("memory session chunk-delta sync", () => {
     }
   });
 
-  function createCfg(): Parameters<typeof getMemorySearchManager>[0]["cfg"] {
+  function createCfg(
+    options: { chunking?: { tokens: number; overlap: number } } = {},
+  ): Parameters<typeof getMemorySearchManager>[0]["cfg"] {
     return {
       memory: {
         search: {
@@ -127,6 +138,7 @@ describe("memory session chunk-delta sync", () => {
           // Keep the embedding cache out of the way so embedBatch calls
           // measure exactly which chunks the sync re-embeds.
           cache: { enabled: false },
+          ...(options.chunking ? { chunking: options.chunking } : {}),
           sources: ["sessions"],
           experimental: { sessionMemory: true },
         },
@@ -140,7 +152,10 @@ describe("memory session chunk-delta sync", () => {
     };
   }
 
-  async function setUpManager(stateDirName: string): Promise<{
+  async function setUpManager(
+    stateDirName: string,
+    options: { chunking?: { tokens: number; overlap: number } } = {},
+  ): Promise<{
     manager: MemoryIndexManager;
     sessionFile: string;
   }> {
@@ -149,7 +164,7 @@ describe("memory session chunk-delta sync", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "session-delta.jsonl");
-    const result = await getMemorySearchManager({ cfg: createCfg(), agentId: "main" });
+    const result = await getMemorySearchManager({ cfg: createCfg(options), agentId: "main" });
     if (!result.manager) {
       throw new Error("manager missing");
     }
@@ -541,6 +556,62 @@ describe("memory session chunk-delta sync", () => {
     expect(embedState.batches.flat()).toContain(degraded?.text ?? "");
     const healed = readSessionChunkRows(manager).find((row) => row.id === degraded?.id);
     expect(healed).toBeDefined();
+  });
+
+  it("marks vector rebuild when a stale-only delta cannot remove persisted vectors", async () => {
+    const { manager, sessionFile } = await setUpManager(".state-delta-stale-vector", {
+      chunking: { tokens: 64, overlap: 0 },
+    });
+    await fs.writeFile(sessionFile, transcriptTurns(1, 30), "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    const before = readSessionChunkRows(manager);
+    expect(before.length).toBeGreaterThan(2);
+    const retainedTail = before.at(-2);
+    const staleId = before.at(-1)?.id;
+    if (!retainedTail || !staleId) {
+      throw new Error("expected retained and stale session chunks");
+    }
+    const retainedTurns = Array.from(retainedTail.text.matchAll(/topic-(\d+)/g)).map((match) =>
+      Number(match[1]),
+    );
+    const lastRetainedTurn = Math.max(...retainedTurns);
+    expect(lastRetainedTurn).toBeLessThan(30);
+
+    const db = Reflect.get(manager, "db") as {
+      exec: (sql: string) => void;
+      prepare: (sql: string) => {
+        get: (...params: unknown[]) => unknown;
+        run: (...params: unknown[]) => void;
+      };
+    };
+    db.exec("CREATE TABLE memory_index_chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
+    db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, '[1,0,0]')").run(
+      staleId,
+    );
+    db.prepare(
+      `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', 'clean')
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run();
+
+    embedState.batches = [];
+    await fs.writeFile(sessionFile, transcriptTurns(1, lastRetainedTurn), "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    const after = readSessionChunkRows(manager);
+    expect(embedState.batches).toEqual([]);
+    expect(after.length).toBeLessThan(before.length);
+    expect(after.some((row) => row.id === staleId)).toBe(false);
+    expect(db.prepare("SELECT id FROM memory_index_chunks_vec WHERE id = ?").get(staleId)).toEqual({
+      id: staleId,
+    });
+    expect(
+      db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+        .get(),
+    ).toEqual({ value: "1" });
   });
 
   it("applies deltas in FTS-only mode without an embedding provider", async () => {
