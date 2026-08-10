@@ -37,9 +37,20 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const ensureMemoryFlushTargetFileMock = vi.fn();
-const emitAgentEventMock = vi.fn();
 const registerAgentRunContextMock = vi.fn();
+const clearAgentRunContextMock = vi.fn();
 const TEST_MAX_FLUSH_FAILURES = 3;
+
+function createMemoryFlushPlan() {
+  return {
+    softThresholdTokens: 4_000,
+    forceFlushTranscriptBytes: 1_000_000_000,
+    reserveTokensFloor: 20_000,
+    prompt: "Pre-compaction memory flush.\nNO_REPLY",
+    systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+    relativePath: "memory/2023-11-14.md",
+  };
+}
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
@@ -247,14 +258,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-unit-"));
-    registerMemoryFlushPlanResolverForTest(() => ({
-      softThresholdTokens: 4_000,
-      forceFlushTranscriptBytes: 1_000_000_000,
-      reserveTokensFloor: 20_000,
-      prompt: "Pre-compaction memory flush.\nNO_REPLY",
-      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
-      relativePath: "memory/2023-11-14.md",
-    }));
+    registerMemoryFlushPlanResolverForTest(createMemoryFlushPlan);
     runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
       result: await run(provider, model),
       provider,
@@ -335,8 +339,8 @@ describe("runMemoryFlushIfNeeded", () => {
     refreshQueuedFollowupSessionMock.mockReset();
     ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
-    emitAgentEventMock.mockReset();
     registerAgentRunContextMock.mockReset();
+    clearAgentRunContextMock.mockReset();
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
       if (!sessionKey || !params.sessionStore?.[sessionKey]) {
@@ -363,8 +367,8 @@ describe("runMemoryFlushIfNeeded", () => {
       ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
+      clearAgentRunContext: clearAgentRunContextMock as never,
       registerAgentRunContext: registerAgentRunContextMock as never,
-      emitAgentEvent: emitAgentEventMock as never,
       randomUUID: () => "00000000-0000-0000-0000-000000000001",
       now: () => 1_700_000_000_000,
     });
@@ -457,8 +461,16 @@ describe("runMemoryFlushIfNeeded", () => {
       relativePath: flushCall.memoryFlushWritePath,
     });
     expect(ensureMemoryFlushTargetFileMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runEmbeddedAgentMock.mock.invocationCallOrder[0] ?? 0,
+      registerAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+    expect(registerAgentRunContextMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runEmbeddedAgentEntryMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(runEmbeddedAgentEntryMock.mock.invocationCallOrder[0]).toBeLessThan(
+      clearAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(clearAgentRunContextMock).toHaveBeenCalledOnce();
+    expect(clearAgentRunContextMock).toHaveBeenCalledWith("00000000-0000-0000-0000-000000000001");
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
     const refreshCall = requireRefreshQueuedFollowupSessionCall();
     expect(refreshCall.key).toBe(sessionKey);
@@ -1030,16 +1042,173 @@ describe("runMemoryFlushIfNeeded", () => {
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("failed");
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
-    expect(emitAgentEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "lifecycle",
-        data: expect.objectContaining({
-          phase: "memory_flush_failed",
-          attempt: 1,
-          maxAttempts: TEST_MAX_FLUSH_FAILURES,
-        }),
-      }),
-    );
+  });
+
+  it.each([
+    {
+      stage: "initial plan resolution",
+      afterRegistration: false,
+      setup: (error: Error) => {
+        const resolver = vi
+          .fn<MemoryFlushPlanResolver>()
+          .mockImplementationOnce(() => {
+            throw error;
+          })
+          .mockImplementation(createMemoryFlushPlan);
+        registerMemoryFlushPlanResolverForTest(resolver);
+      },
+    },
+    {
+      stage: "time-refreshed plan resolution",
+      afterRegistration: false,
+      setup: (error: Error) => {
+        const resolver = vi
+          .fn<MemoryFlushPlanResolver>()
+          .mockImplementationOnce(createMemoryFlushPlan)
+          .mockImplementationOnce(() => {
+            throw error;
+          })
+          .mockImplementation(createMemoryFlushPlan);
+        registerMemoryFlushPlanResolverForTest(resolver);
+      },
+    },
+    {
+      stage: "target preparation",
+      afterRegistration: false,
+      setup: (error: Error) => {
+        ensureMemoryFlushTargetFileMock.mockRejectedValueOnce(error);
+      },
+    },
+    {
+      stage: "provenance baseline read",
+      afterRegistration: false,
+      setup: (error: Error) => {
+        registerMemoryFlushPlanResolverForTest(() => ({
+          ...createMemoryFlushPlan(),
+          recordWriteProvenance: vi.fn(async () => undefined),
+        }));
+        const spy = vi.spyOn(fsCore.promises, "readFile").mockRejectedValueOnce(error);
+        return () => spy.mockRestore();
+      },
+    },
+    {
+      stage: "maintenance execution setup",
+      afterRegistration: true,
+      setup: (error: Error) => {
+        runEmbeddedAgentEntryMock.mockRejectedValueOnce(error);
+      },
+    },
+  ])("records a failed $stage attempt, cleans up, and retries", async (failure) => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 1,
+    };
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    const message = `${failure.stage} failed`;
+    const error = new Error(message);
+    const cleanup = failure.setup(error) as (() => void) | undefined;
+    const replyOperation = createReplyOperation();
+    const visibleErrorPayloads: ReplyPayload[] = [];
+    const params = {
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off" as const,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+      onVisibleErrorPayloads: (payloads: ReplyPayload[]) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    };
+
+    try {
+      const result = await runMemoryFlushIfNeeded(params);
+
+      expect(result.outcome).toBe("failed");
+      expect(sessionStore.main.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
+      const persistedFailure = loadMainSessionEntry(storePath);
+      expect(persistedFailure.memoryFlush).toEqual({
+        kind: "failed",
+        failureCount: 1,
+      });
+      expect(result.sessionEntry).toEqual(persistedFailure);
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(visibleErrorPayloads).toEqual([{ text: `⚠️ ${message}`, isError: true }]);
+      expect(registerAgentRunContextMock).toHaveBeenCalledTimes(failure.afterRegistration ? 1 : 0);
+      expect(clearAgentRunContextMock).toHaveBeenCalledTimes(failure.afterRegistration ? 1 : 0);
+      if (failure.afterRegistration) {
+        expect(clearAgentRunContextMock).toHaveBeenCalledWith(
+          "00000000-0000-0000-0000-000000000001",
+        );
+        expect(registerAgentRunContextMock.mock.invocationCallOrder[0]).toBeLessThan(
+          clearAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+        );
+      }
+
+      const retry = await runMemoryFlushIfNeeded({
+        ...params,
+        sessionEntry: result.sessionEntry,
+        replyOperation: createReplyOperation(),
+      });
+
+      expect(retry.outcome).toBe("completed");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(registerAgentRunContextMock).toHaveBeenCalledTimes(failure.afterRegistration ? 2 : 1);
+      expect(clearAgentRunContextMock).toHaveBeenCalledTimes(failure.afterRegistration ? 2 : 1);
+      expect(loadMainSessionEntry(storePath).memoryFlush).toEqual({
+        kind: "succeeded",
+        compactionCount: 1,
+      });
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  it("honors a time-refreshed null plan before preparing or registering a run", async () => {
+    const resolver = vi
+      .fn<MemoryFlushPlanResolver>()
+      .mockImplementationOnce(createMemoryFlushPlan)
+      .mockReturnValueOnce(null);
+    registerMemoryFlushPlanResolverForTest(resolver);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 1,
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    expect(registerAgentRunContextMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
   });
 
   it("does not track failure on abort error", async () => {
@@ -1146,93 +1315,12 @@ describe("runMemoryFlushIfNeeded", () => {
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("exhausted");
     expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
-    expect(emitAgentEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "lifecycle",
-        data: expect.objectContaining({
-          phase: "memory_flush_exhausted",
-          attempt: TEST_MAX_FLUSH_FAILURES,
-          maxAttempts: TEST_MAX_FLUSH_FAILURES,
-        }),
-      }),
-    );
     expect(visibleErrorPayloads[0]).toEqual(
       expect.objectContaining({
         text: expect.stringContaining("skipping for this cycle"),
         isError: true,
       }),
     );
-  });
-
-  it("retries flush on subsequent messages until MAX_FLUSH_FAILURES", async () => {
-    const storePath = path.join(rootDir, "sessions.json");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-    };
-    await writeTestSessionStore(storePath, "main", sessionEntry);
-    runWithModelFallbackMock.mockRejectedValue(new Error("provider crashed during flush"));
-
-    const params = {
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-7",
-      agentCfgContextTokens: 100_000,
-      resolvedVerboseLevel: "off" as const,
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      storePath,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    };
-
-    await runMemoryFlushIfNeeded(params);
-    await runMemoryFlushIfNeeded({ ...params, replyOperation: createReplyOperation() });
-
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
-
-    const persisted = loadMainSessionEntry(storePath);
-    expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 2 });
-  });
-
-  it("next message retries flush after failure", async () => {
-    const storePath = path.join(rootDir, "sessions.json");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-    };
-    await writeTestSessionStore(storePath, "main", sessionEntry);
-    runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
-
-    const params = {
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun(),
-      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
-      defaultModel: "anthropic/claude-opus-4-7",
-      agentCfgContextTokens: 100_000,
-      resolvedVerboseLevel: "off" as const,
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      storePath,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    };
-
-    await runMemoryFlushIfNeeded(params);
-    await runMemoryFlushIfNeeded({ ...params, replyOperation: createReplyOperation() });
-
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
   });
 
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
