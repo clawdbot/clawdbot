@@ -1,4 +1,4 @@
-import type { MemoryPluginCapability } from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryAuthorizationCapabilities } from "openclaw/plugin-sdk/memory-authorization";
 
 /** Keep plugin registration lazy: the public conformance suite is not a runtime dependency here. */
 export const LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES = Object.freeze({
@@ -12,4 +12,4 @@ export const LANCEDB_MEMORY_AUTHORIZATION_CAPABILITIES = Object.freeze({
   scopedStatus: false,
   exposureReceipts: false,
   egressReceipts: false,
-}) satisfies NonNullable<MemoryPluginCapability["authorization"]>;
+}) satisfies MemoryAuthorizationCapabilities;
