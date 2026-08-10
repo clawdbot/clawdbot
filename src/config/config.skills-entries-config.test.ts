@@ -52,6 +52,7 @@ describe("skills entries config schema", () => {
         defaults: {
           skills: ["github", "weather"],
         },
+        entries: { main: { default: true } },
       },
     });
 
@@ -64,7 +65,7 @@ describe("skills entries config schema", () => {
         defaults: {
           skills: ["github", "weather"],
         },
-        entries: { writer: { skills: ["docs-search"] } },
+        entries: { writer: { default: true, skills: ["docs-search"] } },
       },
     });
 
@@ -77,7 +78,7 @@ describe("skills entries config schema", () => {
         defaults: {
           skills: [],
         },
-        entries: { writer: { skills: [] } },
+        entries: { writer: { default: true, skills: [] } },
       },
     });
 

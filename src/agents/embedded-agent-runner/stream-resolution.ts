@@ -4,6 +4,7 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
+import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
@@ -69,10 +70,6 @@ function isDefaultOpenClawStreamFnForModel(
   return streamFn === provider?.streamSimple || streamFn === provider?.stream;
 }
 
-function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
-  return typeof apiKey === "string" && apiKey.trim().length > 0;
-}
-
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
   return model.provider === "openai" && model.api === "openai-chatgpt-responses";
 }
@@ -85,7 +82,12 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   if (!isOpenAICodexResponsesModel(params.model)) {
     return undefined;
   }
-  if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime)) {
+  // Lifecycle-owned session streams wrap auth/retry policy, so their runtime
+  // binding preserves native Codex transport even when function identity differs.
+  if (
+    !isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime) &&
+    getStreamLlmRuntime(params.currentStreamFn) !== params.llmRuntime
+  ) {
     return undefined;
   }
   return params.currentStreamFn ?? params.llmRuntime.streamSimple;
@@ -174,7 +176,13 @@ export function resolveEmbeddedAgentStreamFn(
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
   if (params.model.provider === "anthropic-vertex") {
-    return createAnthropicVertexStreamFnForModel(params.model);
+    const vertexStreamFn = createAnthropicVertexStreamFnForModel(params.model);
+    return params.signal
+      ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
+          runSignal: params.signal,
+          providerId: params.model.provider,
+        })
+      : vertexStreamFn;
   }
 
   const openClawNativeCodexResponsesStreamFn = resolveOpenClawNativeCodexResponsesStreamFn({
@@ -232,20 +240,18 @@ export function resolveEmbeddedAgentStreamFn(
         authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
+        sessionId: params.sessionId,
         promptCacheKey: params.promptCacheKey,
       });
     }
   }
 
   const promptCacheKey = params.promptCacheKey?.trim();
-  if (!promptCacheKey) {
+  if (!promptCacheKey && !params.signal) {
     return currentStreamFn;
   }
   return wrapEmbeddedAgentStreamFn(currentStreamFn, {
     runSignal: params.signal,
-    resolvedApiKey: undefined,
-    authProfileId: undefined,
-    authStorage: undefined,
     providerId: params.model.provider,
     promptCacheKey,
   });
@@ -255,9 +261,9 @@ function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;
-    resolvedApiKey: string | undefined;
-    authProfileId: string | undefined;
-    authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
+    resolvedApiKey?: string;
+    authProfileId?: string;
+    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
     providerId: string;
     sessionId?: string;
     promptCacheKey?: string;
@@ -268,7 +274,11 @@ function wrapEmbeddedAgentStreamFn(
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
     const embeddedOptions = options as EmbeddedStreamOptions | undefined;
-    const signal = embeddedOptions?.signal ?? params.runSignal;
+    const callerSignal = embeddedOptions?.signal;
+    const signal =
+      callerSignal && params.runSignal && callerSignal !== params.runSignal
+        ? AbortSignal.any([callerSignal, params.runSignal])
+        : (callerSignal ?? params.runSignal);
     let merged =
       params.sessionId && !embeddedOptions?.sessionId
         ? { ...embeddedOptions, sessionId: params.sessionId }

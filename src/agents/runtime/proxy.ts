@@ -198,7 +198,7 @@ async function readProxyErrorData(
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(bytes)) as { error?: string };
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
 }
 
 async function readProxySseChunk(

@@ -202,7 +202,10 @@ describe("handleCommands /plugins install", () => {
       const installParams = mockFirstObjectArg(installPluginFromNpmSpecMock);
       expectObjectFields(installParams, {
         spec: "@acme/policy-plugin@1.0.0",
-        config: policyConfig,
+        config: {
+          ...policyConfig,
+          agents: { entries: { main: { default: true } } },
+        },
         mode: "update",
       });
       expect(installParams).not.toHaveProperty("expectedPluginId");
@@ -262,7 +265,10 @@ describe("handleCommands /plugins install", () => {
       expect(result?.reply?.text).toContain('Installed plugin "brave"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
         spec: "@openclaw/brave-plugin",
-        config: policyConfig,
+        config: {
+          ...policyConfig,
+          agents: { entries: { main: { default: true } } },
+        },
         expectedPluginId: "brave",
         trustedSourceLinkedOfficialInstall: true,
       });

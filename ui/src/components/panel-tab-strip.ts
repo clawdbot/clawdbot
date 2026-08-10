@@ -144,7 +144,7 @@ export const panelTabStripStyles = css`
   }
   .tabstrip-tab__icon {
     display: inline-flex;
-    color: var(--accent, #4ec9a8);
+    color: var(--accent, #ff5c5c);
   }
   .tabstrip-tab.is-exited .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
@@ -160,9 +160,9 @@ export const panelTabStripStyles = css`
     color: var(--muted, #8a919e);
   }
   .tabstrip-tab__badge {
-    border: 1px solid color-mix(in srgb, var(--accent, #4ec9a8) 45%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent, #ff5c5c) 45%, transparent);
     border-radius: 999px;
-    color: var(--accent, #4ec9a8);
+    color: var(--accent, #ff5c5c);
     font-size: 9px;
     line-height: 14px;
     padding: 0 5px;

@@ -15,9 +15,9 @@ import {
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
-  DEFAULT_PACKAGE_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import {
@@ -28,16 +28,23 @@ import {
 } from "../../infra/update-check.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import {
+  parseDevUpdateTargetEnv,
+  type DevUpdateTarget,
+  UPDATE_DEV_TARGET_REF_ENV,
+} from "../../infra/update-dev-target.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
@@ -83,6 +90,18 @@ export { updateFinalizeCommand } from "./update-command-post-core.js";
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
+function readDevUpdateTargetOrExit(): { ok: true; target?: DevUpdateTarget } | { ok: false } {
+  const parsed = parseDevUpdateTargetEnv(process.env);
+  if (parsed.status === "invalid") {
+    defaultRuntime.error(
+      `Invalid internal ${UPDATE_DEV_TARGET_REF_ENV} contract; expected a plain Git ref or a supported tracked-target encoding.`,
+    );
+    defaultRuntime.exit(1);
+    return { ok: false };
+  }
+  return parsed.status === "valid" ? { ok: true, target: parsed.target } : { ok: true };
+}
+
 async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
@@ -115,7 +134,6 @@ async function updateCommandInternal(
   recoveryState: UpdateCommandRecoveryState,
 ): Promise<void> {
   suppressDeprecations();
-  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
@@ -125,8 +143,35 @@ async function updateCommandInternal(
   if (timeoutMs === null) {
     return;
   }
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel !== undefined && !requestedChannel) {
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  let devTarget: DevUpdateTarget | undefined;
+  if (requestedChannel === "dev") {
+    const resolvedDevTarget = readDevUpdateTargetOrExit();
+    if (!resolvedDevTarget.ok) {
+      return;
+    }
+    devTarget = resolvedDevTarget.target;
+  }
+
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     defaultRuntime.error(formatExternalSupervisorUpdateRequired());
+    defaultRuntime.exit(1);
+    return;
+  }
+  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
+  const discoveredRoot = await resolveUpdateRoot();
+  const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
+  if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
+    defaultRuntime.error(
+      `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -137,10 +182,13 @@ async function updateCommandInternal(
       await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
       throw err;
     }
+
+    // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
+    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let root = await resolveUpdateRoot();
+  let root = discoveredRoot;
   if (postCoreUpdateResume) {
     await resumePostCoreUpdate({
       root,
@@ -151,22 +199,12 @@ async function updateCommandInternal(
     return;
   }
 
-  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
     fetchGit: false,
     includeRegistry: false,
   });
-
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
 
   if (requestedChannel === "extended-stable" && updateStatus.installKind === "git") {
     await reportPreMutationUpdateFailure({
@@ -179,7 +217,10 @@ async function updateCommandInternal(
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  let configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    ...(opts.dryRun === true ? { observe: false } : {}),
+  });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
@@ -201,7 +242,12 @@ async function updateCommandInternal(
   const selectedChannel =
     requestedChannel ??
     storedChannel ??
-    (installKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL);
+    (installKind === "git"
+      ? DEFAULT_GIT_CHANNEL
+      : resolveEffectiveUpdateChannel({
+          currentVersion: VERSION,
+          installKind,
+        }).channel);
   if (selectedChannel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateFailure({
       root,
@@ -216,11 +262,22 @@ async function updateCommandInternal(
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
-  const defaultChannel =
-    updateInstallKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
-  const channel = requestedChannel ?? storedChannel ?? defaultChannel;
-  const devTargetRef =
-    channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
+  const channel =
+    requestedChannel ??
+    storedChannel ??
+    (updateInstallKind === "git"
+      ? DEFAULT_GIT_CHANNEL
+      : resolveEffectiveUpdateChannel({
+          currentVersion: VERSION,
+          installKind: updateInstallKind,
+        }).channel);
+  if (channel === "dev" && requestedChannel !== "dev") {
+    const resolvedDevTarget = readDevUpdateTargetOrExit();
+    if (!resolvedDevTarget.ok) {
+      return;
+    }
+    devTarget = resolvedDevTarget.target;
+  }
 
   const explicitTag = normalizeTag(opts.tag);
   if (channel === "extended-stable" && explicitTag) {
@@ -552,7 +609,7 @@ async function updateCommandInternal(
     showProgress,
     opts,
     shouldRestart,
-    devTargetRef,
+    devTarget,
     packageInstallSpec,
     packageInstallEnv,
     packageInstallTarget,
@@ -566,12 +623,16 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop } = execution;
+  const { result, preManagedServiceStop, ownedManagedUpdateContext } = execution;
+  const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
+  const finalizationPluginInstallRecords =
+    ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords;
   stop();
   await finishUpdate({
     result,
     root,
-    configSnapshot,
+    installKindChanged: switchToGit || switchToPackage,
+    configSnapshot: finalizationConfigSnapshot,
     requestedChannel,
     storedChannel,
     channel,
@@ -580,8 +641,9 @@ async function updateCommandInternal(
     opts,
     showProgress,
     preManagedServiceStop,
+    ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
     controlPlaneUpdateSentinelMeta,
-    preUpdatePluginInstallRecords,
+    preUpdatePluginInstallRecords: finalizationPluginInstallRecords,
     startedAt,
     packageUpdateNodeRunner,
     updateStepTimeoutMs,

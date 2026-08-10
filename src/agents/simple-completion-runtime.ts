@@ -1,7 +1,10 @@
 import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
-import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
+import {
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
  *
@@ -41,6 +44,7 @@ import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  type ModelManifestNormalizationContext,
 } from "./model-selection.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
@@ -114,10 +118,12 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   agentDir?: string;
   modelRef?: string;
   useUtilityModel?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): AgentSimpleCompletionSelection | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
   });
   // Utility routing derives a provider-declared small model when unset and
   // treats an explicit empty utilityModel as "use the primary" (disabled).
@@ -135,12 +141,14 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
+    manifestPlugins: params.manifestPlugins,
   });
   const resolved = split
     ? resolveModelRefFromString({
         raw: split.model,
         defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
         aliasIndex,
+        manifestPlugins: params.manifestPlugins,
       })
     : null;
   const provider = resolved?.ref.provider ?? fallbackRef.provider;
@@ -323,6 +331,10 @@ export async function prepareSimpleCompletionModel(params: {
             mode: auth.mode,
             availability: true,
             evidence: "runtime",
+            // The credential is already resolved by the caller and wrapped as
+            // required provider-binding ownership below, so it is not an
+            // ambient discovery competing with declared profiles.
+            authorization: "declared",
           });
       const routeAuthDecision = selectOpenAIModelRouteAuth({
         resolution: routeResolution,
@@ -554,7 +566,9 @@ function normalizeSimpleCompletionReasoning(
     case undefined:
       return undefined;
     case "off":
-      return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
+      return resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model)
+        ? "off"
+        : undefined;
     case "adaptive":
       return "medium";
     case "ultra":

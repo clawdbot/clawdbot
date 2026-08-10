@@ -64,7 +64,7 @@ flow:
         - call: waitForCondition
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.warmupMarker)))"
+                expr: "state.getSnapshot().messages.find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.warmupMarker)))"
             - expr: liveTurnTimeoutMs(env, 120000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - call: runAgentPrompt

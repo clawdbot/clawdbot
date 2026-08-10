@@ -2,11 +2,12 @@ import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
+  auditNativeToolTerminalStatus,
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   isSideEffectingNativeToolItem,
@@ -67,6 +68,8 @@ export type ToolTranscriptResultInput = {
   name: string;
   text?: string;
   isError: boolean;
+  details?: unknown;
+  resultContentSource?: "network";
 };
 
 type ToolProgressRawSignature = { length: number; prefix: string };
@@ -165,7 +168,7 @@ export class CodexToolProgressProjection {
       toolName: existing?.toolName ?? params.tool,
       ...(existing?.meta ? { meta: existing.meta } : {}),
       ...(params.asyncStarted === true ? { asyncStarted: true } : {}),
-      ...(!params.success ? { isError: true } : {}),
+      isError: !params.success,
     });
     if (params.terminalResolution) {
       this.lastNativeToolError = params.terminalResolution.lastToolError;
@@ -345,13 +348,21 @@ export class CodexToolProgressProjection {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
-    const status = itemStatus(item);
     const existing = this.metas.get(item.id);
+    const terminalStatus = auditNativeToolTerminalStatus(item);
+    const isError =
+      typeof existing?.isError === "boolean"
+        ? existing.isError
+        : terminalStatus === "completed"
+          ? false
+          : terminalStatus === "failed" || terminalStatus === "blocked"
+            ? true
+            : undefined;
     this.metas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
-      ...(status !== "running" && isNonSuccessItemStatus(status) ? { isError: true } : {}),
+      ...(isError === undefined ? {} : { isError }),
     });
   }
 

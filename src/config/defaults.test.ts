@@ -2,9 +2,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
 import {
   applyAgentDefaults,
@@ -122,7 +122,7 @@ describe("config defaults", () => {
   it("fills missing agent concurrency defaults", () => {
     const next = applyAgentDefaults({ messages: {} } as never);
 
-    expect(next.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
+    expect(next.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
       DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,

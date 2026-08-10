@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { NostrProfile } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -37,17 +38,6 @@ type TestGateway = ApplicationContext["gateway"] & {
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
 };
 
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred callback to be initialized");
-  }
-  return { promise, resolve };
-}
-
 function stubHangingFetch() {
   const fetchMock = vi.fn<typeof fetch>(
     async (_input, init) =>
@@ -78,9 +68,9 @@ function createGateway(): TestGateway {
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -250,7 +240,7 @@ describe("ChannelsPage lifecycle", () => {
 
     const load = page.importNostrProfile();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    gateway.emit({ connected: false });
+    gateway.emit({ phase: "stopped" });
     expect(page.nostrProfileFormState).toBeNull();
 
     response.resolve(

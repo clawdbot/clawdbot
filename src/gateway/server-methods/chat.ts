@@ -2,33 +2,34 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatInjectParams,
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
+import { resolveSessionSubscriptionKeys } from "../session-subscription-keys.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import { handleChatSend } from "./chat-send-handler.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export {
   augmentChatHistoryWithCanvasBlocks,
@@ -49,15 +50,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,
   "chat.toolTitles": async ({ params, respond, context }) => {
-    if (!validateChatToolTitlesParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.toolTitles params: ${formatValidationErrors(validateChatToolTitlesParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -83,47 +76,37 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
       return;
     }
-    try {
-      const sessionAgentId = resolveSessionAgentId({
-        sessionKey: params.sessionKey,
-        config: cfg,
-        agentId: selectedAgent.agentId,
-      });
-      // Session entry carries per-session model overrides; utility routing must
-      // derive its small-model default from the provider this session actually
-      // uses, not the agent's configured default.
-      const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
-        params.sessionKey,
-        selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
-      );
-      const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
-      // Title generation pulls in the simple-completion runtime; load it lazily
-      // so gateways that never enable the opt-in skip that cost.
-      const { generateToolCallTitles } = await import("../chat-tool-titles.js");
-      const titles = await generateToolCallTitles({
-        cfg: sessionCfg,
-        agentId: sessionAgentId,
-        sessionPrimaryProvider: sessionModel.provider,
-        sessionAuthProfile: entry?.authProfileOverride?.trim() || undefined,
-        items: params.items,
-      });
-      respond(true, { titles });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-    }
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: cfg,
+      agentId: selectedAgent.agentId,
+    });
+    // Session entry carries per-session model overrides; utility routing must
+    // derive its small-model default from the provider this session actually
+    // uses, not the agent's configured default.
+    const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
+      params.sessionKey,
+      selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
+    );
+    const sessionModel = resolveSessionModelRef(sessionCfg, entry, sessionAgentId);
+    // Title generation pulls in the simple-completion runtime; load it lazily
+    // so gateways that never enable the opt-in skip that cost.
+    const { generateToolCallTitles } = await import("../chat-tool-titles.js");
+    const titles = await generateToolCallTitles({
+      cfg: sessionCfg,
+      agentId: sessionAgentId,
+      sessionPrimaryProvider: sessionModel.provider,
+      sessionAuthProfile: entry?.authProfileOverride?.trim() || undefined,
+      items: params.items,
+    });
+    respond(true, { titles });
   },
-  "chat.abort": handleChatAbortRequest,
-  "chat.send": handleChatSend,
+  "chat.abort": async (options) => {
+    await createAgentTurnService(options).abortTurn(options);
+  },
+  "chat.send": handleDirectExternalChatSend,
   "chat.inject": async ({ params, respond, context }) => {
-    if (!validateChatInjectParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.inject params: ${formatValidationErrors(validateChatInjectParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;
     }
     const p = params as {
@@ -195,7 +178,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               label: p.label,
               sessionId,
               storePath,
-              sessionFile: entry.sessionFile,
               agentId,
               createIfMissing: true,
               cfg,
@@ -233,7 +215,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message,
     };
     context.broadcast("chat", chatPayload, {
-      sessionKeys: sessionKey === "global" && agentId ? [`agent:${agentId}:global`] : [sessionKey],
+      sessionKeys: resolveSessionSubscriptionKeys(sessionKey, agentId, resolveDefaultAgentId(cfg)),
     });
     sendGlobalAwareNodeChatPayload({
       context,

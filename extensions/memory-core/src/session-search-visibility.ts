@@ -1,13 +1,12 @@
 // Memory Core plugin module implements session search visibility behavior.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
-  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -15,7 +14,6 @@ import {
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
-import { readQmdSessionArtifactIdentity } from "./qmd-session-artifacts.js";
 
 function normalizeAgentIdForCompare(value: string | undefined): string | undefined {
   return value?.trim().toLowerCase() || undefined;
@@ -40,10 +38,13 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  const anchorFile = anchor.sessionFile?.trim();
-  const candidateFile = candidate.sessionFile?.trim();
-  return Boolean(
-    anchorFile && candidateFile && path.resolve(anchorFile) === path.resolve(candidateFile),
+  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
+  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
+  return (
+    typeof anchorSessionFile === "string" &&
+    anchorSessionFile.trim().length > 0 &&
+    typeof candidateSessionFile === "string" &&
+    candidateSessionFile.trim() === anchorSessionFile.trim()
   );
 }
 
@@ -56,7 +57,7 @@ function isPrivateConversation(params: {
     return false;
   }
   const key = params.key.trim().toLowerCase();
-  const chatTypes = [params.entry.chatType, params.entry.origin?.chatType].filter(
+  const chatTypes = [params.entry.chatType, sessionDeliveryOrigin(params.entry)?.chatType].filter(
     (chatType): chatType is NonNullable<typeof chatType> => chatType !== undefined,
   );
   if (
@@ -161,6 +162,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   sandboxed: boolean;
   hits: MemorySearchResult[];
   conversationRecall?: ConversationRecallContext;
+  /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
+  trustedAgentScope?: boolean;
 }): Promise<MemorySearchResult[]> {
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: params.cfg,
@@ -189,6 +192,9 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   );
 
   const conversationRecall = params.conversationRecall;
+  const trustedAgentScope = Boolean(
+    params.trustedAgentScope && scopedAgentId && !params.requesterSessionKey && !conversationRecall,
+  );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const recallAgentId = anchorSessionKey
     ? resolveSessionAgentId({ sessionKey: anchorSessionKey, config: params.cfg })
@@ -226,7 +232,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
 
   const isSessionKeyAllowed = (key: string): boolean => {
     if (!conversationRecall || !anchorSessionKey || !recallAgentId) {
-      return guard?.check(key).allowed === true;
+      // A bare global key is local to the selected agent store. Reattach that
+      // owner before applying visibility or non-default agents look cross-agent.
+      const visibilityKey =
+        scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
+          ? `agent:${scopedAgentId}:global`
+          : key;
+      return trustedAgentScope || guard?.check(visibilityKey).allowed === true;
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the
@@ -248,9 +260,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
 
   const expandRecallAliasKeys = (keys: string[]): string[] => {
-    // Alias resolution by session id can miss a group/channel alias that shares
-    // the same transcript file under a different session id. Recall must judge
-    // every alias, so expand candidates by stored transcript identity.
+    // Recall must judge every store key for the canonical transcript identity,
+    // including group/channel aliases that were not in the initial key set.
     const expanded = new Set(keys);
     for (const key of keys) {
       const entry = combinedSessionStore[key];
@@ -282,46 +293,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       }
       continue;
     }
-    if (!params.requesterSessionKey || (!guard && !conversationRecall)) {
+    if (!trustedAgentScope && (!params.requesterSessionKey || (!guard && !conversationRecall))) {
       continue;
     }
-    const artifactIdentity = readQmdSessionArtifactIdentity(hit);
-    if (artifactIdentity) {
-      const normalizedScopedAgentId = normalizeAgentIdForCompare(scopedAgentId);
-      const normalizedOwnerAgentId = normalizeAgentIdForCompare(artifactIdentity.agentId);
-      if (
-        normalizedScopedAgentId &&
-        normalizedOwnerAgentId &&
-        normalizedOwnerAgentId !== normalizedScopedAgentId
-      ) {
-        continue;
-      }
-      const keys = filterSessionKeysByScopedAgent({
-        cfg: params.cfg,
-        scopedAgentId,
-        keys: resolveSessionTranscriptMemoryHitKeyToSessionKeys({
-          store: combinedSessionStore,
-          key: artifactIdentity.memoryKey,
-          includeSyntheticFallback: artifactIdentity.archived,
-        }),
-      });
-      if (keys.length === 0) {
-        continue;
-      }
-      const allowed = areSessionKeysAllowed(keys);
-      if (!allowed) {
-        continue;
-      }
-      next.push(hit);
-      continue;
-    }
-    // Deprecated migration compatibility for older QMD/session rows that were
-    // indexed before memory-core stored artifact-to-transcript identity.
     const identity = extractTranscriptIdentityFromSessionsMemoryHit(hit.path);
     if (!identity) {
       continue;
     }
-    const isQmdSessionHit = hit.path.replace(/\\/g, "/").startsWith("qmd/");
     const normalizedScopedAgentId = normalizeAgentIdForCompare(scopedAgentId);
     const normalizedOwnerAgentId = normalizeAgentIdForCompare(identity.ownerAgentId);
     if (
@@ -339,31 +317,19 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         : undefined;
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
-      ((identity.ownerAgentId &&
-        (!scopedAgentId ||
-          normalizeAgentIdForCompare(identity.ownerAgentId) ===
-            normalizeAgentIdForCompare(scopedAgentId))) ||
-        (isQmdSessionHit && scopedAgentId)),
+      identity.ownerAgentId &&
+      (!scopedAgentId ||
+        normalizeAgentIdForCompare(identity.ownerAgentId) ===
+          normalizeAgentIdForCompare(scopedAgentId)),
     );
     const archivedOwnerAgentId = archivedOwnerMatchesScope
       ? (identity.ownerAgentId ?? scopedAgentId)
       : undefined;
-    const liveKeys = identity.liveStem
-      ? resolveTranscriptStemToSessionKeys({
-          store: combinedSessionStore,
-          stem: identity.liveStem,
-          allowQmdSlugFallback: false,
-        })
-      : [];
-    const resolvedKeys =
-      liveKeys.length > 0
-        ? liveKeys
-        : resolveTranscriptStemToSessionKeys({
-            store: combinedSessionStore,
-            stem: identity.stem,
-            allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
-            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-          });
+    const resolvedKeys = resolveTranscriptStemToSessionKeys({
+      store: combinedSessionStore,
+      stem: identity.stem,
+      ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+    });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,

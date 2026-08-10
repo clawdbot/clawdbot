@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
@@ -147,12 +148,6 @@ function assertBoundedViewDescriptor(value: {
   ) {
     throw new Error("MCP App preview descriptor exceeds safe limits");
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function normalizePermissions(value: unknown): McpAppPermissions | undefined {
@@ -330,6 +325,16 @@ export function getMcpAppViewLease(
   pruneViewStore();
   const view = getViewStore().get(viewId);
   return view?.runtime === runtime ? view : undefined;
+}
+
+/** Resolve a live view owned by its originating session, including harness-native runtimes. */
+export function getMcpAppViewLeaseForSession(
+  viewId: string,
+  sessionKey: string,
+): McpAppViewLease | undefined {
+  pruneViewStore();
+  const view = getViewStore().get(viewId);
+  return view?.runtime.sessionKey === sessionKey ? view : undefined;
 }
 
 export function acquireMcpAppViewRequest(

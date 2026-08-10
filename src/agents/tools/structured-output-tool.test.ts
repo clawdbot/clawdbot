@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it } from "vitest";
-import { validateStructuredOutputSchema } from "../swarm-output-schema.js";
+import { validateStructuredOutputSchema } from "../subagents/swarm/swarm-output-schema.js";
+import { isToolResultError } from "../tool-result-error.js";
 import { createStructuredOutputTool } from "./structured-output-tool.js";
 import { testing } from "./structured-output-tool.test-support.js";
 
@@ -17,8 +18,30 @@ describe("structured_output", () => {
         additionalProperties: false,
       },
     });
-    await expect(tool.execute("call-1", { result: { answer: "yes" } })).resolves.toBeDefined();
+    const result = await tool.execute("call-1", { result: { answer: "yes" } });
+    expect(isToolResultError(result)).toBe(false);
     expect(testing.readSwarmStructuredOutput("run-1")?.structured).toEqual({ answer: "yes" });
+  });
+
+  it("publishes a provider-valid schema while accepting any JSON result", () => {
+    const tool = createStructuredOutputTool({
+      runId: "run-json-value",
+      schema: {},
+    });
+    expect(tool.parameters).toEqual({
+      type: "object",
+      required: ["result"],
+      properties: {
+        result: {
+          type: ["object", "array", "string", "number", "boolean", "null"],
+        },
+      },
+      additionalProperties: false,
+    });
+    for (const result of [{ answer: "yes" }, ["yes"], "yes", 1, true, null]) {
+      expect(Value.Check(tool.parameters, { result })).toBe(true);
+    }
+    expect(Value.Check(tool.parameters, { result: undefined })).toBe(false);
   });
 
   it("nudges once then freezes schemaError", async () => {
@@ -35,8 +58,12 @@ describe("structured_output", () => {
     await expect(tool.execute("call-1", { result: { count: "bad" } })).rejects.toThrow(
       "Retry once",
     );
-    await expect(tool.execute("call-2", { result: { count: "still bad" } })).resolves.toBeDefined();
-    await expect(tool.execute("call-3", { result: { count: 3 } })).resolves.toBeDefined();
+    const rejectedRetry = await tool.execute("call-2", { result: { count: "still bad" } });
+    const rejectedLaterCall = await tool.execute("call-3", { result: { count: 3 } });
+    expect(rejectedRetry.details).toMatchObject({ status: "rejected", success: false });
+    expect(rejectedLaterCall.details).toMatchObject({ status: "rejected", success: false });
+    expect(isToolResultError(rejectedRetry)).toBe(true);
+    expect(isToolResultError(rejectedLaterCall)).toBe(true);
     expect(testing.readSwarmStructuredOutput("run-2")).toMatchObject({
       structured: undefined,
       invalidAttempts: 2,
@@ -80,9 +107,9 @@ describe("structured_output", () => {
       schema,
       initialState: durableState,
     });
-    await expect(
-      restored.execute("call-2", { result: { count: "still bad" } }),
-    ).resolves.toBeDefined();
+    const rejected = await restored.execute("call-2", { result: { count: "still bad" } });
+    expect(rejected.details).toMatchObject({ status: "rejected", success: false });
+    expect(isToolResultError(rejected)).toBe(true);
     expect(testing.readSwarmStructuredOutput("run-restart")?.invalidAttempts).toBe(2);
   });
 });

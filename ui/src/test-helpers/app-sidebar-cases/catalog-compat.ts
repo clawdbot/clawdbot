@@ -22,7 +22,7 @@ describe("AppSidebar session catalog pagination", () => {
         {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "main" }, { id: "research" }],
         },
       );
@@ -44,7 +44,7 @@ describe("AppSidebar session catalog pagination", () => {
       selection.scopeId = "research";
       sidebar.requestUpdate();
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
         agentId: "research",
@@ -263,8 +263,8 @@ describe("AppSidebar session catalog pagination", () => {
       expect(
         section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
       ).toContain("Second page unavailable");
-      expect(sidebar.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
-      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
       expect(loadMore()?.disabled).toBe(false);
 
       loadMore()?.click();

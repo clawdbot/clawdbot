@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -40,6 +40,18 @@ function cronJob(id: string): CronJob {
   };
 }
 
+function cronListResponse(jobs: CronJob[]): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "sidebar-attention-cron-fixture",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+  };
+}
+
 type SidebarAttentionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   cronJobs: CronJob[];
@@ -65,6 +77,63 @@ function approvalItems(queue: readonly ExecApprovalRequest[]) {
     now: 0,
   }).filter((item) => item.kind === "pendingApproval");
 }
+
+function cronItems(cronJobs: readonly CronJob[], now = 0) {
+  return buildSidebarAttentionItems({
+    cronJobs,
+    modelAuthStatus: null,
+    approvalQueue: [],
+    now,
+  });
+}
+
+describe("cron attention details", () => {
+  it("lists each failed job with its preferred error", () => {
+    const primary = cronJob("primary");
+    primary.name = "Nightly backup";
+    primary.state = { lastRunStatus: "error", lastError: "  disk full  " };
+    const reason = cronJob("reason-id");
+    reason.name = "";
+    reason.state = {
+      lastRunStatus: "error",
+      lastError: "   ",
+      lastErrorReason: "timeout",
+    };
+    const unknown = cronJob("unknown-id");
+
+    const failed = cronItems([primary, reason, unknown]).find((item) => item.kind === "cronFailed");
+
+    expect(failed?.detail).toBe(
+      "Nightly backup: disk full\nreason-id: timeout\nunknown-id: Unknown error",
+    );
+  });
+
+  it("caps failure errors at 200 characters with an ellipsis", () => {
+    const job = cronJob("long-error");
+    job.state = { lastRunStatus: "error", lastError: "x".repeat(201) };
+
+    const detail = cronItems([job]).find((item) => item.kind === "cronFailed")?.detail;
+    const errorText = detail?.slice("long-error: ".length);
+
+    expect(errorText).toHaveLength(200);
+    expect(errorText).toBe(`${"x".repeat(199)}…`);
+  });
+
+  it("lists overdue job names", () => {
+    const named = cronJob("named-id");
+    named.name = "Nightly backup";
+    named.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    const unnamed = cronJob("unnamed-id");
+    unnamed.name = "";
+    unnamed.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+
+    const overdue = cronItems([named, unnamed], 300_003).find(
+      (item) => item.kind === "cronOverdue",
+    );
+
+    expect(overdue?.detail).toBe("Nightly backup\nunnamed-id");
+  });
+});
 
 describe("pending approval attention", () => {
   it("builds a warning chip only while approvals are pending", () => {
@@ -120,8 +189,7 @@ describe("sidebar attention refresh ownership", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
       hello: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
@@ -137,6 +205,7 @@ describe("sidebar attention refresh ownership", () => {
         password: "",
       },
       subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
     } as unknown as ApplicationGateway;
     const overlays = {
       snapshot: { approvalQueue: [] },
@@ -163,7 +232,7 @@ describe("sidebar attention refresh ownership", () => {
 
     const currentAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
     now = 200_000;
-    secondCron.resolve({ jobs: [cronJob("current")] });
+    secondCron.resolve(cronListResponse([cronJob("current")]));
     secondAuth.resolve(currentAuth);
     await waitForFast(() => expect(element.loadedAtMs).toBe(200_000));
     expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
@@ -171,7 +240,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
 
     now = 300_000;
-    firstCron.resolve({ jobs: [cronJob("stale")] });
+    firstCron.resolve(cronListResponse([cronJob("stale")]));
     firstAuth.resolve({ ts: 1, providers: [] });
     await Promise.all([firstCron.promise, firstAuth.promise]);
     await new Promise<void>((resolve) => {
@@ -183,6 +252,59 @@ describe("sidebar attention refresh ownership", () => {
     expect(element.modelAuthStatus).toBe(currentAuth);
     expect(element.loadedAtMs).toBe(200_000);
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
+  });
+
+  it("clears a stale failure alert when the gateway reports an automation change", async () => {
+    const responses = {
+      "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
+      "models.authStatus": [{ ts: 1, providers: [] }],
+    };
+    const request = vi.fn((method: keyof typeof responses) => {
+      const response = responses[method].shift();
+      if (!response) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return Promise.resolve(response);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected",
+      hello: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    let eventListener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+    const gateway = {
+      snapshot,
+      connection: {
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: (listener: NonNullable<typeof eventListener>) => {
+        eventListener = listener;
+        return () => undefined;
+      },
+    } as unknown as ApplicationGateway;
+    const overlays = {
+      snapshot: { approvalQueue: [] },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["overlays"];
+    vi.stubGlobal("localStorage", createTestStorageMock());
+
+    const provider = createApplicationContextProvider({ gateway, overlays } as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+    await waitForFast(() => expect(element.textContent).toContain("1 automation(s) failed"));
+
+    eventListener?.({ type: "event", event: "cron", payload: {} });
+    await waitForFast(() => expect(element.textContent).not.toContain("automation(s) failed"));
   });
 });
 

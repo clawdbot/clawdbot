@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
-} from "../dreaming-phases.js";
+} from "../dreaming-ingestion-state.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
@@ -16,10 +16,10 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "../dreaming-state.js";
-import {
-  normalizeShortTermPhaseSignalStore,
-  normalizeShortTermRecallStore,
-} from "../short-term-promotion.js";
+// Import from the defining modules, not the short-term-promotion barrel: the
+// barrel pulls memory-host-events/kysely, which doctor enumeration cold-loads.
+import { normalizeShortTermPhaseSignalStore } from "../short-term-promotion-store.js";
+import { normalizeShortTermRecallStore } from "../short-term-promotion-utils.js";
 
 type LegacyDreamingSource = {
   workspaceDir: string;

@@ -1,4 +1,6 @@
+import { initialState, Task } from "@lit/task";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ReactiveElement } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -293,7 +295,7 @@ function anchorFromEvent(event: Event): HTMLAnchorElement | null {
   return null;
 }
 
-export class GitHubLinkHovercardProvider extends HTMLElement {
+export class GitHubLinkHovercardProvider extends ReactiveElement {
   client: GatewayBrowserClient | null = null;
 
   private readonly cache = new Map<string, CacheEntry>();
@@ -306,8 +308,30 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
   private pointerInside = false;
   private renderedPreview: GitHubPreview | null = null;
   private renderedUnavailable = false;
-  private requestVersion = 0;
   private stopI18n: (() => void) | null = null;
+  private readonly previewTask = new Task(this, {
+    autoRun: false,
+    args: () => [this.activeTarget] as const,
+    task: ([target], { signal }) => (target ? this.loadPreview(target, signal) : initialState),
+    onComplete: (preview) => {
+      const card = this.card;
+      if (!card) {
+        return;
+      }
+      this.renderedPreview = preview;
+      renderPreview(card, preview);
+      this.positionCard();
+    },
+    onError: () => {
+      const card = this.card;
+      if (!card) {
+        return;
+      }
+      this.renderedUnavailable = true;
+      renderUnavailable(card);
+      this.positionCard();
+    },
+  });
   private readonly activeAnchorObserver = new MutationObserver(() => {
     const anchor = this.activeAnchor;
     // The card is portaled outside the routed tree, whose replacement can remove
@@ -317,7 +341,12 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     }
   });
 
-  connectedCallback(): void {
+  protected override createRenderRoot(): HTMLElement | DocumentFragment {
+    return this;
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
     this.style.display = "contents";
     this.addEventListener("pointerover", this.handlePointerOver);
     this.addEventListener("pointerout", this.handlePointerOut);
@@ -328,7 +357,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.stopI18n ??= i18n.subscribe(this.handleLocaleChange);
   }
 
-  disconnectedCallback(): void {
+  override disconnectedCallback(): void {
     this.removeEventListener("pointerover", this.handlePointerOver);
     this.removeEventListener("pointerout", this.handlePointerOut);
     this.removeEventListener("focusin", this.handleFocusIn);
@@ -338,6 +367,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.stopI18n?.();
     this.stopI18n = null;
     this.close();
+    super.disconnectedCallback();
   }
 
   private readonly handleLocaleChange = () => {
@@ -427,15 +457,14 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
     this.openTimer = window.setTimeout(() => {
       this.openTimer = null;
-      void this.show(anchor, target);
+      this.show(anchor, target);
     }, delay);
   }
 
-  private async show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): Promise<void> {
+  private show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): void {
     if (this.activeAnchor !== anchor || this.activeTarget?.href !== target.href) {
       return;
     }
-    const version = ++this.requestVersion;
     const card = document.createElement("div");
     nextHovercardId += 1;
     card.id = `openclaw-github-hovercard-${nextHovercardId}`;
@@ -455,24 +484,10 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.listenForViewportChanges();
     this.positionCard();
 
-    try {
-      const preview = await this.loadPreview(target);
-      if (version !== this.requestVersion || card !== this.card) {
-        return;
-      }
-      this.renderedPreview = preview;
-      renderPreview(card, preview);
-    } catch {
-      if (version !== this.requestVersion || card !== this.card) {
-        return;
-      }
-      this.renderedUnavailable = true;
-      renderUnavailable(card);
-    }
-    this.positionCard();
+    void this.previewTask.run([target]);
   }
 
-  private loadPreview(target: GitHubLinkTarget): Promise<GitHubPreview> {
+  private loadPreview(target: GitHubLinkTarget, signal: AbortSignal): Promise<GitHubPreview> {
     const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
     const now = Date.now();
     const cached = this.cache.get(key);
@@ -497,6 +512,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
           owner: target.owner,
           repo: target.repo,
         },
+        { signal },
       );
       return parsePreviewResponse(target, response);
     };
@@ -527,7 +543,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
       this.openTimer = null;
     }
     this.activeAnchorObserver.disconnect();
-    this.requestVersion += 1;
+    void this.previewTask.run([null]);
     if (this.activeAnchor) {
       if (this.describedBy === null) {
         this.activeAnchor.removeAttribute("aria-describedby");

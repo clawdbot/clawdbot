@@ -89,7 +89,12 @@ describe("noteClaudeCliHealth", () => {
       const resolveCommandPath = vi.fn(() => undefined);
 
       noteClaudeCliHealth(
-        { agents: { defaults: { model: "claude-cli/claude-sonnet-4-6" } } },
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
         {
           homeDir,
           workspaceDir,
@@ -129,6 +134,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
@@ -153,6 +159,50 @@ describe("noteClaudeCliHealth", () => {
       );
 
       expect(noteFn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("advises on a version below the first-known floor without declaring it unsupported", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+            liveSessionRequirement: {
+              capability: "msg_lifecycle_v1",
+              minimumVersion: "2.1.206",
+              versionArgs: ["--version"],
+              updateCommand: "claude update",
+            },
+          },
+        ],
+      });
+      const noteFn = vi.fn();
+
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
+        {
+          homeDir,
+          workspaceDir,
+          noteFn,
+          store: createStore(),
+          readClaudeCliCredentials: () => ({ type: "api_key_helper" }),
+          resolveCommandPath: () => "/opt/homebrew/bin/claude",
+          resolveCommandVersion: () => "2.1.205 (Claude Code)",
+        },
+      );
+
+      expect(noteBody(noteFn)).toContain(
+        "Binary version advisory: Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
+      );
     });
   });
 
@@ -226,6 +276,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
@@ -260,6 +311,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
@@ -287,6 +339,7 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {

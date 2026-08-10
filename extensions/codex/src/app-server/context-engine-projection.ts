@@ -443,13 +443,10 @@ function hasMessageContent(message: AgentMessage): message is AgentMessage & { c
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
-  return Math.min(
-    MAX_RENDERED_CONTEXT_CHARS,
-    Math.max(DEFAULT_RENDERED_CONTEXT_CHARS, Math.floor(value)),
-  );
+  return Math.min(MAX_RENDERED_CONTEXT_CHARS, Math.max(1, Math.floor(value)));
 }
 
 function resolveTextPartMaxChars(maxRenderedContextChars: number): number {

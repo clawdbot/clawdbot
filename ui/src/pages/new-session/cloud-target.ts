@@ -6,12 +6,13 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { readDraftCloudProfiles } from "./discovery.ts";
 
 type CloudStartOutcome =
-  | { status: "started"; messageId: string }
+  | { status: "started"; messageId: string; messageSeq?: number }
   | { status: "cancelled" }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
@@ -45,10 +46,6 @@ const PENDING_PLACEMENT_STATES = new Set([
   "reconciling",
 ]);
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isAmbiguousDispatchError(error: unknown): boolean {
   if (error instanceof GatewayRequestError) {
     return error.retryable || error.gatewayCode === "UNAVAILABLE";
@@ -70,7 +67,10 @@ async function readPlacement(
     return { status: "read", placement: described?.session?.placement };
   } catch (error) {
     if (!isAmbiguousDispatchError(error)) {
-      return { status: "rejected", error: errorMessage(error) };
+      return {
+        status: "rejected",
+        error: formatUiError(error),
+      };
     }
     return { status: "unavailable" };
   }
@@ -95,7 +95,7 @@ async function cancelActivePlacement(
     await client.request("environments.destroy", { environmentId });
     return undefined;
   } catch (error) {
-    return errorMessage(error);
+    return formatUiError(error);
   }
 }
 
@@ -122,17 +122,29 @@ async function resolveActivePlacement(
     }
     if (result.status === "unavailable") {
       lookupFailures += 1;
-      if (!isCurrent() || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
-        if (!isCurrent() && lastKnownEnvironmentId) {
+      const submissionCancelled = !isCurrent();
+      if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
+        if (lastKnownEnvironmentId) {
+          // The last successful placement read still proves worker ownership.
+          // Destroy it before returning, or a lookup outage can orphan paid capacity.
           const cleanupError = await cancelActivePlacement(client, {
             key: params.key,
             agentId: params.agentId,
             environmentId: lastKnownEnvironmentId,
             abortRun: false,
           });
-          return cleanupError
-            ? { status: "cleanup-rejected", error: cleanupError }
-            : { status: "cancelled" };
+          if (submissionCancelled) {
+            return cleanupError
+              ? { status: "cleanup-rejected", error: cleanupError }
+              : { status: "cancelled" };
+          }
+          const placementError = "cloud worker placement could not be verified";
+          return {
+            status: "cleanup-rejected",
+            error: cleanupError
+              ? `${placementError}; cleanup failed: ${cleanupError}`
+              : placementError,
+          };
         }
         return {
           status: "cleanup-rejected",
@@ -231,7 +243,7 @@ export async function deleteCloudDraftSession(
     await client.request("sessions.delete", { key, agentId, deleteTranscript: true });
     return undefined;
   } catch (error) {
-    return errorMessage(error);
+    return formatUiError(error);
   }
 }
 
@@ -333,7 +345,7 @@ export async function startCloudInitialTurn(
         isCurrent,
       );
     } catch (error) {
-      dispatchError = errorMessage(error);
+      dispatchError = formatUiError(error);
       if (!isAmbiguousDispatchError(error)) {
         return { status: "dispatch-rejected", error: dispatchError };
       }
@@ -383,7 +395,7 @@ export async function startCloudInitialTurn(
       : { status: "send-not-started", error: "cloud recovery storage is unavailable" };
   }
   try {
-    await client.request("sessions.send", {
+    const sent = await client.request<{ messageSeq?: unknown }>("sessions.send", {
       key: params.key,
       agentId: params.agentId,
       message: params.message,
@@ -401,7 +413,14 @@ export async function startCloudInitialTurn(
         ? { status: "cleanup-rejected", error: cleanupError, messageId }
         : { status: "cancelled" };
     }
-    return { status: "started", messageId };
+    const messageSeq = sent?.messageSeq;
+    return {
+      status: "started",
+      messageId,
+      ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
+        ? { messageSeq }
+        : {}),
+    };
   } catch (error) {
     if (!isCurrent()) {
       const cleanupError = await cancelActivePlacement(client, {
@@ -423,9 +442,17 @@ export async function startCloudInitialTurn(
       });
       return cleanupError
         ? { status: "cleanup-rejected", error: cleanupError, messageId }
-        : { status: "send-definitive-rejected", error: errorMessage(error), messageId };
+        : {
+            status: "send-definitive-rejected",
+            error: formatUiError(error),
+            messageId,
+          };
     }
-    return { status: "send-rejected", error: errorMessage(error), messageId };
+    return {
+      status: "send-rejected",
+      error: formatUiError(error),
+      messageId,
+    };
   }
 }
 

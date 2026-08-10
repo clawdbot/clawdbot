@@ -6,6 +6,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
@@ -58,8 +62,10 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
     return null;
   }
   const { entry } = persisted;
-  const channel = normalizeOptionalChannel(entry.origin?.provider ?? entry.lastChannel);
-  const accountId = normalizeOptionalAccountId(entry.origin?.accountId ?? entry.lastAccountId);
+  const origin = sessionDeliveryOrigin(entry);
+  const context = deliveryContextFromSession(entry);
+  const channel = normalizeOptionalChannel(context?.channel ?? origin?.provider);
+  const accountId = normalizeOptionalAccountId(context?.accountId ?? origin?.accountId);
   return channel || accountId ? { channel, accountId } : null;
 }
 

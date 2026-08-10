@@ -82,6 +82,7 @@ function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
     },
     actions,
     capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
     blockers: [],
     diagnostics: [],
   };
@@ -146,7 +147,10 @@ describe("applyClawCronUpdate", () => {
         cronGateway: {
           add,
           get: async (id) =>
-            cronReadView("worker", refs.find((item) => item.schedulerJobId === id)!),
+            cronReadView(
+              "worker",
+              refs.find((item) => item.schedulerJobId === id)!,
+            ),
           remove,
         },
         readRefs: () => refs,

@@ -7,6 +7,18 @@ import {
 } from "./session-display.ts";
 
 describe("resolveSessionDisplayName", () => {
+  it("uses the same friendly main-thread name for every agent", () => {
+    for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
+      expect(resolveSessionDisplayName(key)).toBe("Main Session");
+    }
+
+    expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
+      "Research desk",
+    );
+    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New session");
+    expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
+  });
+
   it("prefers label, then displayName", () => {
     expect(
       resolveSessionDisplayName("agent:main:telegram:direct:42", {
@@ -33,9 +45,16 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
+    const key = "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d";
+
+    expect(resolveSessionDisplayName(key)).toBe("New session");
     expect(
-      resolveSessionDisplayName("agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"),
-    ).toBe("New thread");
+      resolveSessionDisplayName(key, {
+        label: undefined,
+        displayName: undefined,
+        derivedTitle: undefined,
+      }),
+    ).toBe("New session");
   });
 
   it("names unnamed work sessions after their checkout", () => {
@@ -109,7 +128,16 @@ describe("resolveSessionDisplayName", () => {
           includeSubagentPrefix: false,
         },
       ),
-    ).toBe("Cron: Daily");
+    ).toBe("Automation: Daily");
+  });
+
+  it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron: daily-report" }),
+    ).toBe("Automation: daily-report");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Cron Job: nightly" })).toBe(
+      "Automation: nightly",
+    );
   });
 });
 

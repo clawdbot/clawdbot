@@ -52,6 +52,9 @@ export function scanPolicyDataHandling(
   cfg: Record<string, unknown>,
 ): readonly PolicyDataHandlingEvidence[] {
   const entries: PolicyDataHandlingEvidence[] = [];
+  // Redaction has no config surface: src/logging/redact.ts always redacts. This invariant
+  // record is how dataHandling.sensitiveLogging.requireRedaction reports as satisfied in
+  // `openclaw policy check` evidence and the attestation, since no doctor check can fail.
   entries.push({
     id: "logging-redaction",
     kind: "sensitiveLoggingRedaction",
@@ -128,19 +131,6 @@ function pushMemorySessionTranscriptIndexing(
   cfg: Record<string, unknown>,
 ): void {
   const memory = isRecord(cfg.memory) ? cfg.memory : {};
-  const qmd = isRecord(memory.qmd) ? memory.qmd : {};
-  const qmdSessions = isRecord(qmd.sessions) ? qmd.sessions : {};
-  if (qmdSessions.enabled !== undefined) {
-    entries.push({
-      id: "memory-qmd-session-transcripts",
-      kind: "memorySessionTranscriptIndexing",
-      source: "oc://openclaw.config/memory/qmd/sessions/enabled",
-      scope: "global",
-      value: memory.backend === "qmd" && readBoolean(qmdSessions.enabled) === true,
-      explicit: true,
-    });
-  }
-
   const defaultsMemorySearch = isRecord(memory.search) ? memory.search : {};
   const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
   if (defaultSessionMemory !== undefined) {

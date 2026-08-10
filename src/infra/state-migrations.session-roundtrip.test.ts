@@ -34,7 +34,12 @@ describe("session key write/read round-trip (#29683)", () => {
       const mainKey = normalizeMainKey(cfg.session?.mainKey);
 
       // Write path: resolveSessionKey + canonicalize (as in initSessionState)
-      const rawWriteKey = resolveSessionKey("per-sender", { From: "+1234567890" }, mainKey);
+      const rawWriteKey = resolveSessionKey(
+        "per-sender",
+        { From: "+1234567890" },
+        mainKey,
+        agentId,
+      );
       const writeKey = canonicalizeMainSessionAlias({
         cfg,
         agentId,
@@ -53,7 +58,12 @@ describe("session key write/read round-trip (#29683)", () => {
       const agentId = "ops";
       const mainKey = normalizeMainKey(cfg.session?.mainKey);
 
-      const rawWriteKey = resolveSessionKey("per-sender", { From: "+1234567890" }, mainKey);
+      const rawWriteKey = resolveSessionKey(
+        "per-sender",
+        { From: "+1234567890" },
+        mainKey,
+        agentId,
+      );
       const writeKey = canonicalizeMainSessionAlias({
         cfg,
         agentId,
@@ -99,6 +109,7 @@ describe("session key write/read round-trip (#29683)", () => {
         "per-sender",
         { From: "group:discord:group:123456789" },
         mainKey,
+        agentId,
       );
       const writeKey = canonicalizeMainSessionAlias({
         cfg,
@@ -116,10 +127,13 @@ describe("session key write/read round-trip (#29683)", () => {
 
   describe("no-op when default agent is main", () => {
     it("write and gateway canonical keys match when agent is main", () => {
-      const cfg = { session: { scope: "per-sender" } } as OpenClawConfig;
+      const cfg = {
+        agents: { entries: { main: { default: true } } },
+        session: { scope: "per-sender" },
+      } as OpenClawConfig;
       const mainKey = normalizeMainKey(cfg.session?.mainKey);
 
-      const rawWriteKey = resolveSessionKey("per-sender", { From: "+1234567890" }, mainKey);
+      const rawWriteKey = resolveSessionKey("per-sender", { From: "+1234567890" }, mainKey, "main");
       const writeKey = canonicalizeMainSessionAlias({
         cfg,
         agentId: "main",

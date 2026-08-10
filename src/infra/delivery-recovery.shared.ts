@@ -1,3 +1,8 @@
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveNonNegativeIntegerOption,
+} from "../../packages/normalization-core/src/number-coercion.js";
 import { computeBackoffSchedule } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
@@ -22,6 +27,72 @@ const PRE_CONNECT_ERROR_CODES = new Set([
 const TRANSPORT_ERROR_CODE_RE =
   /^(?:E(?:AI_|CONN|NET|HOST|ADDR|PIPE|TIMEDOUT|SOCKET)|UND_ERR_|ERR_(?:NETWORK|HTTP2|QUIC|TLS|SSL))/;
 const UNPROVEN_ERROR_BRANCH = "unproven delivery error branch";
+
+export type DeliveryRecoverySummary = {
+  recovered: number;
+  failed: number;
+  skippedMaxRetries: number;
+  deferredBackoff: number;
+};
+
+export type DeliveryRecoveryDrainDecision = {
+  match: boolean;
+  bypassBackoff?: boolean;
+};
+
+export type ActiveDeliveryRecoveryClaimResult<T> =
+  | { status: "claimed"; value: T }
+  | { status: "claimed-by-other-owner" };
+
+type DeliveryRecoveryEntry = {
+  id: string;
+  enqueuedAt: number;
+  retryCount: number;
+  lastAttemptAt?: number;
+  availableAt?: number;
+};
+
+type DeliveryRecoveryScanOptions<T extends DeliveryRecoveryEntry> = {
+  entries: readonly T[];
+  loadEntry: (id: string) => Promise<T | null>;
+  onEntry: (entry: T) => Promise<"continue" | "stop" | void>;
+  deadlineMs?: number;
+  onDeadlineExceeded?: () => void;
+  onClaimConflict?: (entry: T) => void;
+  onMissingEntry?: (entry: T) => void;
+};
+
+export function createEmptyDeliveryRecoverySummary(): DeliveryRecoverySummary {
+  return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+}
+
+export function resolveDeliveryRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
+  const durationMs = resolveNonNegativeIntegerOption(maxRecoveryMs, 60_000);
+  if (durationMs <= 0) {
+    return resolveDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
+}
+
+export function isDeliveryRecoveryRetryEligible(
+  entry: DeliveryRecoveryEntry,
+  now: number,
+): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
+  if (entry.availableAt && now < entry.availableAt) {
+    return { eligible: false, remainingBackoffMs: entry.availableAt - now };
+  }
+  const backoff = computeBackoffMs(entry.retryCount);
+  if (backoff <= 0 || (entry.retryCount === 0 && entry.lastAttemptAt === undefined)) {
+    return { eligible: true };
+  }
+  const lastAttemptAt = entry.lastAttemptAt;
+  const baseAttemptAt =
+    typeof lastAttemptAt === "number" && Number.isFinite(lastAttemptAt) && lastAttemptAt > 0
+      ? lastAttemptAt
+      : entry.enqueuedAt;
+  const remainingBackoffMs = baseAttemptAt + backoff - now;
+  return remainingBackoffMs > 0 ? { eligible: false, remainingBackoffMs } : { eligible: true };
+}
 
 function preserveProofBranches(branches: readonly unknown[] | undefined): unknown[] {
   return branches?.map((branch) => branch ?? UNPROVEN_ERROR_BRANCH) ?? [];
@@ -112,19 +183,7 @@ export function getErrnoCode(err: unknown): string | null {
     : null;
 }
 
-export function claimRecoveryEntry(entriesInProgress: Set<string>, entryId: string): boolean {
-  if (entriesInProgress.has(entryId)) {
-    return false;
-  }
-  entriesInProgress.add(entryId);
-  return true;
-}
-
-export function releaseRecoveryEntry(entriesInProgress: Set<string>, entryId: string): void {
-  entriesInProgress.delete(entryId);
-}
-
-export function createRecoveryReplayPacer(): {
+function createRecoveryReplayPacer(): {
   wait(deadlineMs?: number): Promise<"ready" | "deadline-exceeded">;
 } {
   let lastReplayStartedAt = 0;
@@ -161,6 +220,76 @@ export function createRecoveryReplayPacer(): {
       } finally {
         releaseWaiter();
       }
+    },
+  };
+}
+
+/** Own one queue namespace's live claims, drain exclusion, and replay pacing. */
+export function createDeliveryRecoveryCoordinator<T extends DeliveryRecoveryEntry>() {
+  const activeDrains = new Set<string>();
+  const activeEntries = new Set<string>();
+  const replayPacer = createRecoveryReplayPacer();
+
+  async function withClaim<Result>(
+    entryId: string,
+    run: () => Promise<Result>,
+  ): Promise<ActiveDeliveryRecoveryClaimResult<Result>> {
+    if (activeEntries.has(entryId)) {
+      return { status: "claimed-by-other-owner" };
+    }
+    activeEntries.add(entryId);
+    try {
+      return { status: "claimed", value: await run() };
+    } finally {
+      activeEntries.delete(entryId);
+    }
+  }
+
+  return {
+    withClaim,
+
+    async withDrain(drainKey: string, run: () => Promise<void>): Promise<boolean> {
+      if (activeDrains.has(drainKey)) {
+        return false;
+      }
+      activeDrains.add(drainKey);
+      try {
+        await run();
+        return true;
+      } finally {
+        activeDrains.delete(drainKey);
+      }
+    },
+
+    async scan(options: DeliveryRecoveryScanOptions<T>): Promise<void> {
+      for (const entry of options.entries.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt)) {
+        if (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs) {
+          options.onDeadlineExceeded?.();
+          break;
+        }
+
+        // Claim before the authoritative reload so a stale startup snapshot
+        // can never race a reconnect drain or recipient-visible live send.
+        const claim = await withClaim(entry.id, async () => {
+          const current = await options.loadEntry(entry.id);
+          if (!current) {
+            options.onMissingEntry?.(entry);
+            return "continue" as const;
+          }
+          return (await options.onEntry(current)) ?? "continue";
+        });
+        if (claim.status === "claimed-by-other-owner") {
+          options.onClaimConflict?.(entry);
+          continue;
+        }
+        if (claim.value === "stop") {
+          break;
+        }
+      }
+    },
+
+    waitForReplay(deadlineMs?: number): Promise<"ready" | "deadline-exceeded"> {
+      return replayPacer.wait(deadlineMs);
     },
   };
 }

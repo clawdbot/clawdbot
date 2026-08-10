@@ -1,5 +1,6 @@
 // Shared media-understanding types for attachments, provider hooks, request
 // auth, decisions, and structured extraction inputs.
+import type { MediaKind } from "@openclaw/media-core/constants";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,6 +28,7 @@ export type MediaAttachment = {
   path?: string;
   url?: string;
   mime?: string;
+  kind?: MediaKind;
   workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
@@ -118,6 +120,7 @@ export type AudioTranscriptionRequest = {
   prompt?: string;
   query?: Record<string, string | number | boolean>;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -139,6 +142,7 @@ export type VideoDescriptionRequest = {
   model?: string;
   prompt?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -154,6 +158,7 @@ export type ImageDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
@@ -179,6 +184,7 @@ export type ImagesDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
@@ -223,6 +229,7 @@ export type StructuredExtractionRequest = {
   jsonSchema?: unknown;
   jsonMode?: boolean;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;

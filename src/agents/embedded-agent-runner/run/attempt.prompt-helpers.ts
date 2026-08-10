@@ -8,6 +8,7 @@ import type {
   ContextEngineRuntimeContext,
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
@@ -24,11 +25,13 @@ import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
-import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
-import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import {
+  buildActiveImageGenerationTaskPromptContextForSession,
+  buildActiveMusicGenerationTaskPromptContextForSession,
+  buildActiveVideoGenerationTaskPromptContextForSession,
+} from "../../media-generation-task-status.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
-import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
@@ -72,10 +75,7 @@ function rememberDrainedInjections(
   if (promptBuildDrainCache.has(runId)) {
     promptBuildDrainCache.delete(runId);
   } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
-    const oldest = promptBuildDrainCache.keys().next().value;
-    if (oldest !== undefined) {
-      promptBuildDrainCache.delete(oldest);
-    }
+    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
   }
   promptBuildDrainCache.set(runId, injections);
 }
@@ -178,6 +178,9 @@ export async function resolvePromptBuildHookResult(params: {
     : undefined;
   return {
     systemPrompt: promptBuildResult?.systemPrompt,
+    ...(promptBuildResult?.toolsAllow !== undefined
+      ? { toolsAllow: promptBuildResult.toolsAllow }
+      : {}),
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,
@@ -522,6 +525,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "authProfileId"
   | "authProfileIdSource"
   | "runtimePlan"
+  | "userTurnTranscriptRecorder"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };

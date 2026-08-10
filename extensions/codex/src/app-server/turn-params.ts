@@ -28,8 +28,8 @@ export function buildTurnStartParams(
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
+    clearInheritedServiceTier?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -54,14 +54,22 @@ export function buildTurnStartParams(
       : {
           sandboxPolicy:
             options.sandboxPolicy ??
-            codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
+            codexSandboxPolicyForTurn(
+              options.appServer.sandbox,
+              options.cwd,
+              options.appServer.start?.args,
+            ),
         }),
     ...(modelSelection
       ? { model: modelSelection.model, personality: CODEX_NATIVE_PERSONALITY_NONE }
       : {}),
+    // Codex distinguishes an omitted native default from explicitly clearing
+    // an OpenClaw-owned priority override left on this exact warm session.
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
-      : {}),
+      : options.clearInheritedServiceTier
+        ? { serviceTier: null }
+        : {}),
     ...(modelSelection
       ? {
           effort: resolveReasoningEffort(
@@ -79,7 +87,6 @@ export function buildTurnStartParams(
             turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
             skillsCollaborationInstructions: options.skillsCollaborationInstructions,
             memoryCollaborationInstructions: options.memoryCollaborationInstructions,
-            heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
           }),
         }
       : {}),
@@ -95,7 +102,6 @@ export function buildTurnCollaborationMode(
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -119,7 +125,6 @@ function buildTurnScopedCollaborationInstructions(
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
-    heartbeatCollaborationInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
@@ -131,11 +136,7 @@ function buildTurnScopedCollaborationInstructions(
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
   if (params.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only") {
-    return joinPresentSections(
-      buildHeartbeatCollaborationInstructions(),
-      contextInstructions,
-      options.heartbeatCollaborationInstructions,
-    );
+    return joinPresentSections(buildHeartbeatCollaborationInstructions(), contextInstructions);
   }
   if (contextInstructions?.trim()) {
     return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);

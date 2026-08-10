@@ -1,4 +1,5 @@
 // Gateway RPC handlers for DM sender access requests on pairing-policy channels.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -42,12 +43,6 @@ class InvalidPairingTargetError extends Error {}
 
 function normalizeFilter(value: string | undefined): string | undefined {
   return normalizeOptionalString(value)?.toLowerCase();
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function resolvePairingPolicy(params: {

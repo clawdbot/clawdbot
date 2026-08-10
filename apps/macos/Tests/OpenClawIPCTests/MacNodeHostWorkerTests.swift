@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OpenClawKit
 import Testing
@@ -6,14 +7,18 @@ import Testing
 private struct WorkerBackpressureTimeout: Error {}
 
 private actor StubMacNodeHostWorker: MacNodeHostWorking {
-    let manifest = MacNodeHostManifest(
-        version: "test",
-        caps: ["system", "mcp"],
-        commands: ["system.run", "mcp.tools.call.v1"],
-        pathEnv: "/usr/bin:/bin")
+    let manifest: MacNodeHostManifest
     private var requests: [BridgeInvokeRequest] = []
 
-    func start(command _: [String]) async throws -> MacNodeHostManifest { self.manifest }
+    init(commands: [String] = ["system.run", "mcp.tools.call.v1"]) {
+        self.manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["system", "mcp"],
+            commands: commands,
+            pathEnv: "/usr/bin:/bin")
+    }
+
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest { self.manifest }
     func supports(_ command: String) async -> Bool { self.manifest.commands.contains(command) }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -32,6 +37,51 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
+    @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
+        let input = MacNodeHostWorkerRetryPolicy.Input(
+            launch: MacNodeHostWorkerLaunch(
+                command: ["/usr/local/bin/openclaw", "node", "worker"]),
+            configurationGeneration: 4)
+        var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
+
+        try policy.prepareForStart(input)
+        let dispositions = (0..<20).map { _ in policy.recordUnexpectedExit(for: input) }
+
+        #expect(dispositions.prefix(5) == [
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000),
+            .retry(attempt: 2, delayNanoseconds: 2_000_000_000),
+            .retry(attempt: 3, delayNanoseconds: 4_000_000_000),
+            .retry(attempt: 4, delayNanoseconds: 8_000_000_000),
+            .retry(attempt: 5, delayNanoseconds: 10_000_000_000),
+        ])
+        #expect(dispositions.dropFirst(5).allSatisfy {
+            $0 == .giveUp(unexpectedExitCount: 6)
+        })
+        #expect(throws: MacNodeHostWorkerRetryPolicy.RetryBudgetExhausted.self) {
+            try policy.prepareForStart(input)
+        }
+    }
+
+    @Test func `new worker input resets an exhausted crash retry budget`() throws {
+        let original = MacNodeHostWorkerRetryPolicy.Input(
+            launch: MacNodeHostWorkerLaunch(
+                command: ["/usr/local/bin/openclaw", "node", "worker"]),
+            configurationGeneration: 4)
+        let updated = MacNodeHostWorkerRetryPolicy.Input(
+            launch: original.launch,
+            configurationGeneration: 5)
+        var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
+
+        try policy.prepareForStart(original)
+        #expect(policy.recordUnexpectedExit(for: original) ==
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
+        #expect(policy.recordUnexpectedExit(for: original) == .giveUp(unexpectedExitCount: 2))
+
+        try policy.prepareForStart(updated)
+        #expect(policy.recordUnexpectedExit(for: updated) ==
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
+    }
+
     @Test func `worker allows a generous cold-start window`() async throws {
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
 
@@ -42,23 +92,133 @@ struct MacNodeHostWorkerTests {
         while IFS= read -r line; do :; done
         """
 
-        let manifest = try await worker.start(command: ["/bin/sh", "-c", script])
+        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         #expect(manifest.version == "test")
         await worker.stop()
     }
 
-    @Test func `Mac runtime forwards CLI node commands to the shared worker`() async {
-        let worker = StubMacNodeHostWorker()
+    @Test func `worker launches in the selected checkout`() async throws {
+        let checkout = try makeTempDirForTests().resolvingSymlinksInPath()
+        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        let script = """
+        printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
+          "$(/bin/pwd -P)"
+        while IFS= read -r line; do :; done
+        """
+
+        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script],
+            currentDirectoryURL: checkout))
+
+        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
+        defer { free(expectedCurrentDirectory) }
+        #expect(manifest.pathEnv == String(cString: expectedCurrentDirectory))
+        await worker.stop()
+    }
+
+    @Test(arguments: [
+        OpenClawSystemCommand.run.rawValue,
+        "mcp.tools.call.v1",
+        "codex.terminal.resume.v1",
+    ])
+    func `Mac runtime forwards worker-owned commands to the shared worker`(command: String) async {
+        let worker = StubMacNodeHostWorker(commands: [command])
         let runtime = MacNodeRuntime(nodeHostWorker: worker)
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
             id: "worker-run",
-            command: OpenClawSystemCommand.run.rawValue,
+            command: command,
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
 
         #expect(response.ok)
         #expect(response.payloadJSON == #"{"owner":"cli"}"#)
-        #expect(await worker.invokedCommands() == [OpenClawSystemCommand.run.rawValue])
+        #expect(await worker.invokedCommands() == [command])
+    }
+
+    @Test(arguments: [
+        MacNodeCodexThreadCatalogContract.listCommand,
+        MacNodeCodexThreadCatalogContract.turnsCommand,
+        MacNodeClaudeSessionCatalogContract.listCommand,
+        MacNodeClaudeSessionCatalogContract.readCommand,
+    ])
+    func `native session catalogs own commands shared with the worker`(command: String) async {
+        let worker = StubMacNodeHostWorker(commands: [command])
+        let payload = #"{"owner":"native"}"#
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            codexThreadCatalogEnabled: { true },
+            codexThreadListRequest: { _ in payload },
+            codexThreadTurnsRequest: { _ in payload },
+            claudeSessionCatalogEnabled: { true },
+            claudeSessionListRequest: { _ in payload },
+            claudeSessionReadRequest: { _ in payload })
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "native-catalog",
+            command: command,
+            paramsJSON: #"{"limit":1}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
+        #expect(await worker.invokedCommands().isEmpty)
+    }
+
+    @Test(arguments: [
+        (
+            MacNodeCodexThreadCatalogContract.listCommand,
+            "UNAVAILABLE: Codex session catalog is disabled"
+        ),
+        (
+            MacNodeCodexThreadCatalogContract.turnsCommand,
+            "UNAVAILABLE: Codex session catalog is disabled"
+        ),
+        (
+            MacNodeClaudeSessionCatalogContract.listCommand,
+            "UNAVAILABLE: Claude session catalog is disabled"
+        ),
+        (
+            MacNodeClaudeSessionCatalogContract.readCommand,
+            "UNAVAILABLE: Claude session catalog is disabled"
+        ),
+        (
+            OpenClawComputerCommand.act.rawValue,
+            "COMPUTER_DISABLED: enable Computer Control in Settings"
+        ),
+    ])
+    func `worker cannot bypass native capability consent`(command: String, expectedMessage: String) async {
+        let worker = StubMacNodeHostWorker(commands: [command])
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            computerControlEnabled: { false },
+            codexThreadCatalogEnabled: { false },
+            claudeSessionCatalogEnabled: { false })
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "native-disabled",
+            command: command))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == expectedMessage)
+        #expect(await worker.invokedCommands().isEmpty)
+    }
+
+    @Test(arguments: [OpenClawCanvasCommand.present.rawValue, "canvas.plugin.render"])
+    func `worker cannot bypass the canvas namespace consent gate`(command: String) async {
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: false]) {
+            let worker = StubMacNodeHostWorker(commands: [command])
+            let runtime = MacNodeRuntime(nodeHostWorker: worker)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "canvas-disabled",
+                command: command))
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .unavailable)
+            #expect(response.error?.message == "CANVAS_DISABLED: enable Canvas in Settings")
+            #expect(await worker.invokedCommands().isEmpty)
+        }
     }
 
     @Test func `capability union preserves native order and adds worker commands once`() {
@@ -90,7 +250,8 @@ struct MacNodeHostWorkerTests {
         done
         """
 
-        let manifest = try await worker.start(command: ["/bin/sh", "-c", script])
+        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         #expect(manifest.commands == ["system.run"])
         let response = await worker.invoke(BridgeInvokeRequest(
             id: "worker-run",
@@ -118,7 +279,8 @@ struct MacNodeHostWorkerTests {
         while IFS= read -r line; do :; done
         """
 
-        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
         await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
         await worker.cancel(invokeId: "terminal-1")
         let response = await worker.invoke(BridgeInvokeRequest(
@@ -131,8 +293,10 @@ struct MacNodeHostWorkerTests {
 
     @Test func `ready worker exit notifies its route owner`() async throws {
         try await confirmation("unexpected worker exit") { confirmed in
+            let exitGate = AsyncTestGate()
             let worker = MacNodeHostWorker(session: GatewayNodeSession()) {
                 confirmed()
+                exitGate.open()
             }
             let script = """
             printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
@@ -140,8 +304,9 @@ struct MacNodeHostWorkerTests {
             exit 7
             """
 
-            _ = try await worker.start(command: ["/bin/sh", "-c", script])
-            try? await Task.sleep(for: .milliseconds(200))
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script]))
+            await exitGate.wait()
         }
     }
 
@@ -156,8 +321,10 @@ struct MacNodeHostWorkerTests {
         while IFS= read -r line; do :; done
         """
 
-        let first = try await worker.start(command: ["/bin/sh", "-c", firstScript])
-        let second = try await worker.start(command: ["/bin/sh", "-c", secondScript])
+        let first = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", firstScript]))
+        let second = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", secondScript]))
 
         #expect(first.version == "first")
         #expect(second.version == "second")
@@ -175,7 +342,8 @@ struct MacNodeHostWorkerTests {
         IFS= read -r second
         printf '%s\\n' '{"type":"invoke-result","result":{"id":"second","ok":true,"payload":{"done":true}}}'
         """
-        _ = try await worker.start(command: ["/bin/sh", "-c", script])
+        _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+            command: ["/bin/sh", "-c", script]))
 
         let first = Task {
             await worker.invoke(BridgeInvokeRequest(

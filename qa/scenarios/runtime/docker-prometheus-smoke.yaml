@@ -7,8 +7,10 @@ scenario:
     primary:
       - observability.prometheus-api-auth
       - observability.prometheus
-    secondary:
       - observability.prometheus-qa-lab
+      - observability.prometheus-runtime-validation
+      - observability.telemetry-prometheus
+    secondary:
       - containers.e2e-plan-runtime-validation
   objective: Verify a QA-lab gateway run emits protected, bounded Prometheus diagnostics metrics through the diagnostics-prometheus plugin.
   successCriteria:
@@ -27,7 +29,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/diagnostics-prometheus/src/service.ts
-    - src/diagnostics/internal-diagnostics.ts
+    - src/infra/diagnostic-events.ts
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
@@ -128,6 +130,18 @@ flow:
         - assert:
             expr: "prometheusText.includes('# TYPE openclaw_harness_run_total counter')"
             message: "missing harness run counter"
+        - assert:
+            expr: "/^openclaw_run_completed_total\\{[^}\\n]*outcome=\"completed\"[^}\\n]*\\}\\s+[1-9]\\d*(?:\\.\\d+)?$/m.test(prometheusText)"
+            message: "missing positive completed-run sample"
+        - assert:
+            expr: "/^openclaw_model_call_total\\{[^}\\n]*outcome=\"completed\"[^}\\n]*\\}\\s+[1-9]\\d*(?:\\.\\d+)?$/m.test(prometheusText)"
+            message: "missing positive completed model-call sample"
+        - assert:
+            expr: "/^openclaw_harness_run_total\\{[^}\\n]*outcome=\"completed\"[^}\\n]*\\}\\s+[1-9]\\d*(?:\\.\\d+)?$/m.test(prometheusText)"
+            message: "missing positive completed harness-run sample"
+        - assert:
+            expr: 'prometheusText.includes(''openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1'')'
+            message: "missing diagnostics-prometheus exporter-start sample"
         - assert:
             expr: "!prometheusText.includes(config.secretNeedle)"
             message: "prometheus output leaked prompt sentinel"

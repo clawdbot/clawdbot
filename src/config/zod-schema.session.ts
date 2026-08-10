@@ -40,7 +40,7 @@ const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((va
   }
 });
 
-export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
+const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
   .object({
@@ -75,6 +75,14 @@ export const SessionSchema = z
         maxAgeHours: z.number().nonnegative().optional(),
         spawnSessions: z.boolean().optional(),
         defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
+      })
+      .strict()
+      .optional(),
+    sharing: z
+      .object({
+        readOnly: z.boolean().optional(),
+        suggest: z.boolean().optional(),
+        drafts: z.boolean().optional(),
       })
       .strict()
       .optional(),

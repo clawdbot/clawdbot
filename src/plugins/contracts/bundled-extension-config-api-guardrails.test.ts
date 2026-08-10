@@ -10,8 +10,8 @@ const REPO_ROOT = resolve(SRC_ROOT, "..");
 const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
   {
     path: "extensions/telegram/src/config-schema.ts",
-    allowedSpecifier: "../config-api.js",
-    forbiddenSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    allowedSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    forbiddenSpecifier: "openclaw/plugin-sdk/bundled-channel-config-schema",
   },
   {
     path: "extensions/discord/src/config-schema.ts",
@@ -30,8 +30,8 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
   },
   {
     path: "extensions/imessage/src/config-schema.ts",
-    allowedSpecifier: "../config-api.js",
-    forbiddenSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    allowedSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    forbiddenSpecifier: "openclaw/plugin-sdk/bundled-channel-config-schema",
   },
   {
     path: "extensions/whatsapp/src/config-schema.ts",

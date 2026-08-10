@@ -34,7 +34,12 @@ import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalClientEnabled,
 } from "./exec-approvals.js";
-import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
+import {
+  canonicalizeSlackApiTargetId,
+  formatSlackTarget,
+  parseSlackTarget,
+  type SlackTarget,
+} from "./target-parsing.js";
 
 export type SlackApprovalKind = "exec" | "plugin";
 export type SlackNativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -131,7 +136,7 @@ export function resolveTurnSourceSlackOriginTarget(
     return null;
   }
   return {
-    to: `${parsed.kind}:${parsed.id}`,
+    to: formatSlackApprovalTarget(parsed),
     threadId: stringifyRouteThreadId(request.request.turnSourceThreadId),
   };
 }
@@ -164,7 +169,7 @@ export function resolveSlackFallbackOriginTarget(
     return null;
   }
   return {
-    to: `${parsed.kind}:${canonicalizeSlackApiTargetId(parsed.kind, parsed.id)}`,
+    to: formatSlackApprovalTarget(parsed, canonicalizeSlackApiTargetId(parsed.kind, parsed.id)),
     threadId: sessionTarget.threadId,
   };
 }
@@ -232,7 +237,7 @@ export function normalizeSlackForwardTarget(
     return null;
   }
   return {
-    to: `${parsed.kind}:${parsed.id}`,
+    to: formatSlackApprovalTarget(parsed),
     accountId: normalizeOptionalString(target.accountId),
     threadId: stringifyRouteThreadId(target.threadId),
   };
@@ -439,4 +444,10 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
     agentFilter: config?.agentFilter,
     sessionFilter: config?.sessionFilter,
   });
+}
+
+function formatSlackApprovalTarget(target: SlackTarget, id = target.id): string {
+  return target.teamId
+    ? formatSlackTarget({ teamId: target.teamId, kind: target.kind, id })
+    : `${target.kind}:${id}`;
 }

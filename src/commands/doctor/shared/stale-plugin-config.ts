@@ -1,6 +1,6 @@
 // Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
@@ -11,6 +11,7 @@ import {
   resolveOfficialExternalPluginId,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { asObjectRecord } from "./object.js";
 import {
   filterRepairableStalePluginHits,
@@ -39,7 +40,8 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const environment = env ?? process.env;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
   const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
@@ -254,15 +256,15 @@ function collectDependentChannelConfigHits(
       surface: "heartbeat",
     });
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const target = agent?.heartbeat?.target;
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
+    const target = heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
     }
     hits.push({
       pluginId: target,
-      pathLabel: `agents.list.${index}.heartbeat.target`,
+      pathLabel: `${path}.heartbeat.target`,
       surface: "heartbeat",
     });
   }
@@ -450,15 +452,21 @@ export function maybeRepairStalePluginConfig(
       `- channels: removed ${channelIds.length} stale channel config${channelIds.length === 1 ? "" : "s"} (${channelIds.join(", ")})`,
     );
     const heartbeatCount = hits.filter((hit) => hit.surface === "heartbeat").length;
+    const heartbeatIds = [
+      ...new Set(hits.filter((hit) => hit.surface === "heartbeat").map((hit) => hit.pluginId)),
+    ];
     if (heartbeatCount > 0) {
       changes.push(
-        `- agents heartbeat: removed ${heartbeatCount} stale heartbeat target${heartbeatCount === 1 ? "" : "s"} (${channelIds.join(", ")})`,
+        `- agents heartbeat: removed ${heartbeatCount} stale heartbeat target${heartbeatCount === 1 ? "" : "s"} (${heartbeatIds.join(", ")})`,
       );
     }
     const modelByChannelCount = hits.filter((hit) => hit.surface === "modelByChannel").length;
+    const modelByChannelIds = [
+      ...new Set(hits.filter((hit) => hit.surface === "modelByChannel").map((hit) => hit.pluginId)),
+    ];
     if (modelByChannelCount > 0) {
       changes.push(
-        `- channels.modelByChannel: removed ${modelByChannelCount} stale channel model override${modelByChannelCount === 1 ? "" : "s"} (${channelIds.join(", ")})`,
+        `- channels.modelByChannel: removed ${modelByChannelCount} stale channel model override${modelByChannelCount === 1 ? "" : "s"} (${modelByChannelIds.join(", ")})`,
       );
     }
   }
@@ -509,9 +517,8 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
   ) {
     delete defaultsHeartbeat.target;
   }
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
-  for (const agent of agents) {
-    const heartbeat = agent.heartbeat;
+  for (const { agent } of listMutableCodexRouteAgentEntries(config)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
     if (
       heartbeat &&
       typeof heartbeat.target === "string" &&

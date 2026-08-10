@@ -5,6 +5,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
+  isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -136,13 +137,13 @@ export function collectAdmissionProtectedSessionIds(params: {
   const db = getSessionKysely(params.database.db);
   const rows = executeSqliteQuerySync(
     params.database.db,
-    db.selectFrom("session_entries").select(["entry_json", "session_id", "session_key"]),
+    db.selectFrom("session_nodes").select(["entry_json", "current_session_id", "session_key"]),
   ).rows;
   for (const row of rows) {
     if (!normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       continue;
     }
-    protectedSessionIds.add(row.session_id);
+    protectedSessionIds.add(row.current_session_id);
     const entry = parseSqliteSessionEntryJson(row);
     if (entry) {
       for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
@@ -155,7 +156,7 @@ export function collectAdmissionProtectedSessionIds(params: {
   // every generation of an admitted key stays off-limits.
   const generationRows = executeSqliteQuerySync(
     params.database.db,
-    db.selectFrom("sessions").select(["session_id", "session_key"]),
+    db.selectFrom("session_windows").select(["session_id", "session_key"]),
   ).rows;
   for (const row of generationRows) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
@@ -173,7 +174,7 @@ function readHistoricalSessionIds(params: {
   return executeSqliteQuerySync(
     params.database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select("session_id")
       .orderBy("updated_at", "asc")
       .orderBy("session_id", "asc"),
@@ -213,6 +214,12 @@ export function kickSessionHistoryDiskBudgetMaintenance(params: {
       explicit deletion, which can double usage via freshly written archives. */
   force?: boolean;
 }): void {
+  if (
+    params.agentId &&
+    isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
+  ) {
+    return;
+  }
   const maintenance = params.maintenanceConfig ?? resolveMaintenanceConfig();
   if (
     maintenance.mode !== "enforce" ||
@@ -313,7 +320,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
   let removedEntries = 0;
   let removedFiles = 0;
   if (usage.totalBytes > highWaterBytes) {
-    // Archive pruning shares the session write lock so a concurrent
+    // Archive pruning shares the SQLite writer queue so a concurrent
     // reset/delete cannot race its archive file against the unlink pass.
     const archiveSweep = await runExclusiveSqliteSessionWrite(resolved, async () =>
       pruneSessionTranscriptArchivesToHighWater({
@@ -339,13 +346,13 @@ async function enforceSessionHistoryMaintenanceSerialized(
     const eviction = await runExclusiveSessionLifecycleMutation({
       scope: params.storePath,
       identities: [sessionId],
-      run: async () =>
-        await runExclusiveSqliteSessionWrite(resolved, async () => {
+      run: async () => {
+        const plan = await runExclusiveSqliteSessionWrite(resolved, async () => {
           const protectedBeforeArchive = collectProtectedHistoricalSessionIds({
             database,
             storePath: params.storePath,
           });
-          const plan = planSqliteSessionStateDeleteIfUnreferenced({
+          const candidate = planSqliteSessionStateDeleteIfUnreferenced({
             archiveDirectory,
             archiveTranscript: true,
             database,
@@ -353,13 +360,18 @@ async function enforceSessionHistoryMaintenanceSerialized(
             referencedSessionIds: protectedBeforeArchive,
             sessionId,
           });
-          if (!plan) {
+          if (!candidate) {
             return null;
           }
-
-          // Extract-before-delete is the retention invariant. Admission is fenced across archive
-          // creation, then rechecked inside the write transaction before any rows are reclaimed.
-          const materialized = materializeSqliteSessionStateDeletePlans([plan]);
+          return candidate;
+        });
+        if (!plan) {
+          return null;
+        }
+        // Extract-before-delete is the retention invariant. The lifecycle hold
+        // fences admission while the store writer is released for archive I/O.
+        const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+        const committedArchives = await runExclusiveSqliteSessionWrite(resolved, async () => {
           let deleted = false;
           let archivedTranscripts: ReturnType<typeof deleteMaterializedSqliteSessionStatePlans> =
             [];
@@ -377,7 +389,10 @@ async function enforceSessionHistoryMaintenanceSerialized(
             deleted =
               executeSqliteQuerySync(
                 transactionDb.db,
-                db.selectFrom("sessions").select("session_id").where("session_id", "=", sessionId),
+                db
+                  .selectFrom("session_windows")
+                  .select("session_id")
+                  .where("session_id", "=", sessionId),
               ).rows.length === 0;
           }, toDatabaseOptions(resolved));
           if (!deleted) {
@@ -391,11 +406,16 @@ async function enforceSessionHistoryMaintenanceSerialized(
           } catch {
             // Best-effort reclamation only.
           }
-          return {
-            archivedTranscripts,
-            usage: await measureSessionPhysicalDiskUsage(params.storePath),
-          };
-        }),
+          return archivedTranscripts;
+        });
+        if (!committedArchives) {
+          return null;
+        }
+        return {
+          archivedTranscripts: committedArchives,
+          usage: await measureSessionPhysicalDiskUsage(params.storePath),
+        };
+      },
     });
     if (!eviction) {
       continue;

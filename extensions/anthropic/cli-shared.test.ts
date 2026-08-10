@@ -6,7 +6,6 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
-  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 type ClaudePreparedExecutionWithSecret = {
@@ -66,6 +65,22 @@ describe("Claude CLI adapter equivalence", () => {
       }),
     ).toEqual({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" } });
   });
+
+  it("privately acknowledges isolated completion preparation", () => {
+    const backend = buildAnthropicCliBackend();
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-8",
+      isolatedCompletionPrompt: "TASK: return JSON",
+      isolatedCompletionSystemPrompt: "Return JSON.",
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      isolatedCompletionPrompt: string;
+      isolatedCompletionSystemPrompt: string;
+    }) as { env?: Record<string, string>; isolatedCompletionEnforced?: true };
+
+    expect(prepared).toEqual({ env: {}, isolatedCompletionEnforced: true });
+  });
 });
 
 describe("resolveClaudeCliAutoCompactEnv", () => {
@@ -77,33 +92,6 @@ describe("resolveClaudeCliAutoCompactEnv", () => {
 
   it.each([undefined, 0, 0.5, Number.NaN])("rejects an invalid context budget: %s", (budget) => {
     expect(resolveClaudeCliAutoCompactEnv(budget)).toBeUndefined();
-  });
-});
-
-describe("resolveClaudeCliRuntimeToolAvailability", () => {
-  it("routes every restricted tool through the OpenClaw MCP policy boundary", () => {
-    expect(
-      resolveClaudeCliRuntimeToolAvailability({
-        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "process", "browser", "image"],
-      }),
-    ).toEqual({
-      mcp: [
-        "mcp__openclaw__read",
-        "mcp__openclaw__write",
-        "mcp__openclaw__edit",
-        "mcp__openclaw__apply_patch",
-        "mcp__openclaw__exec",
-        "mcp__openclaw__process",
-        "mcp__openclaw__browser",
-        "mcp__openclaw__image",
-      ],
-    });
-  });
-
-  it("keeps process-only authority on the exact OpenClaw MCP tool", () => {
-    expect(resolveClaudeCliRuntimeToolAvailability({ toolsAllow: ["process"] })).toEqual({
-      mcp: ["mcp__openclaw__process"],
-    });
   });
 });
 
@@ -127,17 +115,6 @@ function normalizeClaudeArgs(
 }
 
 describe("Claude backend permission args", () => {
-  it("leaves args alone when they omit permission flags", () => {
-    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
   it("removes legacy skip-permissions without adding bypassPermissions", () => {
     expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
       "-p",
@@ -216,9 +193,11 @@ describe("Claude CLI model aliases", () => {
     const aliases = buildAnthropicCliBackend().config.modelAliases;
 
     expect(aliases?.["opus"]).toBe("opus");
+    expect(aliases?.["opus-5"]).toBe("claude-opus-5");
     expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
     expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
     expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
+    expect(aliases?.["claude-opus-5"]).toBe("claude-opus-5");
     expect(aliases?.["claude-opus-4-8"]).toBe("claude-opus-4-8");
     expect(aliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
     expect(aliases?.["claude-opus-4-6"]).toBe("claude-opus-4-6");
@@ -280,6 +259,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
         ],
         toolAvailability: {
           native: [],
+          openClaw: ["openclaw"],
           mcp: ["mcp__openclaw__openclaw"],
         },
       }),
@@ -355,6 +335,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
         ],
         toolAvailability: {
           native: [],
+          openClaw: ["message"],
           mcp: ["mcp__openclaw__message"],
         },
       }),
@@ -379,10 +360,13 @@ describe("resolveClaudeCliExecutionArgs", () => {
   });
 
   it("preserves Claude customizations when no exact per-run tool restriction exists", () => {
+    // --chrome passthrough is the seam for browser sign-in (for example 1Password
+    // agentic autofill); restricted runs above must keep forcing --no-chrome.
     const baseArgs = [
       "-p",
       "--setting-sources",
       "user",
+      "--chrome",
       "--plugin-dir",
       "/tmp/plugin",
       "--agents",
@@ -416,7 +400,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "mcp__other__*",
         ],
-        toolAvailability: { native: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [], mcp: [] },
       }),
     ).toEqual([
       "-p",
@@ -675,6 +659,12 @@ describe("normalizeClaudeBackendConfig", () => {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     });
+    expect(backend.liveSessionRequirement).toEqual({
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
+    });
 
     const normalized = normalizeConfig?.({
       ...backend.config,
@@ -692,7 +682,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.liveSession).toBe("claude-stdio");
     expect(backend.resolveExecutionArgs).toBe(resolveClaudeCliExecutionArgs);
-    expect(backend.resolveRuntimeToolAvailability).toBe(resolveClaudeCliRuntimeToolAvailability);
+    expect(backend.toolAvailabilityEnforcement).toBe("execution-args");
   });
 
   it("opts bundled Claude CLI into bounded raw transcript reseed without disabling native resume", () => {
@@ -826,6 +816,34 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(() => prepared.secretInput.createData()).toThrow(
       "Claude CLI credential input is no longer available",
     );
+  });
+
+  it("does not forward an expired selected OAuth profile", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(() =>
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        authProfileId: "anthropic:claude-cli",
+        authCredential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "expired-access-token",
+          refresh: "expired-refresh-token",
+          expires: Date.now() - 60_000,
+        },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+        authCredential: {
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        };
+      }),
+    ).toThrow("Selected Claude CLI OAuth credential is expired or invalid");
   });
 
   it("keeps native Claude login when no compatible profile is selected", () => {

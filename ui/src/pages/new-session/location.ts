@@ -1,8 +1,12 @@
 export type NewSessionRouteData = {
+  /** The agent the loader resolved; empty until the Gateway can name one. */
   agentId: string;
+  /** The agent the URL asked for, which only a navigation can change. */
+  requestedAgentId: string;
   catalogId: string;
   model: string;
   catalogLabel: string;
+  startTerminal: boolean;
 };
 
 export type NewSessionTarget = { catalogId: string };

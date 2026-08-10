@@ -6,6 +6,7 @@ import type {
 export type MarkdownStyle =
   | "bold"
   | "italic"
+  | "underline"
   | "strikethrough"
   | "code"
   | "code_block"

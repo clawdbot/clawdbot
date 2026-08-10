@@ -21,10 +21,15 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
-import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
+import {
+  createToolLoopBatchAdmission,
+  installToolLoopRecoveryCleanup,
+} from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type ClientToolPreparation = Omit<
@@ -49,7 +54,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   onSystemPromptChanged: (systemPrompt: string) => void;
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
-  sessionLockController: EmbeddedAttemptSessionLockController;
+  transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
   sessionManager: AttemptSessionManager;
 }) {
   const { attempt } = input;
@@ -79,6 +84,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     provider: attempt.provider,
     modelId: attempt.modelId,
     model: attempt.model,
+    contextTokenBudget: attempt.contextTokenBudget,
+    agentId: input.sessionAgentId,
+    sessionId: attempt.sessionId,
+    sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
     runId: attempt.runId,
   });
   const resourceLoader = createEmbeddedAgentResourceLoader({
@@ -156,12 +165,15 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
           return hydratedTool;
         }
       : undefined,
-    withSessionWriteLock: (operation) =>
-      input.sessionLockController.withSessionWriteLock(operation),
+    withSessionWriteSettlement: (operation) =>
+      input.transcriptLifecycle.withTranscriptWrite(operation),
   };
   const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
+      ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
+      : undefined,
   });
   const activeSession = createdSession.session;
   if (!activeSession) {
@@ -170,6 +182,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
+  installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
@@ -185,6 +198,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
+  if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
+    installCodeModeRepairHook({ agent: activeSession.agent });
+  }
   input.markStage("agent-session");
 
   return {

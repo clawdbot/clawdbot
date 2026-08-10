@@ -17,7 +17,11 @@ import {
   listSpawnedSessionKeys,
   sessionVisibilityGatewayTesting,
 } from "../../plugin-sdk/session-visibility.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isIncognitoSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 
 type GatewayCaller = typeof callGateway;
@@ -452,6 +456,16 @@ export async function resolveVisibleSessionReference(params: {
 }): Promise<VisibleSessionReferenceResolution> {
   const resolvedKey = params.resolvedSession.key;
   const displayKey = params.resolvedSession.displayKey;
+  // Cross-session tools persist their results into the caller transcript; an
+  // incognito target must remain unreachable even from an incognito requester.
+  if (isIncognitoSessionKey(resolvedKey)) {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
+      displayKey,
+    };
+  }
   const shouldVerifySpawnedVisibility =
     params.restrictToSpawned &&
     !params.resolvedSession.resolvedViaSessionId &&

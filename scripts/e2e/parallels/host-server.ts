@@ -122,6 +122,7 @@ export async function startNpmRegistryServer(input: {
   const url = `http://${input.hostIp}:${port}`;
   say(`Serve prepared npm package set on ${url}`);
   return {
+    hostUrl: `http://127.0.0.1:${port}`,
     url,
     stop: async () => {
       try {

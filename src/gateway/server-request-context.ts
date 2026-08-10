@@ -7,9 +7,14 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { upsertPresence } from "../infra/system-presence.js";
+import { resolveUserProfileId } from "../state/user-profiles.js";
+import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
 type GatewayRequestContextClient = GatewayClient & {
@@ -21,8 +26,12 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "controlUiSessionPullRequests" | "sessionViewerPresence"
+  >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
@@ -37,6 +46,9 @@ type GatewayRequestContextParams = {
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
+  readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
+  readChatMetadata: GatewayRequestContext["readChatMetadata"];
+  readChatStartupProjection?: GatewayRequestContext["readChatStartupProjection"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -73,15 +85,7 @@ type GatewayRequestContextParams = {
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
-  chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
-  chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
-  chatRunPlanSnapshots?: GatewayRequestContext["chatRunPlanSnapshots"];
-  chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
-  chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
-  agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
-  bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
-  clearChatRunState: GatewayRequestContext["clearChatRunState"];
+  chatRunState: GatewayRequestContext["chatRunState"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -166,6 +170,9 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
+    sessionViewerPresence: params.runtimeState.sessionViewerPresence,
+    sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
@@ -184,6 +191,13 @@ export function createGatewayRequestContext(
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
+    ...(params.readPreparedGatewayModelCatalog
+      ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }
+      : {}),
+    readChatMetadata: params.readChatMetadata,
+    ...(params.readChatStartupProjection
+      ? { readChatStartupProjection: params.readChatStartupProjection }
+      : {}),
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,
@@ -251,6 +265,52 @@ export function createGatewayRequestContext(
       }
       return false;
     },
+    refreshConnectedUserProfile: (profile) => {
+      let presenceChanged = false;
+      for (const gatewayClient of params.clients) {
+        const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
+        if (!authenticatedUserProfile) {
+          continue;
+        }
+        const canonicalProfileId =
+          authenticatedUserProfile.profileId === profile.id
+            ? profile.id
+            : resolveUserProfileId(authenticatedUserProfile.profileId);
+        if (canonicalProfileId !== profile.id) {
+          continue;
+        }
+        Object.assign(authenticatedUserProfile, {
+          profileId: canonicalProfileId,
+          displayName: profile.displayName,
+          avatarRevision: profile.avatarRevision,
+          hasAvatar: profile.hasAvatar,
+          updatedAt: profile.updatedAt,
+        });
+        if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
+          continue;
+        }
+        upsertPresence(gatewayClient.presenceKey, {
+          user: buildAuthenticatedPresenceUser({
+            authenticatedUserId: gatewayClient.authenticatedUserId,
+            authenticatedUserIsTailscaleProvider:
+              gatewayClient.authenticatedUserIsTailscaleProvider,
+            authenticatedUserProfile: {
+              profileId: profile.id,
+              displayName: profile.displayName,
+              avatarRevision: profile.avatarRevision,
+            },
+          }),
+        });
+        presenceChanged = true;
+      }
+      if (presenceChanged) {
+        broadcastPresenceSnapshot({
+          broadcast: params.broadcast,
+          incrementPresenceVersion: params.incrementPresenceVersion,
+          getHealthVersion: params.getHealthVersion,
+        });
+      }
+    },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
       for (const gatewayClient of params.clients) {
@@ -313,22 +373,19 @@ export function createGatewayRequestContext(
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
     chatQueuedTurns: params.chatQueuedTurns,
-    chatAbortedRuns: params.chatAbortedRuns,
-    chatRunBuffers: params.chatRunBuffers,
-    chatRunPlanSnapshots: params.chatRunPlanSnapshots,
-    chatDeltaSentAt: params.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: params.agentDeltaSentAt,
-    bufferedAgentEvents: params.bufferedAgentEvents,
-    clearChatRunState: params.clearChatRunState,
+    chatRunState: params.chatRunState,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,
     unsubscribeSessionEvents: params.unsubscribeSessionEvents,
     subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
-    unsubscribeAllSessionEvents: params.unsubscribeAllSessionEvents,
+    unsubscribeAllSessionEvents: (connId) => {
+      params.unsubscribeAllSessionEvents(connId);
+      // PR replace-sets share this websocket cleanup boundary with session events.
+      params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+      params.runtimeState.sessionViewerPresence?.unsubscribe(connId);
+    },
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,

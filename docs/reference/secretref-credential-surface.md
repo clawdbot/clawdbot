@@ -50,6 +50,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
+- `plugins.entries.google.config.webSearch.headers.*`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
@@ -83,6 +84,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.slack.accounts.*.signingSecret`
 - `channels.sms.authToken`
 - `channels.sms.accounts.*.authToken`
+- `channels.buzz.authTag`
+- `channels.buzz.privateKey`
 - `channels.clickclack.token`
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`
@@ -118,8 +121,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.zalo.webhookSecret`
 - `channels.zalo.accounts.*.botToken`
 - `channels.zalo.accounts.*.webhookSecret`
-- `channels.googlechat.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
-- `channels.googlechat.accounts.*.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
+- `channels.googlechat.serviceAccount`
+- `channels.googlechat.accounts.*.serviceAccount`
 
 ### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 

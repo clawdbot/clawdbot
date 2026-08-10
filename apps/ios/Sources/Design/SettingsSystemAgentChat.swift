@@ -151,30 +151,31 @@ final class IOSSystemAgentChatModel {
         return supportsSystemAgent ? .ready : .missingSystemAgentMethod
     }
 
-    private nonisolated static func screenshotFixtureReply(params: [String: AnyCodable]) throws -> Data {
+    nonisolated static func screenshotFixtureReply(params: [String: AnyCodable]) throws -> Data {
         let hasMessage = params["message"]?.value is String
+        let reply = hasMessage
+            ? String(localized: "I’ll keep this conversation separate from ordinary agent chat.")
+            : String(localized: "I can check Gateway status, repair configuration, change models, or connect channels.")
         var result: [String: Any] = [
             "sessionId": "ios-screenshot-openclaw",
-            "reply": hasMessage
-                ? "I’ll keep this conversation separate from ordinary agent chat."
-                : "I can check Gateway status, repair configuration, change models, or connect channels.",
+            "reply": reply,
             "action": "none",
         ]
         if !hasMessage {
             result["question"] = [
                 "id": "help",
                 "header": "OpenClaw",
-                "question": "What should we look at first?",
+                "question": String(localized: "What should we look at first?"),
                 "options": [
                     [
-                        "label": "Check status",
-                        "description": "Review the Gateway and active services.",
+                        "label": String(localized: "Check status"),
+                        "description": String(localized: "Review the Gateway and active services."),
                         "recommended": true,
                         "reply": "Check Gateway status",
                     ],
                     [
-                        "label": "Review setup",
-                        "description": "Inspect models, channels, and configuration.",
+                        "label": String(localized: "Review setup"),
+                        "description": String(localized: "Inspect models, channels, and configuration."),
                         "reply": "Review setup",
                     ],
                 ],
@@ -375,7 +376,7 @@ final class IOSSystemAgentChatModel {
             throw NSError(
                 domain: "Gateway",
                 code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Gateway is not connected"])
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Gateway is not connected")])
         }
         guard self.isCurrentRequest(generation) else { throw CancellationError() }
         self.routeLease = routeLease

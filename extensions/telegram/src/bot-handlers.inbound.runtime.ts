@@ -32,7 +32,12 @@ import {
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  resolveTelegramMessageThreadSpec,
+  resolveTelegramPrimaryMedia,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -52,7 +57,8 @@ export function createTelegramHandlerInboundRuntime(
   messageRuntime: TelegramHandlerMessageRuntime,
 ) {
   const {
-    mediaRuntimeWithAbort,
+    resolveMediaRuntime,
+    recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
@@ -64,7 +70,7 @@ export function createTelegramHandlerInboundRuntime(
     resolveTelegramDebounceLane,
   } = createTelegramInboundDebounceRuntime({ cfg, bot, runtime }, messageRuntime);
 
-  const { handleMediaGroup, shouldSkipMediaDownloadForUnaddressedMentionGroup } =
+  const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } =
     createTelegramInboundMediaGroupRuntime(
       {
         accountId,
@@ -199,41 +205,44 @@ export function createTelegramHandlerInboundRuntime(
       return;
     }
 
-    if (
-      await shouldSkipMediaDownloadForUnaddressedMentionGroup({
-        authorizationCfg,
-        ctx,
-        msg,
-        chatId,
-        isGroup,
-        isForum,
-        resolvedThreadId,
-        dmThreadId,
-        senderId,
-        effectiveGroupAllow,
-        effectiveDmAllow,
-        groupConfig,
-        topicConfig,
-      })
-    ) {
+    const mediaDisposition = await resolveUnaddressedGroupMediaDisposition({
+      authorizationCfg,
+      ctx,
+      msg,
+      chatId,
+      isGroup,
+      isForum,
+      resolvedThreadId,
+      dmThreadId,
+      senderId,
+      effectiveGroupAllow,
+      effectiveDmAllow,
+      groupConfig,
+      topicConfig,
+    });
+    if (mediaDisposition === "skip") {
       releaseDispatchDedupeClaims(dispatchDedupeClaims);
       return;
     }
 
     const nativeMedia = resolveTelegramPrimaryMedia(msg);
+    const mediaRuntime = resolveMediaRuntime();
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
       media = await resolveMedia({
         ctx,
         maxBytes: mediaMaxBytes,
-        ...mediaRuntimeWithAbort,
+        ...mediaRuntime,
       });
+      if (media) {
+        await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
+      }
     } catch (mediaErr) {
       const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
-      if (
-        mediaRuntimeWithAbort.abortSignal?.aborted &&
-        isDurablyRetryableInboundMediaError(mediaErr)
-      ) {
+      const warningThreadParams = buildTelegramThreadParams(
+        resolveTelegramMessageThreadSpec(msg, isForum),
+      );
+      if (mediaRuntime.abortSignal?.aborted && isDurablyRetryableInboundMediaError(mediaErr)) {
         // Abort mid-media-resolution must stay retryable for live updates too;
         // a clean claim release would settle the update as handled and silently
         // drop the message during shutdown or deadline cancellation.
@@ -242,7 +251,7 @@ export function createTelegramHandlerInboundRuntime(
         return;
       }
       if (isMediaSizeLimitError(mediaErr)) {
-        if (sendOversizeWarning) {
+        if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
           const limitMb =
             mediaErr instanceof TelegramBotApiFileTooLargeError
               ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
@@ -252,6 +261,7 @@ export function createTelegramHandlerInboundRuntime(
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                ...warningThreadParams,
                 reply_parameters: {
                   message_id: msg.message_id,
                   allow_sending_without_reply: true,
@@ -268,17 +278,20 @@ export function createTelegramHandlerInboundRuntime(
           releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
           return;
         }
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          runtime,
-          fn: () =>
-            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-              reply_parameters: {
-                message_id: msg.message_id,
-                allow_sending_without_reply: true,
-              },
-            }),
-        }).catch(() => {});
+        if (mediaDisposition !== "silent-ingest") {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            runtime,
+            fn: () =>
+              bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+                ...warningThreadParams,
+                reply_parameters: {
+                  message_id: msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              }),
+          }).catch(() => {});
+        }
       }
     }
 

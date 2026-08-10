@@ -1035,6 +1035,26 @@ describe("command secret target ids", () => {
     );
   });
 
+  it("unions only the selected broadcast channel/account routes", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {
+        channels: {
+          discord: {
+            token: "discord-default",
+            accounts: { ops: { token: "discord-ops" } },
+          },
+          telegram: { botToken: "telegram-default" },
+        },
+      } as never,
+      channels: ["discord", "telegram"],
+      accountId: "ops",
+    });
+
+    expect(scoped.allowedPaths?.has("channels.discord.token")).toBe(true);
+    expect(scoped.allowedPaths?.has("channels.discord.accounts.ops.token")).toBe(true);
+    expect(scoped.allowedPaths?.has("channels.telegram.botToken")).toBe(true);
+  });
+
   it("keeps account-scoped allowedPaths as an empty set when scoped target paths are absent", () => {
     const scoped = getScopedChannelsCommandSecretTargets({
       config: {

@@ -1,6 +1,7 @@
 // Covers which ChatGPT Responses failures the SSE transport retries.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -73,6 +74,8 @@ describe("streamOpenAICodexResponses retry classification", () => {
   );
 
   it("still retries retryable ChatGPT responses", async () => {
+    const prompt = "PRIVATE-NATIVE-SSE-RETRY-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(new Response("overloaded", { status: 503 }))
@@ -81,6 +84,94 @@ describe("streamOpenAICodexResponses retry classification", () => {
           status: 401,
         }),
       );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
+      if (typeof callback === "function") {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    const options = {
+      apiKey: jwt,
+      transport: "sse" as const,
+    };
+    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+
+    const result = await streamOpenAICodexResponses(
+      model,
+      { ...context, systemPrompt: prompt },
+      options,
+    ).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(observations).toHaveLength(2);
+    expect(observations.every((entry) => entry.egress === "native-codex-sse")).toBe(true);
+    expect(observations.every((entry) => entry.payloadVariant === "initial")).toBe(true);
+    expect(observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
+    expect(JSON.stringify(observations)).not.toContain(prompt);
+  });
+
+  it.each([
+    Object.assign(new Error("unable to verify the first certificate"), {
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    }),
+    new Error("fetch failed", {
+      cause: Object.assign(new Error("certificate has expired"), {
+        code: "CERT_HAS_EXPIRED",
+      }),
+    }),
+    Object.assign(new Error("TLS validation failed"), {
+      code: "CERT_NOT_YET_VALID",
+    }),
+    new Error("fetch failed", {
+      cause: Object.assign(new Error("TLS validation failed"), {
+        code: "CERT_NOT_YET_VALID",
+      }),
+    }),
+    new Error("certificate is not yet valid"),
+    Object.assign(new Error("TLS validation failed"), {
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+    }),
+  ])("does not retry deterministic TLS certificate failures", async (error) => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a non-Error rejection with a wrapped certificate code", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue({
+      cause: { code: "INVALID_CA" },
+      message: "fetch failed",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps retrying transient network failures", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
+      .mockRejectedValueOnce(new Error("usage limit: stop after retry"));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
       if (typeof callback === "function") {

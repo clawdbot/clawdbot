@@ -1,13 +1,22 @@
 // Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Tracks spawned children by pid so the killProcessTree mock can emit close on them.
+const spawnRegistry = new Map<number, EventEmitter>();
 
 const mocks = vi.hoisted(() => ({
   hasBinary: vi.fn(() => true),
   resolveExecutable: vi.fn((name: string) => name),
   runCommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
+  killProcessTree: vi.fn((pid: number) => {
+    const child = spawnRegistry.get(pid);
+    if (child) {
+      queueMicrotask(() => child.emit("close", 0, null));
+    }
+  }),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -28,6 +37,10 @@ vi.mock("../infra/executable-path.js", () => ({
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
+
+vi.mock("../process/kill-tree.js", () => ({
+  killProcessTree: mocks.killProcessTree,
 }));
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
@@ -61,16 +74,23 @@ type MockWatcherChild = EventEmitter & {
   stderr: EventEmitter;
 };
 
+let nextMockPid = 1234;
+
 function createMockWatcherChild(spawned = true): MockWatcherChild {
   const child = new EventEmitter();
-  return Object.assign(child, {
+  const pid = spawned ? nextMockPid++ : undefined;
+  const mockedChild = Object.assign(child, {
     stderr: new EventEmitter(),
     kill: vi.fn(() => {
       queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
       return true;
     }),
-    ...(spawned ? { pid: 1234 } : {}),
+    ...(pid !== undefined ? { pid } : {}),
   });
+  if (pid !== undefined) {
+    spawnRegistry.set(pid, mockedChild);
+  }
+  return mockedChild;
 }
 
 async function startMockWatcher(spawned = true): Promise<MockWatcherChild[]> {
@@ -87,11 +107,21 @@ async function startMockWatcher(spawned = true): Promise<MockWatcherChild[]> {
 
 describe("startGmailWatcher", () => {
   beforeEach(async () => {
+    // stopGmailWatcher uses the killProcessTree mock from the previous beforeEach run,
+    // which looks up spawnRegistry entries populated by that test's children.
     await stopGmailWatcher();
+    spawnRegistry.clear();
     mocks.hasBinary.mockReturnValue(true);
     mocks.resolveExecutable.mockImplementation((name: string) => name);
     mocks.runCommandWithTimeout.mockReset();
     mocks.spawn.mockReset();
+    mocks.killProcessTree.mockReset();
+    mocks.killProcessTree.mockImplementation((pid: number) => {
+      const child = spawnRegistry.get(pid);
+      if (child) {
+        queueMicrotask(() => child.emit("close", 0, null));
+      }
+    });
     mocks.spawn.mockImplementation(() => {
       const child = new EventEmitter();
       return Object.assign(child, {
@@ -102,6 +132,11 @@ describe("startGmailWatcher", () => {
         killed: false,
       });
     });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await stopGmailWatcher();
   });
 
   it("does not let a stale cancelled startup clear newer watcher config", async () => {
@@ -372,19 +407,16 @@ describe("startGmailWatcher", () => {
     }
   });
 
-  it("escalates to SIGKILL and resolves on final timeout when process ignores signals", async () => {
+  it("uses killProcessTree for gog shutdown and resolves on final timeout when process ignores signals", async () => {
     vi.useFakeTimers();
     try {
       mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
 
-      // Spawn a process that never emits exit/close/error
+      // Spawn a process with a known pid that never emits exit/close/error
       const stubbornChild = new EventEmitter();
-      const killCalls: string[] = [];
       Object.assign(stubbornChild, {
-        kill: vi.fn((sig: string) => {
-          killCalls.push(sig);
-          return true;
-        }),
+        pid: 9999,
+        kill: vi.fn(() => true),
         killed: false,
       });
       mocks.spawn.mockReturnValueOnce(stubbornChild);
@@ -404,17 +436,17 @@ describe("startGmailWatcher", () => {
         });
       });
 
-      // Re-entry starts settle on stubbornChild
+      // Re-entry starts settle on stubbornChild; advance past the 8 s final
+      // timeout (stubbornChild never emits exit), then verify the outcome.
       const startPromise = startGmailWatcher(createGmailConfig());
-
-      // After 3s the escalation fires SIGKILL
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(killCalls).toContain("SIGTERM");
-      expect(killCalls).toContain("SIGKILL");
-
-      // After 8s total the final timeout resolves even though exit never fired
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(8_000);
       await expect(startPromise).resolves.toEqual({ started: true });
+
+      // killProcessTree must have been called with stubbornChild's pid before settle gave up.
+      expect(mocks.killProcessTree).toHaveBeenCalledWith(
+        9999,
+        expect.objectContaining({ graceMs: 3_000 }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -456,6 +488,24 @@ describe("startGmailWatcher", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("calls killProcessTree (not proc.kill) when stopping the gog watcher", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    const child = createMockWatcherChild();
+    mocks.spawn.mockReturnValueOnce(child);
+
+    await startGmailWatcher(createGmailConfig());
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+
+    await stopGmailWatcher();
+
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(
+      child.pid,
+      expect.objectContaining({ graceMs: 3_000 }),
+    );
+    // proc.kill should not be called — tree termination replaces the direct kill.
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("swallows stdout and stderr stream errors without crashing", async () => {

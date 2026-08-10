@@ -22,6 +22,10 @@ import {
 } from "./memory-host-core.js";
 import { appendMemoryHostEvent } from "./memory-host-events.js";
 
+async function createFixtureRoot(prefix: string): Promise<string> {
+  return await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
+}
+
 describe("memory-host-core helpers", () => {
   afterEach(() => {
     clearMemoryPluginState();
@@ -92,7 +96,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("lists readable workspaces without requiring workspace-root writes", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-readonly-workspace-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-readonly-workspace-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
@@ -131,9 +135,7 @@ describe("memory-host-core helpers", () => {
   it.runIf(process.platform !== "win32")(
     "propagates failures reading an existing event export",
     async () => {
-      const fixtureRoot = await fs.mkdtemp(
-        path.join(os.tmpdir(), "memory-host-unreadable-export-"),
-      );
+      const fixtureRoot = await createFixtureRoot("memory-host-unreadable-export-");
       const workspaceDir = path.join(fixtureRoot, "workspace");
       let eventExportPath: string | undefined;
       try {
@@ -182,7 +184,7 @@ describe("memory-host-core helpers", () => {
   it.runIf(process.platform !== "win32")(
     "does not delete an event export through a symlinked parent",
     async () => {
-      const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-symlink-"));
+      const fixtureRoot = await createFixtureRoot("memory-host-export-symlink-");
       const workspaceDir = path.join(fixtureRoot, "workspace");
       const externalMemoryDir = path.join(fixtureRoot, "external-memory");
       const stateDir = path.join(fixtureRoot, "state");
@@ -227,7 +229,7 @@ describe("memory-host-core helpers", () => {
   );
 
   it("does not replace or delete an unowned event export path", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-unowned-export-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-unowned-export-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
@@ -274,7 +276,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("does not let an orphaned owner marker authorize a later workspace file", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-orphan-owner-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-orphan-owner-");
     const stateDir = path.join(fixtureRoot, "state");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     try {
@@ -331,7 +333,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("does not claim a same-content inode that replaces an exclusive export", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-create-replace-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-create-replace-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const cfg = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -393,7 +395,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("does not claim a hash-only pending event export after interruption", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-pending-owner-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-pending-owner-");
     const stateDir = path.join(fixtureRoot, "state");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const firstEvent = {
@@ -464,7 +466,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("omits the event export when a workspace path component is a file", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-blocked-export-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-blocked-export-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
@@ -495,7 +497,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("lists shared public artifacts from memory workspaces", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-public-artifacts-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-public-artifacts-");
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       const workspaceDir = path.join(fixtureRoot, "workspace");
@@ -620,7 +622,7 @@ describe("memory-host-core helpers", () => {
   it.runIf(process.platform !== "win32")(
     "does not let a workspace alias overwrite a newer event export",
     async () => {
-      const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-race-"));
+      const fixtureRoot = await createFixtureRoot("memory-host-export-race-");
       const workspaceDir = path.join(fixtureRoot, "workspace");
       const workspaceAlias = path.join(fixtureRoot, "workspace-alias");
       const cfg = {
@@ -710,7 +712,7 @@ describe("memory-host-core helpers", () => {
     { name: "refresh", clearEvents: false },
     { name: "retirement", clearEvents: true },
   ])("preserves a replacement installed during event export $name", async ({ clearEvents }) => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-replace-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-export-replace-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const cfg = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -776,7 +778,7 @@ describe("memory-host-core helpers", () => {
     { name: "refresh", clearEvents: false },
     { name: "retirement", clearEvents: true },
   ])("keeps ownership through same-inode event export $name", async ({ clearEvents }) => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-inode-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-export-inode-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const cfg = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -848,7 +850,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("retries an owned event export after a same-inode post-write race", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-retry-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-export-retry-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const cfg = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -911,7 +913,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("repairs an oversized owned event export by inode", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-oversized-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-export-oversized-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const cfg = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -953,7 +955,7 @@ describe("memory-host-core helpers", () => {
   });
 
   it("keeps public event exports isolated across state directories", async () => {
-    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-owner-"));
+    const fixtureRoot = await createFixtureRoot("memory-host-export-owner-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
     const cfg = {
       agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },

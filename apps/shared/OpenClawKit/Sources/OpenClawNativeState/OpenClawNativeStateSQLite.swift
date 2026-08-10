@@ -14,7 +14,9 @@ public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
 }
 
 public enum OpenClawNativeStateCanonicalTable: Sendable {
+    case deviceAuthTokens
     case deviceIdentities
+    case execApprovalsConfig
     case macosPortGuardianRecords
 }
 
@@ -35,7 +37,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 5
+    private static let maximumSupportedSchemaVersion: Int64 = 6
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -58,16 +60,17 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
 
     private struct CanonicalTable {
         let name: String
-        let indexName: String
+        let indexName: String?
         let createSQL: String
         let columns: [Column]
         let indexColumns: [IndexColumn]
 
         var objects: Set<SchemaObject> {
-            [
-                SchemaObject(type: "index", name: self.indexName),
-                SchemaObject(type: "table", name: self.name),
-            ]
+            var objects = [SchemaObject(type: "table", name: self.name)]
+            if let indexName {
+                objects.append(SchemaObject(type: "index", name: indexName))
+            }
+            return Set(objects)
         }
     }
 
@@ -100,6 +103,35 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             IndexColumn(name: "updated_at_ms", descending: true),
         ])
 
+    private static let deviceAuthTokens = CanonicalTable(
+        name: "device_auth_tokens",
+        indexName: "idx_device_auth_tokens_updated",
+        createSQL: """
+        CREATE TABLE IF NOT EXISTS device_auth_tokens (
+          device_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          token TEXT NOT NULL,
+          scopes_json TEXT NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (device_id, role)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
+          ON device_auth_tokens(updated_at_ms DESC, device_id, role);
+        """,
+        columns: [
+            Column(name: "device_id", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
+            Column(name: "role", type: "TEXT", notNull: true, primaryKeyPosition: 2, hidden: 0),
+            Column(name: "token", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "scopes_json", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
+        ],
+        indexColumns: [
+            IndexColumn(name: "updated_at_ms", descending: true),
+            IndexColumn(name: "device_id", descending: false),
+            IndexColumn(name: "role", descending: false),
+        ])
+
     private static let macosPortGuardianRecords = CanonicalTable(
         name: "macos_port_guardian_records",
         indexName: "idx_macos_port_guardian_records_port",
@@ -127,8 +159,43 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             IndexColumn(name: "timestamp", descending: true),
         ])
 
+    private static let execApprovalsConfig = CanonicalTable(
+        name: "exec_approvals_config",
+        indexName: nil,
+        createSQL: """
+        CREATE TABLE IF NOT EXISTS exec_approvals_config (
+          config_key TEXT NOT NULL PRIMARY KEY,
+          raw_json TEXT NOT NULL,
+          socket_path TEXT,
+          has_socket_token INTEGER NOT NULL,
+          default_security TEXT,
+          default_ask TEXT,
+          default_ask_fallback TEXT,
+          auto_allow_skills INTEGER,
+          agent_count INTEGER NOT NULL,
+          allowlist_count INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        ) STRICT;
+        """,
+        columns: [
+            Column(name: "config_key", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
+            Column(name: "raw_json", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "socket_path", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "has_socket_token", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "default_security", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "default_ask", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "default_ask_fallback", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "auto_allow_skills", type: "INTEGER", notNull: false, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "agent_count", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "allowlist_count", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
+            Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
+        ],
+        indexColumns: [])
+
     private static let canonicalTables = [
+        OpenClawNativeStateSQLite.deviceAuthTokens,
         OpenClawNativeStateSQLite.deviceIdentities,
+        OpenClawNativeStateSQLite.execApprovalsConfig,
         OpenClawNativeStateSQLite.macosPortGuardianRecords,
     ]
 
@@ -136,11 +203,18 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
-    public init(databaseURL: URL, busyTimeoutMilliseconds: Int32 = 5000) throws {
+    public init(
+        databaseURL: URL,
+        busyTimeoutMilliseconds: Int32 = 5000,
+        createIfMissing: Bool = true) throws
+    {
         self.databaseURL = databaseURL
-        try Self.secureDirectory(databaseURL.deletingLastPathComponent())
+        if createIfMissing {
+            try Self.secureDirectory(databaseURL.deletingLastPathComponent())
+        }
         var database: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+            | (createIfMissing ? SQLITE_OPEN_CREATE : 0)
         let result = sqlite3_open_v2(databaseURL.path, &database, flags, nil)
         guard result == SQLITE_OK, let database else {
             let detail = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown SQLite error"
@@ -310,7 +384,9 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
 
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
         switch table {
+        case .deviceAuthTokens: self.deviceAuthTokens
         case .deviceIdentities: self.deviceIdentities
+        case .execApprovalsConfig: self.execApprovalsConfig
         case .macosPortGuardianRecords: self.macosPortGuardianRecords
         }
     }
@@ -378,7 +454,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             throw OpenClawNativeStateError("\(table.name) must be a STRICT table")
         }
         guard try self.validRequiredIndex(table) else {
-            throw OpenClawNativeStateError("\(table.indexName) has an incompatible schema")
+            throw OpenClawNativeStateError("\(table.indexName ?? table.name) has an incompatible index schema")
         }
     }
 
@@ -397,11 +473,12 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     private func validRequiredIndex(_ table: CanonicalTable) throws -> Bool {
+        guard let indexName = table.indexName else { return table.indexColumns.isEmpty }
         let list = try self.prepare("PRAGMA index_list('\(table.name)')")
         var found = false
         while try list.step() == .row {
             let name = try list.requiredText(at: 1, field: "index name")
-            if name == table.indexName {
+            if name == indexName {
                 found = try list.int32(at: 2) == 0
                     && (list.requiredText(at: 3, field: "index origin")) == "c"
                     && list.int32(at: 4) == 0
@@ -409,7 +486,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         }
         guard found else { return false }
 
-        let details = try self.prepare("PRAGMA index_xinfo('\(table.indexName)')")
+        let details = try self.prepare("PRAGMA index_xinfo('\(indexName)')")
         var keyColumns: [IndexColumn] = []
         while try details.step() == .row {
             guard details.int32(at: 5) == 1 else { continue }
@@ -503,6 +580,14 @@ public final class OpenClawNativeStateSQLiteStatement {
         try self.connection.withConnectionLock {
             guard sqlite3_bind_int64(self.statement, index, value) == SQLITE_OK else {
                 throw self.connection.databaseError(operation: "bind SQLite integer")
+            }
+        }
+    }
+
+    public func bindNull(at index: Int32) throws {
+        try self.connection.withConnectionLock {
+            guard sqlite3_bind_null(self.statement, index) == SQLITE_OK else {
+                throw self.connection.databaseError(operation: "bind SQLite null")
             }
         }
     }

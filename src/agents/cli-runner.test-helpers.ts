@@ -9,8 +9,12 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import type { RunCliAgentParams } from "./cli-runner/types.js";
@@ -75,6 +79,13 @@ export function createTestMcpLoopbackServerConfig(port: number) {
   };
 }
 
+export function createClaudeInputStartedEvent(data: string) {
+  const input = JSON.parse(data) as { type?: string; uuid?: string };
+  return input.type === "user" && typeof input.uuid === "string"
+    ? { type: "command_lifecycle" as const, command_uuid: input.uuid, state: "started" as const }
+    : undefined;
+}
+
 export function createTestMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
 }): McpLoopbackClientGrant {
@@ -120,6 +131,7 @@ export type PreparedCliRunContextOverrides = {
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
+  toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
   mcpDeliveryCapture?: boolean;
@@ -129,9 +141,11 @@ export type PreparedCliRunContextOverrides = {
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
   workspaceDir?: string;
+  systemPrompt?: string;
   timeoutMs?: number;
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
+  liveSessionRequirement?: PreparedCliRunContext["backendResolved"]["liveSessionRequirement"];
 };
 
 export function buildPreparedCliRunContext(
@@ -221,7 +235,11 @@ export function buildPreparedCliRunContext(
             ? "google"
             : "openai",
       resolveExecutionArgs: overrides.resolveExecutionArgs,
+      toolAvailabilityEnforcement:
+        overrides.toolAvailabilityEnforcement ??
+        (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
+      liveSessionRequirement: overrides.liveSessionRequirement,
     },
     preparedBackend: {
       backend,
@@ -233,7 +251,7 @@ export function buildPreparedCliRunContext(
     contextEngineConfig: {},
     modelId: model,
     normalizedModel: model,
-    systemPrompt: "You are a helpful assistant.",
+    systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
@@ -346,20 +364,21 @@ export async function expectPathMissing(targetPath: string) {
   throw new Error(`expected ${targetPath} to be missing`);
 }
 
-export async function withTempExecApprovalsFile(
+export async function withTempExecApprovalsState(
   file: Record<string, unknown>,
   run: () => Promise<void>,
 ) {
   const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
-  await fs.promises.mkdir(path.join(home, ".openclaw"), { recursive: true });
-  await fs.promises.writeFile(
-    path.join(home, ".openclaw", "exec-approvals.json"),
-    `${JSON.stringify(file)}\n`,
-    "utf-8",
-  );
+  const stateDir = path.join(home, ".openclaw");
   try {
-    await withEnvAsync({ HOME: home }, run);
+    await withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: stateDir }, async () => {
+      execApprovalsStoreTesting.reset();
+      saveExecApprovals(file as ExecApprovalsFile);
+      await run();
+    });
   } finally {
+    closeOpenClawStateDatabaseForTest();
+    execApprovalsStoreTesting.reset();
     await fs.promises.rm(home, { recursive: true, force: true });
   }
 }
@@ -510,6 +529,7 @@ export function mockClaudeLiveRun(
     cancelable?: boolean;
     beforeSpawn?: () => Promise<void>;
     events?: Array<Record<string, unknown> | string>;
+    inputLifecycle?: boolean;
     exitImmediately?: RunExit;
     exitOnWrite?: RunExit;
     onWrite?: (params: {
@@ -541,6 +561,10 @@ export function mockClaudeLiveRun(
     write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
       writes.push(data);
       const writeIndex = writes.length - 1;
+      const inputStartedEvent = createClaudeInputStartedEvent(data);
+      if (options.inputLifecycle !== false && inputStartedEvent) {
+        emit([inputStartedEvent]);
+      }
       if (options.onWrite) {
         options.onWrite({ data, emit, writeIndex });
       } else if (writeIndex === 0 && options.events) {
@@ -593,6 +617,7 @@ export function buildClaudeControlRequestEvents(params: {
   toolUseId: string;
   input: Record<string, unknown>;
   sessionId?: string;
+  toolName?: string;
 }) {
   const sessionId = params.sessionId ?? "live-control";
   return [
@@ -601,7 +626,7 @@ export function buildClaudeControlRequestEvents(params: {
       request_id: params.requestId,
       request: {
         subtype: "can_use_tool",
-        tool_name: "Bash",
+        tool_name: params.toolName ?? "Bash",
         tool_use_id: params.toolUseId,
         input: params.input,
       },

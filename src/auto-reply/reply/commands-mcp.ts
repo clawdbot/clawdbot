@@ -11,8 +11,8 @@ import { buildConfigSchema } from "../../config/schema.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  rejectNonOwnerCommand,
-  rejectUnauthorizedCommand,
+  commandReply,
+  defineAuthorizedTextCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
@@ -22,7 +22,6 @@ import {
   readCommandMessageThreadId,
   resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
-  type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { parseMcpCommand } from "./mcp-commands.js";
@@ -31,20 +30,6 @@ const MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner route for MCP configuration. Run /mcp show from an owner DM so sensitive server details are not posted in this chat.";
 const MCP_SHOW_PRIVATE_ROUTE_ACK =
   "MCP server configuration is sensitive. I sent the details to the owner privately.";
-
-type McpCommandDeps = {
-  resolvePrivateMcpTargets: (params: HandleCommandsParams) => Promise<PrivateCommandRouteTarget[]>;
-  deliverPrivateMcpReply: (params: {
-    commandParams: HandleCommandsParams;
-    targets: PrivateCommandRouteTarget[];
-    reply: ReplyPayload;
-  }) => Promise<boolean>;
-};
-
-const defaultMcpCommandDeps: McpCommandDeps = {
-  resolvePrivateMcpTargets: resolvePrivateMcpTargetsForCommand,
-  deliverPrivateMcpReply: deliverPrivateCommandReply,
-};
 
 function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
@@ -106,15 +91,6 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
   };
 }
 
-async function resolvePrivateMcpTargetsForCommand(
-  params: HandleCommandsParams,
-): Promise<PrivateCommandRouteTarget[]> {
-  return await resolvePrivateCommandRouteTargets({
-    commandParams: params,
-    request: buildMcpShowPrivateRouteRequest(params),
-  });
-}
-
 function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecApprovalRequest {
   const now = Date.now();
   const agentId =
@@ -139,61 +115,33 @@ function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecAppr
   };
 }
 
-async function deliverGroupMcpShowReplyPrivately(
-  deps: McpCommandDeps,
-  params: HandleCommandsParams,
-  name?: string,
-) {
-  const targets = await deps.resolvePrivateMcpTargets(params);
+async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, name?: string) {
+  const targets = await resolvePrivateCommandRouteTargets({
+    commandParams: params,
+    request: buildMcpShowPrivateRouteRequest(params),
+  });
   if (targets.length === 0) {
-    return {
-      shouldContinue: false,
-      reply: { text: MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE },
-    };
+    return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
   }
   const privateReply = await buildMcpShowReply(name);
   for (const target of targets) {
     if (
-      await deps.deliverPrivateMcpReply({
+      await deliverPrivateCommandReply({
         commandParams: params,
         targets: [target],
         reply: privateReply,
       })
     ) {
-      return {
-        shouldContinue: false,
-        reply: { text: MCP_SHOW_PRIVATE_ROUTE_ACK },
-      };
+      return commandReply(MCP_SHOW_PRIVATE_ROUTE_ACK);
     }
   }
-  return {
-    shouldContinue: false,
-    reply: { text: MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE },
-  };
+  return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);
 }
 
-/** Creates an MCP command handler with injectable private-route dependencies. */
-function createMcpCommandHandler(deps: Partial<McpCommandDeps> = {}): CommandHandler {
-  const resolvedDeps: McpCommandDeps = {
-    ...defaultMcpCommandDeps,
-    ...deps,
-  };
-  return async (params, allowTextCommands) => {
-    if (!allowTextCommands) {
-      return null;
-    }
-    const mcpCommand = parseMcpCommand(params.command.commandBodyNormalized);
-    if (!mcpCommand) {
-      return null;
-    }
-    const unauthorized = rejectUnauthorizedCommand(params, "/mcp");
-    if (unauthorized) {
-      return unauthorized;
-    }
-    const nonOwner = rejectNonOwnerCommand(params, "/mcp");
-    if (nonOwner) {
-      return nonOwner;
-    }
+/** Command handler for /mcp show/set/unset operations. */
+export const handleMcpCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/mcp", match: parseMcpCommand, ownerOnly: true },
+  async (params, mcpCommand) => {
     const disabled = requireCommandFlagEnabled(params.cfg, {
       label: "/mcp",
       configKey: "mcp",
@@ -202,15 +150,12 @@ function createMcpCommandHandler(deps: Partial<McpCommandDeps> = {}): CommandHan
       return disabled;
     }
     if (mcpCommand.action === "error") {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${mcpCommand.message}` },
-      };
+      return commandReply(`⚠️ ${mcpCommand.message}`);
     }
 
     if (mcpCommand.action === "show") {
       if (params.isGroup) {
-        return await deliverGroupMcpShowReplyPrivately(resolvedDeps, params, mcpCommand.name);
+        return await deliverGroupMcpShowReplyPrivately(params, mcpCommand.name);
       }
       return {
         shouldContinue: false,
@@ -233,38 +178,18 @@ function createMcpCommandHandler(deps: Partial<McpCommandDeps> = {}): CommandHan
         server: mcpCommand.value,
       });
       if (!result.ok) {
-        return {
-          shouldContinue: false,
-          reply: { text: `⚠️ ${result.error}` },
-        };
+        return commandReply(`⚠️ ${result.error}`);
       }
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`,
-        },
-      };
+      return commandReply(`🔌 MCP server "${mcpCommand.name}" saved to ${result.path}.`);
     }
 
     const result = await unsetConfiguredMcpServer({ name: mcpCommand.name });
     if (!result.ok) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${result.error}` },
-      };
+      return commandReply(`⚠️ ${result.error}`);
     }
     if (!result.removed) {
-      return {
-        shouldContinue: false,
-        reply: { text: `🔌 No MCP server named "${mcpCommand.name}" in ${result.path}.` },
-      };
+      return commandReply(`🔌 No MCP server named "${mcpCommand.name}" in ${result.path}.`);
     }
-    return {
-      shouldContinue: false,
-      reply: { text: `🔌 MCP server "${mcpCommand.name}" removed from ${result.path}.` },
-    };
-  };
-}
-
-/** Command handler for /mcp show/set/unset operations. */
-export const handleMcpCommand: CommandHandler = createMcpCommandHandler();
+    return commandReply(`🔌 MCP server "${mcpCommand.name}" removed from ${result.path}.`);
+  },
+);

@@ -4,6 +4,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
@@ -124,10 +125,6 @@ function hasOptionalString(value: Record<string, unknown>, key: string): boolean
   return !Object.hasOwn(value, key) || isNonEmptyString(value[key]);
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function parsePendingOperation(value: unknown): SystemAgentOperation | null {
   if (!isPlainRecord(value) || value.version !== 1 || !isPlainRecord(value.operation)) {
     return null;
@@ -242,7 +239,7 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
   if (operation.kind === "doctor-fix") {
     return [
       "OpenClaw rescue cannot run doctor repairs from a message channel because they can change the inference route powering this session.",
-      "Exit OpenClaw and run `openclaw doctor --fix` in a terminal.",
+      "On the machine running OpenClaw, with OpenClaw stopped, run `openclaw doctor --fix`.",
     ].join(" ");
   }
   if (operation.kind === "plugin-install") {

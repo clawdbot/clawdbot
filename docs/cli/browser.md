@@ -118,6 +118,34 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+## Chrome extension relay
+
+```bash
+openclaw browser extension path
+openclaw browser extension pair
+openclaw browser extension pair --gateway-url wss://gateway.example.com
+openclaw browser extension cdp
+openclaw browser extension cdp --json
+```
+
+- `extension path` prints the unpacked extension directory for Chrome's **Load
+  unpacked** flow.
+- `extension pair` creates the host-local relay key when needed and prints the
+  pairing string. `--gateway-url` creates a direct remote-Gateway pairing URL;
+  non-loopback URLs must use `wss://`.
+- `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
+  the loopback browser/CDP endpoints, protocol version, key ID, and fixed
+  challenge/complete binding. It never prints the relay key or an authorization
+  header by default.
+
+`extension cdp --legacy-bearer` is a temporary migration escape hatch. It
+prints the old Bearer header with a warning only while
+`browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
+without printing a credential. Use `--json` for machine output; warnings remain
+on stderr so stdout stays valid JSON.
+
+Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
+
 ## Tabs
 
 ```bash
@@ -196,6 +224,16 @@ openclaw browser dialog --dismiss --dialog-id d1
 Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp root). Use `waitfordownload` or `download` when the agent needs to wait for a specific file and return its path; those explicit waiters own the next download. Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed inbound media, including `media://inbound/<id>` and sandbox-relative `media/inbound/<id>` references. Nested media refs, traversal, and arbitrary local paths are rejected.
 
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
+
+Batch actions:
+
+```bash
+openclaw browser batch --actions '[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]'
+openclaw browser batch --actions-file plan.json
+openclaw browser batch --actions-file - --continue
+```
+
+`openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
 
 ## State and storage
 

@@ -5,6 +5,7 @@ import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 const mocks = vi.hoisted(() => ({
   completeDeferredSessionMcpRuntimeRetirement: vi.fn(),
   getMcpAppViewLease: vi.fn(),
+  getMcpAppViewLeaseForSession: vi.fn(),
   peekSessionMcpRuntime: vi.fn(),
   restoreMcpAppView: vi.fn(),
   createMcpAppStandaloneTicket: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../agents/mcp-ui-resource.js", () => ({
   getMcpAppViewLease: mocks.getMcpAppViewLease,
+  getMcpAppViewLeaseForSession: mocks.getMcpAppViewLeaseForSession,
   acquireMcpAppViewRequest: () => () => {},
 }));
 vi.mock("../../agents/mcp-app-sandbox.js", () => ({
@@ -116,6 +118,7 @@ describe("MCP App gateway bridge", () => {
     view.authorizeAppInteraction = undefined;
     view.readOnly = undefined;
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
+    mocks.getMcpAppViewLeaseForSession.mockReset().mockReturnValue(undefined);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
     mocks.restoreMcpAppView.mockReset().mockResolvedValue(undefined);
@@ -154,6 +157,23 @@ describe("MCP App gateway bridge", () => {
     expect(activeRuntime.acquireLease).toHaveBeenCalledOnce();
     expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
+  });
+
+  it("resolves a harness-native view through its originating session", async () => {
+    const nativeRuntime = runtime();
+    const nativeView = { ...view, runtime: nativeRuntime };
+    mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+    mocks.getMcpAppViewLeaseForSession.mockReturnValue(nativeView);
+
+    const respond = await invoke("mcp.app.view", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ html: "<html>demo</html>" });
+    expect(mocks.getMcpAppViewLeaseForSession).toHaveBeenCalledWith("cv_app", "agent:main:main");
+    expect(mocks.restoreMcpAppView).not.toHaveBeenCalled();
   });
 
   it("preserves the existing view payload when standalone ticket issuance is unavailable", async () => {

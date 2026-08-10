@@ -7,16 +7,22 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
+  acknowledgeNotifyOnExit,
   addSession,
   appendOutput,
   createSessionSlug,
   deleteSession,
+  drainFinishedSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
+  getFinishedSession,
+  getFinishedSessionForProcess,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
   markExited,
+  markTerminalPollObserved,
+  recordNotifyOnExitRemoval,
   setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
@@ -54,6 +60,26 @@ describe("bash process registry", () => {
     resetProcessRegistryForTests();
   });
 
+  it("suppresses a notify-on-exit event when terminal poll wins the race", () => {
+    const session = createRegistrySession({
+      id: "poll-first",
+      maxOutputChars: 10_000,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    addSession(session);
+    markTerminalPollObserved(session);
+    markExited(session, 0, null, "completed");
+
+    const remove = vi.fn(() => true);
+    recordNotifyOnExitRemoval(session, remove);
+
+    expect(remove).toHaveBeenCalledOnce();
+    expect(getFinishedSession("poll-first")?.terminalPollObserved).toBe(true);
+    acknowledgeNotifyOnExit(getFinishedSession("poll-first") ?? {});
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
   it("captures output and truncates", () => {
     const session = createRegistrySession({
       maxOutputChars: 10,
@@ -82,8 +108,10 @@ describe("bash process registry", () => {
 
     const drained = drainSession(session);
     expect(drained.stdout).toBe("b".repeat(20_000));
+    expect(drained.outputDropped).toBe(true);
     expect(session.pendingStdout).toHaveLength(0);
     expect(session.pendingStdoutChars).toBe(0);
+    expect(drainSession(session).outputDropped).toBe(false);
     expect(session.truncated).toBe(true);
   });
 
@@ -183,8 +211,112 @@ describe("bash process registry", () => {
         tail: "",
         truncated: false,
         totalOutputChars: 0,
+        unreadOutput: { stdout: "", stderr: "", outputDropped: false },
       },
     ]);
+  });
+
+  it("moves unread output into the exact finished snapshot and consumes it once", () => {
+    const session = createRegistrySession({
+      id: "exact-finished-output",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 100,
+      backgrounded: true,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", "terminal output\n");
+    markExited(session, 0, null, "completed");
+
+    const finished = getFinishedSessionForProcess(session);
+    expect(finished).toBe(getFinishedSession(session.id));
+    expect(finished && drainFinishedSession(finished).stdout).toBe("terminal output\n");
+    expect(finished && drainFinishedSession(finished).stdout).toBe("");
+    expect(drainSession(session).stdout).toBe("");
+  });
+
+  it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
+    for (let index = 0; index < 53; index += 1) {
+      const session = createRegistrySession({
+        id: `finished-${index}`,
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 100,
+        backgrounded: true,
+      });
+      addSession(session);
+      appendOutput(session, "stdout", `output-${index}`);
+      markExited(session, 0, null, "completed");
+    }
+
+    expect(listFinishedSessions()).toHaveLength(50);
+    expect(getFinishedSession("finished-0")).toBeUndefined();
+    expect(getFinishedSession("finished-2")).toBeUndefined();
+    expect(getFinishedSession("finished-3")?.aggregated).toBe("output-3");
+    expect(getFinishedSession("finished-52")?.aggregated).toBe("output-52");
+  });
+
+  it("bounds aggregate finished-session output without truncating retained logs", () => {
+    for (let index = 0; index < 11; index += 1) {
+      const session = createRegistrySession({
+        id: `large-finished-${index}`,
+        maxOutputChars: 250_000,
+        pendingMaxOutputChars: 250_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      appendOutput(session, "stdout", String(index).repeat(250_000));
+      markExited(session, 0, null, "completed");
+    }
+
+    expect(listFinishedSessions()).toHaveLength(8);
+    expect(getFinishedSession("large-finished-2")).toBeUndefined();
+    expect(getFinishedSession("large-finished-3")?.aggregated).toBe("3".repeat(250_000));
+    expect(getFinishedSession("large-finished-10")?.aggregated).toBe("10".repeat(125_000));
+  });
+
+  it("releases the aggregate budget when a completed session is explicitly cleared", () => {
+    for (let index = 0; index < 8; index += 1) {
+      const session = createRegistrySession({
+        id: `clear-budget-${index}`,
+        maxOutputChars: 250_000,
+        pendingMaxOutputChars: 250_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      appendOutput(session, "stdout", String(index).repeat(250_000));
+      markExited(session, 0, null, "completed");
+    }
+
+    deleteSession("clear-budget-3");
+
+    const replacement = createRegistrySession({
+      id: "clear-budget-replacement",
+      maxOutputChars: 250_000,
+      pendingMaxOutputChars: 250_000,
+      backgrounded: true,
+    });
+    addSession(replacement);
+    appendOutput(replacement, "stdout", "r".repeat(250_000));
+    markExited(replacement, 0, null, "completed");
+
+    expect(listFinishedSessions()).toHaveLength(8);
+    expect(getFinishedSession("clear-budget-0")?.aggregated).toBe("0".repeat(250_000));
+    expect(getFinishedSession("clear-budget-3")).toBeUndefined();
+    expect(getFinishedSession("clear-budget-replacement")?.aggregated).toBe("r".repeat(250_000));
+  });
+
+  it("retains the complete newest log when it alone exceeds the aggregate budget", () => {
+    const session = createRegistrySession({
+      id: "oversized-finished",
+      maxOutputChars: 2_000_001,
+      pendingMaxOutputChars: 2_000_001,
+      backgrounded: true,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", "x".repeat(2_000_001));
+    markExited(session, 0, null, "completed");
+
+    expect(listFinishedSessions()).toHaveLength(1);
+    expect(getFinishedSession("oversized-finished")?.aggregated).toHaveLength(2_000_001);
   });
 
   it("tracks only live backgrounded sessions", () => {

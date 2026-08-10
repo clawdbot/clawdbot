@@ -1,34 +1,8 @@
 /**
  * Resolves per-attempt runtime decisions from config and channel context.
  */
-import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockOptions,
-} from "../../session-write-lock.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-/**
- * Builds the session write-lock timing for a live embedded attempt. The lock is
- * capped by compaction time because cleanup may keep writing after model abort,
- * but should not inherit the much larger full run timeout.
- */
-export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
-  config?: OpenClawConfig;
-  compactionTimeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
-  // Bound embedded-attempt lock holds to the compaction window, not the full run timeout.
-  // With defaults this permits roughly 180s compaction time plus the shared 120s
-  // timeout grace before the watchdog releases a stuck live-process lock.
-  return resolveSessionWriteLockOptions(params.config, {
-    env: params.env,
-    maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-      timeoutMs: params.compactionTimeoutMs,
-    }),
-  });
-}
 
 /**
  * Returns the auth profile id that should be attached to model-stream

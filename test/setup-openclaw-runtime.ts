@@ -25,15 +25,13 @@ type WorkerPluginRuntimeHelpers = {
   setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
 };
 type WorkerCleanupHelpers = {
-  clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
+  clearSessionStoreCacheForTest: typeof import("../src/config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.js").drainSessionStoreWriterQueuesForTest;
-  drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
   resetPreparedModelRuntimeSnapshotsForTest: typeof import("../src/agents/prepared-model-runtime.test-support.js").resetPreparedModelRuntimeSnapshotsForTest;
-  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.test-support.js").resetSessionWriteLockStateForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -71,17 +69,10 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     [WORKER_CLEANUP_HELPERS]?: Promise<WorkerCleanupHelpers>;
   };
   globalState[WORKER_CLEANUP_HELPERS] ??= (async () => {
-    // The test-support facade reads the API installed by the real lock module at import time.
-    // Load that producer first so concurrent module evaluation cannot observe a missing API.
-    const sessionWriteLock = await vi.importActual<
-      typeof import("../src/agents/session-write-lock.js")
-    >("../src/agents/session-write-lock.js");
     const [
       contextRuntimeState,
       modelsConfigState,
       preparedModelRuntime,
-      sessionWriteLockTestSupport,
-      sessionStoreCache,
       sessionStoreWriterState,
       fileLock,
     ] = await Promise.all([
@@ -94,30 +85,21 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/agents/prepared-model-runtime.test-support.js")>(
         "../src/agents/prepared-model-runtime.test-support.js",
       ),
-      vi.importActual<typeof import("../src/agents/session-write-lock.test-support.js")>(
-        "../src/agents/session-write-lock.test-support.js",
-      ),
-      vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
-        "../src/config/sessions/store-cache.js",
-      ),
       vi.importActual<typeof import("../src/config/sessions/store-writer-state.js")>(
         "../src/config/sessions/store-writer-state.js",
       ),
       vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
     ]);
     return {
-      clearSessionStoreCaches: sessionStoreCache.clearSessionStoreCaches,
+      clearSessionStoreCacheForTest: sessionStoreWriterState.clearSessionStoreCacheForTest,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreWriterQueuesForTest:
         sessionStoreWriterState.drainSessionStoreWriterQueuesForTest,
-      drainSessionWriteLockStateForTest: sessionWriteLock.drainSessionWriteLockStateForTest,
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
       resetPreparedModelRuntimeSnapshotsForTest:
         preparedModelRuntime.resetPreparedModelRuntimeSnapshotsForTest,
-      resetSessionWriteLockStateForTest:
-        sessionWriteLockTestSupport.resetSessionWriteLockStateForTest,
     };
   })();
   return globalState[WORKER_CLEANUP_HELPERS];
@@ -384,32 +366,27 @@ beforeAll(async () => {
 
 afterEach(async () => {
   const {
-    clearSessionStoreCaches,
+    clearSessionStoreCacheForTest,
     drainFileLockStateForTest,
     drainSessionStoreWriterQueuesForTest,
-    drainSessionWriteLockStateForTest,
     resetContextWindowCacheForTest,
     resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
     resetPreparedModelRuntimeSnapshotsForTest,
-    resetSessionWriteLockStateForTest,
   } = await loadWorkerCleanupHelpers();
   await drainSessionStoreWriterQueuesForTest();
-  clearSessionStoreCaches();
+  clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
-  await drainSessionWriteLockStateForTest();
   resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetPreparedModelRuntimeSnapshotsForTest();
-  resetSessionWriteLockStateForTest();
   await installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
-  const { clearSessionStoreCaches, drainFileLockStateForTest, drainSessionWriteLockStateForTest } =
+  const { clearSessionStoreCacheForTest, drainFileLockStateForTest } =
     await loadWorkerCleanupHelpers();
-  clearSessionStoreCaches();
+  clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
-  await drainSessionWriteLockStateForTest();
 });

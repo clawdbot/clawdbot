@@ -1,5 +1,9 @@
 {
   "id": "qqbot",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "QQ Bot",
   "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
   "icon": "https://cdn.simpleicons.org/qq",
@@ -58,6 +62,10 @@
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
       },
+      "contextVisibility": {
+        "type": "string",
+        "enum": ["all", "allowlist", "allowlist_quote"]
+      },
       "group": {
         "type": "object",
         "additionalProperties": true,
@@ -92,12 +100,9 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "contextVisibility": { "$ref": "#/$defs/contextVisibility" },
           "systemPrompt": { "type": "string" },
           "markdownSupport": { "type": "boolean" },
-          "voiceDirectUploadFormats": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
           "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
           "urlDirectUpload": { "type": "boolean" },
           "upgradeUrl": { "type": "string" },
@@ -134,12 +139,9 @@
         "type": "array",
         "items": { "type": "string" }
       },
+      "contextVisibility": { "$ref": "#/$defs/contextVisibility" },
       "systemPrompt": { "type": "string" },
       "markdownSupport": { "type": "boolean" },
-      "voiceDirectUploadFormats": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
       "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
       "stt": { "$ref": "#/$defs/stt" },
       "urlDirectUpload": { "type": "boolean" },

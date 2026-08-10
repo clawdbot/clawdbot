@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -495,12 +496,38 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(res.warnings);
     });
 
-    it("warns when automatic gpt-5.6 overrides a provider PI runtime policy", () => {
+    it.each([
+      {
+        title: "warns when automatic gpt-5.6 overrides a provider PI runtime policy",
+        baseUrl: "https://api.openai.com/v1",
+        modelPattern: "openai/gpt-5.6",
+        runtime: "default",
+      },
+      {
+        title: "warns when automatic Spark overrides a provider PI runtime policy",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        modelPattern: "openai/gpt-5.3-codex-spark",
+        runtime: "default",
+      },
+      {
+        title:
+          "still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default",
+        baseUrl: "https://api.openai.com/v1",
+        modelPattern: "openai/*",
+        runtime: "default",
+      },
+      {
+        title: "still warns when an agent model route explicitly selects Codex",
+        baseUrl: "https://api.openai.com/v1",
+        modelPattern: "openai/gpt-5.5",
+        runtime: "codex",
+      },
+    ])("$title", ({ baseUrl, modelPattern, runtime }) => {
       const res = validateWithMissingCodexPlugin({
         models: {
           providers: {
             openai: {
-              baseUrl: "https://api.openai.com/v1",
+              baseUrl,
               models: [],
               agentRuntime: { id: "pi" },
             },
@@ -510,33 +537,7 @@ describe("config plugin validation", () => {
           list: [{ id: "openclaw" }],
           defaults: {
             models: {
-              "openai/gpt-5.6": { agentRuntime: { id: "default" } },
-            },
-          },
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
-    it("warns when automatic Spark overrides a provider PI runtime policy", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [],
-              agentRuntime: { id: "pi" },
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "openclaw" }],
-          defaults: {
-            models: {
-              "openai/gpt-5.3-codex-spark": { agentRuntime: { id: "default" } },
+              [modelPattern]: { agentRuntime: { id: runtime } },
             },
           },
         },
@@ -813,6 +814,79 @@ describe("config plugin validation", () => {
       expectNoMissingCodexPluginWarning(res.warnings);
     });
 
+    it("does not attribute keyed agent model refs to another agent", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          entries: {
+            openclaw: {
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            ops: {
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "openai/gpt-5.6": { agentRuntime: { id: "pi" } },
+              },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("keeps numeric legacy list indices bound to their pre-migration agents", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          list: [
+            {
+              id: "10",
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "openai/gpt-5.6": { agentRuntime: { id: "pi" } },
+              },
+            },
+            {
+              id: "2",
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("keeps the two-argument diagnostic API correct for a legacy list", () => {
+      expect(
+        shouldSuppressMissingCodexPluginDiagnostics(
+          {
+            agents: {
+              list: [
+                {
+                  id: "10",
+                  default: true,
+                  model: "anthropic/claude-sonnet-4-6",
+                },
+                { id: "2", model: "openai/gpt-5.6" },
+              ],
+            },
+            plugins: { entries: { codex: {} } },
+          },
+          suiteEnv(),
+        ),
+      ).toBe(false);
+    });
+
     it("warns when a default exact Codex policy remains reachable by another agent", () => {
       const res = validateWithMissingCodexPlugin({
         models: {
@@ -1084,32 +1158,6 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(res.warnings);
     });
 
-    it("still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-              agentRuntime: { id: "pi" },
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "openclaw" }],
-          defaults: {
-            models: {
-              "openai/*": { agentRuntime: { id: "default" } },
-            },
-          },
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
     it("still warns when the missing Codex plugin is explicitly enabled", () => {
       const res = validateWithMissingCodexPlugin({
         models: {
@@ -1147,32 +1195,6 @@ describe("config plugin validation", () => {
                   agentRuntime: { id: "codex" },
                 },
               ],
-            },
-          },
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
-    it("still warns when an agent model route explicitly selects Codex", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-              agentRuntime: { id: "pi" },
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "openclaw" }],
-          defaults: {
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
           },
         },

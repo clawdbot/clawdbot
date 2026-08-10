@@ -103,11 +103,13 @@ a workflow fix that the existing parent run cannot consume.
   returns to the Code SHA loop.
 - During release planning, inspect both `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` before branching and again
-  before final publish. For every deprecated or removal-pending compatibility
-  record whose `removeAfter` date is on or before the release date, either
-  remove the compatibility path where safe and validate the affected tests, or
-  write down why removal is blocked and get explicit maintainer approval before
-  shipping the expired compatibility path.
+  before final publish. For every `deprecated` compatibility record whose
+  `removeAfter` date is on or before the release date, either remove the
+  compatibility path where safe and validate the affected tests, or change it
+  to `removal-pending`, document the blocker, and get explicit maintainer
+  approval. Revalidate every due `removal-pending` record's blocker and upgrade
+  conditions before shipping; keep it only with explicit maintainer approval
+  until those conditions are met.
 - When removing deprecated runtime/config compatibility, preserve any doctor
   migration, repair, or hint that is still needed by supported upgrade paths.
   Doctor-side compatibility should stay tracked in
@@ -207,9 +209,9 @@ prepare-run <PR>`.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.
-- When any beta or stable release is live, make a best-effort Discord
-  announcement using the configured secret workflow; do not block or roll back
-  the release if the announcement fails.
+- When any beta, stable, or extended-stable release is live, make a best-effort
+  Discord announcement using the release-track-specific wording; do not block
+  or roll back the release if the announcement fails.
 - When asked to announce on X, use `~/Projects/bird/bird` and follow the
   release tweet style below.
 
@@ -222,10 +224,18 @@ maintenance patch, read
 or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
-The backport ability owns the complete mainline inventory, private-security
-reconciliation, candidate decisions, maintainer approval, coordinated staging
-PR, and proof handoff. After that PR lands, use the dedicated extended-stable sequence
-below. Never route `.33+` through the regular beta/stable release sequence.
+The backport flow covers mainline inventory, private-security reconciliation,
+approval, the staging PR, and proof handoff. After it lands, use the sequence
+below. Never route `.33+` through regular beta/stable release steps.
+
+Extended-stable requires a visible **SDK/config backport warning** whenever a
+candidate changes the public plugin SDK or a config/default/schema/migration
+surface. Prefer an adaptation that uses the SDK and configuration already
+shipped on that line. If a contract change remains necessary, record its
+published impact and the maintainer decision in the ledger and staging PR.
+Read `references/extended-stable-backports.md`; a clean cherry-pick, green
+release checks, or a regenerated baseline does not by itself explain the
+maintenance risk.
 
 ## Publish Gateway extended-stable releases
 
@@ -236,62 +246,51 @@ Docker Gateway images. Treat
 `scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
 on pinned current `main` as the exact command and validation contract.
 
-1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
-   approved backport PR lands. Verify the root and every publishable official
-   plugin have the intended version, then generate and commit the complete
-   `## YYYY.M.P` `CHANGELOG.md` section before freezing its full 40-character
-   SHA. Unlike the regular Code-SHA flow, this npm-only candidate preflight
-   packages the frozen tree, so a matching non-empty changelog section is a
-   prerequisite, not post-validation release decoration. Backport the complete
-   current-main Docker release-channel change, including its workflow, promoter,
-   policy, shared release-version classifier, tests, and workflow validation
-   changes. Do not create the final tag yet; tag-push workflows use that code,
-   which must not route `.33+` to regular stable aliases or fail from a partial
-   copy.
-2. Dispatch `openclaw-npm-release.yml` from that canonical branch with the
-   frozen SHA as `tag`, `preflight_only=true`, and
-   `npm_dist_tag=extended-stable`. A full SHA is a validation-only candidate
-   input; save the successful preflight run ID and SHA.
-3. Run Full Release Validation against the same frozen SHA with the canonical
-   branch as `target_context_ref`. Use
-   `node scripts/full-release-validation-at-sha.mjs --sha <sha> --target-ref extended-stable/YYYY.M.33`
-   so trusted workflow code is pinned independently from the exact product
-   target. Save the successful run ID and its exact `run_attempt` from
-   `gh api repos/openclaw/openclaw/actions/runs/<run-id> --jq .run_attempt`.
-4. If either candidate gate fails or another backport is needed, update the
-   canonical branch and its matching `CHANGELOG.md` section, freeze its new
-   SHA, and rerun the affected gates. Do not create, delete, or move a final
-   `vYYYY.M.P` tag for candidate validation.
-5. Only after the candidate gates are green, re-resolve the canonical branch
-   tip and require it still equals the validated SHA. Create and push the
-   signed final `vYYYY.M.P` tag at that SHA. Never move or delete a final
-   extended-stable tag: a post-tag code change needs a new patch version and a
-   new candidate.
+1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
+   plugin have the intended version. Generate and commit the complete
+   `## YYYY.M.P` changelog section with `### Highlights`, `### Changes`, and
+   `### Fixes`. Carry the full current-main Docker
+   release-channel unit: workflow, promoter, policy, shared classifier, tests,
+   and workflow validation. Run focused checks and freeze the untagged tip SHA.
+2. From that branch, run npm preflight with the SHA as `tag`,
+   `preflight_only=true`, and `npm_dist_tag=extended-stable`; save the run ID.
+3. Run complete Full Release Validation against the canonical branch with
+   `release_profile=stable`; save its run ID and successful `run_attempt`.
+   Prefer the trusted main-pinned harness, which attests the immutable target
+   SHA in its v3 manifest. Any candidate branch change invalidates both gates.
+4. Require the tip still equals the frozen SHA, then create signed `vYYYY.M.P`.
+   Never move or delete a final tag; later source changes need a new patch.
+5. Require the saved validation run to be complete and successful, bind its
+   manifest target SHA and attempt to the tag, and accept a direct run from the
+   canonical branch, a direct current-`main` run whose workflow SHA is still
+   reachable from main, or a trusted main-pinned `release-ci/*` harness. Reject
+   narrow reruns.
 6. Dispatch `plugin-npm-release.yml` from the same branch with
    `publish_scope=all-publishable`, the full release SHA as `ref`, and
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
    readback, then save the successful plugin run ID.
-7. Dispatch the real `openclaw-npm-release.yml` publish from the same branch
-   with the intended tag, `npm_dist_tag=extended-stable`, all three saved run
-   IDs, and `full_release_validation_run_attempt=<saved-attempt>`. The workflow
-   must publish the exact prepared core tarball and prove the referenced runs
-   match the canonical branch and release SHA.
-8. Independently verify the exact core package, every official plugin package,
-   and all `extended-stable` selectors. If only the core selector readback
-   fails, use the `openclaw` repair command generated by the core workflow. If
-   an official-plugin selector is missing or stale for an already-published
-   version, use the approved credential-isolated release tooling for manual
-   plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
-   republish the same version.
-9. Require `Docker Release` to publish and verify the exact default, slim,
-   browser, and architecture images in both registries before its final step
-   promotes the three extended-stable aliases through the shared promotion
-   script. For alias repair, dispatch
-   `docker-channel-promote.yml` from current `main` with the exact tag; never
-   rebuild or move the release tag.
-10. Do not create a GitHub Release or publish the macOS app, Windows Hub,
-    mobile apps, website downloads, ClawHub packages, or private dist-tag
-    artifacts from this path.
+7. Publish core with the tag, `npm_dist_tag=extended-stable`, all three run IDs,
+   and `full_release_validation_run_attempt=<saved-attempt>`. Normally dispatch
+   from the canonical branch. For a workflow-only recovery after the candidate
+   is immutable, dispatch trusted current `main` with
+   `release_candidate_branch=extended-stable/YYYY.M.33`; it still publishes the
+   tag checkout and accepts canonical-branch, current-main, or trusted-pinned
+   validation evidence; the prepared tarball and every evidence identity must
+   still match the candidate SHA.
+8. From a clean current-`main` checkout, run
+   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
+   Verify signatures, provenance, inventories, exact versions, and selectors.
+   Use the generated repair only for the root selector; repair other selectors
+   with approved credential-isolated tooling. Never republish a version.
+9. Require `Docker Release` to verify default, slim, browser, and architecture
+   images in GHCR and Docker Hub, including attestations and platform versions.
+   It must advance only
+   `extended-stable`, `extended-stable-slim`, and `extended-stable-browser` by
+   digest and refuse automatic rollback. For alias repair, dispatch the
+   approval-gated `docker-channel-promote.yml` from current `main` with the exact
+   tag; never rebuild or move the release tag.
+10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
+    ClawHub, or private dist-tag artifacts from this path.
 
 ## Keep release channel naming aligned
 
@@ -317,13 +316,13 @@ complete until `main` carries the actual shipped release state.
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Set `main` to the shipped stable version, not a speculative next train. Run
    `pnpm release:prep` after the root version change, then
-   `pnpm deps:shrinkwrap:generate`.
+   `pnpm deps:npm-lock:check`.
 3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
    tagged release branch. Include the stable `appcast.xml` update when the mac
    release published one.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
-5. Run `pnpm release:generated:check`, `pnpm deps:shrinkwrap:check`, and
+5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
    `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
    contains the shipped version and changelog before calling the stable release
    done.
@@ -481,7 +480,7 @@ HEAD/worktree-bound manifest under git metadata for cutover review.
   credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies use
-  `scripts/render-github-release-notes.mjs`. When the full matching
+  `scripts/render-github-release-notes.mts`. When the full matching
   `CHANGELOG.md` version section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, publish the exact
   `## YYYY.M.PATCH` block through the line before the next level-2 heading,
@@ -745,7 +744,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`. If either cannot be injected, stop
   before starting those local long lanes and report the missing key.
 - Live credentialed channel QA is the GitHub Actions workflow
-  `QA-Lab - All Lanes` (`.github/workflows/qa-live-telegram-convex.yml`), not a
+  `QA-Lab - All Lanes` (`.github/workflows/qa-live-transports-convex.yml`), not a
   local substitute. Dispatch it from Actions against the release tag and wait
   for it to pass before npm preflight/publish readiness. Use a SHA only when it
   satisfies the workflow's secret-bearing trust gate: main ancestor or open PR
@@ -1076,7 +1075,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
     `preflight_run_id` plus the successful `full_release_validation_run_id` and
-    its exact `full_release_validation_run_attempt`.
+    its exact `full_release_validation_run_attempt`. Preserve the immutable evidence pair as
+    `full_release_validation_run_id=<saved-run-id>` and
+    `full_release_validation_run_attempt=<saved-attempt>`.
     For stable publish, also pass the exact non-prerelease
     `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
     candidate-approved installer digest map as `windows_node_installer_digests`.

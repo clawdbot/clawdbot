@@ -1,5 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   Agent,
   AgentEvent,
@@ -12,7 +13,7 @@ import type {
   AgentSessionConfig,
   AgentSessionEvent,
   AgentSessionEventListener,
-  AgentSessionWriteLockRunner,
+  AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
 import { extractTextContent } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
@@ -42,7 +43,10 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SourceInfo } from "./source-info.js";
+import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
+
+const log = createSubsystemLogger("agents/session");
 
 interface ToolDefinitionEntry {
   definition: ToolDefinition;
@@ -105,7 +109,7 @@ export abstract class AgentSessionBase {
   protected disableBuiltInTools: boolean;
   protected baseToolsOverride?: Record<string, AgentTool>;
   protected sessionStartEvent: SessionStartEvent;
-  protected withExternalSessionWriteLock?: AgentSessionWriteLockRunner;
+  protected withExternalSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   protected extensionUIContext?: ExtensionUIContext;
   protected extensionCommandContextActions?: ExtensionCommandContextActions;
   protected extensionAbortHandler?: () => void;
@@ -146,7 +150,7 @@ export abstract class AgentSessionBase {
       type: "session_start",
       reason: "startup",
     };
-    this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
   }
 
@@ -196,9 +200,9 @@ export abstract class AgentSessionBase {
     return result.ok ? { apiKey: result.apiKey, headers: result.headers } : {};
   }
 
-  protected async runWithSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T> {
-    return this.withExternalSessionWriteLock
-      ? await this.withExternalSessionWriteLock(run)
+  protected async runWithSessionWriteSettlement<T>(run: () => Promise<T> | T): Promise<T> {
+    return this.withExternalSessionWriteSettlement
+      ? await this.withExternalSessionWriteSettlement(run)
       : await run();
   }
 
@@ -217,7 +221,7 @@ export abstract class AgentSessionBase {
   protected installAgentToolHooks(): void {
     this.agent.beforeToolCall = async ({ toolCall, args }) => {
       const runner = this.currentExtensionRunner;
-      return await this.runWithSessionWriteLock(async () => {
+      return await this.runWithSessionWriteSettlement(async () => {
         if (!runner.hasHandlers("tool_call")) {
           return undefined;
         }
@@ -244,7 +248,7 @@ export abstract class AgentSessionBase {
         return undefined;
       }
 
-      const hookResult = await this.runWithSessionWriteLock(
+      const hookResult = await this.runWithSessionWriteSettlement(
         async () =>
           await runner.emitToolResult({
             type: "tool_result",
@@ -274,10 +278,24 @@ export abstract class AgentSessionBase {
   // Event Subscription
   // =========================================================================
 
-  /** Emit an event to all listeners */
+  /** Copy-on-write listener registration keeps dispatch stable without per-event snapshots. */
   protected emit(event: AgentSessionEvent): void {
     for (const l of this.eventListeners) {
-      l(event);
+      void l(event);
+    }
+  }
+
+  /** Terminal listeners form a barrier before retry, compaction, or queue draining. */
+  private async emitTerminal(
+    event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+  ): Promise<void> {
+    const listeners = this.eventListeners;
+    for (const listener of listeners) {
+      try {
+        await listener(event);
+      } catch (error) {
+        log.warn(`agent_end listener failed: ${String(error)}`);
+      }
     }
   }
 
@@ -291,6 +309,7 @@ export abstract class AgentSessionBase {
 
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
+  private lastAssistantEntryId: string | undefined;
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
@@ -304,13 +323,19 @@ export abstract class AgentSessionBase {
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
     if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
+      await this.runWithSessionWriteSettlement(
+        async () => await this.handleAgentEventUnlocked(event),
+      );
       return;
     }
     await this.handleAgentEventUnlocked(event);
   };
 
   private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
+    if (event.type === "agent_start") {
+      this.lastAssistantEntryId = undefined;
+    }
+
     // When a user message starts, check if it's from either queue and remove it BEFORE emitting
     // This ensures the UI sees the updated queue state
     if (event.type === "message_start" && event.message.role === "user") {
@@ -335,13 +360,18 @@ export abstract class AgentSessionBase {
 
     // Emit to extensions first
     const messageChangedByExtension = await this.emitExtensionEvent(event);
+    const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
-    this.emit(
-      event.type === "agent_end"
-        ? { ...event, willRetry: this.willRetryAfterAgentEnd(event) }
-        : event,
-    );
+    if (event.type === "agent_end") {
+      await this.emitTerminal({
+        ...event,
+        willRetry: this.willRetryAfterAgentEnd(event),
+        ...(this.lastAssistantEntryId ? { assistantEntryId: this.lastAssistantEntryId } : {}),
+      });
+    } else if (!publishAfterPersistence) {
+      this.emit(event);
+    }
 
     // Handle session persistence
     if (event.type === "message_end") {
@@ -363,10 +393,25 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        this.sessionManager.appendMessage(event.message, {
-          invalidateSerializedPrefixCache:
-            messageChangedByExtension || toolResultChangedByExtension,
-        });
+        let entryId: string;
+        try {
+          entryId = this.sessionManager.appendMessage(event.message, {
+            invalidateSerializedPrefixCache:
+              messageChangedByExtension || toolResultChangedByExtension,
+          });
+        } catch (error) {
+          if (event.message.role === "user") {
+            reportSteeringMessagePersistenceFailure(event.message, error);
+          }
+          throw error;
+        }
+        if (event.message.role === "assistant") {
+          this.lastAssistantEntryId = entryId;
+        } else if (event.message.role === "user") {
+          // A queued user message_end normally follows a committed append before listeners consume it.
+          // before_message_write suppression marks its recorder blocked first and is terminal without retry.
+          this.emit(event);
+        }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -518,13 +563,13 @@ export abstract class AgentSessionBase {
    * Multiple listeners can be added. Returns unsubscribe function for this listener.
    */
   subscribe(listener: AgentSessionEventListener): () => void {
-    this.eventListeners.push(listener);
+    this.eventListeners = [...this.eventListeners, listener];
 
     // Return unsubscribe function for this specific listener
     return () => {
       const index = this.eventListeners.indexOf(listener);
       if (index !== -1) {
-        this.eventListeners.splice(index, 1);
+        this.eventListeners = this.eventListeners.toSpliced(index, 1);
       }
     };
   }
@@ -702,9 +747,19 @@ export abstract class AgentSessionBase {
     return this.agent.followUpMode;
   }
 
-  /** Current session file path, or undefined if sessions are disabled */
+  /** Current persisted transcript target, or undefined for in-memory sessions. */
+  get sessionTarget() {
+    return this.sessionManager.getSessionTarget();
+  }
+
+  /** Current persisted session key, or undefined for in-memory sessions. */
+  get sessionKey(): string | undefined {
+    return this.sessionTarget?.sessionKey;
+  }
+
+  /** @deprecated Compatibility token; returns the session key, not a file path. */
   get sessionFile(): string | undefined {
-    return this.sessionManager.getSessionFile();
+    return this.sessionKey;
   }
 
   /** Current session ID */

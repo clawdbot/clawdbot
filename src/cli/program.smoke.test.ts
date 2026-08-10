@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./program.js";
 import {
+  callGateway,
   configureCommand,
   ensureConfigReady,
   runSystemAgentWithInference,
@@ -58,10 +59,72 @@ describe("cli program (smoke)", () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
     const options = firstMockArg(runTui) as {
       timeoutMs?: number;
+      historyLimit?: number;
       forceProcessExitOnReturn?: boolean;
     };
     expect(options?.timeoutMs).toBe(45000);
+    expect(options?.historyLimit).toBe(200);
     expect(options?.forceProcessExitOnReturn).toBe(true);
+  });
+
+  it("resolves a positional tui short reference before launch", async () => {
+    callGateway.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
+
+    await runProgram(["tui", "movies-a1166b81"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: { shortId: "a1166b81", slugHint: "movies" },
+      }),
+    );
+    expect(firstMockArg(runTui)).toMatchObject({
+      local: false,
+      session: "agent:main:thread:resolved",
+    });
+  });
+
+  it("preserves a global-scope URL main session when launching tui", async () => {
+    callGateway.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    });
+
+    await runProgram(["tui", "https://gateway.example/dashboard/ops"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agents.list",
+        params: {},
+      }),
+    );
+    expect(firstMockArg(runTui)).toMatchObject({
+      local: false,
+      session: "global",
+      agentId: "ops",
+    });
+  });
+
+  it("leaves tui agent inference unchanged without a URL agent", async () => {
+    await runProgram(["tui"]);
+
+    expect(firstMockArg(runTui)).not.toHaveProperty("agentId");
+  });
+
+  it("rejects a URL target combined with --url", async () => {
+    await expect(
+      runProgram([
+        "tui",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--url",
+        "wss://other.example",
+      ]),
+    ).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("pass one target"));
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("runs setup one-shot requests", async () => {
@@ -89,6 +152,30 @@ describe("cli program (smoke)", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Error: --history-limit must be a positive integer.",
     );
+    expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("accepts the maximum Gateway tui history limit", async () => {
+    await runProgram(["tui", "--history-limit", "1000"]);
+
+    expect(firstMockArg(runTui)).toMatchObject({ local: false, historyLimit: 1000 });
+  });
+
+  it.each([
+    { entryPoint: "tui --local", args: ["tui", "--local"] },
+    { entryPoint: "terminal", args: ["terminal"] },
+    { entryPoint: "chat", args: ["chat"] },
+  ])("preserves oversized history limits for local $entryPoint", async ({ args }) => {
+    await runProgram([...args, "--history-limit", "1001"]);
+
+    expect(firstMockArg(runTui)).toMatchObject({ local: true, historyLimit: 1001 });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects tui history limits above the Gateway maximum", async () => {
+    await expect(runProgram(["tui", "--history-limit", "1001"])).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: --history-limit must be at most 1000.");
     expect(runTui).not.toHaveBeenCalled();
   });
 

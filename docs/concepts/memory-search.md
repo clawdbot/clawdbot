@@ -73,7 +73,9 @@ flowchart LR
     T --> BM["BM25 search"]
     VS --> M["Weighted merge"]
     BM --> M
-    M --> R["Top results"]
+    M --> D["Recency and importance"]
+    D --> R["MMR diversity"]
+    R --> O["Top results"]
 ```
 
 - **Vector search** matches similar meaning ("gateway host" matches "the
@@ -86,11 +88,45 @@ flowchart LR
 
 If only one path is available, the other runs alone.
 
+The builtin engine then applies deterministic ranking:
+
+```text
+hybrid relevance × recency decay × importance multiplier
+```
+
+Importance is scored once when an entry is written by a memory workflow that
+already has a model in the loop. Missing importance is neutral, so existing
+indexes keep their previous relevance signal. Dated daily notes decay with a
+30-day half-life; curated files such as `MEMORY.md` and `USER.md` are evergreen.
+This follows the relevance, recency, and importance result in
+[Generative Agents (arXiv:2304.03442)](https://arxiv.org/abs/2304.03442) without
+adding a query-time model call.
+
+MMR then reorders the scored hybrid candidate set to reduce redundant
+snippets. It does not change scores, threshold eligibility, or make another
+provider call.
+
+## Deterministic trigger recall
+
+On eligible interactive turns, the builtin engine also compares the inbound
+message with short trigger phrases stored on indexed entries. Strong matches
+can add up to three compact entries to hidden context before the reply. The
+prefilter uses the existing keyword and vector retrieval paths and does not run
+a recall model.
+
+Automatic injection is deliberately narrower than `memory_search`: only
+promoted, trusted entries qualify. Until indexed provenance is available, that
+means entries from root `MEMORY.md` and `USER.md` only. Daily notes, imported
+transcripts, and session transcripts remain available through explicit memory
+tools or Active Memory escalation, but are never injected automatically.
+
 **FTS-only mode.** Set `provider: "none"` to intentionally disable embeddings
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
-also falls back to keyword-only ranking if no embedding auth is configured,
-without erroring, and so does `provider: "local"` (the GGUF/llama.cpp
-provider) when it fails.
+falls back to keyword-only ranking when embedding setup or a request fails, as
+does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
+still indexes text for keyword search, and `memory_search` includes the
+redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
+there are no matches.
 
 **Explicit provider unavailable.** If you name any other provider explicitly
 (for example `openai`, `ollama`, `gemini`) and it becomes unavailable at
@@ -102,46 +138,29 @@ ranking.
 
 ## Improving search quality
 
-Two optional features help with a large note history.
+Two deterministic ranking passes are enabled by default for hybrid search.
 
-### Temporal decay
+### Recency decay
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
 original weight. `MEMORY.md` and other non-dated files under `memory/` are
 evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
 
-<Tip>
-Enable this if your agent has months of daily notes and stale information
-keeps outranking recent context.
-</Tip>
-
 ### MMR (diversity)
 
 Reduces redundant results. If five notes all mention the same router config,
-MMR ensures the top results cover different topics instead of repeating.
+MMR favors a similarly relevant result with different content instead of
+repeating near-identical snippets. The fixed relevance-biased setting uses
+lambda `0.7` with Jaccard overlap over snippet tokens. Its local work is
+`O(k²)`: ordinary defaults request 24 candidates per retrieval leg, for at
+most 48 unique non-exact candidates before overlap; broader project and
+identifier searches remain separately capped.
 
 <Tip>
-Enable this if `memory_search` keeps returning near-duplicate snippets from
-different daily notes.
+No configuration is required. FTS-only and vector-only fallback paths do not
+run the hybrid MMR pass.
 </Tip>
-
-### Enable both
-
-```json5
-{
-  memory: {
-    search: {
-      query: {
-        hybrid: {
-          mmr: { enabled: true },
-          temporalDecay: { enabled: true },
-        },
-      },
-    },
-  },
-}
-```
 
 ## Multimodal memory
 
@@ -169,11 +188,6 @@ DM setup shares that main session, so users routed there can recall content
 from its watched groups. Use a per-peer `dmScope` for DM isolation, or set
 visibility to `"self"` to opt out of ambient watched-session reads. Other
 unrelated same-agent sessions still require `"agent"` visibility.
-
-When using the QMD backend, also set `memory.qmd.sessions.enabled: true` so
-transcripts get exported into the QMD collection; `experimental.sessionMemory`
-and `sources` alone do not export transcripts into QMD. See
-[configuration reference](/reference/memory-config#session-memory-search-experimental).
 
 ## Troubleshooting
 

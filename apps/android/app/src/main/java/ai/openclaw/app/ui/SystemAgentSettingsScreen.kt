@@ -249,7 +249,16 @@ private fun SystemAgentQuestionCard(
       Text(question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
       question.options.forEach { option ->
         ClawSecondaryButton(
-          text = if (option.recommended) "${option.label} · ${nativeString("Recommended")}" else option.label,
+          text =
+            if (option.recommended) {
+              nativeString(
+                "\$label · \$recommendation",
+                option.label,
+                nativeString("Recommended"),
+              )
+            } else {
+              option.label
+            },
           onClick = { onAnswer(option) },
           enabled = enabled,
         )

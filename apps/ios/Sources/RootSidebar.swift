@@ -102,6 +102,7 @@ struct RootSidebar: View {
             {
                 self.selectSidebarDestination(.settings)
             }
+            .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
 
             if self.isDrawerLayout {
                 OpenClawSidebarControlButton(action: self.dismissAction)
@@ -484,6 +485,7 @@ struct RootSidebar: View {
         .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
+        .accessibilityIdentifier("RootTabs.Sidebar.Destination.chat")
         .accessibilityValue(mainSession?.unread == true ? String(localized: "Unread") : "")
     }
 
@@ -710,6 +712,7 @@ struct RootSidebar: View {
         .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
             cornerRadius: OpenClawProMetric.controlRadius,
             style: .continuous))
+        .accessibilityIdentifier("RootTabs.Sidebar.Destination.\(destination.rawValue)")
     }
 
     /// Attention lives on the rows that act on it (prototype parity): pending

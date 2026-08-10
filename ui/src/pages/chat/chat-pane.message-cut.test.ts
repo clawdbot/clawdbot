@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 type TestChatPane = HTMLElement & {
   connectedClient: GatewayBrowserClient | null;
@@ -12,15 +13,8 @@ type TestChatPane = HTMLElement & {
   forkFromMessage: (entryId: string) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   state: ChatPageHost;
+  switchPaneSession: (sessionKey: string) => void;
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function createSessionContext(
   client: GatewayBrowserClient,
@@ -30,7 +24,7 @@ function createSessionContext(
     gateway: {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected",
         hello: { features: { methods: [] } },
       },
     },
@@ -52,7 +46,9 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
+    chatMessage: "",
     chatMessages: [],
+    chatAttachments: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -68,11 +64,12 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarLayout: { columns: [] },
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
+    handleChatDraftChange: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
   pane.context = createSessionContext(params.client, params.sessions);
@@ -83,6 +80,34 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
 }
 
 describe("chat pane message cuts", () => {
+  it("restores forked prompt attachments into the new session composer", async () => {
+    const sessions = {
+      forkAtMessage: vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:forked",
+        editorText: "edit me",
+        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      }),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
+    pane.switchPaneSession = vi.fn((sessionKey: string) => {
+      state.sessionKey = sessionKey;
+      state.chatAttachments = [];
+    });
+
+    await pane.forkFromMessage("user-entry");
+
+    expect(state.sessionKey).toBe("agent:main:forked");
+    expect(state.chatAttachments).toEqual([
+      {
+        id: expect.stringMatching(/^att-/),
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,aW1hZ2U=",
+      },
+    ]);
+  });
+
   it("keeps a newer global agent selection when a message fork finishes late", async () => {
     const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
     const sessions = {

@@ -1,8 +1,16 @@
 // Verifies exec host, sandbox, and approval-default resolution for embedded agents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
+
+function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
+  return {
+    ...config,
+    agents: { ...config.agents, list: [{ id: "main", default: true }] },
+  };
+}
 
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
@@ -16,13 +24,13 @@ describe("resolveExecDefaults", () => {
   it("does not advertise node routing when exec host is pinned to gateway", () => {
     expect(
       resolveExecDefaults({
-        cfg: {
+        cfg: withDefaultAgent({
           tools: {
             exec: {
               host: "gateway",
             },
           },
-        },
+        }),
         sandboxAvailable: false,
       }).canRequestNode,
     ).toBe(false);
@@ -30,13 +38,13 @@ describe("resolveExecDefaults", () => {
 
   it("does not advertise node routing when exec host is auto and sandbox is available", () => {
     const defaults = resolveExecDefaults({
-      cfg: {
+      cfg: withDefaultAgent({
         tools: {
           exec: {
             host: "auto",
           },
         },
-      },
+      }),
       sandboxAvailable: true,
     });
 
@@ -47,13 +55,13 @@ describe("resolveExecDefaults", () => {
 
   it("keeps node routing available when exec host is auto without sandbox", () => {
     const defaults = resolveExecDefaults({
-      cfg: {
+      cfg: withDefaultAgent({
         tools: {
           exec: {
             host: "auto",
           },
         },
-      },
+      }),
       sandboxAvailable: false,
     });
 
@@ -68,13 +76,13 @@ describe("resolveExecDefaults", () => {
     } as SessionEntry;
     expect(
       resolveExecDefaults({
-        cfg: {
+        cfg: withDefaultAgent({
           tools: {
             exec: {
               host: "gateway",
             },
           },
-        },
+        }),
         sessionEntry,
         sandboxAvailable: false,
       }).canRequestNode,
@@ -83,13 +91,13 @@ describe("resolveExecDefaults", () => {
 
   it("uses host approval defaults for gateway when exec policy is unset", () => {
     const defaults = resolveExecDefaults({
-      cfg: {
+      cfg: withDefaultAgent({
         tools: {
           exec: {
             host: "auto",
           },
         },
-      },
+      }),
       sandboxAvailable: false,
     });
 
@@ -102,13 +110,13 @@ describe("resolveExecDefaults", () => {
 
   it("keeps sandbox deny by default when auto resolves to sandbox", () => {
     const defaults = resolveExecDefaults({
-      cfg: {
+      cfg: withDefaultAgent({
         tools: {
           exec: {
             host: "auto",
           },
         },
-      },
+      }),
       sandboxAvailable: true,
     });
 
@@ -130,13 +138,13 @@ describe("resolveExecDefaults", () => {
     });
 
     const defaults = resolveExecDefaults({
-      cfg: {
+      cfg: withDefaultAgent({
         tools: {
           exec: {
             host: "auto",
           },
         },
-      },
+      }),
       sandboxAvailable: true,
     });
 
@@ -151,13 +159,13 @@ describe("resolveExecDefaults", () => {
   it("maps normalized auto mode to allowlist plus on-miss approvals", () => {
     expect(
       resolveExecDefaults({
-        cfg: {
+        cfg: withDefaultAgent({
           tools: {
             exec: {
               mode: "auto",
             },
           },
-        },
+        }),
         sandboxAvailable: false,
       }),
     ).toMatchObject({
@@ -181,13 +189,13 @@ describe("resolveExecDefaults", () => {
     // mapping so persisted host policy remains the final safety boundary.
     expect(
       resolveExecDefaults({
-        cfg: {
+        cfg: withDefaultAgent({
           tools: {
             exec: {
               mode: "auto",
             },
           },
-        },
+        }),
         sandboxAvailable: false,
       }),
     ).toMatchObject({
@@ -216,6 +224,7 @@ describe("resolveExecDefaults", () => {
               mode: "full",
             },
           },
+          agents: { list: [{ id: "agent-a", default: true }] },
         },
         agentId: "agent-a",
         sandboxAvailable: false,
@@ -240,6 +249,7 @@ describe("resolveExecDefaults", () => {
             list: [
               {
                 id: "agent-a",
+                default: true,
                 tools: {
                   exec: {
                     mode: "full",
@@ -272,6 +282,7 @@ describe("resolveExecDefaults", () => {
             list: [
               {
                 id: "agent-a",
+                default: true,
                 tools: {
                   exec: {
                     mode: "allowlist",
@@ -294,7 +305,7 @@ describe("resolveExecDefaults", () => {
   it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
     expect(
       resolveNodeExecEligibility({
-        cfg: {
+        cfg: withDefaultAgent({
           tools: {
             exec: {
               host: "node",
@@ -302,7 +313,7 @@ describe("resolveExecDefaults", () => {
               node: "build-mac",
             },
           },
-        },
+        }),
       }),
     ).toEqual({ canExec: false, node: "build-mac" });
   });
@@ -310,10 +321,10 @@ describe("resolveExecDefaults", () => {
   it("blocks node skill eligibility when the gateway denies system.run", () => {
     expect(
       resolveNodeExecEligibility({
-        cfg: {
+        cfg: withDefaultAgent({
           gateway: { nodes: { commands: { deny: [" system.run "] } } },
           tools: { exec: { host: "node", mode: "full" } },
-        },
+        }),
       }),
     ).toEqual({ canExec: false });
   });

@@ -11,6 +11,7 @@ import {
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { isTerminalConfigEnabled } from "./enabled.js";
 
 /** Why a terminal cannot open, or `null` when it can. */
 type TerminalLaunchBlock =
@@ -140,13 +141,13 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     const terminalConfig = config.gateway?.terminal;
     return resolveTerminalLaunch({
       config,
-      enabled: terminalConfig?.enabled === true,
+      enabled: isTerminalConfigEnabled(config),
       agentId,
       configuredShell: terminalConfig?.shell,
     });
   };
   const accumulateRestartRestrictions = (config: OpenClawConfig) => {
-    if (config.gateway?.terminal?.enabled !== true) {
+    if (!isTerminalConfigEnabled(config)) {
       terminalDisabledUntilRestart = true;
       return;
     }
@@ -162,7 +163,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     }
   };
   const accumulateCommitRestrictions = (config: OpenClawConfig) => {
-    if (config.gateway?.terminal?.enabled !== true) {
+    if (!isTerminalConfigEnabled(config)) {
       terminalDisabledUntilCommit = true;
       return;
     }
@@ -205,10 +206,10 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       return active;
     },
     isEnabled: () =>
-      activeConfig.gateway?.terminal?.enabled === true &&
+      isTerminalConfigEnabled(activeConfig) &&
       !terminalDisabledUntilRestart &&
       !terminalDisabledUntilCommit &&
-      (preparedConfig === null || preparedConfig.gateway?.terminal?.enabled === true),
+      (preparedConfig === null || isTerminalConfigEnabled(preparedConfig)),
     prepareConfig: (config, options) => {
       if (options.restartPending) {
         hasPendingRestart = true;

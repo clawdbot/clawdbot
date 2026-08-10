@@ -6,6 +6,9 @@ type GatewayClientSender = { id: string; name?: string };
 export function gatewayClientSenderFields(client: GatewayClient | null): {
   sender?: GatewayClientSender;
 } {
+  if (client?.internal?.senderAttribution) {
+    return { sender: client.internal.senderAttribution };
+  }
   const profile = client?.authenticatedUserProfile;
   if (profile) {
     return {
@@ -18,7 +21,14 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
   return client?.authenticatedUserId ? { sender: { id: client.authenticatedUserId } } : {};
 }
 
-/** Returns the trusted creator identity captured during connection admission. */
+/** Returns the same durable human profile identity used for session creation attribution. */
 export function gatewayClientSessionCreator(client: GatewayClient | null) {
-  return client?.operatorIdentity ? { ...client.operatorIdentity } : undefined;
+  const profile = client?.authenticatedUserProfile;
+  return profile
+    ? {
+        type: "human" as const,
+        id: profile.profileId,
+        ...(profile.displayName ? { label: profile.displayName } : {}),
+      }
+    : undefined;
 }

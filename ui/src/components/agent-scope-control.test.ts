@@ -23,6 +23,31 @@ function createSelection(setScope: (agentId: string | null) => void) {
 }
 
 describe("renderAgentScopeControl", () => {
+  it("does not wrap dropdown options in a label that reactivates the trigger", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", name: "Main agent" },
+          { id: "writer", name: "Writer" },
+        ],
+        selection: createSelection(vi.fn()),
+      }),
+      container,
+    );
+
+    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await select?.updateComplete;
+
+    expect(select?.closest("label")).toBeNull();
+    expect(select?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Agent",
+    );
+    container.remove();
+  });
+
   it("includes historical agent ids and maps All agents back to null", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -49,6 +74,61 @@ describe("renderAgentScopeControl", () => {
     select?.onSelect("");
     expect(setScope).toHaveBeenNthCalledWith(1, "retired");
     expect(setScope).toHaveBeenNthCalledWith(2, null);
+    container.remove();
+  });
+
+  it("keeps semantic system agents out of roster and historical options", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", kind: "agent", name: "Main agent" },
+          { id: "ordinary-looking-id", kind: "system", name: "System" },
+          { id: "writer", kind: "agent", name: "Writer" },
+        ],
+        additionalAgentIds: ["ordinary-looking-id", "retired"],
+        selection: createSelection(vi.fn()),
+        selectedId: "ordinary-looking-id",
+      }),
+      container,
+    );
+
+    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await select?.updateComplete;
+    expect(select?.value).toBe("");
+    expect(select?.options.map((option) => option.value)).toEqual([
+      "",
+      "main",
+      "retired",
+      "writer",
+    ]);
+    container.remove();
+  });
+
+  it("uses the first selectable agent when a concrete selector receives a system id", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", kind: "agent", name: "Main agent" },
+          { id: "ordinary-looking-id", kind: "system", name: "System" },
+          { id: "writer", kind: "agent", name: "Writer" },
+        ],
+        selection: createSelection(vi.fn()),
+        allowAll: false,
+        selectedId: "ordinary-looking-id",
+      }),
+      container,
+    );
+
+    const select = container.querySelector<AgentSelectElement>("openclaw-agent-select");
+    await select?.updateComplete;
+    expect(select?.value).toBe("main");
+    expect(select?.options.map((option) => option.value)).toEqual(["main", "writer"]);
     container.remove();
   });
 

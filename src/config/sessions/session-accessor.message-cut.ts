@@ -1,9 +1,11 @@
 import {
   forkSqliteSessionAtMessage,
   listSqliteSessionBranches,
+  resolveSessionTranscriptActiveLeafEntryId as resolveSqliteSessionTranscriptActiveLeafEntryId,
   rewindSqliteSessionToMessage,
   switchSqliteSessionBranch,
 } from "./session-accessor.sqlite.js";
+import type { TranscriptEvent } from "./session-accessor.types.js";
 import type {
   SessionBranchListParams,
   SessionBranchListResult,
@@ -19,20 +21,29 @@ export async function listSessionBranches(
   return await listSqliteSessionBranches(params);
 }
 
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly TranscriptEvent[],
+): string | undefined {
+  return resolveSqliteSessionTranscriptActiveLeafEntryId(events);
+}
+
 export async function rewindSessionToMessage(
   params: SessionMessageCutMutationParams,
 ): Promise<SessionMessageCutMutationResult> {
-  return await rewindSqliteSessionToMessage(params);
+  const result = await rewindSqliteSessionToMessage(params);
+  return result.status === "conflict" ? { status: "failed" } : result;
 }
 
 export async function forkSessionAtMessage(
   params: SessionMessageCutMutationParams & { targetKey: string },
 ): Promise<SessionMessageCutMutationResult> {
-  return await forkSqliteSessionAtMessage(params);
+  const result = await forkSqliteSessionAtMessage(params);
+  return result.status === "conflict" ? { status: "failed" } : result;
 }
 
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
 ): Promise<SessionBranchSwitchMutationResult> {
-  return await switchSqliteSessionBranch(params);
+  const result = await switchSqliteSessionBranch(params);
+  return result.status === "conflict" ? { status: "failed" } : result;
 }

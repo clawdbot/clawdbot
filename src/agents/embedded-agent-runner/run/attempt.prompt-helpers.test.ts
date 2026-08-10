@@ -31,12 +31,14 @@ const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
-vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
-vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
-vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
+vi.mock("../../media-generation-task-status.js", () => ({
+  ...imageGenerationTaskStatusMocks,
+  ...musicGenerationTaskStatusMocks,
+  ...videoGenerationTaskStatusMocks,
+}));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
-import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-skip.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
   forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
@@ -264,6 +266,29 @@ describe("resolvePromptSubmissionSkipReason", () => {
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  it("preserves an explicit empty per-turn tool allowlist", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+    const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "answer without tools",
+      messages: [],
+      hookCtx: { runId: "tools-allow-run", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild,
+      },
+    });
+
+    expect(result.toolsAllow).toEqual([]);
+    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+    forgetPromptBuildDrainCacheForRun("tools-allow-run");
+  });
+
   it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
     const runAgentTurnPrepare = vi.fn(async () => ({ prependContext: "turn policy" }));

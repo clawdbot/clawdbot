@@ -5,6 +5,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import { detectAmbientInferenceBackends } from "../commands/onboard-inference-ambient.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
+import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
 const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 10_000;
@@ -86,7 +87,10 @@ function withAmbientCandidates(
   );
   const ambient = detectAmbientInferenceBackends(env)
     .filter((candidate) => !existing.has(`${candidate.kind}\0${candidate.modelRef}`))
-    .map((candidate) => Object.assign(candidate, { recommended: false as const }));
+    .map((candidate) => {
+      const brandId = resolveSetupInferenceCandidateBrandId(candidate);
+      return Object.assign(candidate, brandId ? { brandId } : {}, { recommended: false as const });
+    });
   if (ambient.length === 0) {
     return detection;
   }

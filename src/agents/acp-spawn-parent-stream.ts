@@ -1,7 +1,12 @@
 /** Relays child ACP session stream updates back into the requester parent session. */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+  truncateWithMarker,
+} from "@openclaw/normalization-core/utf16-slice";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
@@ -58,7 +63,7 @@ function truncate(value: string, maxChars: number): string {
   if (maxChars <= 1) {
     return truncateUtf16Safe(value, maxChars);
   }
-  return `${truncateUtf16Safe(value, maxChars - 1)}…`;
+  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -75,29 +80,9 @@ function formatProxyEnvSummary(keys: string[]): string {
   return `proxy env: ${keys.join(", ")}`;
 }
 
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function asStreamingConfigRecord(value: unknown): Record<string, unknown> | undefined {
-  const record = asObjectRecord(value);
-  if (record) {
-    return record;
-  }
-  if (typeof value === "string") {
-    return { mode: value };
-  }
-  if (typeof value === "boolean") {
-    return { mode: value ? "partial" : "off" };
-  }
-  return undefined;
-}
-
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {
-  const baseRecord = asStreamingConfigRecord(base);
-  const overrideRecord = asStreamingConfigRecord(override);
+  const baseRecord = asObjectRecord(base);
+  const overrideRecord = asObjectRecord(override);
   if (!baseRecord || !overrideRecord) {
     return override ?? base;
   }
@@ -134,35 +119,6 @@ function mergeStreamingEntry(
   };
 }
 
-function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
-  return (
-    asObjectRecord(entry.streaming)?.mode !== undefined ||
-    typeof entry.streaming === "string" ||
-    typeof entry.streaming === "boolean"
-  );
-}
-
-function applyParentPreviewStreamModeDefault(
-  entry: StreamingCompatEntry,
-  channelId: string,
-): StreamingCompatEntry {
-  if (channelId !== "discord" || hasConfiguredPreviewStreamMode(entry)) {
-    return entry;
-  }
-  const streaming = asObjectRecord(entry.streaming);
-  return {
-    ...entry,
-    streaming: streaming
-      ? {
-          ...streaming,
-          mode: "progress",
-        }
-      : {
-          mode: "progress",
-        },
-  };
-}
-
 function resolveParentProgressStreamingEntry(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
@@ -183,10 +139,7 @@ function resolveParentProgressStreamingEntry(params: {
     normalizeAccountId(params.deliveryContext?.accountId),
     normalizeAccountId,
   );
-  return applyParentPreviewStreamModeDefault(
-    mergeStreamingEntry(channelCfg, accountCfg),
-    channelId,
-  );
+  return mergeStreamingEntry(channelCfg, accountCfg);
 }
 
 function resolveParentProgressCommentary(params: {
@@ -782,4 +735,3 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

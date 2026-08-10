@@ -18,8 +18,8 @@ scenario:
     - docs/plugins/manifest.md
   codeRefs:
     - scripts/stage-bundled-plugin-runtime.mjs
-    - src/agents/skills/workspace.ts
-    - src/agents/skills/plugin-skills.ts
+    - src/skills/loading/workspace.ts
+    - src/skills/loading/plugin-skills.ts
   execution:
     kind: flow
     summary: Force the packaged dist-runtime plugin tree and verify an enabled bundled plugin skill survives discovery.

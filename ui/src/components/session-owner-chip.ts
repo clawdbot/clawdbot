@@ -1,24 +1,41 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { t } from "../i18n/index.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import "./viewer-facepile.ts";
 
-export type SessionCreatedBy = SessionCreatorIdentity;
+export type SessionCreatedActor = ProtocolSessionCreatedActor;
+export type SessionCreatorOption = SessionCreatedActor & { id: string };
 
 export function listSessionCreators(
-  sessions: readonly { createdBy?: SessionCreatedBy }[],
-): SessionCreatedBy[] {
-  const creators = new Map<string, SessionCreatedBy>();
+  sessions: readonly { createdActor?: SessionCreatedActor }[],
+): SessionCreatorOption[] {
+  const creators = new Map<string, SessionCreatorOption>();
   for (const session of sessions) {
-    const id = session.createdBy?.id.trim();
+    const id = session.createdActor?.id?.trim();
     if (!id) {
       continue;
     }
-    const label = session.createdBy?.label?.trim();
+    const label = session.createdActor?.label?.trim();
+    const avatarUrl = session.createdActor?.avatarUrl?.trim();
     const existing = creators.get(id);
-    if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
-      creators.set(id, { id, ...(label ? { label } : {}) });
+    const nextLabel =
+      label && (!existing?.label || label.localeCompare(existing.label) < 0)
+        ? label
+        : existing?.label;
+    const nextAvatarUrl = [existing?.avatarUrl, avatarUrl]
+      .filter((value): value is string => Boolean(value))
+      .toSorted()[0];
+    if (!existing || nextLabel !== existing.label || nextAvatarUrl !== existing.avatarUrl) {
+      creators.set(id, {
+        type: session.createdActor?.type ?? "human",
+        id,
+        ...(nextLabel ? { label: nextLabel } : {}),
+        ...(nextAvatarUrl ? { avatarUrl: nextAvatarUrl } : {}),
+      });
     }
   }
   return [...creators.values()].toSorted((a, b) => {
@@ -28,43 +45,21 @@ export function listSessionCreators(
 }
 
 export function renderSessionOwnerChip(
-  createdBy: SessionCreatedBy | null | undefined,
+  createdActor: SessionCreatedActor | null | undefined,
   size: "row" | "header",
+  attribution: "created" | "archived" = "created",
 ) {
-  return createdBy
+  return createdActor?.id
     ? html`<openclaw-session-owner-chip
-        .createdBy=${createdBy}
+        .createdActor=${createdActor}
         size=${size}
+        attribution=${attribution}
       ></openclaw-session-owner-chip>`
     : nothing;
 }
 
-export function renderSessionCreatorFilter(params: {
-  creators: readonly SessionCreatedBy[];
-  selectedId: string | null;
-  onChange: (creatorId: string | null) => void;
-}) {
-  if (params.creators.length < 2) {
-    return nothing;
-  }
-  return html`<label class="sidebar-session-creator-filter">
-    <span>${t("sessionsView.filterByCreator")}</span>
-    <select
-      aria-label=${t("sessionsView.filterByCreator")}
-      .value=${params.selectedId ?? ""}
-      @change=${(event: Event) =>
-        params.onChange((event.currentTarget as HTMLSelectElement).value || null)}
-    >
-      <option value="">${t("sessionsView.allCreators")}</option>
-      ${params.creators.map(
-        (creator) => html`<option value=${creator.id}>${creator.label ?? creator.id}</option>`,
-      )}
-    </select>
-  </label>`;
-}
-
-function ownerInitials(createdBy: SessionCreatedBy): string {
-  const source = createdBy.label?.trim() || createdBy.id.trim();
+function ownerInitials(createdActor: SessionCreatedActor): string {
+  const source = createdActor.label?.trim() || createdActor.id?.trim() || "";
   if (!source) {
     return "";
   }
@@ -72,8 +67,11 @@ function ownerInitials(createdBy: SessionCreatedBy): string {
     .replace(/@.*$/u, "")
     .split(/[\s._-]+/u)
     .filter(Boolean);
-  const initials = ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase();
-  return initials || source[0]!.toUpperCase();
+  // Grapheme clusters, not UTF-16 units or bare code points: emoji display names
+  // must render their complete visible initial (no lone surrogates or split ZWJ sequences).
+  const firstChar = (value: string | undefined): string => (value ? takeGraphemes(value, 1) : "");
+  const initials = (firstChar(parts[0]) + firstChar(parts[1])).toUpperCase();
+  return initials || firstChar(source).toUpperCase();
 }
 
 // Deterministic hue per identity so a person keeps one color everywhere.
@@ -90,30 +88,55 @@ function ownerHue(id: string): number {
  * this chip is solid and never pulses/expires, in deliberate contrast to the
  * translucent, ring-styled live-presence chips. Render only when the gateway
  * has 2+ distinct creator identities (solo mode shows no attribution chrome).
+ * Human actors use only the durable profile projection carried by the session
+ * record. Actors without that source keep stable initials because provenance
+ * outlives live connection presence.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
-  @property({ attribute: false }) createdBy: SessionCreatedBy | null = null;
+  @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
+  @property({ type: String }) attribution: "created" | "archived" = "created";
 
   override render() {
-    const createdBy = this.createdBy;
-    if (!createdBy) {
+    const createdActor = this.createdActor;
+    if (!createdActor?.id) {
       return nothing;
     }
-    const initials = ownerInitials(createdBy);
+    const initials = ownerInitials(createdActor);
     if (!initials) {
       return nothing;
     }
-    const title = createdBy.label || createdBy.id;
-    const accessibleLabel = t("sessionsView.createdBy", { name: title });
+    const title = createdActor.label || createdActor.id;
+    const accessibleLabel = t(
+      this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
+      { name: title },
+    );
+    const avatar = createdActor.avatarUrl
+      ? resolveAvatar({
+          id: createdActor.id,
+          name: createdActor.label,
+          profileAvatarUrl: createdActor.avatarUrl,
+        })
+      : null;
     return html`
       <span
         class="session-owner-chip session-owner-chip--${this.size}"
-        style="--owner-hue: ${ownerHue(createdBy.id)}"
+        style="--owner-hue: ${ownerHue(createdActor.id)}"
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${initials}</span
+        >${avatar?.kind === "profile"
+          ? html`<openclaw-viewer-avatar
+              .user=${{
+                id: createdActor.id,
+                name: createdActor.label,
+                avatarUrl: createdActor.avatarUrl,
+                watchedSessions: [],
+              }}
+              variant="session"
+              aria-hidden="true"
+            ></openclaw-viewer-avatar>`
+          : initials}</span
       >
     `;
   }

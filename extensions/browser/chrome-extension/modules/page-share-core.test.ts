@@ -32,8 +32,63 @@ describe("page share core", () => {
     });
     expect(executeScript.mock.calls[1]?.[0]).toMatchObject({
       target: { tabId: 17 },
-      args: ["document-id_123"],
+      args: ["document-id_123", 30_000],
     });
+  });
+
+  it.each([
+    ["response headers", false],
+    ["response body", true],
+  ] as const)("aborts a Google Docs export stalled during %s", async (_phase, headersReceived) => {
+    type ExecuteScriptDetails = {
+      args?: unknown[];
+      func: (...args: unknown[]) => unknown;
+    };
+    const executeScript = vi.fn(async (details: ExecuteScriptDetails) => {
+      if (!details.args) {
+        return [{ result: "" }];
+      }
+      const result = await details.func(details.args[0], 1);
+      return [{ result }];
+    });
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("Expected export timeout signal");
+      }
+      if (!headersReceived) {
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error(String(signal.reason))), {
+            once: true,
+          });
+        });
+      }
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+        ),
+      );
+    });
+    vi.stubGlobal("chrome", { scripting: { executeScript } });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await expect(
+      capturePageShare({
+        id: 17,
+        url: "https://docs.google.com/document/d/document-id_123/edit",
+        title: "Document",
+      }),
+    ).rejects.toThrow(/timeout|abort/i);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://docs.google.com/document/d/document-id_123/export?format=txt",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("keeps text at the boundary and marks truncation beyond it", () => {
@@ -48,12 +103,93 @@ describe("page share core", () => {
       content: "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS + 1),
     });
     expect(atBoundary.content).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    expect(beyondBoundary.content).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
     expect(
       beyondBoundary.content.endsWith(
         `[Truncated: original was ${PAGE_SHARE_MAX_CONTENT_CHARS + 1} characters]`,
       ),
     ).toBe(true);
   });
+
+  it.each(["content", "selection"] as const)(
+    "preserves exact-boundary %s without truncating it",
+    (field) => {
+      const text = "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS);
+      const payload = buildPageSharePayload({
+        url: "https://example.com",
+        title: "Example",
+        content: field === "content" ? text : "",
+        ...(field === "selection" ? { selection: text } : {}),
+      });
+      const sharedText = field === "selection" ? payload.selection : payload.content;
+
+      expect(sharedText).toBe(text);
+      expect(sharedText).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    },
+  );
+
+  it("keeps oversized selected text and its truncation marker within the producer field cap", () => {
+    const selection = "x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS + 1);
+    const payload = buildPageSharePayload({
+      url: "https://example.com",
+      title: "Example",
+      content: "",
+      selection,
+    });
+
+    expect(payload.selection).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+    expect(
+      payload.selection?.endsWith(`[Truncated: original was ${selection.length} characters]`),
+    ).toBe(true);
+  });
+
+  it.each(["content", "selection"] as const)(
+    "never leaves a split Unicode surrogate while truncating %s",
+    (field) => {
+      const originalLength = PAGE_SHARE_MAX_CONTENT_CHARS + 1;
+      const marker = `\n\n[Truncated: original was ${originalLength} characters]`;
+      const text =
+        `${"x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS - marker.length - 1)}😀` +
+        "x".repeat(marker.length);
+      expect(text).toHaveLength(originalLength);
+
+      const payload = buildPageSharePayload({
+        url: "https://example.com",
+        title: "Example",
+        content: field === "content" ? text : "",
+        ...(field === "selection" ? { selection: text } : {}),
+      });
+      const sharedText = field === "selection" ? payload.selection : payload.content;
+
+      expect(sharedText?.length).toBeLessThanOrEqual(PAGE_SHARE_MAX_CONTENT_CHARS);
+      expect(sharedText?.endsWith(marker)).toBe(true);
+      expect(sharedText?.slice(0, -marker.length)).not.toMatch(/[\uD800-\uDBFF]$/u);
+    },
+  );
+
+  it.each(["content", "selection"] as const)(
+    "preserves a newline after a non-terminal surrogate while truncating %s",
+    (field) => {
+      const originalLength = PAGE_SHARE_MAX_CONTENT_CHARS + 1;
+      const marker = `\n\n[Truncated: original was ${originalLength} characters]`;
+      const text =
+        `${"x".repeat(PAGE_SHARE_MAX_CONTENT_CHARS - marker.length - 2)}\uD83D\n` +
+        "x".repeat(marker.length + 1);
+      expect(text).toHaveLength(originalLength);
+
+      const payload = buildPageSharePayload({
+        url: "https://example.com",
+        title: "Example",
+        content: field === "content" ? text : "",
+        ...(field === "selection" ? { selection: text } : {}),
+      });
+      const sharedText = field === "selection" ? payload.selection : payload.content;
+
+      expect(sharedText).toHaveLength(PAGE_SHARE_MAX_CONTENT_CHARS);
+      expect(sharedText?.endsWith(marker)).toBe(true);
+      expect(sharedText?.slice(0, -marker.length).endsWith("\uD83D\n")).toBe(true);
+    },
+  );
 
   it("trims fields, preserves newlines, applies caps, and drops empty optionals", () => {
     const payload = buildPageSharePayload({

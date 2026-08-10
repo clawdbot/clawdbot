@@ -84,7 +84,7 @@ export function createDeviceAuthMigrationController(params: {
       if (
         !client ||
         !requestId ||
-        !params.gateway.snapshot.connected ||
+        params.gateway.snapshot.phase !== "connected" ||
         !params.isCurrent(client, epoch) ||
         snapshot.busy ||
         disposed

@@ -2,7 +2,9 @@ import { createHmac, randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
 export const BOARD_HTTP_PATH_PREFIX = "/__openclaw__/board/";
-export const BOARD_VIEW_TICKET_TTL_MS = 2 * 60_000;
+// Bounds residual bearer access after the originating client loses its view authority.
+// Each load rechecks grant state; content changes invalidate through revision and generation.
+export const BOARD_VIEW_TICKET_TTL_MS = 20 * 60_000;
 
 const BOARD_VIEW_TICKET_SCOPE = "board-widget-view";
 const BOARD_VIEW_TICKET_MAX_LENGTH = 2_048;
@@ -15,6 +17,7 @@ type BoardViewTicket = {
 
 type BoardViewTicketClaims = {
   sessionKey: string;
+  agentId?: string;
   name: string;
   revision: number;
   viewGeneration: string;
@@ -37,6 +40,10 @@ function isValidClaims(value: unknown): value is BoardViewTicketClaims {
     typeof claims.sessionKey === "string" &&
     claims.sessionKey.length > 0 &&
     claims.sessionKey.length <= 512 &&
+    (claims.agentId === undefined ||
+      (typeof claims.agentId === "string" &&
+        claims.agentId.length > 0 &&
+        claims.agentId.length <= 64)) &&
     typeof claims.name === "string" &&
     claims.name.length > 0 &&
     claims.name.length <= 64 &&
@@ -52,6 +59,7 @@ function isValidClaims(value: unknown): value is BoardViewTicketClaims {
 
 export function createBoardViewTicket(params: {
   sessionKey: string;
+  agentId?: string;
   name: string;
   revision: number;
   viewGeneration: string;
@@ -60,6 +68,7 @@ export function createBoardViewTicket(params: {
   const nowMs = params.nowMs ?? Date.now();
   const claims: BoardViewTicketClaims = {
     sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     name: params.name,
     revision: params.revision,
     viewGeneration: params.viewGeneration,

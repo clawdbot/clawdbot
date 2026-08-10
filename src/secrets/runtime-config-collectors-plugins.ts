@@ -51,6 +51,7 @@ export function collectPluginConfigAssignments(params: {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
+    params.context.env,
   );
   const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
     .filter(([, origin]) => origin === "bundled")
@@ -65,6 +66,7 @@ export function collectPluginConfigAssignments(params: {
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: bundledLoadablePluginIds,
         pluginIds: Object.keys(entries),
+        manifestRegistry: params.context.manifestRegistry,
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {
       const secretInputs = metadata.configContracts.secretInputs;

@@ -49,9 +49,6 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     ...buildChannelReactionShape({
       reactionLevels: ["off", "ack", "minimal", "extensive"],
     }),
-    debounceMs: params.useDefaults
-      ? z.number().int().nonnegative().optional().default(0)
-      : z.number().int().nonnegative().optional(),
     pluginHooks: WhatsAppPluginHooksSchema,
   };
 }

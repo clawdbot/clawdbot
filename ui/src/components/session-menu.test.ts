@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
-import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuData = {
   label: string;
@@ -36,6 +36,7 @@ async function mountMenu(
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
     lastActive?: string;
@@ -43,6 +44,7 @@ async function mountMenu(
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
     onClose?: () => void;
+    actionDisabledReasons?: Partial<Record<SessionMenuActionKind, string>>;
   } = {},
 ): Promise<SessionMenuElement> {
   const container = document.createElement("div");
@@ -64,8 +66,11 @@ async function mountMenu(
       .anchor=${{ x: 100, y: 100 }}
       .trigger=${options.trigger ?? null}
       .disabled=${false}
+      .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
       .archiveAllowed=${options.archiveAllowed ?? true}
+      .deleteAllowed=${options.deleteAllowed ??
+      (session.archived || (options.archiveAllowed ?? true))}
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .canOpenChat=${options.canOpenChat ?? true}
@@ -115,6 +120,33 @@ async function openIconPicker(menu: SessionMenuElement) {
 }
 
 describe("session menu", () => {
+  it("disables only denied mutation actions and ignores forced selection", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({
+      onAction,
+      actionDisabledReasons: {
+        delete: "This action requires operator.admin access.",
+        "toggle-pin": "This action requires operator.write access.",
+      },
+    });
+    const openChat = menuItem(menu, "Open chat");
+    const pin = menuItem(menu, "Pin session");
+    const deleteItem = menuItem(menu, "Delete…");
+
+    expect(openChat.disabled).toBe(false);
+    expect(pin.disabled).toBe(true);
+    expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
+    expect(deleteItem.disabled).toBe(true);
+    deleteItem.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        composed: true,
+        detail: { item: { value: "delete" } },
+      }),
+    );
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it("shows when the session was last active", async () => {
     const menu = await mountMenu({ lastActive: "57d" });
 
@@ -126,14 +158,14 @@ describe("session menu", () => {
 
     expect(menuItemLabels(menu)).toEqual([
       "Open chat",
-      "Pin thread",
+      "Pin session",
       "Change icon",
       "Mark as unread",
       "Rename…",
       "Fork",
       "Add to Workboard",
       "Move to group",
-      "Archive thread",
+      "Archive session",
       "Delete…",
     ]);
   });
@@ -173,6 +205,13 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain("Mark 2 as read");
   });
 
+  it("offers Restore N when every selected session is archived", async () => {
+    const menu = await mountMenu({ selectionCount: 2, session: { archived: true } });
+
+    expect(menuItemLabels(menu)).toContain("Restore 2");
+    expect(menuItemLabels(menu)).not.toContain("Archive 2");
+  });
+
   it("omits Open chat and Workboard when unavailable", async () => {
     const menu = await mountMenu({ canOpenChat: false, workboard: null });
 
@@ -186,16 +225,27 @@ describe("session menu", () => {
       session: { archived: true },
     });
 
-    expect(menuItem(menu, "Restore thread").disabled).toBe(false);
+    expect(menuItem(menu, "Restore session").disabled).toBe(false);
     expect(menuItem(menu, "Delete…").disabled).toBe(false);
-    expect(menuItem(menu, "Pin thread").disabled).toBe(true);
+    expect(menuItem(menu, "Pin session").disabled).toBe(true);
   });
 
-  it("disables archive and delete when an active session cannot be archived", async () => {
-    const menu = await mountMenu({ archiveAllowed: false });
+  it("enables archive while preserving disabled delete for an active session", async () => {
+    const menu = await mountMenu({ archiveAllowed: true, deleteAllowed: false });
 
-    expect(menuItem(menu, "Archive thread").disabled).toBe(true);
+    expect(menuItem(menu, "Archive session").disabled).toBe(false);
     expect(menuItem(menu, "Delete…").disabled).toBe(true);
+  });
+
+  it("keeps batch archive enabled while independently guarding delete", async () => {
+    const menu = await mountMenu({
+      selectionCount: 2,
+      archiveAllowed: false,
+      deleteAllowed: false,
+    });
+
+    expect(menuItem(menu, "Archive 2").disabled).toBe(false);
+    expect(menuItem(menu, "Delete 2…").disabled).toBe(true);
   });
 
   it("closes before dispatching Pin", async () => {
@@ -205,7 +255,7 @@ describe("session menu", () => {
       onAction: (action) => calls.push(action.kind),
     });
 
-    menuItem(menu, "Pin thread").click();
+    menuItem(menu, "Pin session").click();
 
     expect(calls).toEqual(["close", "toggle-pin"]);
   });
@@ -237,9 +287,11 @@ describe("session menu", () => {
 
   it("opens an accessible icon picker with keyboard grid navigation", async () => {
     const menu = await mountMenu();
+    const dropdown = menu.querySelector("wa-dropdown");
 
     await openIconPicker(menu);
 
+    expect(menu.querySelector("wa-dropdown")).toBe(dropdown);
     expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("role")).toBe("dialog");
     const choices = Array.from(
       menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"),
@@ -247,6 +299,47 @@ describe("session menu", () => {
     expect(document.activeElement).toBe(choices[0]);
     choices[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     expect(document.activeElement).toBe(choices[1]);
+  });
+
+  it("keeps Tab ownership inside the nested icon-picker dialog", async () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    containers.push(trigger);
+    const menu = await mountMenu({ trigger });
+
+    await openIconPicker(menu);
+
+    const choice = menu.querySelector<HTMLButtonElement>(".session-menu__icon-choice");
+    expect(document.activeElement).toBe(choice);
+    choice?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(choice);
+  });
+
+  it("preserves an intentionally focused icon-picker field after the dropdown opens", async () => {
+    const menu = await mountMenu();
+    await openIconPicker(menu);
+    const input = menu.querySelector<HTMLInputElement>(".session-menu__emoji-field input");
+    input?.focus();
+
+    menu.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-after-show"));
+
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("keeps one dropdown and restores its originating item after leaving the icon picker", async () => {
+    const menu = await mountMenu();
+    const dropdown = menu.querySelector("wa-dropdown");
+    await openIconPicker(menu);
+
+    menu.querySelector<HTMLButtonElement>(".session-menu__icon-picker-back")?.click();
+    await menu.updateComplete;
+    await Promise.resolve();
+
+    expect(menu.querySelector("wa-dropdown")).toBe(dropdown);
+    expect(document.activeElement).toBe(menuItem(menu, "Change icon"));
   });
 
   it("opens group actions and dispatches group, removal, and creation choices", async () => {
@@ -333,7 +426,12 @@ describe("session menu", () => {
       menuItem(submenu, "Projects").querySelector(".session-menu__shortcut")?.textContent,
     ).toBe("2");
 
-    const keydown = new KeyboardEvent("keydown", { key: "2", bubbles: true, cancelable: true });
+    const keydown = new KeyboardEvent("keydown", {
+      key: "٢",
+      code: "Digit2",
+      bubbles: true,
+      cancelable: true,
+    });
     document.dispatchEvent(keydown);
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
     expect(keydown.defaultPrevented).toBe(true);
@@ -401,12 +499,17 @@ describe("session menu", () => {
       onAction: (action) => calls.push(action.kind),
     });
 
-    const pin = menuItem(menu, "Pin thread");
+    const pin = menuItem(menu, "Pin session");
     expect(pin.querySelector(".session-menu__shortcut")?.textContent).toBe("P");
     expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
     expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();
 
-    const keydown = new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true });
+    const keydown = new KeyboardEvent("keydown", {
+      key: "з",
+      code: "KeyP",
+      bubbles: true,
+      cancelable: true,
+    });
     document.dispatchEvent(keydown);
     expect(calls).toEqual(["close", "toggle-pin"]);
     expect(keydown.defaultPrevented).toBe(true);
@@ -427,6 +530,40 @@ describe("session menu", () => {
     );
 
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to its durable trigger before a Tab leaves the menu", async () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    containers.push(trigger);
+    const menu = await mountMenu({ trigger });
+    const item = menuItem(menu, "Open chat");
+    item.focus();
+
+    const keydown = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    item.dispatchEvent(keydown);
+
+    expect(document.activeElement).toBe(trigger);
+    expect(keydown.defaultPrevented).toBe(false);
+  });
+
+  it("does not reclaim focus when Tab originates outside the open menu", async () => {
+    const trigger = document.createElement("button");
+    const outside = document.createElement("button");
+    document.body.append(trigger, outside);
+    containers.push(trigger, outside);
+    await mountMenu({ trigger });
+    outside.focus();
+
+    outside.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+
+    expect(document.activeElement).toBe(outside);
   });
 
   it("closes on Escape without leaking the key past the menu", async () => {

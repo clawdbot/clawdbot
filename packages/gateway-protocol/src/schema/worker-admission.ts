@@ -35,10 +35,12 @@ export const WORKER_PROTOCOL_METHODS = [
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
+export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
@@ -47,6 +49,9 @@ export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
 export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
+// Replay is opaque and cannot be truncated. Transcript projection separately
+// verifies that the complete commit frame fits the protocol payload ceiling.
+export const WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES = WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
 
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
 const WorkerProtocolFeatureSchema = Type.String({
@@ -213,6 +218,25 @@ const WorkerTranscriptToolCallSchema = closedObject({
   ),
   executionMode: Type.Optional(Type.Union([Type.Literal("sequential"), Type.Literal("parallel")])),
 });
+const WorkerReplayHashSchema = Type.String({
+  minLength: 2,
+  maxLength: 16,
+  pattern: "^[a-z0-9]+$",
+});
+
+export const WorkerProviderReplayStateSchema = closedObject({
+  v: Type.Literal(1),
+  type: WorkerIdentifierSchema,
+  id: Type.Optional(Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES }),
+  replayIndex: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  provider: WorkerIdentifierSchema,
+  api: WorkerIdentifierSchema,
+  model: WorkerIdentifierSchema,
+  baseUrlHash: Type.Optional(WorkerReplayHashSchema),
+  sessionHash: Type.Optional(WorkerReplayHashSchema),
+  authProfileHash: Type.Optional(WorkerReplayHashSchema),
+});
 
 const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
@@ -238,6 +262,7 @@ const WorkerTranscriptAssistantMessageSchema = closedObject({
   model: WorkerIdentifierSchema,
   responseModel: Type.Optional(WorkerIdentifierSchema),
   responseId: Type.Optional(WorkerIdentifierSchema),
+  providerReplay: Type.Optional(WorkerProviderReplayStateSchema),
   diagnostics: Type.Optional(
     Type.Array(WorkerTranscriptAssistantDiagnosticSchema, {
       maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
@@ -434,6 +459,7 @@ const WorkerLiveFallbackReasonSchema = Type.Union([
   Type.Literal("billing"),
   Type.Literal("server_error"),
   Type.Literal("timeout"),
+  Type.Literal("tls_certificate"),
   Type.Literal("context_overflow"),
   Type.Literal("model_not_found"),
   Type.Literal("session_expired"),
@@ -640,6 +666,7 @@ export type WorkerHeartbeatResult = Static<typeof WorkerHeartbeatResultSchema>;
 export type WorkerHeartbeatRequestFrame = Static<typeof WorkerHeartbeatRequestFrameSchema>;
 export type WorkerHeartbeatResponseFrame = Static<typeof WorkerHeartbeatResponseFrameSchema>;
 export type WorkerTranscriptMessage = Static<typeof WorkerTranscriptMessageSchema>;
+export type WorkerProviderReplayState = Static<typeof WorkerProviderReplayStateSchema>;
 export type WorkerTranscriptCommitParams = Static<typeof WorkerTranscriptCommitParamsSchema>;
 export type WorkerTranscriptCommitResult = Static<typeof WorkerTranscriptCommitResultSchema>;
 export type WorkerTranscriptCommitErrorReason = Static<

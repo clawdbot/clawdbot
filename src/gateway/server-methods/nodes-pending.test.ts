@@ -26,7 +26,7 @@ vi.mock("../node-pending-work.js", () => ({
   removeNodePendingWorkItem: mocks.removeNodePendingWorkItem,
 }));
 
-vi.mock("../../infra/node-pairing-state.js", () => ({
+vi.mock("../../infra/device-pairing-node-state.js", () => ({
   captureNodePairingGeneration: mocks.captureNodePairingGeneration,
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));

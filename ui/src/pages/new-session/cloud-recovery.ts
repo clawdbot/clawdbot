@@ -1,7 +1,8 @@
+import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 
 export type CloudSessionCreateParams = SessionCreateParams & {
-  key: string;
+  key?: string;
   agentId: string;
   message: "";
   worktree: true;
@@ -28,10 +29,6 @@ function storageKey(gatewayUrl: string, recoveryScope: string): string {
   return `${STORAGE_PREFIX}${gatewayUrl}:${recoveryScope}`;
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 const CLOUD_CREATE_STRING_FIELDS = [
   "model",
   "thinkingLevel",
@@ -56,6 +53,7 @@ export function parseCloudSessionCreateParams(
     "agentId",
     "message",
     "worktree",
+    "incognito",
     ...CLOUD_CREATE_STRING_FIELDS,
   ]);
   if (
@@ -64,6 +62,7 @@ export function parseCloudSessionCreateParams(
     record.agentId !== agentId ||
     record.message !== "" ||
     record.worktree !== true ||
+    (record.incognito !== undefined && record.incognito !== true) ||
     CLOUD_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )
@@ -86,6 +85,10 @@ export function readCloudSessionRecovery(
       return null;
     }
     const value = JSON.parse(raw) as Partial<CloudSessionRecovery>;
+    if (value.createParams?.incognito === true) {
+      globalThis.sessionStorage?.removeItem(storageKey(gatewayUrl, recoveryScope));
+      return null;
+    }
     if (
       !isNonEmptyString(value.sessionKey) ||
       !isNonEmptyString(value.messageId) ||

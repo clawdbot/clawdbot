@@ -639,7 +639,7 @@ describe("telegram doctor", () => {
           channels: {
             telegram: {
               replyToMode: "first",
-              streaming: false,
+              streaming: { mode: "off" },
             },
           },
         } as unknown as OpenClawConfig)
@@ -662,6 +662,24 @@ describe("telegram doctor", () => {
         } as unknown as OpenClawConfig)
       ).join("\n"),
     ).not.toContain("selected quote replies");
+  });
+
+  it("warns for selected quotes when explicit preview overrides inherited block delivery", async () => {
+    const warnings = await collectPreviewWarnings({
+      channels: {
+        telegram: {
+          replyToMode: "first",
+          streaming: { mode: "partial" },
+        },
+      },
+      agents: {
+        defaults: {
+          blockStreamingDefault: "on",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(warnings.join("\n")).toContain("selected quote replies");
   });
 
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {

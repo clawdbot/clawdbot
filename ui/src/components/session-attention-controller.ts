@@ -73,7 +73,7 @@ export class SessionAttentionController implements ReactiveController {
   }
 
   private synchronizeAttentionGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
-    const connected = gateway.snapshot.connected;
+    const connected = gateway.snapshot.phase === "connected";
     const client =
       connected &&
       isGatewayMethodAdvertised({ hello: gateway.snapshot.hello }, "question.list") === true &&
@@ -98,7 +98,7 @@ export class SessionAttentionController implements ReactiveController {
         () =>
           this.host.isConnected &&
           this.host.sessionAttentionContext?.gateway === gateway &&
-          gateway.snapshot.connected &&
+          gateway.snapshot.phase === "connected" &&
           gateway.snapshot.client === client,
       );
     }

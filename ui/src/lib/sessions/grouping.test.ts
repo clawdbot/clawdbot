@@ -4,6 +4,8 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   groupSidebarSessionRows,
   groupSessionRows,
+  moveSessionSection,
+  normalizeSessionSectionOrder,
   normalizeSessionsGroupBy,
   normalizeSidebarSessionsGrouping,
   UNGROUPED_ID,
@@ -117,6 +119,56 @@ describe("groupSidebarSessionRows", () => {
     ]);
   });
 
+  it("applies stored cross-section order after pinned rows", () => {
+    const sections = groupSidebarSessionRows(
+      [
+        row({ key: "pin", pinned: true }),
+        row({ key: "a", category: "Alpha" }),
+        row({ key: "thread" }),
+        row({ key: "group", kind: "group" }),
+      ],
+      { sectionOrder: ["work", "groups", "ungrouped", "category:Alpha"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "pinned",
+      "work",
+      "groups",
+      "ungrouped",
+      "category:Alpha",
+    ]);
+  });
+
+  it("emits catalog sections after coding by default and honors their stored positions", () => {
+    const rows = [row({ key: "thread" }), row({ key: "work", workSession: true })];
+
+    expect(
+      groupSidebarSessionRows(rows, { catalogIds: ["claude", "codex"] }).map(
+        (section) => section.id,
+      ),
+    ).toEqual(["ungrouped", "work", "catalog:claude", "catalog:codex"]);
+    expect(
+      groupSidebarSessionRows(rows, {
+        catalogIds: ["claude", "codex"],
+        sectionOrder: ["catalog:codex", "ungrouped", "work", "catalog:claude"],
+      }).map((section) => section.id),
+    ).toEqual(["catalog:codex", "ungrouped", "work", "catalog:claude"]);
+  });
+
+  it("appends sections missing from stored order in default relative order", () => {
+    const sections = groupSidebarSessionRows(
+      [row({ key: "a", category: "Alpha" }), row({ key: "thread" })],
+      { sectionOrder: ["work"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual(["category:Alpha", "work", "ungrouped"]);
+  });
+
+  it("keeps the default order for an empty stored order", () => {
+    const rows = [row({ key: "a", category: "Alpha" }), row({ key: "thread" })];
+    expect(groupSidebarSessionRows(rows, { sectionOrder: [] })).toEqual(
+      groupSidebarSessionRows(rows),
+    );
+  });
+
   it("collapses categories into the threads list when grouping is none", () => {
     const sections = groupSidebarSessionRows(
       [
@@ -128,6 +180,124 @@ describe("groupSidebarSessionRows", () => {
     );
     expect(sections.map((section) => section.id)).toEqual(["pinned", "ungrouped", "work"]);
     expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "u-1"]);
+  });
+
+  it("uses the normalized section order while keeping pinned rows first", () => {
+    const sections = groupSidebarSessionRows(
+      [
+        row({ key: "pin", pinned: true }),
+        row({ key: "thread" }),
+        row({ key: "group", kind: "group" }),
+        row({ key: "alpha", category: "Alpha" }),
+        row({ key: "work", workSession: true }),
+      ],
+      {
+        knownGroups: ["Alpha"],
+        sectionOrder: ["ungrouped", "groups", "category:Alpha", "work"],
+      },
+    );
+
+    expect(sections.map((section) => section.id)).toEqual([
+      "pinned",
+      "ungrouped",
+      "groups",
+      "category:Alpha",
+      "work",
+    ]);
+  });
+});
+
+describe("normalizeSessionSectionOrder", () => {
+  it("builds the default order from an empty stored value", () => {
+    expect(normalizeSessionSectionOrder([], ["Alpha", "Beta"])).toEqual([
+      "category:Alpha",
+      "category:Beta",
+      "ungrouped",
+      "groups",
+      "work",
+    ]);
+  });
+
+  it("honors stored positions", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["ungrouped", "category:Alpha", "groups", "category:Beta", "work"],
+        ["Alpha", "Beta"],
+      ),
+    ).toEqual(["ungrouped", "category:Alpha", "groups", "category:Beta", "work"]);
+  });
+
+  it("inserts a new category before the first built-in section", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["category:Alpha", "ungrouped", "groups", "work"],
+        ["Alpha", "Beta"],
+      ),
+    ).toEqual(["category:Alpha", "category:Beta", "ungrouped", "groups", "work"]);
+  });
+
+  it("drops stale category tokens", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["category:Stale", "category:Alpha", "ungrouped", "groups", "work"],
+        ["Alpha"],
+      ),
+    ).toEqual(["category:Alpha", "ungrouped", "groups", "work"]);
+  });
+
+  it("appends unseen catalogs after coding and drops disappeared catalogs", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["catalog:codex", "ungrouped", "groups", "work", "catalog:removed"],
+        [],
+        ["claude", "codex"],
+      ),
+    ).toEqual(["catalog:codex", "ungrouped", "groups", "work", "catalog:claude"]);
+  });
+
+  it("drops invalid and duplicate tokens", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["category:Stale", "bogus", "category:", "ungrouped", "ungrouped", "category:Alpha"],
+        ["Alpha"],
+      ),
+    ).toEqual(["ungrouped", "groups", "work", "category:Alpha"]);
+  });
+
+  it("reinserts a missing built-in after its default predecessor", () => {
+    expect(
+      normalizeSessionSectionOrder(
+        ["category:Alpha", "ungrouped", "category:Beta", "work"],
+        ["Alpha", "Beta"],
+      ),
+    ).toEqual(["category:Alpha", "ungrouped", "groups", "category:Beta", "work"]);
+  });
+});
+
+describe("moveSessionSection", () => {
+  const order = ["category:Alpha", "category:Beta", "ungrouped", "groups", "work"];
+
+  it("moves a section before or after its target", () => {
+    expect(moveSessionSection(order, "category:Beta", "work", "before")).toEqual([
+      "category:Alpha",
+      "ungrouped",
+      "groups",
+      "category:Beta",
+      "work",
+    ]);
+    expect(moveSessionSection(order, "category:Alpha", "groups", "after")).toEqual([
+      "category:Beta",
+      "ungrouped",
+      "groups",
+      "category:Alpha",
+      "work",
+    ]);
+  });
+
+  it("leaves self and unknown moves unchanged", () => {
+    expect(moveSessionSection(order, "category:Alpha", "category:Alpha", "after")).toEqual(order);
+    expect(moveSessionSection(order, "category:Missing", "work", "before")).toEqual(order);
+    expect(moveSessionSection(order, "category:Alpha", "missing", "before")).toEqual(order);
   });
 });
 

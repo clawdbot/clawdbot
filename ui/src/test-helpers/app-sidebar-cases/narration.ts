@@ -202,12 +202,12 @@ describe("AppSidebar live narration", () => {
       agentId: undefined,
     });
 
-    gateway.publish({ connected: false });
+    gateway.publish({ phase: "stopped" });
     sidebar.connected = false;
     await sidebar.updateComplete;
     await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1));
 
-    gateway.publish({ connected: true });
+    gateway.publish({ phase: "connected" });
     sidebar.connected = true;
     await sidebar.updateComplete;
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));

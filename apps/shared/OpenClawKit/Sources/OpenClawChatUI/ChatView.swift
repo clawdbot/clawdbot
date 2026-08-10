@@ -149,12 +149,15 @@ public struct OpenClawChatView: View {
     private let dictationControl: OpenClawChatDictationControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
+    private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     private enum Layout {
         #if os(macOS)
         static let outerPaddingHorizontal: CGFloat = 6
         static let outerPaddingVertical: CGFloat = 0
         static let composerPaddingHorizontal: CGFloat = 0
+        static let swarmPaddingHorizontal: CGFloat = 12
+        static let swarmPaddingVertical: CGFloat = 8
         static let stackSpacing: CGFloat = 0
         static let messageSpacing: CGFloat = 6
         static let messageListPaddingTop: CGFloat = 12
@@ -166,6 +169,8 @@ public struct OpenClawChatView: View {
         static let outerPaddingHorizontal: CGFloat = 6
         static let outerPaddingVertical: CGFloat = 6
         static let composerPaddingHorizontal: CGFloat = 6
+        static let swarmPaddingHorizontal: CGFloat = 6
+        static let swarmPaddingVertical: CGFloat = 0
         static let stackSpacing: CGFloat = 6
         static let messageSpacing: CGFloat = 12
         static let messageListPaddingTop: CGFloat = 10
@@ -199,7 +204,8 @@ public struct OpenClawChatView: View {
         talkControl: OpenClawChatTalkControl? = nil,
         dictationControl: OpenClawChatDictationControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
-        speech: OpenClawChatSpeechController? = nil)
+        speech: OpenClawChatSpeechController? = nil,
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
@@ -222,6 +228,7 @@ public struct OpenClawChatView: View {
         self.dictationControl = dictationControl
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
+        self.mediaPlaybackAllowed = mediaPlaybackAllowed
     }
 
     public var body: some View {
@@ -259,6 +266,9 @@ public struct OpenClawChatView: View {
             self.planPill
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .padding(.vertical, Layout.swarmPaddingVertical)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -273,6 +283,10 @@ public struct OpenClawChatView: View {
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
             self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.swarmPaddingHorizontal)
+                .padding(.vertical, Layout.swarmPaddingVertical)
+                .padding(.top, Layout.stackSpacing)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
@@ -290,6 +304,14 @@ public struct OpenClawChatView: View {
             ChatPlanPill(
                 steps: self.viewModel.planSteps,
                 explanation: self.viewModel.planExplanation)
+        }
+    }
+
+    @ViewBuilder
+    private var swarmProgress: some View {
+        let groups = self.viewModel.activeSwarmGroups
+        if !groups.isEmpty {
+            OpenClawChatSwarmProgressView(groups: groups)
         }
     }
 
@@ -473,7 +495,8 @@ public struct OpenClawChatView: View {
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity)
+                runIdentity: self.viewModel.workingIndicatorIdentity,
+                outputTokens: self.viewModel.liveRunOutputTokens)
                 .equatable()
         }
 
@@ -525,6 +548,16 @@ public struct OpenClawChatView: View {
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            },
+            mediaArtifactResolverReady: self.viewModel.healthOK,
+            mediaPlaybackAllowed: self.mediaPlaybackAllowed,
+            loadMediaArtifact: { [weak viewModel] artifactId, kind, playback in
+                guard let viewModel else { return nil }
+                return try await viewModel.transport.loadMediaArtifact(
+                    sessionKey: viewModel.sessionKey,
+                    artifactId: artifactId,
+                    kind: kind,
+                    playback: playback)
             })
             .frame(
                 maxWidth: .infinity,
@@ -761,7 +794,8 @@ public struct OpenClawChatView: View {
     }
 
     private var showsWorkingIndicator: Bool {
-        self.viewModel.hasBlockingRunActivity && !self.hasVisibleStreamingAssistantText
+        self.viewModel.hasBlockingRunActivity &&
+            (!self.hasVisibleStreamingAssistantText || self.viewModel.liveUsageRunID != nil)
     }
 
     private var turnRecapObservation: ChatTurnRecapObservation {
@@ -1077,27 +1111,13 @@ extension OpenClawChatView {
     }
 
     private func primaryText(in message: OpenClawChatMessage) -> String {
-        let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
-        }
-        return OpenClawChatMessage.displayText(
-            contentText: parts.joined(separator: "\n"),
-            role: message.role,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+        ChatMessageVisibleText.displayText(
+            in: message,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {
-        message.content.contains { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
-                true
-            default:
-                false
-            }
-        }
+        message.content.contains(where: \.isInlineAttachment)
     }
 
     private func toolCalls(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {

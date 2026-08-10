@@ -50,7 +50,6 @@ Override the policy for one agent:
     entries: {
       support: {
         typingMode: "message",
-        typingIntervalSeconds: 8,
       },
     },
   },
@@ -63,7 +62,7 @@ Override the policy for one agent:
 - `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`), and can also start from active execution before reasoning deltas arrive.
 - Heartbeat typing is a liveness signal for the resolved delivery target. It starts at heartbeat run start instead of following `message` or `thinking` stream timing. Set `typingMode: "never"` to disable it.
 - Heartbeats do not show typing when the heartbeat target is `"none"`, when the target cannot be resolved, when chat delivery is disabled for the heartbeat, or when the channel does not support typing.
-- `agents.defaults.typingIntervalSeconds` controls the **refresh cadence**, not the start time. Default: 6 seconds. `agents.entries.*.typingIntervalSeconds` can override it per agent.
+- `agents.defaults.typingIntervalSeconds` controls the **refresh cadence** for every agent, not the start time. Default: 6 seconds.
 
 ## Related
 

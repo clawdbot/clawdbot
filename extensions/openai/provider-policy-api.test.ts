@@ -1,6 +1,7 @@
 // Openai tests cover provider policy api plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  isResponseModelEquivalent,
   normalizeModelCatalogId,
   resolveModelRoutes,
   resolveThinkingProfile,
@@ -14,6 +15,22 @@ describe("OpenAI provider policy artifact", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  it.each([
+    ["openai", "gpt-5.6", "gpt-5.6-sol", true],
+    ["openai", "gpt-5.6", "gpt-5.6-terra", false],
+    ["openai", "gpt-5.6", "gpt-5.6-luna", false],
+    ["openai", "gpt-5.6-sol", "gpt-5.6", false],
+    ["openai", "gpt-5.5", "gpt-5.6-sol", false],
+    ["anthropic", "gpt-5.6", "gpt-5.6-sol", false],
+  ])(
+    "declares response-model equivalence for %s/%s -> %s as %s",
+    (provider, requestedModelId, responseModelId, expected) => {
+      expect(isResponseModelEquivalent({ provider, requestedModelId, responseModelId })).toBe(
+        expected,
+      );
+    },
+  );
 
   it("normalizes the legacy Codex model alias at the provider boundary", () => {
     expect(normalizeModelCatalogId({ provider: " OpenAI ", modelId: "openai/GPT-5.4-CODEX" })).toBe(

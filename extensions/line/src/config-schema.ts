@@ -22,6 +22,7 @@ const ThreadBindingsSchema = z
 
 const LineCommonConfigSchemaBase = z.object({
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   channelAccessToken: z.string().optional(),
   channelSecret: z.string().optional(),
   tokenFile: z.string().optional(),

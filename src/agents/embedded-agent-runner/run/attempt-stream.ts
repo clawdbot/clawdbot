@@ -13,7 +13,7 @@ import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { log } from "../logger.js";
-import { collectPromptCacheToolNames } from "../prompt-cache-observability.js";
+import { collectPromptCacheTools } from "../prompt-cache-observability.js";
 import { repairRejectedThinkingReplayInSessionManager } from "../thinking-replay-repair.js";
 import {
   dropReasoningFromHistory,
@@ -22,7 +22,6 @@ import {
 } from "../thinking.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
@@ -51,20 +50,15 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
-
 export function installEmbeddedAttemptStreamGuards(input: {
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
   sessionAgentId: string;
   cacheTrace: CacheTrace;
-  allCustomTools: Array<{ name?: string }>;
+  allCustomTools: Array<{ name?: string; description?: string; parameters?: unknown }>;
   systemPromptText: string;
   transcriptPolicy: TranscriptPolicy;
   sessionManager: SessionManager | undefined;
-  sessionLockController: AttemptSessionLockController;
   isOpenAIResponsesApi: boolean;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
@@ -83,9 +77,9 @@ export function installEmbeddedAttemptStreamGuards(input: {
   const attempt = input.attempt;
   const session = input.session;
   const cacheObservabilityEnabled = Boolean(input.cacheTrace) || log.isEnabled("debug");
-  const promptCacheToolNames = collectPromptCacheToolNames(
-    input.allCustomTools as Array<{ name?: string }>,
-  );
+  const promptCacheTools = cacheObservabilityEnabled
+    ? collectPromptCacheTools(input.allCustomTools)
+    : [];
   if (input.cacheTrace) {
     input.cacheTrace.recordStage("session:loaded", {
       messages: session.messages,
@@ -138,7 +132,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
         });
         if (repair.repaired) {
           input.onRejectedThinkingReplayRepaired();
-          input.sessionLockController.refreshAfterOwnedSessionWrite();
           return;
         }
         log.warn(
@@ -349,6 +342,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
   });
   return {
     cacheObservabilityEnabled,
-    promptCacheToolNames,
+    promptCacheTools,
   };
 }

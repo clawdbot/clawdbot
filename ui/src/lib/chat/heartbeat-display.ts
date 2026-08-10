@@ -1,12 +1,9 @@
 // Control UI chat module implements heartbeat display behavior.
+import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 export function stripHeartbeatTokenForDisplay(
   raw: string,

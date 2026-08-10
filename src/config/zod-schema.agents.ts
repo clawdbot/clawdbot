@@ -1,10 +1,29 @@
 // Defines agent-related Zod schema fragments for config parsing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
-const AgentEntryConfigSchema = AgentEntrySchema.omit({ id: true });
+const AgentEntryConfigSchema = z.preprocess(
+  (value, ctx) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const key of Object.getOwnPropertyNames(value)) {
+        if (!isBlockedObjectKey(key)) {
+          continue;
+        }
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: "agent entries must not contain blocked object keys",
+        });
+        return z.NEVER;
+      }
+    }
+    return value;
+  },
+  AgentEntrySchema.omit({ id: true }),
+);
 
 export const AgentsSchema = z
   .object({
@@ -17,6 +36,17 @@ export const AgentsSchema = z
       .optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    const agents = Object.values(value.entries ?? {});
+    const defaultCount = agents.filter((agent) => agent.default === true).length;
+    if (defaultCount !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: `agents.entries must contain exactly one default=true entry (found ${defaultCount})`,
+      });
+    }
+  })
   .optional();
 
 const BindingMatchSchema = z

@@ -329,6 +329,7 @@ describe("exec approvals gateway methods", () => {
       expectedPairingGeneration: "generation-1",
       command,
       params: { includeResolvedDefaults: true },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -419,6 +420,7 @@ describe("exec approvals gateway methods", () => {
       expectedPairingGeneration: "generation-1",
       command,
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -480,6 +482,7 @@ describe("exec approvals gateway methods", () => {
         rules: [{ pattern: "hostname", action: "allow" }],
         baseHash: "sha256:current",
       },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { updated: true, hash: "sha256:next" }, undefined);
   });
@@ -560,6 +563,7 @@ describe("exec approvals gateway methods", () => {
       nodeId: "missing-node",
       command: "system.execApprovals.get",
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -568,6 +572,7 @@ describe("exec approvals gateway methods", () => {
         code: "UNAVAILABLE",
         details: {
           nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+          nodeCommandDispatched: false,
         },
       }),
     );

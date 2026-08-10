@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -13,7 +14,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -25,7 +26,7 @@ import {
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import { resolveDefaultAgentDir } from "../agent-scope-config.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 type AuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -37,7 +38,10 @@ type AuthProfileDatabase = Pick<
 const PRIMARY_ROW_KEY = "primary";
 
 function resolveAgentDir(agentDir?: string): string {
-  return resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
+  if (agentDir) {
+    return resolveUserPath(agentDir);
+  }
+  return resolveSharedMainAuthAgentDir();
 }
 
 function inferAgentIdFromDir(agentDir: string): string {
@@ -82,11 +86,7 @@ function parseJsonCell(raw: string | null | undefined): unknown {
   if (!raw) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
+  return safeParseJson(raw) ?? null;
 }
 
 type PersistedAuthProfileStoreInspection =
@@ -98,51 +98,45 @@ function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
-function inspectAuthProfileJsonCellReadOnly(
-  pathname: string,
+function inspectAuthProfileTable(
+  db: DatabaseSync,
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection | null {
+  const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
+  const schemaObject = db
+    .prepare("SELECT type FROM sqlite_master WHERE name = ?")
+    .get(tableName) as { type?: unknown } | undefined;
+  if (!schemaObject) {
+    // Agent databases shipped before SQLite auth storage do not have these
+    // additive tables until their next writable bootstrap.
+    return { status: "missing", reason: "table" };
+  }
+  return schemaObject.type === "table" ? null : { status: "unreadable" };
+}
+
+function inspectAuthProfileJsonCell(
+  db: DatabaseSync,
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
-  const sqlite = requireNodeSqlite();
-  let db: DatabaseSync | undefined;
-  try {
-    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
-    // This short-lived reader bypasses the canonical agent DB bootstrap, but it
-    // must share its busy policy so brief rollback-journal locks do not look
-    // like missing credentials.
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    if (readSqliteUserVersion(db) > OPENCLAW_AGENT_SCHEMA_VERSION) {
-      return { status: "unreadable" };
+  const tableInspection = inspectAuthProfileTable(db, target);
+  if (tableInspection) {
+    return tableInspection;
+  }
+  const kysely = getAuthProfileKysely(db);
+  let raw: string;
+  if (target === "store") {
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("auth_profile_store")
+        .select("store_json")
+        .where("store_key", "=", PRIMARY_ROW_KEY),
+    );
+    if (!row) {
+      return { status: "missing", reason: "row" };
     }
-    const tableName = target === "store" ? "auth_profile_store" : "auth_profile_state";
-    const schemaObject = db
-      .prepare("SELECT type FROM sqlite_master WHERE name = ?")
-      .get(tableName) as { type?: unknown } | undefined;
-    if (!schemaObject) {
-      // Agent databases shipped before SQLite auth storage do not have these
-      // additive tables until their next writable bootstrap.
-      return { status: "missing", reason: "table" };
-    }
-    if (schemaObject.type !== "table") {
-      return { status: "unreadable" };
-    }
-    const kysely = getAuthProfileKysely(db);
-    if (target === "store") {
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("auth_profile_store")
-          .select("store_json")
-          .where("store_key", "=", PRIMARY_ROW_KEY),
-      );
-      if (!row) {
-        return { status: "missing", reason: "row" };
-      }
-      try {
-        return { status: "readable", raw: JSON.parse(row.store_json) as unknown };
-      } catch {
-        return { status: "unreadable" };
-      }
-    }
+    raw = row.store_json;
+  } else {
     const row = executeSqliteQueryTakeFirstSync(
       db,
       kysely
@@ -153,11 +147,30 @@ function inspectAuthProfileJsonCellReadOnly(
     if (!row) {
       return { status: "missing", reason: "row" };
     }
-    try {
-      return { status: "readable", raw: JSON.parse(row.state_json) as unknown };
-    } catch {
+    raw = row.state_json;
+  }
+  try {
+    return { status: "readable", raw: JSON.parse(raw) as unknown };
+  } catch {
+    return { status: "unreadable" };
+  }
+}
+
+function inspectAuthProfileJsonCellReadOnly(
+  pathname: string,
+  target: "store" | "state",
+): PersistedAuthProfileStoreInspection {
+  let db: DatabaseSync | undefined;
+  try {
+    db = openNodeSqliteDatabase(pathname, { readOnly: true });
+    // This short-lived reader bypasses the canonical agent DB bootstrap, but it
+    // must share its busy policy so brief rollback-journal locks do not look
+    // like missing credentials.
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    if (readSqliteUserVersion(db) > OPENCLAW_AGENT_SCHEMA_VERSION) {
       return { status: "unreadable" };
     }
+    return inspectAuthProfileJsonCell(db, target);
   } catch {
     return { status: "unreadable" };
   } finally {
@@ -176,7 +189,11 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
 /** Distinguishes an absent auth row from a present store that could not be read. */
 export function inspectPersistedAuthProfileStoreRaw(
   agentDir?: string,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
+  if (database) {
+    return inspectAuthProfileJsonCell(database.db, "store");
+  }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   if (!fs.existsSync(databasePath)) {
     return { status: "missing", reason: "database" };
@@ -187,7 +204,11 @@ export function inspectPersistedAuthProfileStoreRaw(
 /** Distinguishes an absent auth-state row from state that could not be read. */
 export function inspectPersistedAuthProfileStateRaw(
   agentDir?: string,
+  database?: Pick<OpenClawAgentDatabase, "db">,
 ): PersistedAuthProfileStoreInspection {
+  if (database) {
+    return inspectAuthProfileJsonCell(database.db, "state");
+  }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   if (!fs.existsSync(databasePath)) {
     return { status: "missing", reason: "database" };
@@ -335,6 +356,11 @@ export function writePersistedAuthProfileStateRaw(
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: OpenClawAgentDatabase) => T,
+  options: { stateDir?: string } = {},
 ): T {
-  return runOpenClawAgentWriteTransaction(operation, resolveAuthProfileDatabaseOptions(agentDir));
+  const databaseOptions = resolveAuthProfileDatabaseOptions(agentDir);
+  return runOpenClawAgentWriteTransaction(operation, {
+    ...databaseOptions,
+    ...(options.stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir } } : {}),
+  });
 }

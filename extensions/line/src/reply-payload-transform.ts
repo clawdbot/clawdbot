@@ -84,10 +84,10 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const lonStr = expectDefined(parts[3], "location longitude field");
       const latitude = parseStrictFiniteNumber(latStr);
       const longitude = parseStrictFiniteNumber(lonStr);
-      if (latitude !== undefined && longitude !== undefined) {
+      if (address && latitude !== undefined && longitude !== undefined) {
         lineData.location = {
           title: title || "Location",
-          address: address || "",
+          address,
           latitude,
           longitude,
         };

@@ -15,6 +15,7 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
@@ -445,7 +446,15 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (inFlight) {
       return await inFlight;
     }
-    const operation = reclaimOnce(request);
+    const operation = reclaimOnce(request).catch((error: unknown) => {
+      // Another teardown path can win after this call has crossed its durable completion fence.
+      // Report the committed terminal state instead of leaking a stale tunnel error to callers.
+      const completed = placements.get(request.sessionId);
+      if (error instanceof WorkerTunnelOwnerDisconnectedError && completed?.state === "reclaimed") {
+        return completed;
+      }
+      throw error;
+    });
     reclaimInFlight.set(request.sessionId, operation);
     try {
       return await operation;

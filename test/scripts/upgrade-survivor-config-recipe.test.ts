@@ -9,11 +9,13 @@ import {
   CONFIG_COMMAND_TIMEOUT_MS,
   isReleaseBefore,
   resolveScenarioConfigSteps,
+  resolveUpgradeSurvivorConfigSteps,
+  resolveUpgradeSurvivorConfigStepsForBaseline,
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
-} from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
+} from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 
-const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
+const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 
 describe("upgrade survivor config recipe command resolution", () => {
   it("compares baseline versions with the shared release parser", () => {
@@ -76,6 +78,20 @@ describe("upgrade survivor config recipe command resolution", () => {
         intent: "codex-allowlist-survival",
       },
     ]);
+  });
+
+  it("inserts scenario config before final validation", () => {
+    const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
+    expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("removes unsupported scenario config for older baselines", () => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
+    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
+    expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
+    expect(steps.at(-1)?.id).toBe("validate");
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {
@@ -153,7 +169,16 @@ process.exit(0);
 
       execFileSync(
         process.execPath,
-        [RECIPE_PATH, "apply", "--summary", summaryPath, "--baseline-version", "2026.4.21"],
+        [
+          "--import",
+          "tsx",
+          RECIPE_PATH,
+          "apply",
+          "--summary",
+          summaryPath,
+          "--baseline-version",
+          "2026.4.21",
+        ],
         {
           env: {
             ...process.env,

@@ -33,6 +33,7 @@ import {
   extractAssistantTextForPhase,
   parseAssistantTextSignature,
 } from "../../../shared/chat-message-content.js";
+import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
@@ -110,7 +111,7 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
       const record = block as { type?: unknown; textSignature?: unknown };
       return (
         isAssistantTextContentBlockType(record.type) &&
-        Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+        Boolean(parseAssistantTextSignature(record)?.phase)
       );
     });
     if (!hasExplicitPhasedTextBlock) {
@@ -120,7 +121,7 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
             return null;
           }
           const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-          const signature = parseAssistantTextSignature(record.textSignature);
+          const signature = parseAssistantTextSignature(record);
           if (
             !isAssistantTextContentBlockType(record.type) ||
             typeof record.text !== "string" ||
@@ -184,6 +185,25 @@ function formatToolErrorWarningText(params: {
   includeDetails: boolean;
   useMarkdown: boolean;
 }): string {
+  const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
+  if (terminalDiagnostic?.kind === "process") {
+    const toolLabel = formatToolAggregate("process", [terminalDiagnostic.sessionId], {
+      markdown: params.useMarkdown,
+    });
+    const reason =
+      terminalDiagnostic.reason.kind === "exit"
+        ? `exit ${terminalDiagnostic.reason.exitCode}`
+        : terminalDiagnostic.reason.kind === "signal"
+          ? `signal ${terminalDiagnostic.reason.signal}`
+          : terminalDiagnostic.reason.timeoutKind === "no-output-timeout"
+            ? "timed out waiting for output"
+            : "timed out";
+    const errorSuffix =
+      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+    const recoveryHint = params.includeDetails ? "" : ". Use /verbose full for complete output";
+    return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}${recoveryHint}.`;
+  }
+
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
@@ -421,25 +441,7 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
   return code ? ` (exit ${code})` : "";
 }
 function maybeWrapInlineCode(value: string, markdown: boolean): string {
-  if (!markdown) {
-    return value;
-  }
-  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
-  return `${delimiter}${padding}${value}${padding}${delimiter}`;
-}
-function longestBacktickRun(value: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const char of value) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-      continue;
-    }
-    current = 0;
-  }
-  return longest;
+  return markdown ? formatInlineCodeSpan(value) : value;
 }
 /**
  * Chooses whether a tool failure needs a separate user-visible warning and
@@ -494,6 +496,9 @@ function resolveToolErrorWarningPolicy(params: {
     // warning may be the run's only failure signal.
     return { showWarning: !params.hasUserFacingReply, includeDetails };
   }
+  if (params.lastToolError.terminalDiagnostic?.kind === "process") {
+    return { showWarning: !params.hasUserFacingReply, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -517,6 +522,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
+  assistantTranscriptIdempotencyKey?: string;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -662,7 +668,7 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
   const reasoningText =
-    suppressAssistantArtifacts || runAborted
+    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? ""
       : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
         ? extractAssistantThinking(assistantForPayload)
@@ -754,7 +760,7 @@ export function buildEmbeddedRunPayloads(params: {
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts =
-    suppressAssistantArtifacts || runAborted
+    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? []
       : (shouldUseCanonicalFinalAnswer
           ? [fallbackAnswerSourceText]
@@ -890,7 +896,13 @@ export function buildEmbeddedRunPayloads(params: {
           ...(params.assistantMessageIndex !== undefined
             ? { assistantMessageIndex: params.assistantMessageIndex }
             : {}),
+          ...(item.media?.length ? { assistantTranscriptMediaUrls: [...item.media] } : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
+          ...(params.assistantTranscriptIdempotencyKey
+            ? {
+                assistantTranscriptIdempotencyKey: params.assistantTranscriptIdempotencyKey,
+              }
+            : {}),
         });
       }
       if (item.replyToId) {

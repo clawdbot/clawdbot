@@ -3,13 +3,13 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mjs";
-import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
+import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
+import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import {
   PLUGIN_PRERELEASE_REQUIRED_SURFACES,
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
-} from "../../scripts/lib/plugin-prerelease-test-plan.mjs";
+} from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
@@ -46,7 +46,7 @@ function getDockerLane(name: string) {
   return lane;
 }
 
-describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
+describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
   it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
 
@@ -57,11 +57,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
   it("runs the package and Docker product lanes through the existing scheduler", () => {
     const plan = createPluginPrereleaseTestPlan();
+    const channelLaneScript = readFileSync(
+      "scripts/e2e/npm-onboard-channel-agent-docker.sh",
+      "utf8",
+    );
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
-      "npm-onboard-discord-channel-agent",
-      "npm-onboard-slack-channel-agent",
+      "npm-onboard-discord-candidate-channel-agent",
+      "npm-onboard-slack-candidate-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "plugins-offline",
@@ -82,6 +86,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     for (const lane of plan.dockerLanes) {
       expect(getDockerLane(lane).name).toBe(lane);
     }
+    expect(channelLaneScript).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE");
+    expect(channelLaneScript).toContain("bash scripts/plugin-npm-publish.sh --pack");
+    expect(channelLaneScript).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
+    expect(channelLaneScript).toContain("npm-pack:$container_package");
+    const candidateLane = getDockerLane("npm-onboard-discord-candidate-channel-agent");
+    expect(candidateLane.command).toContain("OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR");
+    expect(candidateLane.command).toContain(
+      'OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}"',
+    );
   });
 
   it("keeps live-ish coverage outside provider-backed Docker lanes", () => {
@@ -92,7 +105,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(plan.staticChecks[2]).toEqual({
       check: "live-ish-availability",
       checkName: "checks-plugin-prerelease-live-ish-availability",
-      command: "node scripts/plugin-prerelease-liveish-matrix.mjs",
+      command: "node --import tsx scripts/plugin-prerelease-liveish-matrix.mts",
       surfaces: ["live-ish-availability"],
     });
   });
@@ -167,7 +180,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
     expect(assertionsScript).toContain(
-      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);',
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
     );
     expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
@@ -184,7 +197,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
     const lane = getDockerLane("kitchen-sink-rpc");
     const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
-    const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+    const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mts", "utf8");
 
     expect(lane).toMatchObject({
       command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
@@ -202,8 +215,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB");
     expect(script).toContain("docker_e2e_sample_stats_until_exit");
     expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
-    expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
-    expect(script).not.toContain("--import tsx");
+    expect(script).toContain("node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts");
     expect(walkScript).toContain("commands.list");
     expect(walkScript).toContain("tools.invoke");
     expect(walkScript).toContain("tts.providers");
@@ -405,7 +417,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
-    expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
+    expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mts");
     expect(
       workflow.jobs["check-shard"].strategy.matrix.include.find(
         (entry: WorkflowMatrixEntry) => entry.check_name === "check-dependencies",
@@ -433,7 +445,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
-    expect(normalCiScript).not.toContain("full_release_validation=true");
+    const normalCiDispatchCase = normalCiScript.match(/^\s*ci\)\n([\s\S]*?)^\s*;;$/mu)?.[1];
+    expect(normalCiDispatchCase).toContain('dispatch_and_wait ci.yml "$dispatch_run_name"');
+    expect(normalCiDispatchCase).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
       'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")',
     );
@@ -444,9 +458,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
     );
     expect(pluginManifestScript).toContain("await import(");
-    expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
-    expect(pluginManifestScript).toContain('"./scripts/lib/extension-test-plan.mjs"');
-    expect(pluginManifestScript).toContain('"./scripts/lib/ci-node-test-plan.mjs"');
+    expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mts"');
+    expect(pluginManifestScript).toContain('"./scripts/lib/extension-test-plan.mts"');
+    expect(pluginManifestScript).toContain('"./scripts/lib/ci-node-test-plan.mts"');
     expect(pluginManifestScript).toContain('shard.shardName === "agentic-plugins"');
     expect(pluginManifestScript).toContain(
       "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",
@@ -654,16 +668,43 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );
-    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
-    );
+    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(240);
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-    expect(
-      fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
-    ).toBeGreaterThanOrEqual(3);
+    expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
+      description:
+        "Cancel each child workflow after its first failed job; false collects independent failures to completion",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    for (const [jobName, kind] of [
+      ["normal_ci", "ci"],
+      ["plugin_prerelease", "plugin-prerelease"],
+      ["release_checks", "release-checks"],
+      ["npm_telegram", "npm-telegram"],
+    ] as const) {
+      const dispatch: WorkflowStep = fullReleaseWorkflow.jobs[jobName].steps[0];
+      expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(kind);
+      expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
+      expect(dispatch.run).toContain('if [[ "$FAIL_FAST" != "true" ]]; then');
+      expect(dispatch.run).toContain("has failed child jobs before the workflow completed");
+    }
+    expect(fullReleaseWorkflow.jobs.performance.steps[0].env).not.toHaveProperty("FAIL_FAST");
+    expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
     expect(fullReleaseSource).toContain(
       "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
+    expect(releaseChecksWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
+      description: "Stop the Matrix QA lane after its first failed check or scenario",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(releaseChecksWorkflow.jobs.qa_live_release_checks.with.fail_fast).toBe(
+      "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
+    );
+    const qaLiveSource = readFileSync(".github/workflows/qa-live-transports-convex.yml", "utf8");
+    expect(qaLiveSource).toContain('if [[ "$FAIL_FAST" == "true" ]]');
   });
 
   it("allows Unreleased notes only for current-tree release checks", () => {
@@ -768,7 +809,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("keeps the live-ish availability check redacted", () => {
     const output = execFileSync(
       process.execPath,
-      ["scripts/plugin-prerelease-liveish-matrix.mjs"],
+      ["--import", "tsx", "scripts/plugin-prerelease-liveish-matrix.mts"],
       {
         encoding: "utf8",
         env: {

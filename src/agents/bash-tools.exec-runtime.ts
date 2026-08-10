@@ -1,7 +1,8 @@
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   type EventSessionRoutingPolicy,
   resolveEventSessionKeyForPolicy,
@@ -16,7 +17,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -30,6 +31,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -43,9 +45,14 @@ import {
   appendOutput,
   createSessionSlug,
   markExited,
+  recordNotifyOnExitRemoval,
   tail,
 } from "./bash-process-registry.js";
-import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
+import {
+  appendExecTimeoutRetryGuidance,
+  renderExecExitLabel,
+  renderExecUpdateText,
+} from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -102,7 +109,7 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 /** Tail length used in background completion notifications. */
-export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
+const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 /** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
@@ -145,6 +152,7 @@ export type ExecProcessOutcome =
       timedOut: boolean;
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
       reason: string;
     };
 
@@ -174,7 +182,9 @@ function emitExecProcessCompleted(params: {
   target: "host" | "sandbox";
 }): void {
   const exitSignal = normalizeExecExitSignal(params.outcome.exitSignal);
-  emitDiagnosticEvent({
+  // Payload stays untrusted, but the ambient trace context is the OpenClaw run
+  // scope, so exporters may use it to nest the exec span under its run.
+  emitDiagnosticEventWithTrustedTraceContext({
     type: "exec.process.completed",
     target: params.target,
     mode: params.mode,
@@ -308,7 +318,12 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+  if (
+    !session.backgrounded ||
+    !session.notifyOnExit ||
+    session.exitNotified ||
+    session.terminalPollObserved
+  ) {
     return;
   }
   const sessionKey = session.sessionKey?.trim();
@@ -316,16 +331,19 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   session.exitNotified = true;
-  const exitLabel = session.exitSignal
-    ? `signal ${session.exitSignal}`
-    : `code ${session.exitCode ?? 0}`;
+  const exitLabel = renderExecExitLabel(session);
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
     return;
   }
-  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
+  if (
+    status === "completed" &&
+    session.exitCode === 0 &&
+    !output &&
+    session.notifyOnExitEmptySuccess !== true
+  ) {
     return;
   }
   const summary = output
@@ -336,10 +354,19 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
   };
-  enqueueSystemEvent(eventText, {
-    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-    deliveryContext: session.notifyDeliveryContext,
-  });
+  const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
+  const remove = enqueueSystemEventWithReceipt(
+    eventText,
+    {
+      sessionKey: eventSessionKey,
+      contextKey: `exec:${session.id}`,
+      deliveryContext: session.notifyDeliveryContext,
+    },
+    { allowDuplicate: true },
+  );
+  if (remove) {
+    recordNotifyOnExitRemoval(session, remove);
+  }
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
   if (!isSubagentSessionKey(sessionKey)) {
@@ -517,6 +544,7 @@ function buildExecExitOutcome(params: {
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
+    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
 }
@@ -644,6 +672,7 @@ export async function runExecProcess(opts: {
     pendingStderr: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
+    pendingOutputDropped: false,
     aggregated: "",
     tail: "",
     exited: false,
@@ -757,6 +786,8 @@ export async function runExecProcess(opts: {
           aggregated: session.aggregated.trim(),
           durationMs: Date.now() - startedAt,
         });
+        // Background observers need the finalizer failure in the same bounded, redacted output.
+        appendOutput(session, "stderr", `\n${redactToolPayloadText(formatErrorMessage(error))}\n`);
       } else {
         logWarn(`exec: sandbox finalize after process failure failed (${String(error)}).`);
       }

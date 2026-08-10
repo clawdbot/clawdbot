@@ -14,7 +14,7 @@ function completeResult(params?: {
     toolName: string;
     meta?: string;
     replaySafe?: boolean;
-    isError?: true;
+    isError?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -34,6 +34,7 @@ function completeResult(params?: {
       didSendDeterministicApprovalPrompt: () => false,
       didSendViaMessagingTool: () => false,
       getAcceptedSessionSpawns: () => [],
+      getAssistantTurnCount: () => 0,
       getCompactionCount: () => 0,
       getHeartbeatToolResponse: () => undefined,
       getItemLifecycle: () => undefined,
@@ -54,15 +55,7 @@ function completeResult(params?: {
       toolMetas: params?.toolMetas ?? [],
     } as never,
     state: {
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
-      timedOutByRunBudget: false,
-      promptError: null,
-      promptErrorSource: null,
+      terminal: { kind: "ok" },
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
       yieldDetected: false,
@@ -104,6 +97,7 @@ describe("attempt result projection", () => {
       completeResult({
         toolMetas: [
           { toolName: "", replaySafe: true },
+          { toolName: "read", isError: false },
           {
             toolName: "exec",
             meta: "done",
@@ -116,6 +110,12 @@ describe("attempt result projection", () => {
         ],
       }).toolMetas,
     ).toEqual([
+      {
+        toolName: "read",
+        meta: undefined,
+        replaySafe: false,
+        isError: false,
+      },
       {
         toolName: "exec",
         meta: "done",

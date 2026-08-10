@@ -1,0 +1,137 @@
+// CLI backends report a tool result without repeating the request, so the
+// terminal progress event has to carry the args the tool started with.
+import { describe, expect, it, vi } from "vitest";
+import { type AgentEventRuntimePayload, onAgentEvent } from "../../infra/agent-events.js";
+import { createCliEventHandlers } from "./execute-events.js";
+import type { CliToolTracking } from "./execute-tool-tracking.js";
+import type { PreparedCliRunContext } from "./types.js";
+
+function buildContext(runId: string): PreparedCliRunContext {
+  const backend = {
+    command: "claude",
+    args: [],
+    output: "jsonl" as const,
+    input: "stdin" as const,
+    serialize: true,
+  };
+  return {
+    params: {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "claude-haiku-4-5",
+      timeoutMs: 1_000,
+      runId,
+    },
+    started: Date.now(),
+    workspaceDir: "/tmp",
+    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
+    preparedBackend: { backend, env: {} },
+    reusableCliSession: { mode: "none" },
+    hadSessionFile: false,
+    contextEngineConfig: {},
+    modelId: "claude-haiku-4-5",
+    normalizedModel: "claude-haiku-4-5",
+    systemPrompt: "system",
+    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+    bootstrapPromptWarningLines: [],
+    authEpochVersion: 2,
+  } as PreparedCliRunContext;
+}
+
+function buildToolTracking(): CliToolTracking {
+  return {
+    handleCliToolUseStart: vi.fn(),
+    handleCliToolResult: vi.fn(),
+    resolveCliLoopbackTerminalOutcome: vi.fn(() => undefined),
+    beginGatewayCapture: vi.fn(),
+  } as unknown as CliToolTracking;
+}
+
+function collectToolEvents(runId: string): {
+  events: AgentEventRuntimePayload[];
+  dispose: () => void;
+} {
+  const events: AgentEventRuntimePayload[] = [];
+  const dispose = onAgentEvent((event) => {
+    if (event.runId === runId && event.stream === "tool") {
+      events.push(event);
+    }
+  });
+  return { events, dispose };
+}
+
+describe("cli tool result events", () => {
+  it("carries the started args into the terminal event", () => {
+    const runId = "run-tool-result-args";
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking: buildToolTracking(),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const { events, dispose } = collectToolEvents(runId);
+
+    try {
+      handlers.emitCliToolUseStart({
+        toolCallId: "call-1",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "nope-not-a-command" },
+      });
+      handlers.emitCliToolResult({
+        toolCallId: "call-1",
+        name: "Bash",
+        isError: true,
+        result: "bash: nope-not-a-command: command not found",
+      });
+
+      const result = events.find((event) => event.data.phase === "result");
+      expect(result?.data.args).toEqual({ command: "nope-not-a-command" });
+      expect(result?.data.isError).toBe(true);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("forgets a call's args once it reports, so ids cannot leak across calls", () => {
+    const runId = "run-tool-result-args-forget";
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking: buildToolTracking(),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const { events, dispose } = collectToolEvents(runId);
+
+    try {
+      handlers.emitCliToolUseStart({
+        toolCallId: "call-1",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "first" },
+      });
+      handlers.emitCliToolResult({
+        toolCallId: "call-1",
+        name: "Bash",
+        isError: false,
+        result: "",
+      });
+      // A second result for the same id must not reuse the first call's request.
+      handlers.emitCliToolResult({
+        toolCallId: "call-1",
+        name: "Bash",
+        isError: false,
+        result: "",
+      });
+
+      const results = events.filter((event) => event.data.phase === "result");
+      expect(results[0]?.data.args).toEqual({ command: "first" });
+      expect(results[1]?.data.args).toBeUndefined();
+    } finally {
+      dispose();
+    }
+  });
+});

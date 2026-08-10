@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -22,9 +23,9 @@ function createGateway(connected: boolean): GatewayHarness {
   const client = {} as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
+    phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
-    reconnecting: !connected,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -54,8 +55,7 @@ function createGateway(connected: boolean): GatewayHarness {
     setConnected(nextConnected) {
       snapshot = {
         ...snapshot,
-        connected: nextConnected,
-        reconnecting: !nextConnected,
+        phase: nextConnected ? "connected" : "reconnecting",
       };
       for (const listener of listeners) {
         listener(snapshot);
@@ -84,14 +84,6 @@ function createSessionResult(key: string, displayName: string): SessionsListResu
     defaults: {},
     sessions: [{ key, kind: "direct", displayName, updatedAt: 1 }],
   } as SessionsListResult;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
 }
 
 async function mountPalette(context: ApplicationContext<RouteId>) {

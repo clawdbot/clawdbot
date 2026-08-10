@@ -9,15 +9,18 @@ import type {
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import {
   claimWorkerTurn,
   latestDurableWorkspaceConflict,
@@ -34,6 +37,7 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
@@ -70,12 +74,27 @@ type WorkerTurnLauncherOptions = {
   admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
+  resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
   workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
 
 class WorkerTurnExecutionError extends Error {}
 class WorkerWorkspaceReconciliationError extends Error {}
+
+function emitProviderReplayRejected(
+  config: SessionPlacementTurnParams["config"],
+  details: { reason: string; bytes?: number; limitBytes?: number; count?: number },
+): void {
+  if (isDiagnosticsEnabled(config)) {
+    emitTrustedDiagnosticEvent({
+      type: "payload.large",
+      surface: "worker.provider-replay",
+      action: "rejected",
+      ...details,
+    });
+  }
+}
 
 async function executeLocalTurn<T>(params: {
   claim: LocalTurnPlacementClaim;
@@ -172,6 +191,7 @@ async function executeWorkerTurn(params: {
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
+  localWorkspaceDir: string;
 }) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
@@ -216,7 +236,10 @@ async function executeWorkerTurn(params: {
       }
       const pending = journal.load();
       if (pending) {
-        await recoverWorkerWorkspaceReconciliation({ root: turn.workspaceDir, journal: pending });
+        await recoverWorkerWorkspaceReconciliation({
+          root: params.localWorkspaceDir,
+          journal: pending,
+        });
         journal.abort();
       }
     });
@@ -230,28 +253,38 @@ async function executeWorkerTurn(params: {
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
-  const manager = SessionManager.open(turn.sessionFile);
+  const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
+  const manager = SessionManager.open(transcriptTarget);
   const userMessageAlreadyPersisted =
     turn.suppressNextUserMessagePersistence === true ||
     turn.userTurnTranscriptRecorder?.hasPersisted() === true;
   const contextMessages = convertToLlm(manager.buildSessionContext().messages);
   const leaf = manager.getLeafEntry();
-  const initialMessages = windowInitialMessages(
+  const initialMessagePlan = windowInitialMessages(
     userMessageAlreadyPersisted && leaf?.type === "message" && leaf.message.role === "user"
       ? contextMessages.slice(0, -1)
       : contextMessages,
   );
+  if (initialMessagePlan.kind === "provider-replay-unavailable") {
+    const details = initialMessagePlan.details;
+    emitProviderReplayRejected(
+      turn.config,
+      "bytes" in details ? details : { count: details.messageCount, reason: details.reason },
+    );
+    throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+  }
+  const initialMessages = initialMessagePlan.messages;
   let baseLeafId = manager.getLeafId();
   if (!userMessageAlreadyPersisted) {
     const persisted = turn.userTurnTranscriptRecorder
-      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: turn.workspaceDir })
+      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: params.localWorkspaceDir })
       : undefined;
     if (persisted) {
       baseLeafId = persisted.messageId;
-      turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message);
+      turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message, persisted.admission);
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
-      baseLeafId = SessionManager.open(turn.sessionFile).getLeafId();
+      baseLeafId = SessionManager.open(transcriptTarget).getLeafId();
     } else if (!turn.userTurnTranscriptRecorder) {
       const message = {
         role: "user" as const,
@@ -285,10 +318,11 @@ async function executeWorkerTurn(params: {
     timeoutMs: turn.timeoutMs,
   });
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
-  const descriptor = fitLaunchDescriptor(
+  const toolAuthority = resolveWorkerToolAuthority({ modelRef, turn });
+  const launchPlan = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
-        version: 1,
+        version: 2,
         socketPath: tunnel.remoteSocketPath,
         admission: {
           environmentId: placement.environmentId,
@@ -316,15 +350,26 @@ async function executeWorkerTurn(params: {
             ackedSeq: placement.lastLiveEventAckCursor ?? 0,
             nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
           },
+          toolAuthority,
         },
       }),
     initialMessages,
   );
+  if (launchPlan.kind === "local-fallback") {
+    emitProviderReplayRejected(turn.config, {
+      bytes: launchPlan.bytes,
+      limitBytes: launchPlan.limitBytes,
+      reason: launchPlan.reason,
+    });
+    throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+  }
+  const descriptor = launchPlan.descriptor;
   turn.userTurnTranscriptRecorder?.markSentToProvider?.();
   turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
   const handoffAbort = new AbortController();
   params.onHandoff();
   const processPromise = tunnel.runWorkspaceCommand({
+    transportRetry: "never",
     argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", placement.workerBundleHash],
     input: JSON.stringify(descriptor),
     timeoutMs: turn.timeoutMs,
@@ -367,13 +412,17 @@ async function executeWorkerTurn(params: {
     throw new WorkerTurnExecutionError("Cloud worker turn failed");
   }
 
-  const completed = SessionManager.open(turn.sessionFile);
+  const completed = SessionManager.open(transcriptTarget);
   const currentPlacement = params.placements.get(placement.sessionId);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
   ) {
-    throw new Error("Cloud worker result does not match its committed transcript acknowledgement");
+    throw new Error(
+      `Cloud worker result does not match its committed transcript acknowledgement ` +
+        `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
+        `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
+    );
   }
   if (
     (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
@@ -426,7 +475,7 @@ async function executeWorkerTurn(params: {
       try {
         const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
         const reconciliation = await tunnel.reconcileWorkspace({
-          localPath: turn.workspaceDir,
+          localPath: params.localWorkspaceDir,
           remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
           baseManifestRef: currentPlacement.workspaceBaseManifestRef,
           journal,
@@ -457,10 +506,10 @@ async function executeWorkerTurn(params: {
           conflictPaths: applied?.conflictPaths ?? [],
           priorConflict: priorWorkspaceConflict,
           stagedResultRef: recordedStagedResultRef,
-          root: turn.workspaceDir,
+          root: params.localWorkspaceDir,
           report: async (report) => {
             if ("cleared" in report) {
-              SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+              SessionManager.open(transcriptTarget).appendCustomMessageEntry(
                 WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
                 "A later cloud workspace result superseded the previous conflict.",
                 false,
@@ -475,7 +524,7 @@ async function executeWorkerTurn(params: {
                 report.totalCount,
               ),
             };
-            SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+            SessionManager.open(transcriptTarget).appendCustomMessageEntry(
               WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
               workspaceConflict.summary,
               true,
@@ -490,7 +539,7 @@ async function executeWorkerTurn(params: {
         await settleStagedWorkspaceResult({
           placements: params.placements,
           turnClaim: params.turnClaim,
-          root: turn.workspaceDir,
+          root: params.localWorkspaceDir,
           stagedResultRef: recordedStagedResultRef,
           conflictRetained: finalized.conflictRetained,
           reclaim: false,
@@ -558,7 +607,7 @@ export function createWorkerSessionTurnPlacementProvider(
       }
       return await executeLocalTurn({ claim, placements: options.placements, runLocal });
     },
-    async executeTurn(claim, turn, runLocal) {
+    async executeTurn(claim, turn, runLocal, onAdmitted) {
       const current = options.placements.get(claim.sessionId);
       if (
         !current &&
@@ -585,6 +634,9 @@ export function createWorkerSessionTurnPlacementProvider(
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);
       let placement = requireActivePlacement(routablePlacement);
+      // The placement owns the managed worktree. Callers can carry a default or stale
+      // workspace path, but remote results must only reconcile into that canonical root.
+      const localWorkspaceDir = await options.resolveWorkspacePath(identity);
       const admitted = await claimWorkerTurn({
         placements: options.placements,
         identity,
@@ -596,6 +648,8 @@ export function createWorkerSessionTurnPlacementProvider(
       const turnClaim = admitted.turnClaim;
       let handedOff = false;
       try {
+        // Remote turns never invoke runLocal; release queue protection only after their claim.
+        onAdmitted?.();
         const result = await executeWorkerTurn({
           environments: options.environments,
           onHandoff: () => {
@@ -603,6 +657,7 @@ export function createWorkerSessionTurnPlacementProvider(
           },
           placement,
           placements: options.placements,
+          localWorkspaceDir,
           workspaceOperations,
           turn,
           turnClaim,

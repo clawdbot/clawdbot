@@ -1,10 +1,12 @@
 // Prompt Snapshots tests cover prompt snapshots script behavior.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createFormattedPromptSnapshotFiles } from "../../scripts/generate-prompt-snapshots.js";
+import {
+  createFormattedPromptSnapshotFiles,
+  materializeCodexDynamicToolSnapshot,
+} from "../../scripts/generate-prompt-snapshots.js";
 import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -14,8 +16,6 @@ import {
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
 import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
-import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
-import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 import { createHappyPathPromptSnapshotFiles } from "../helpers/agents/happy-path-prompt-snapshots.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
@@ -35,102 +35,50 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
-function listCommittedPromptSnapshotFiles(): string[] {
-  const externalFiles = listExternalCommittedPromptSnapshotFiles();
-  if (externalFiles) {
-    return externalFiles;
-  }
-  return fs
-    .readdirSync(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
-    .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-    .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry))
-    .toSorted();
-}
-
-function listExternalCommittedPromptSnapshotFiles(): string[] | null {
-  return listGitCommittedPromptSnapshotFiles() ?? listFindCommittedPromptSnapshotFiles();
-}
-
-function listGitCommittedPromptSnapshotFiles(): string[] | null {
-  const result = spawnSync(
-    "git",
-    ["ls-files", "--", CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.endsWith(".md") || line.endsWith(".json"))
-    .toSorted();
-}
-
-function listFindCommittedPromptSnapshotFiles(): string[] | null {
-  const result = spawnSync(
-    "find",
-    [
-      path.join(process.cwd(), CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR),
-      "-maxdepth",
-      "1",
-      "-type",
-      "f",
-      "(",
-      "-name",
-      "*.md",
-      "-o",
-      "-name",
-      "*.json",
-      ")",
-    ],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((filePath) => toRepoRelativePath(process.cwd(), filePath))
-    .toSorted();
-}
-
 describe("happy path prompt snapshots", () => {
   it("loads the generator entrypoint used by the prompt snapshot check", () => {
     expect(createFormattedPromptSnapshotFiles).toEqual(expect.any(Function));
   });
 
-  it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
-    expectNoReaddirSyncDuring(() => {
-      const committed = listCommittedPromptSnapshotFiles();
+  it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
+    const generated = await createHappyPathPromptSnapshotFiles();
+    const scenarios = [
+      { name: "telegram-direct", replacements: [] },
+      { name: "discord-group", replacements: ["sessions_spawn"] },
+      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+    ];
 
-      expect(committed.length).toBeGreaterThan(0);
-      expect(committed.every((file) => file.endsWith(".md") || file.endsWith(".json"))).toBe(true);
-    });
+    for (const { name, replacements } of scenarios) {
+      const fileName = `codex-dynamic-tools.${name}.json`;
+      const expected = generated.find((file) => path.basename(file.path) === fileName);
+      expect(expected, `missing complete generated tool catalog for ${name}`).toBeDefined();
+
+      const committed = JSON.parse(readCommittedSnapshot(fileName)) as
+        | unknown[]
+        | {
+            base: string;
+            replace: Record<string, { name: string; inputSchema?: unknown; tools?: unknown[] }>;
+          };
+      if (Array.isArray(committed)) {
+        expect(replacements).toEqual([]);
+      } else {
+        expect(committed.base).toBe("codex-dynamic-tools.telegram-direct.json");
+        expect(Object.keys(committed.replace)).toEqual(replacements);
+        for (const [toolName, tool] of Object.entries(committed.replace)) {
+          expect(tool.name).toBe(toolName);
+          expect(tool.inputSchema !== undefined || Array.isArray(tool.tools)).toBe(true);
+        }
+      }
+
+      const materialized = await materializeCodexDynamicToolSnapshot(name);
+      expect(JSON.parse(materialized)).toEqual(JSON.parse(expected!.content));
+    }
   });
 
-  it("keeps the committed Codex prompt snapshot artifact set explicit", () => {
-    expect(listCommittedPromptSnapshotFiles().map((file) => path.basename(file))).toEqual([
-      "README.md",
-      "codex-dynamic-tools.discord-group.json",
-      "codex-dynamic-tools.heartbeat-turn.json",
-      "codex-dynamic-tools.telegram-direct.json",
-      "discord-group-codex-message-tool.md",
-      "telegram-direct-codex-message-tool.md",
-      "telegram-heartbeat-codex-tool.md",
-    ]);
+  it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
+    await expect(materializeCodexDynamicToolSnapshot("../outside")).rejects.toThrow(
+      "Invalid Codex dynamic-tool snapshot scenario",
+    );
   });
 
   it("generates snapshots without jiti plugin-loader fallbacks", async () => {
@@ -188,7 +136,6 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
-    expect(telegram).toContain("<TOOLS.md contents will be here>");
     expect(telegram).toContain("<USER.md contents will be here>");
     expect(telegram).toContain("<MEMORY.md contents will be here>");
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
@@ -230,11 +177,9 @@ describe("happy path prompt snapshots", () => {
 
     expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
     expect(collaborationModeInstructions).toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).toContain("HEARTBEAT.md exists");
-    expect(collaborationModeInstructions).toContain(
-      "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
-    );
-    expect(collaborationModeInstructions).not.toContain("<HEARTBEAT.md contents will be here>");
+    // Monitor context now lives in cron scratch; the collaboration prompt must
+    // no longer reference the retired workspace file.
+    expect(collaborationModeInstructions).not.toContain("HEARTBEAT.md");
     expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
   });
 

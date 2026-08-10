@@ -7,96 +7,49 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { isGoogleTextGenerationModelId } from "./provider-models.js";
+import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./provider-models.js";
 
 const GOOGLE_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_BASE_URL}/models?pageSize=1000`;
 const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
 const GOOGLE_GEMINI_MODELS_CACHE_TTL_MS = 60_000;
 const GOOGLE_GEMINI_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
-const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = [
-  {
-    id: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-2.5-flash",
-    name: "Gemini 2.5 Flash",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-2.5-flash-lite",
-    name: "Gemini 2.5 Flash-Lite",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-3.5-flash",
-    name: "Gemini 3.5 Flash",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-3.6-flash",
-    name: "Gemini 3.6 Flash",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-3.5-flash-lite",
-    name: "Gemini 3.5 Flash-Lite",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-3.1-pro-preview",
-    name: "Gemini 3.1 Pro Preview",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-3.1-flash-lite",
-    name: "Gemini 3.1 Flash Lite",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
-  {
-    id: "gemini-3-flash-preview",
-    name: "Gemini 3 Flash Preview",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: GOOGLE_GEMINI_COST,
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-  },
+const GOOGLE_GEMINI_TEXT_MODEL_ROWS: ReadonlyArray<
+  readonly [id: string, name: string, prefersCodeMode: boolean]
+> = [
+  ["gemini-2.5-pro", "Gemini 2.5 Pro", false],
+  ["gemini-2.5-flash", "Gemini 2.5 Flash", false],
+  ["gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", false],
+  ["gemini-3.5-flash", "Gemini 3.5 Flash", true],
+  ["gemini-3.6-flash", "Gemini 3.6 Flash", true],
+  ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", true],
+  ["gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true],
+  ["gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", true],
+  ["gemini-3-flash-preview", "Gemini 3 Flash Preview", true],
 ];
+const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = GOOGLE_GEMINI_TEXT_MODEL_ROWS.map(
+  ([id, name, prefersCodeMode]): ModelDefinitionConfig => {
+    const model: ModelDefinitionConfig = {
+      id,
+      name,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: GOOGLE_GEMINI_COST,
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    };
+    if (prefersCodeMode) {
+      model.compat = { codeMode: "preferred" };
+    }
+    return model;
+  },
+);
+const GOOGLE_GEMINI_TEXT_MODEL_BY_ID = new Map(
+  GOOGLE_GEMINI_TEXT_MODELS.map((model) => [model.id, model]),
+);
+const GOOGLE_GEMINI_TEXT_MODEL_IDS: ReadonlySet<string> = new Set(
+  GOOGLE_GEMINI_TEXT_MODEL_BY_ID.keys(),
+);
 
 export function buildGoogleStaticCatalogProvider(): ModelProviderConfig {
   return {
@@ -155,6 +108,11 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   ) {
     return undefined;
   }
+  // Compat flags apply to evaluated weights only. Resolve discovered id
+  // variants (aliases, dated previews, -latest) to the bundled entry with the
+  // same weights; ids that do not resolve keep no compat (fail closed).
+  const staticId = resolveGoogleStaticModelId(id, GOOGLE_GEMINI_TEXT_MODEL_IDS);
+  const staticModel = staticId ? GOOGLE_GEMINI_TEXT_MODEL_BY_ID.get(staticId) : undefined;
   return {
     id,
     name: readString(record, "displayName") ?? id,
@@ -165,6 +123,7 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     cost: GOOGLE_GEMINI_COST,
     contextWindow,
     maxTokens,
+    ...(staticModel?.compat ? { compat: { ...staticModel.compat } } : {}),
   };
 }
 

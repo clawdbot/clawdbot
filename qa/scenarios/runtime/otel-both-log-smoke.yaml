@@ -33,8 +33,7 @@ scenario:
         logsExporter: both
         sampleRate: 1
         flushIntervalMs: 1000
-        captureContent:
-          enabled: false
+        captureContent: false
   docsRefs:
     - docs/gateway/opentelemetry.md
     - docs/concepts/qa-e2e-automation.md

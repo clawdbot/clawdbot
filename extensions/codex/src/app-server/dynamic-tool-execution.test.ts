@@ -19,6 +19,7 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("dynamic tool execution helpers", () => {
   afterEach(() => {
@@ -138,9 +139,11 @@ describe("dynamic tool execution helpers", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
-                timeoutMs: 180_000,
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                  timeoutMs: 180_000,
+                },
               },
             },
           },
@@ -361,12 +364,12 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(150_000);
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
-        config: undefined,
-      }),
-    ).toBe(630_000);
+    const fullWaitTimeoutMs = resolveDynamicToolCallTimeoutMs({
+      call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
+      config: undefined,
+    });
+    expect(fullWaitTimeoutMs).toBe(630_000);
+    expect(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS).toBeGreaterThan(fullWaitTimeoutMs);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {

@@ -1,5 +1,9 @@
 {
   "id": "voice-call",
+  "doctorContract": {
+    "resolveSessionStoreAgentIds": true,
+    "stateMigrations": true
+  },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
   "skills": ["./skills"],
@@ -222,6 +226,11 @@
     },
     "store": {
       "label": "Call Log Store Path",
+      "advanced": true
+    },
+    "agentId": {
+      "label": "Response Agent ID",
+      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
       "advanced": true
     },
     "sessionScope": {
@@ -878,6 +887,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
       },
       "sessionScope": {
         "type": "string",

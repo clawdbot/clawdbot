@@ -13,6 +13,36 @@ export type ProviderModelRef = {
   model: string;
 };
 
+type ModelSourceSuffix = {
+  base: string;
+  source: "cloud" | "local";
+};
+
+function parseModelSourceSuffix(modelRef: string): ModelSourceSuffix | undefined {
+  const sourceSeparator = modelRef.lastIndexOf(":");
+  if (sourceSeparator < 0) {
+    return undefined;
+  }
+  const source = modelRef.slice(sourceSeparator + 1);
+  if (source === "cloud" || source === "local") {
+    return { base: modelRef.slice(0, sourceSeparator), source };
+  }
+  if (!source.includes("/") && source.endsWith("-cloud")) {
+    return { base: modelRef.slice(0, -"-cloud".length), source: "cloud" };
+  }
+  return undefined;
+}
+
+/** Recognizes one unambiguous hosted source suffix on a bare or qualified model ref. */
+export function isCloudModelRef(modelRef: string | undefined): boolean {
+  const normalized = modelRef?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const source = parseModelSourceSuffix(normalized);
+  return source?.source === "cloud" && parseModelSourceSuffix(source.base) === undefined;
+}
+
 /** Normalize provider ids for catalog refs. */
 export function normalizeModelCatalogProviderId(provider: string): string {
   return normalizeLowercaseStringOrEmpty(provider);

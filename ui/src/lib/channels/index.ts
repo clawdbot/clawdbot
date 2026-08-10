@@ -1,9 +1,12 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type {
+  ChannelAccountSnapshot,
   ChannelsPairingApproveResult,
   ChannelsPairingListResult,
   ChannelsStatusSnapshot,
 } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -20,7 +23,7 @@ type ChannelLogoutResult = {
 
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
   hello?: {
     auth?: { role?: string; scopes?: readonly string[] } | null;
   } | null;
@@ -79,6 +82,47 @@ export type ChannelCapability = {
   dispose: () => void;
 };
 
+export function resolveChannelAccounts(
+  channelAccounts: ChannelsStatusSnapshot["channelAccounts"] | null | undefined,
+  channelId: string,
+): ChannelAccountSnapshot[] {
+  const accounts =
+    channelAccounts && Object.hasOwn(channelAccounts, channelId) && channelAccounts[channelId];
+  return Array.isArray(accounts) ? accounts : [];
+}
+
+export function channelSnapshotEntryIsActive(
+  snapshot: ChannelsStatusSnapshot | null,
+  channelId: string,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const status = asRecord(
+    Object.hasOwn(snapshot.channels, channelId) ? snapshot.channels[channelId] : undefined,
+  );
+  if (status?.configured === true || status?.running === true || status?.connected === true) {
+    return true;
+  }
+  return resolveChannelAccounts(snapshot.channelAccounts, channelId).some(
+    (account) =>
+      account.configured === true || account.running === true || account.connected === true,
+  );
+}
+
+/** Matches the Channels hub's definition of a transport the operator already uses. */
+export function channelSnapshotHasActiveChannel(snapshot: ChannelsStatusSnapshot | null): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const channelIds = new Set([
+    ...snapshot.channelOrder,
+    ...Object.keys(snapshot.channels),
+    ...Object.keys(snapshot.channelAccounts),
+  ]);
+  return [...channelIds].some((channelId) => channelSnapshotEntryIsActive(snapshot, channelId));
+}
+
 export function resolveChannelPairingAuthSignature(
   snapshot: Partial<ChannelGatewaySnapshot>,
 ): string {
@@ -107,7 +151,7 @@ function channelSnapshotAllowsScope(
 function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
   return {
     client: snapshot.client ?? null,
-    connected: snapshot.connected ?? false,
+    connected: snapshot.phase === "connected",
     channelsLoading: false,
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
@@ -127,9 +171,9 @@ function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = 
   };
 }
 
-function delay(ms: number): Promise<"timeout"> {
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(() => resolve("timeout"), ms);
+    setTimeout(resolve, ms);
   });
 }
 
@@ -188,14 +232,9 @@ async function loadChannels(
   })();
 
   const softTimeoutMs = options.softTimeoutMs;
-  if (typeof softTimeoutMs === "number" && softTimeoutMs > 0) {
-    const outcome = await Promise.race([refresh.then(() => "done" as const), delay(softTimeoutMs)]);
-    if (outcome === "timeout") {
-      return;
-    }
-    return;
-  }
-  await refresh;
+  await (typeof softTimeoutMs === "number" && softTimeoutMs > 0
+    ? Promise.race([refresh, delay(softTimeoutMs)])
+    : refresh);
 }
 
 function isCurrentPairingRefresh(
@@ -596,7 +635,8 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connectionChanged = state.connected !== snapshot.connected;
+    const connected = snapshot.phase === "connected";
+    const connectionChanged = state.connected !== connected;
     const nextChannelReadAccess = channelSnapshotAllowsScope(snapshot, "operator.read");
     const channelReadAccessChanged = currentChannelReadAccess !== nextChannelReadAccess;
     currentChannelReadAccess = nextChannelReadAccess;
@@ -607,7 +647,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     const whatsappAdminAccessChanged = currentWhatsAppAdminAccess !== nextWhatsAppAdminAccess;
     currentWhatsAppAdminAccess = nextWhatsAppAdminAccess;
     state.client = snapshot.client;
-    state.connected = snapshot.connected;
+    state.connected = connected;
     const lifecycle = getChannelsLifecycle(state);
     if (clientChanged || connectionChanged || channelReadAccessChanged) {
       state.channelsLoading = false;

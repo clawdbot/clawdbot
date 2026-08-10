@@ -1,5 +1,6 @@
 // Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
@@ -10,6 +11,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { parseDeliveryContextJson } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
@@ -93,11 +95,7 @@ function parseJsonValue(raw: string | null): JsonValue | undefined {
   if (!raw?.trim()) {
     return undefined;
   }
-  try {
-    return JSON.parse(raw) as JsonValue;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(raw) as JsonValue | undefined;
 }
 
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
@@ -156,7 +154,10 @@ function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
   };
 }
 
-function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
+type BoundTaskRecord = Insertable<TaskRunsTable>;
+
+/** Canonically serializes a task before an outer transaction acquires the write lock. */
+export function bindTaskRecord(record: TaskRecord): BoundTaskRecord {
   return {
     task_id: record.taskId,
     runtime: record.runtime,
@@ -273,7 +274,12 @@ function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
   return executeSqliteQuerySync(db, query).rows;
 }
 
-function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
+/** Upserts a prebound task on the exact supplied shared-state handle. */
+export function upsertTaskRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  row: BoundTaskRecord,
+): void {
+  const { db } = database;
   const updates = { ...row, task_id: undefined };
   executeSqliteQuerySync(
     db,
@@ -327,11 +333,10 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
   return cachedDatabase;
 }
 
-function withWriteTransaction(write: (database: TaskRegistryDatabase) => void) {
-  const database = openTaskRegistryDatabase();
-  runOpenClawStateWriteTransaction(() => {
-    write(database);
-  });
+function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) {
+  // Open once before BEGIN; the callback receives that exact shared-state owner.
+  openTaskRegistryDatabase();
+  runOpenClawStateWriteTransaction((database) => write(database));
 }
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
@@ -373,7 +378,8 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
 }
 
 export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {
-  withWriteTransaction(({ db }) => {
+  withWriteTransaction((database) => {
+    const { db } = database;
     const kysely = getTaskRegistryKysely(db);
     const taskIds = [...snapshot.tasks.keys()];
     if (taskIds.length === 0) {
@@ -401,7 +407,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
       });
     }
     for (const task of snapshot.tasks.values()) {
-      upsertTaskRow(db, bindTaskRecordBase(task));
+      upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
     }
     for (const state of snapshot.deliveryStates.values()) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
@@ -410,8 +416,8 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 }
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
-  withWriteTransaction(({ db }) => {
-    upsertTaskRow(db, bindTaskRecordBase(task));
+  withWriteTransaction((database) => {
+    upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
   });
 }
 
@@ -419,8 +425,9 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
   task: TaskRecord;
   deliveryState?: TaskDeliveryState;
 }) {
-  withWriteTransaction(({ db }) => {
-    upsertTaskRow(db, bindTaskRecordBase(params.task));
+  withWriteTransaction((database) => {
+    const { db } = database;
+    upsertTaskRunRowInDatabase(database, bindTaskRecord(params.task));
     if (params.deliveryState) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(params.deliveryState));
     } else {

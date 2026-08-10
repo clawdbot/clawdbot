@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
@@ -12,11 +13,17 @@ import {
 } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
-function ensureStartupMigrationCheckpointSchema(db: DatabaseSync, pathname: string): void {
+function ensureStartupMigrationCheckpointSchema(
+  db: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): void {
   runSqliteImmediateTransactionSync(
     db,
     () => {
+      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
       assertSupportedSchemaVersion(db, pathname);
       db.exec(`
         CREATE TABLE IF NOT EXISTS schema_meta (
@@ -61,12 +68,15 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
 ): T {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
+  assertOpenClawStateWriteAllowed({ databasePath: pathname, env });
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
+  const db = openNodeSqliteDatabase(pathname);
   try {
+    configureSqlitePreSchemaPragmas(db, {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    });
     assertSqliteIntegrity(db, pathname);
-    ensureStartupMigrationCheckpointSchema(db, pathname);
+    ensureStartupMigrationCheckpointSchema(db, pathname, env);
     return callback(db);
   } finally {
     db.close();

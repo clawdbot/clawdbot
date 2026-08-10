@@ -7,7 +7,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
+import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -44,13 +44,18 @@ function selectChatSendAgentReplyPayloads(params: {
   hasReturnedAgentErrorPayloads: boolean;
 }): ReplyPayload[] {
   return params.deliveredReplies
-    .filter((entry) => entry.kind === "final")
-    .map((entry) => entry.payload)
-    .filter(
-      (payload) =>
-        (!payload.isError && isSourceReplyTranscriptMirrorPayload(payload)) ||
-        (!params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload)),
-    );
+    .filter((entry) => {
+      const { payload } = entry;
+      if (isSourceReplyTranscriptMirrorPayload(payload)) {
+        return entry.kind === "final" && payload.isError !== true;
+      }
+      return (
+        !params.hasReturnedAgentErrorPayloads &&
+        (entry.kind === "block" || entry.kind === "final") &&
+        isReplyPayloadStatusNotice(payload)
+      );
+    })
+    .map((entry) => entry.payload);
 }
 
 /** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */
@@ -108,13 +113,10 @@ export async function finalizeChatSendSourceReplies(params: {
       sessionKey,
       agentId,
       payloads,
-      managedImageLocalRoots: mediaLocalRoots,
+      managedMediaLocalRoots: mediaLocalRoots,
       includeSensitiveMedia: false,
-      onLocalAudioAccessDenied: (message) => {
-        context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-      },
-      onManagedImagePrepareError: (message) => {
-        context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+      onManagedMediaPrepareError: (message) => {
+        context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
       },
     });
   const buildReplyMediaMessage = async (payloads: typeof finalPayloads) =>
@@ -231,7 +233,7 @@ export async function finalizeChatSendSourceReplies(params: {
     if (!attachParams.messageId) {
       return;
     }
-    await attachManagedOutgoingImagesToMessage({
+    await attachManagedOutgoingMediaToMessage({
       messageId: attachParams.messageId,
       blocks: attachParams.request.state.persistedContent,
     });

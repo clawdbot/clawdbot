@@ -23,7 +23,7 @@ import {
   migratedSessionAccessorWriteFiles,
   migratedTranscriptWriterFiles,
   readOnlyGatewaySessionAccessorFiles,
-} from "../../scripts/check-session-accessor-boundary.mjs";
+} from "../../scripts/check-session-accessor-boundary.mts";
 
 describe("session accessor boundary guard", () => {
   it("keeps Gateway read paths on non-materializing accessors", () => {
@@ -80,7 +80,7 @@ describe("session accessor boundary guard", () => {
         "src/commands/sessions-tail.ts",
         "src/commands/sessions.ts",
         "src/commands/status.agent-local.ts",
-        "src/commands/status.summary.ts",
+        "src/status/summary.ts",
         "src/commands/tasks.ts",
         "src/config/sessions/combined-store-gateway.ts",
         "src/config/sessions/delivery-info.ts",
@@ -111,7 +111,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/sessions-read.ts",
         "src/gateway/server-methods/sessions-shared.ts",
         "src/gateway/server-methods/sessions-subscriptions.ts",
-        "src/gateway/server-methods/sessions.ts",
         "src/gateway/server-session-events.ts",
         "src/gateway/session-reset-service.ts",
         "src/infra/outbound/message-action-tts.ts",
@@ -168,7 +167,9 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/main-session-restart-recovery.ts",
+        "src/agents/main-session-restart-recovery-checkpoint.ts",
+        "src/agents/main-session-restart-recovery-marking.ts",
+        "src/agents/main-session-restart-recovery-store.ts",
         "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
         "src/agents/subagent-control.ts",
@@ -213,7 +214,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/sessions-read.ts",
         "src/gateway/server-methods/sessions-shared.ts",
         "src/gateway/server-methods/sessions-subscriptions.ts",
-        "src/gateway/server-methods/sessions.ts",
         "src/gateway/server-node-events.ts",
         "src/gateway/session-compaction-checkpoints.ts",
         "src/infra/outbound/outbound-session.ts",

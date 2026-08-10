@@ -20,7 +20,7 @@ scenario:
   codeRefs:
     - src/agents/tools/image-generate-tool.ts
     - src/gateway/chat-attachments.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
     summary: Verify a generated image is saved as media, reattached on the next turn, and described correctly through the vision path.

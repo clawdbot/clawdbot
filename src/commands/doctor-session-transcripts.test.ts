@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../agents/sessions/session-manager.js";
+import { openFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 
 const note = vi.hoisted(() => vi.fn());
+const repairReservedIncognitoSessionKeys = vi.hoisted(() => vi.fn());
+const repairCanonicalSessionDeliveryStates = vi.hoisted(() => vi.fn());
+const repairCanonicalSessionKeys = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 
@@ -16,6 +19,18 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
+}));
+
+vi.mock("./doctor-session-incognito-key-repair.js", () => ({
+  repairReservedIncognitoSessionKeys,
+}));
+
+vi.mock("./doctor-session-delivery-state.js", () => ({
+  repairCanonicalSessionDeliveryStates,
+}));
+
+vi.mock("./doctor-session-canonical-keys.js", () => ({
+  repairCanonicalSessionKeys,
 }));
 
 vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
@@ -94,6 +109,18 @@ describe("doctor session transcript repair", () => {
 
   beforeEach(async () => {
     note.mockClear();
+    repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0, repaired: 0 });
+    repairCanonicalSessionDeliveryStates
+      .mockReset()
+      .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
+    repairCanonicalSessionKeys.mockReset().mockResolvedValue({
+      archivedTranscriptDirectories: [],
+      foundGroups: 0,
+      repairBatches: 0,
+      removedRows: 0,
+      repairedGroups: 0,
+      scannedStores: 0,
+    });
     runDoctorSessionSqlite.mockReset();
     withDoctorSqliteMaintenanceLock
       .mockReset()
@@ -279,6 +306,15 @@ describe("doctor session transcript repair", () => {
       env,
       mode: "import",
     });
+    expect(repairReservedIncognitoSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
+    expect(
+      expectDefined(runDoctorSessionSqlite.mock.invocationCallOrder[0], "SQLite import call order"),
+    ).toBeLessThan(
+      expectDefined(
+        repairReservedIncognitoSessionKeys.mock.invocationCallOrder[0],
+        "reserved key repair call order",
+      ),
+    );
     expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env,
       operation: "session SQLite import",
@@ -484,7 +520,7 @@ describe("doctor session transcript repair", () => {
     expect(repairedRecords.find((entry) => entry.id === "plugin-metadata")).toMatchObject({
       parentId: "active-assistant",
     });
-    const reopened = SessionManager.open(filePath, path.dirname(filePath));
+    const reopened = openFileBackedSessionManagerForTest(filePath, path.dirname(filePath));
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await fs.readFile(filePath, "utf-8"))
       .trim()
@@ -550,7 +586,7 @@ describe("doctor session transcript repair", () => {
     expect(repaired).toContain("answer");
     expect(repaired).toContain('"id":"append-root"');
     expect(repaired).not.toContain("stale");
-    const reopened = SessionManager.open(filePath, path.dirname(filePath));
+    const reopened = openFileBackedSessionManagerForTest(filePath, path.dirname(filePath));
     expect(reopened.buildSessionContext().messages).toHaveLength(3);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await fs.readFile(filePath, "utf-8"))
@@ -609,7 +645,7 @@ describe("doctor session transcript repair", () => {
     const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
 
     expect(result.repaired).toBe(true);
-    const reopened = SessionManager.open(filePath, path.dirname(filePath));
+    const reopened = openFileBackedSessionManagerForTest(filePath, path.dirname(filePath));
     expect(reopened.buildSessionContext().messages).toHaveLength(3);
     reopened.appendMessage({ role: "user", content: "new root", timestamp: Date.now() });
     const records = (await fs.readFile(filePath, "utf-8"))

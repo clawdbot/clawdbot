@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runInstallPolicyMock = vi.fn();
 const findBlockedManifestDependenciesMock = vi.fn();
@@ -42,7 +45,14 @@ const {
   preflightPluginNpmInstallPolicyRuntime,
   scanBundleInstallSourceRuntime,
   scanFileInstallSourceRuntime,
+  scanInstalledPackageDependencyTreeRuntime,
 } = await import("./install-security-scan.runtime.js");
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
+});
 
 function expectOnlyOperatorPolicyRan() {
   expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
@@ -173,6 +183,67 @@ describe("install security scan official bypass", () => {
       },
     });
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("installed dependency tree scan", () => {
+  it("accepts a managed host link declared as a runtime dependency", async () => {
+    findBlockedManifestDependenciesMock.mockReturnValue([]);
+    const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-scan-"));
+    tempDirs.push(npmRoot);
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    const hostLink = path.join(packageDir, "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(hostLink), { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-plugin",
+        dependencies: { openclaw: "2026.7.1" },
+      }),
+      "utf8",
+    );
+    await fs.symlink(process.cwd(), hostLink, "junction");
+
+    const result = await scanInstalledPackageDependencyTreeRuntime({
+      allowManagedNpmRootPackagePeerSymlinks: true,
+      dependencyScanRootDir: npmRoot,
+      logger: {},
+      packageDir,
+      pluginId: "runtime-plugin",
+    });
+
+    expect(result).toBeUndefined();
+    expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an openclaw dependency symlink that does not target the trusted host", async () => {
+    findBlockedManifestDependenciesMock.mockReturnValue([]);
+    const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-scan-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-outside-"));
+    tempDirs.push(npmRoot, outsideRoot);
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    const hostLink = path.join(packageDir, "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(hostLink), { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-plugin",
+        dependencies: { openclaw: "2026.7.1" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(outsideRoot, "package.json"), '{"name":"openclaw"}', "utf8");
+    await fs.symlink(outsideRoot, hostLink, "junction");
+
+    await expect(
+      scanInstalledPackageDependencyTreeRuntime({
+        allowManagedNpmRootPackagePeerSymlinks: true,
+        dependencyScanRootDir: npmRoot,
+        logger: {},
+        packageDir,
+        pluginId: "runtime-plugin",
+      }),
+    ).rejects.toThrow("installed dependency scan found package outside install root");
   });
 });
 

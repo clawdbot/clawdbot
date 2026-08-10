@@ -35,7 +35,7 @@ vi.mock("./attempt-session-settle.js", () => ({
 vi.mock("./attempt-session.js", () => ({
   prepareEmbeddedAttemptAgentSession: mocks.prepareAgentSession,
 }));
-vi.mock("./attempt-stream-transport.js", () => ({
+vi.mock("./attempt-stream-settle.js", () => ({
   prepareEmbeddedAttemptTransport: mocks.prepareTransport,
 }));
 vi.mock("./attempt-trajectory.js", () => ({
@@ -171,8 +171,8 @@ function createFixture() {
       replayAllowedToolNames: new Set(["read"]),
       resolveActiveContextEnginePluginId: vi.fn(),
       sessionAgentId: "main",
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      transcriptLifecycle: {},
+      withOwnedTranscriptWrite: vi.fn(),
     },
     agentSession: {
       agentCoreThinkingLevel: "medium",
@@ -308,5 +308,26 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(fixture.lifecycle.onTrajectoryRecorderCreated).toHaveBeenCalledWith(
       fixture.trajectoryRecorder,
     );
+  });
+
+  it("settles pending user-turn persistence before reconciling the session boundary", async () => {
+    const fixture = createFixture();
+    let releasePersistence: (() => void) | undefined;
+    const pendingPersistence = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const waitForRuntimePersistence = vi.fn(async () => await pendingPersistence);
+    fixture.input.attempt.userTurnTranscriptRecorder = {
+      waitForRuntimePersistence,
+    } as unknown as PrepareInput["attempt"]["userTurnTranscriptRecorder"];
+
+    const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    await vi.waitFor(() => expect(waitForRuntimePersistence).toHaveBeenCalledOnce());
+    expect(mocks.prepareSessionBoundary).not.toHaveBeenCalled();
+
+    releasePersistence?.();
+    await preparing;
+
+    expect(mocks.prepareSessionBoundary).toHaveBeenCalledOnce();
   });
 });

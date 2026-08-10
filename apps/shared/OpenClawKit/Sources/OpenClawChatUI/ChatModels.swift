@@ -109,6 +109,11 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     }
 }
 
+public enum OpenClawChatPlaybackMode: String, Codable, Hashable, Sendable {
+    case native
+    case transcode
+}
+
 public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let type: String?
     public let text: String?
@@ -116,7 +121,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let thinkingSignature: String?
     public let mimeType: String?
     public let fileName: String?
+    public let artifactId: String?
+    public let url: String?
+    public let openUrl: String?
+    public let alt: String?
+    public let width: Int?
+    public let height: Int?
+    public let sizeBytes: Int?
     public let durationSeconds: Double?
+    public let playback: OpenClawChatPlaybackMode?
     public let content: AnyCodable?
     public let preview: OpenClawChatCanvasPreview?
 
@@ -127,6 +140,31 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let details: AnyCodable?
     public let isError: Bool?
 
+    /// Gateway media and historical file attachments must stay visible in both chat and exports.
+    var isInlineAttachment: Bool {
+        switch self.type?.lowercased() {
+        case "file", "attachment", "image", "audio", "video":
+            true
+        default:
+            false
+        }
+    }
+
+    var mediaKind: OpenClawChatMediaKind? {
+        let normalizedType = self.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalizedType {
+        case "image": return .image
+        case "audio": return .audio
+        case "video": return .video
+        default: break
+        }
+        let normalizedMIME = self.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedMIME?.hasPrefix("image/") == true { return .image }
+        if normalizedMIME?.hasPrefix("audio/") == true { return .audio }
+        if normalizedMIME?.hasPrefix("video/") == true { return .video }
+        return nil
+    }
+
     public init(
         type: String?,
         text: String?,
@@ -134,7 +172,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         thinkingSignature: String? = nil,
         mimeType: String?,
         fileName: String?,
+        artifactId: String? = nil,
+        url: String? = nil,
+        openUrl: String? = nil,
+        alt: String? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        sizeBytes: Int? = nil,
         durationSeconds: Double? = nil,
+        playback: OpenClawChatPlaybackMode? = nil,
         content: AnyCodable?,
         preview: OpenClawChatCanvasPreview? = nil,
         id: String? = nil,
@@ -149,7 +195,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.thinkingSignature = thinkingSignature
         self.mimeType = mimeType
         self.fileName = fileName
+        self.artifactId = artifactId
+        self.url = url
+        self.openUrl = openUrl
+        self.alt = alt
+        self.width = width
+        self.height = height
+        self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds
+        self.playback = playback
         self.content = content
         self.preview = preview
         self.id = id
@@ -166,7 +220,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case thinkingSignature
         case mimeType
         case fileName
+        case artifactId
+        case url
+        case openUrl
+        case alt
+        case width
+        case height
+        case sizeBytes
         case durationSeconds
+        case durationMs
+        case playback
         case content
         case preview
         case id
@@ -185,7 +248,21 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.thinkingSignature = try container.decodeIfPresent(String.self, forKey: .thinkingSignature)
         self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
         self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        let decodedURL = try container.decodeIfPresent(String.self, forKey: .url)
+        self.url = decodedURL
+        self.openUrl = try container.decodeIfPresent(String.self, forKey: .openUrl)
+        self.artifactId = try container.decodeIfPresent(String.self, forKey: .artifactId)
+            ?? Self.managedArtifactId(
+                from: decodedURL,
+                type: self.type,
+                mimeType: self.mimeType)
+        self.alt = try container.decodeIfPresent(String.self, forKey: .alt)
+        self.width = try container.decodeIfPresent(Int.self, forKey: .width)
+        self.height = try container.decodeIfPresent(Int.self, forKey: .height)
+        self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
+            ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
+        self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
@@ -211,7 +288,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.thinkingSignature, forKey: .thinkingSignature)
         try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
         try container.encodeIfPresent(self.fileName, forKey: .fileName)
+        try container.encodeIfPresent(self.artifactId, forKey: .artifactId)
+        try container.encodeIfPresent(self.url, forKey: .url)
+        try container.encodeIfPresent(self.openUrl, forKey: .openUrl)
+        try container.encodeIfPresent(self.alt, forKey: .alt)
+        try container.encodeIfPresent(self.width, forKey: .width)
+        try container.encodeIfPresent(self.height, forKey: .height)
+        try container.encodeIfPresent(self.sizeBytes, forKey: .sizeBytes)
         try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(self.playback, forKey: .playback)
         try container.encodeIfPresent(self.content, forKey: .content)
         try container.encodeIfPresent(self.preview, forKey: .preview)
         try container.encodeIfPresent(self.id, forKey: .id)
@@ -219,6 +304,35 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.arguments, forKey: .arguments)
         try container.encodeIfPresent(self.details, forKey: .details)
         try container.encodeIfPresent(self.isError, forKey: .isError)
+    }
+
+    private static func managedArtifactId(
+        from rawURL: String?,
+        type: String?,
+        mimeType: String?) -> String?
+    {
+        guard let rawURL,
+              let components = URLComponents(string: rawURL),
+              components.scheme == nil,
+              components.host == nil
+        else { return nil }
+        let segments = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
+        guard segments.count == 7,
+              segments[0...3] == ["api", "chat", "media", "outgoing"],
+              segments[6] == "full",
+              let attachmentId = UUID(uuidString: String(segments[5]))?.uuidString.lowercased()
+        else { return nil }
+        let normalizedType = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedMIME = mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let prefix = if normalizedType == "audio" || normalizedType == "video" ||
+            normalizedMIME?.hasPrefix("audio/") == true ||
+            normalizedMIME?.hasPrefix("video/") == true
+        {
+            "artifact_managed_media_"
+        } else {
+            "artifact_managed_image_"
+        }
+        return prefix + attachmentId
     }
 }
 
@@ -562,13 +676,20 @@ public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
     public let sessionId: String?
 }
 
+public struct OpenClawChatEditorAttachment: Codable, Sendable {
+    public let mimeType: String
+    public let data: String
+}
+
 public struct OpenClawChatRewindResponse: Codable, Sendable {
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
 }
 
 public struct OpenClawChatForkAtMessageResponse: Codable, Sendable {
     public let sessionKey: String
     public let editorText: String?
+    public let editorAttachments: [OpenClawChatEditorAttachment]?
 }
 
 public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifiable {

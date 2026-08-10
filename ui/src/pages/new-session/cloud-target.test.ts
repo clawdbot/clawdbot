@@ -98,12 +98,13 @@ describe("cloud session startup", () => {
       .fn()
       .mockRejectedValueOnce(new Error("transport closed"))
       .mockResolvedValueOnce({ session: { placement: { state: "active" } } })
-      .mockResolvedValueOnce({ runId: "run-1" });
+      .mockResolvedValueOnce({ runId: "run-1", messageSeq: 3 });
 
     await expect(
       startCloudInitialTurn(clientWith(request), { ...params, attachments }, () => true),
     ).resolves.toMatchObject({
       status: "started",
+      messageSeq: 3,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(
@@ -232,6 +233,50 @@ describe("cloud session startup", () => {
       error: "cloud worker placement could not be verified",
     });
     expect(request).toHaveBeenCalledTimes(5);
+  });
+
+  it.each([
+    {
+      name: "destroys the last known worker",
+      cleanupError: undefined,
+      expectedError: "cloud worker placement could not be verified",
+    },
+    {
+      name: "reports a rejected worker cleanup",
+      cleanupError: "cleanup unavailable",
+      expectedError:
+        "cloud worker placement could not be verified; cleanup failed: cleanup unavailable",
+    },
+  ])("$name when placement lookups remain unavailable", async ({ cleanupError, expectedError }) => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          placement: { state: "provisioning", environmentId: "environment-unavailable" },
+        })
+        .mockRejectedValueOnce(new Error("lookup unavailable 1"))
+        .mockRejectedValueOnce(new Error("lookup unavailable 2"))
+        .mockRejectedValueOnce(new Error("lookup unavailable 3"))
+        .mockRejectedValueOnce(new Error("lookup unavailable 4"));
+      if (cleanupError) {
+        request.mockRejectedValueOnce(new Error(cleanupError));
+      } else {
+        request.mockResolvedValueOnce({ worker: { state: "destroyed" } });
+      }
+
+      const outcome = startCloudInitialTurn(clientWith(request), params, () => true);
+      await vi.runAllTimersAsync();
+
+      await expect(outcome).resolves.toEqual({ status: "cleanup-rejected", error: expectedError });
+      expect(request).toHaveBeenCalledTimes(6);
+      expect(request).toHaveBeenNthCalledWith(6, "environments.destroy", {
+        environmentId: "environment-unavailable",
+      });
+      expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a still-provisioning placement recoverable after reconciliation times out", async () => {

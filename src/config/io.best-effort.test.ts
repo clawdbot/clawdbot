@@ -193,7 +193,11 @@ describe("readBestEffortConfig", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfig).toEqual({ update: { channel: "beta" } });
+      expect(snapshot.sourceConfigBeforeMigrations).toEqual({ update: { channel: "beta" } });
+      expect(snapshot.sourceConfig).toEqual({
+        update: { channel: "beta" },
+        agents: { entries: { main: { default: true } } },
+      });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
       expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
@@ -218,8 +222,10 @@ describe("readBestEffortConfig", () => {
       const snapshot = await readConfigFileSnapshot();
       const bestEffort = await readBestEffortConfig();
 
-      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBeUndefined();
+      // Snapshot materialization must inject the same defaults as load; prepared-runtime
+      // exact-config resolution compares the two and diverging shapes fail it permanently.
+      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
 
       expect(bestEffort.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(bestEffort.agents?.defaults?.contextPruning?.ttl).toBe("1h");
@@ -283,7 +289,7 @@ describe("readSourceConfigBestEffort", () => {
       const snapshot = await readConfigFileSnapshot();
       const sourceBestEffort = await readSourceConfigBestEffort();
 
-      expect(sourceBestEffort).toEqual(snapshot.resolved);
+      expect(sourceBestEffort).toEqual(snapshot.sourceConfigBeforeMigrations);
       expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
       expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
     });

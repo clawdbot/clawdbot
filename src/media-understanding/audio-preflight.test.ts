@@ -44,6 +44,27 @@ describe("transcribeFirstAudio", () => {
     expect(ctx.media?.[1]?.transcribed).toBe(true);
   });
 
+  it.each([".aiff", ".aif", ".aifc"])(
+    "transcribes %s voice notes without an explicit content type",
+    async (extension) => {
+      runAudioTranscriptionMock.mockResolvedValueOnce({
+        transcript: "AIFF voice note transcript",
+        attachments: [],
+      });
+
+      const ctx: MsgContext = {
+        Body: "<media:audio>",
+        media: [{ path: `/tmp/voice${extension}` }],
+      };
+
+      await expect(transcribeFirstAudio({ ctx, cfg: {} })).resolves.toBe(
+        "AIFF voice note transcript",
+      );
+      expect(runAudioTranscriptionMock).toHaveBeenCalledOnce();
+      expect(ctx.media?.[0]?.transcribed).toBe(true);
+    },
+  );
+
   it("skips audio preflight when audio config is explicitly disabled", async () => {
     const transcript = await transcribeFirstAudio({
       ctx: {

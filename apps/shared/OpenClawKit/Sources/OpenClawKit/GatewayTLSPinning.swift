@@ -81,6 +81,10 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
     }
 }
 
+public enum GatewayBoundedDataError: Error, Equatable, Sendable {
+    case responseTooLarge(maximumBytes: Int)
+}
+
 protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
@@ -132,6 +136,92 @@ enum GatewayTLSValidationPolicy {
     }
 }
 
+public enum GatewayTLSServerTrustDecision: Equatable, Sendable {
+    case accept
+    case reject
+}
+
+enum GatewayTLSServerTrustEvaluation {
+    case accept(fingerprint: String?, enforcePin: Bool)
+    case reject(failure: GatewayTLSValidationFailure, enforcedFingerprint: String?)
+}
+
+public enum GatewayTLSServerTrust {
+    public static func evaluate(
+        trust: SecTrust,
+        host: String,
+        port: Int,
+        params: GatewayTLSParams) -> GatewayTLSServerTrustDecision
+    {
+        let expectedFingerprint = params.expectedFingerprint ?? params.storeKey.flatMap {
+            GatewayTLSStore.loadFingerprint(stableID: $0)
+        }
+        return switch self.evaluate(
+            trust: trust,
+            host: host,
+            port: port,
+            params: params,
+            expectedFingerprint: expectedFingerprint)
+        {
+        case .accept:
+            .accept
+        case .reject:
+            .reject
+        }
+    }
+
+    static func evaluate(
+        trust: SecTrust,
+        host: String,
+        port: Int,
+        params: GatewayTLSParams,
+        expectedFingerprint: String?) -> GatewayTLSServerTrustEvaluation
+    {
+        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
+        let fingerprint = certificateFingerprint(trust)
+        let expected = expectedFingerprint.map(normalizeFingerprint)
+        let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
+        failure = { kind, expectedFingerprint, enforcedFingerprint in
+            .reject(
+                failure: GatewayTLSValidationFailure(
+                    kind: kind,
+                    host: host,
+                    storeKey: params.storeKey,
+                    expectedFingerprint: expectedFingerprint,
+                    observedFingerprint: fingerprint,
+                    systemTrustOk: systemTrustOk,
+                    port: port),
+                enforcedFingerprint: enforcedFingerprint)
+        }
+        switch GatewayTLSValidationPolicy.decide(
+            expectedFingerprint: expected,
+            observedFingerprint: fingerprint,
+            allowTOFU: params.allowTOFU,
+            required: params.required,
+            systemTrustOk: systemTrustOk)
+        {
+        case let .accept(acceptedFingerprint, enforcePin, saveFirstUse):
+            guard saveFirstUse else {
+                return .accept(fingerprint: acceptedFingerprint, enforcePin: enforcePin)
+            }
+            guard let acceptedFingerprint,
+                  let storeKey = params.storeKey,
+                  let claimedFingerprint = GatewayTLSStore.claimFirstUseFingerprint(
+                      acceptedFingerprint,
+                      stableID: storeKey)
+            else {
+                return failure(.pinStorageUnavailable, nil, nil)
+            }
+            guard claimedFingerprint == acceptedFingerprint else {
+                return failure(.pinMismatch, claimedFingerprint, claimedFingerprint)
+            }
+            return .accept(fingerprint: acceptedFingerprint, enforcePin: enforcePin)
+        case let .reject(kind):
+            return failure(kind, expected, nil)
+        }
+    }
+}
+
 final class GatewayTLSFirstUseClaims: @unchecked Sendable {
     private let lock = NSLock()
     private var fingerprints: [String: String] = [:]
@@ -174,6 +264,25 @@ struct GatewayTLSKeychainOperations: @unchecked Sendable {
         delete: { SecItemDelete($0) })
 }
 
+struct GatewayTLSKeychainNamespaceState {
+    private(set) var suffix: String?
+    private(set) var used = false
+
+    mutating func configure(suffix: String) -> Bool {
+        if let configured = self.suffix {
+            return configured == suffix
+        }
+        guard !self.used || suffix.isEmpty else { return false }
+        self.suffix = suffix
+        return true
+    }
+
+    mutating func service(base: String) -> String {
+        self.used = true
+        return base + (self.suffix ?? "")
+    }
+}
+
 public enum GatewayTLSStore {
     @TaskLocal static var keychainOperations = GatewayTLSKeychainOperations.live
 
@@ -183,7 +292,19 @@ public enum GatewayTLSStore {
         case unavailable
     }
 
-    private static let keychainService = "ai.openclaw.tls-pinning"
+    private static let baseKeychainService = "ai.openclaw.tls-pinning"
+    private static let keychainServiceLock = NSLock()
+    private nonisolated(unsafe) static var keychainNamespace = GatewayTLSKeychainNamespaceState()
+    private static var keychainService: String {
+        self.keychainServiceLock.withLock {
+            self.keychainNamespace.service(base: self.baseKeychainService)
+        }
+    }
+
+    private static var usesDefaultKeychainService: Bool {
+        self.keychainServiceLock.withLock { (self.keychainNamespace.suffix ?? "").isEmpty }
+    }
+
     private static let keychainAccountPrefix = "fingerprint.v3."
     private static let legacyCanonicalAccountPrefix = "fingerprint.v2."
 
@@ -191,6 +312,19 @@ public enum GatewayTLSStore {
     private static let legacySuiteName = "ai.openclaw.shared"
     private static let legacyKeyPrefix = "gateway.tls."
     private static let firstUseClaims = GatewayTLSFirstUseClaims()
+
+    /// The macOS app profile is immutable for the process lifetime. Configure its
+    /// Keychain namespace before constructing any Gateway connection.
+    @discardableResult
+    public static func configureKeychainServiceSuffix(_ suffix: String) -> Bool {
+        self.keychainServiceLock.withLock {
+            self.keychainNamespace.configure(suffix: suffix)
+        }
+    }
+
+    static func resolvedKeychainService(suffix: String) -> String {
+        self.baseKeychainService + suffix
+    }
 
     public static func loadFingerprint(stableID: String) -> String? {
         guard case let .value(fingerprint) = self.loadFingerprintResult(stableID: stableID) else {
@@ -276,11 +410,15 @@ public enum GatewayTLSStore {
 
     @discardableResult
     public static func clearAllFingerprints() -> Bool {
+        self.clearAllFingerprints(clearLegacy: { self.clearAllLegacyFingerprints() })
+    }
+
+    static func clearAllFingerprints(clearLegacy: () -> Void) -> Bool {
         let removedKeychain = self.keychainOperations.delete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.keychainService,
         ] as CFDictionary)
-        self.clearAllLegacyFingerprints()
+        clearLegacy()
         let removed = removedKeychain == errSecSuccess || removedKeychain == errSecItemNotFound
         if removed {
             self.firstUseClaims.clearAll()
@@ -418,6 +556,7 @@ public enum GatewayTLSStore {
     }
 
     private static func readLegacyDefaultsFingerprint(stableID: String) -> FingerprintRead {
+        guard self.usesDefaultKeychainService else { return .missing }
         guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return .unavailable }
         let key = self.legacyKeyPrefix + stableID
         guard let value = defaults.object(forKey: key) else { return .missing }
@@ -514,8 +653,10 @@ public enum GatewayTLSStore {
         } ?? true
         guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return removedV2 }
         let removedRaw = self.deleteFingerprint(account: stableID)
-        UserDefaults(suiteName: self.legacySuiteName)?
-            .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        if self.usesDefaultKeychainService {
+            UserDefaults(suiteName: self.legacySuiteName)?
+                .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        }
         return removedRaw && removedV2
     }
 
@@ -530,6 +671,7 @@ public enum GatewayTLSStore {
     }
 
     private static func clearAllLegacyFingerprints() {
+        guard self.usesDefaultKeychainService else { return }
         guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
         for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(self.legacyKeyPrefix) {
             defaults.removeObject(forKey: key)
@@ -678,6 +820,42 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
+    public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
+        self.registerExpectedAuthority(url: request.url)
+        guard maximumBytes >= 0 else {
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        let (bytes, response) = try await self.session.bytes(for: request)
+        let expectedLength = response.expectedContentLength
+        guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
+            bytes.task.cancel()
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        var data = Data()
+        if expectedLength > 0 {
+            data.reserveCapacity(Int(expectedLength))
+        }
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    bytes.task.cancel()
+                    throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                }
+                data.append(byte)
+            }
+        } catch {
+            bytes.task.cancel()
+            throw error
+        }
+        return (data, response)
+    }
+
+    public func finishTasksAndInvalidate() {
+        self.session.finishTasksAndInvalidate()
+    }
+
     public func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
@@ -708,60 +886,21 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
-        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
-        let fingerprint = certificateFingerprint(trust)
-        let decision = GatewayTLSValidationPolicy.decide(
-            expectedFingerprint: expected,
-            observedFingerprint: fingerprint,
-            allowTOFU: self.params.allowTOFU,
-            required: self.params.required,
-            systemTrustOk: systemTrustOk)
-
-        switch decision {
-        case let .accept(acceptedFingerprint, enforcePin, saveFirstUse):
-            if saveFirstUse {
-                guard let acceptedFingerprint,
-                      let storeKey = self.params.storeKey,
-                      let claimedFingerprint = GatewayTLSStore.claimFirstUseFingerprint(
-                          acceptedFingerprint,
-                          stableID: storeKey)
-                else {
-                    self.recordTLSFailure(GatewayTLSValidationFailure(
-                        kind: .pinStorageUnavailable,
-                        host: host,
-                        storeKey: self.params.storeKey,
-                        expectedFingerprint: nil,
-                        observedFingerprint: acceptedFingerprint,
-                        systemTrustOk: systemTrustOk,
-                        port: challenge.protectionSpace.port))
-                    completionHandler(.cancelAuthenticationChallenge, nil)
-                    return
-                }
-                guard claimedFingerprint == acceptedFingerprint else {
-                    self.recordTLSPinExpectation(claimedFingerprint)
-                    self.recordTLSFailure(GatewayTLSValidationFailure(
-                        kind: .pinMismatch,
-                        host: host,
-                        storeKey: storeKey,
-                        expectedFingerprint: claimedFingerprint,
-                        observedFingerprint: acceptedFingerprint,
-                        systemTrustOk: systemTrustOk,
-                        port: challenge.protectionSpace.port))
-                    completionHandler(.cancelAuthenticationChallenge, nil)
-                    return
-                }
-            }
-            self.recordTLSAcceptance(acceptedFingerprint, enforcePin: enforcePin)
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: host,
+            port: port,
+            params: self.params,
+            expectedFingerprint: expected)
+        {
+        case let .accept(fingerprint, enforcePin):
+            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
             completionHandler(.useCredential, URLCredential(trust: trust))
-        case let .reject(kind):
-            self.recordTLSFailure(GatewayTLSValidationFailure(
-                kind: kind,
-                host: host,
-                storeKey: self.params.storeKey,
-                expectedFingerprint: expected,
-                observedFingerprint: fingerprint,
-                systemTrustOk: systemTrustOk,
-                port: challenge.protectionSpace.port))
+        case let .reject(failure, enforcedFingerprint):
+            if let enforcedFingerprint {
+                self.recordTLSPinExpectation(enforcedFingerprint)
+            }
+            self.recordTLSFailure(failure)
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }

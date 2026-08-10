@@ -5,9 +5,14 @@ import type {
   SessionEntryStatus,
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  hasValidSqliteSessionEntryIdentity,
+  parseSqliteSessionEntryRecord,
+} from "./session-entry-json.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
-type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries">;
+type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null {
   return value === "running" ||
@@ -19,45 +24,15 @@ export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null
     : null;
 }
 
-function normalizeSessionCreatorIdentity(value: unknown): SessionEntry["createdBy"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const candidate = value as { id?: unknown; label?: unknown };
-  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-  if (!id) {
-    return undefined;
-  }
-  const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
-  return { id, ...(label ? { label } : {}) };
-}
+export { hasValidSqliteSessionEntryIdentity };
 
-export function serializeSqliteSessionCreatorIdentity(
-  createdBy: SessionEntry["createdBy"],
-): string | null {
-  const normalized = normalizeSessionCreatorIdentity(createdBy);
-  return normalized ? JSON.stringify(normalized) : null;
-}
-
-export function parseSqliteSessionEntryJson(row: { entry_json: string }): SessionEntry | null {
-  try {
-    const parsed = JSON.parse(row.entry_json) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const entry = parsed as SessionEntry;
-    // entry_json stays authoritative across downgrade/upgrade cycles: an older
-    // binary can rewrite it without knowing about the additive projection column.
-    const createdBy = normalizeSessionCreatorIdentity(entry.createdBy);
-    if (createdBy) {
-      entry.createdBy = createdBy;
-    } else {
-      delete entry.createdBy;
-    }
-    return entry;
-  } catch {
-    return null;
-  }
+export function parseSqliteSessionEntryJson(row: {
+  current_session_id?: string;
+  entry_json: string;
+  updated_at?: number;
+}): SessionEntry | null {
+  const record = parseSqliteSessionEntryRecord(row);
+  return record ? projectCanonicalSessionEntryShape(record) : null;
 }
 
 export function readSqliteSessionEntriesByStatus(
@@ -72,8 +47,8 @@ export function readSqliteSessionEntriesByStatus(
   }
   const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
   let query = db
-    .selectFrom("session_entries")
-    .select(["session_key", "entry_json", "session_id", "updated_at"])
+    .selectFrom("session_nodes")
+    .select(["session_key", "entry_json", "current_session_id", "updated_at"])
     .where("status", "in", selectedStatuses);
   if (selectedSessionKeys) {
     query = query.where("session_key", "in", selectedSessionKeys);

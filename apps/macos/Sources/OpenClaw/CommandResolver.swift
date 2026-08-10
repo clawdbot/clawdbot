@@ -3,6 +3,8 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    /// Version probes may queue under machine load; keep command resolution tolerant but bounded.
+    static let versionProbeTimeout: TimeInterval = 10
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -14,17 +16,20 @@ enum CommandResolver {
         return nil
     }
 
-    static func runtimeResolution(searchPaths: [String]?) -> Result<RuntimeResolution, RuntimeResolutionError> {
-        RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
+    static func runtimeResolution(searchPaths: [String]?) async -> Result<RuntimeResolution, RuntimeResolutionError> {
+        await RuntimeLocator.resolve(searchPaths: searchPaths ?? self.preferredPaths())
     }
 
     static func makeRuntimeCommand(
         runtime: RuntimeResolution,
         entrypoint: String,
         subcommand: String,
-        extraArgs: [String]) -> [String]
+        extraArgs: [String],
+        profile: AppProfile = .current) -> [String]
     {
-        [runtime.path, entrypoint, subcommand] + extraArgs
+        profile.localCLICommand(
+            prefix: [runtime.path, entrypoint],
+            arguments: [subcommand] + extraArgs)
     }
 
     static func runtimeErrorCommand(_ error: RuntimeResolutionError) -> [String] {
@@ -43,7 +48,7 @@ enum CommandResolver {
     }
 
     static func projectRoot() -> URL {
-        if let stored = UserDefaults.standard.string(forKey: projectRootDefaultsKey),
+        if let stored = AppDefaults.standard.string(forKey: projectRootDefaultsKey),
            let url = expandPath(stored),
            FileManager().fileExists(atPath: url.path)
         {
@@ -58,7 +63,7 @@ enum CommandResolver {
     }
 
     static func setProjectRoot(_ path: String) {
-        UserDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
+        AppDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
     }
 
     static func projectRootPath() -> String {
@@ -71,7 +76,7 @@ enum CommandResolver {
         let home = FileManager().homeDirectoryForCurrentUser
         let projectRoot = self.projectRoot()
         let validatedExecutable = self.validatedOpenClawExecutable(
-            defaults: .standard,
+            defaults: AppDefaults.standard,
             fileManager: .default,
             requiredVersion: GatewayEnvironment.expectedGatewayVersionString())
         return self.preferredPaths(
@@ -254,13 +259,43 @@ enum CommandResolver {
         #endif
     }
 
+    static func projectNodeHostWorkerLaunch(
+        projectRoot: URL? = nil,
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch?
+    {
+        #if DEBUG
+        let root = projectRoot ?? self.projectRoot()
+        let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else { return nil }
+        switch await self.runtimeResolution(searchPaths: searchPaths) {
+        case let .success(runtime):
+            return MacNodeHostWorkerLaunch(
+                command: self.nodeHostWorkerCommand(
+                    prefix: [runtime.path, sourceRunner.path]),
+                currentDirectoryURL: root)
+        case let .failure(error):
+            throw error
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    static func nodeHostWorkerCommand(
+        prefix: [String],
+        profile: AppProfile = .current) -> [String]
+    {
+        profile.localCLICommand(prefix: prefix, arguments: ["node", "worker"])
+    }
+
     static func openclawNodeCommand(
         subcommand: String,
         extraArgs: [String] = [],
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil,
+        profile: AppProfile = .current) async -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, settings.transport == .ssh {
@@ -276,13 +311,13 @@ enum CommandResolver {
 
         let root = projectRoot ?? self.projectRoot()
         if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
-            return [openclawPath, subcommand] + extraArgs
+            return profile.localCLICommand(prefix: [openclawPath], arguments: [subcommand] + extraArgs)
         }
         if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
-            return [openclawPath, subcommand] + extraArgs
+            return profile.localCLICommand(prefix: [openclawPath], arguments: [subcommand] + extraArgs)
         }
 
-        let runtimeResult = self.runtimeResolution(searchPaths: searchPaths)
+        let runtimeResult = await self.runtimeResolution(searchPaths: searchPaths)
         switch runtimeResult {
         case let .success(runtime):
             if let entry = gatewayEntrypoint(in: root) {
@@ -290,7 +325,8 @@ enum CommandResolver {
                     runtime: runtime,
                     entrypoint: entry,
                     subcommand: subcommand,
-                    extraArgs: extraArgs)
+                    extraArgs: extraArgs,
+                    profile: profile)
             }
         case .failure:
             break
@@ -298,7 +334,9 @@ enum CommandResolver {
 
         if let pnpm = findExecutable(named: "pnpm", searchPaths: searchPaths) {
             // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
-            return [pnpm, "--silent", "openclaw", subcommand] + extraArgs
+            return profile.localCLICommand(
+                prefix: [pnpm, "--silent", "openclaw"],
+                arguments: [subcommand] + extraArgs)
         }
 
         switch runtimeResult {
@@ -315,18 +353,20 @@ enum CommandResolver {
     static func openclawCommand(
         subcommand: String,
         extraArgs: [String] = [],
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         configRoot: [String: Any]? = nil,
         searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        projectRoot: URL? = nil,
+        profile: AppProfile = .current) async -> [String]
     {
-        self.openclawNodeCommand(
+        await self.openclawNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
             configRoot: configRoot,
             searchPaths: searchPaths,
-            projectRoot: projectRoot)
+            projectRoot: projectRoot,
+            profile: profile)
     }
 
     // MARK: - SSH helpers
@@ -480,7 +520,7 @@ enum CommandResolver {
     }
 
     static func connectionSettings(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         configRoot: [String: Any]? = nil) -> RemoteSettings
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
@@ -522,7 +562,7 @@ enum CommandResolver {
             sshHostKeyPolicy: sshHostKeyPolicy)
     }
 
-    static func connectionModeIsRemote(defaults: UserDefaults = .standard) -> Bool {
+    static func connectionModeIsRemote(defaults: UserDefaults = AppDefaults.standard) -> Bool {
         self.connectionSettings(defaults: defaults).mode == .remote
     }
 

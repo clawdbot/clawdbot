@@ -18,6 +18,7 @@ import type {
 import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
@@ -297,7 +298,11 @@ function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
       if (!data) {
         continue;
       }
-      return Buffer.from(data, "base64");
+      const canonicalAudio = canonicalizeGoogleProviderBase64(data);
+      if (!canonicalAudio) {
+        throw new Error("Google TTS response returned malformed base64 audio data");
+      }
+      return Buffer.from(canonicalAudio, "base64");
     }
   }
   throw new Error("Google TTS response missing audio data");

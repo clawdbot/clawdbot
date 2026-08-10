@@ -3,6 +3,7 @@
  * explicit per-model config, global defaults, catalog metadata, and model
  * family fallbacks.
  */
+import { resolveClaudeOpus5ModelIdentity } from "@openclaw/llm-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -14,6 +15,41 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-ref-shared.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+
+/** Resolves configured thinking without consulting model capability metadata. */
+export function resolveConfiguredThinkingDefault(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): ThinkLevel | undefined {
+  const configuredModels = params.cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
+  const perModelThinking =
+    configuredModels?.[canonicalKey]?.params?.thinking ??
+    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  if (
+    perModelThinking === false ||
+    perModelThinking === "disabled" ||
+    perModelThinking === "none"
+  ) {
+    return "off";
+  }
+  if (
+    perModelThinking === "off" ||
+    perModelThinking === "minimal" ||
+    perModelThinking === "low" ||
+    perModelThinking === "medium" ||
+    perModelThinking === "high" ||
+    perModelThinking === "xhigh" ||
+    perModelThinking === "adaptive" ||
+    perModelThinking === "max" ||
+    perModelThinking === "ultra"
+  ) {
+    return perModelThinking;
+  }
+  return params.cfg.agents?.defaults?.thinkingDefault;
+}
 
 /** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
@@ -44,31 +80,7 @@ export function resolveThinkingDefault(params: {
     normalizedPrimarySelection === normalizedCanonicalKey ||
     Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
     normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
-  const perModelThinking =
-    configuredModels?.[canonicalKey]?.params?.thinking ??
-    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
-  // Accept boolean false and common disable aliases as "off".
-  if (
-    perModelThinking === false ||
-    perModelThinking === "disabled" ||
-    perModelThinking === "none"
-  ) {
-    return "off";
-  }
-  if (
-    perModelThinking === "off" ||
-    perModelThinking === "minimal" ||
-    perModelThinking === "low" ||
-    perModelThinking === "medium" ||
-    perModelThinking === "high" ||
-    perModelThinking === "xhigh" ||
-    perModelThinking === "adaptive" ||
-    perModelThinking === "max" ||
-    perModelThinking === "ultra"
-  ) {
-    return perModelThinking;
-  }
-  const configured = params.cfg.agents?.defaults?.thinkingDefault;
+  const configured = resolveConfiguredThinkingDefault(params);
   if (configured) {
     return configured;
   }
@@ -76,6 +88,9 @@ export function resolveThinkingDefault(params: {
     normalizedProvider === "anthropic" ||
     normalizedProvider === "anthropic-vertex" ||
     normalizedProvider === "claude-cli";
+  if (isClaudeProvider && resolveClaudeOpus5ModelIdentity({ id: normalizedModel })) {
+    return "high";
+  }
   if (
     isClaudeProvider &&
     (normalizedModel.startsWith("claude-opus-4-8") || normalizedModel.startsWith("claude-opus-4.8"))

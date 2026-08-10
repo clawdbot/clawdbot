@@ -1,11 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import type { TerminalBackend } from "./backend.js";
 import { TerminalSessionManager } from "./session-manager.js";
-
-type TerminalOpenRequest = Parameters<TerminalSessionManager["open"]>[0];
-type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
+import {
+  baseOpenRequest as baseRequest,
+  type FakeTerminalPty,
+  makeFakePty,
+} from "./session-manager.test-helpers.js";
 const TERMINAL_EVENT_DATA = "terminal.data";
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
@@ -17,76 +18,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-/** A controllable fake PTY that records writes and lets tests drive data/exit. */
-function makeFakePty() {
-  let dataListener: ((chunk: string) => void) | undefined;
-  let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-  const handle: TerminalPtyHandle & {
-    writes: string[];
-    resizes: Array<[number, number]>;
-    killed: boolean;
-    paused: boolean;
-    pauseCalls: number;
-    resumeCalls: number;
-    deliveredChunks: number;
-    emitData: (chunk: string) => void;
-    emitExit: (code: number, signal?: number) => void;
-  } = {
-    pid: 4242,
-    writes: [],
-    resizes: [],
-    killed: false,
-    paused: false,
-    pauseCalls: 0,
-    resumeCalls: 0,
-    deliveredChunks: 0,
-    write: (data) => handle.writes.push(data),
-    resize: (cols, rows) => handle.resizes.push([cols, rows]),
-    pause: () => {
-      handle.paused = true;
-      handle.pauseCalls += 1;
-    },
-    resume: () => {
-      handle.paused = false;
-      handle.resumeCalls += 1;
-    },
-    onData: (listener) => {
-      dataListener = listener;
-    },
-    onExit: (listener) => {
-      exitListener = listener;
-    },
-    kill: () => {
-      handle.killed = true;
-    },
-    emitData: (chunk) => {
-      if (!handle.paused) {
-        handle.deliveredChunks += 1;
-        dataListener?.(chunk);
-      }
-    },
-    emitExit: (code, signal) => exitListener?.({ exitCode: code, signal }),
-  };
-  return handle;
-}
-
-function baseRequest(overrides?: Partial<TerminalOpenRequest>): TerminalOpenRequest {
-  return {
-    owner: { kind: "conn", connId: "conn-1" },
-    agentId: "main",
-    cwd: "/work",
-    shell: "/bin/zsh",
-    args: ["-l"],
-    cols: 80,
-    rows: 24,
-    env: { TERM: "xterm-256color" },
-    ...overrides,
-  };
-}
-
 describe("TerminalSessionManager", () => {
   it("kills a backend that finishes after its open request is cancelled", async () => {
-    const spawned = deferred<TerminalPtyHandle>();
+    const spawned = deferred<FakeTerminalPty>();
     const controller = new AbortController();
     const first = makeFakePty();
     const second = makeFakePty();
@@ -118,8 +52,8 @@ describe("TerminalSessionManager", () => {
   });
 
   it("bounds cancelled backend operations until they settle", async () => {
-    const firstSpawn = deferred<TerminalPtyHandle>();
-    const secondSpawn = deferred<TerminalPtyHandle>();
+    const firstSpawn = deferred<FakeTerminalPty>();
+    const secondSpawn = deferred<FakeTerminalPty>();
     const firstController = new AbortController();
     const secondController = new AbortController();
     let spawnCount = 0;
@@ -766,6 +700,96 @@ describe("TerminalSessionManager agent ownership", () => {
         }),
       ]);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["disconnect", "close"] as const)(
+    "immediately resumes a shared terminal when its slow viewer leaves via %s",
+    async (removal) => {
+      vi.useFakeTimers();
+      const fake = makeFakePty();
+      const emit = vi.fn();
+      const bufferedAmounts = new Map([
+        ["viewer-slow", Number.MAX_SAFE_INTEGER],
+        ["viewer-healthy", 0],
+      ]);
+      const manager = new TerminalSessionManager({
+        emit,
+        getBufferedAmount: (connId) => bufferedAmounts.get(connId),
+        spawn: async () => fake,
+      });
+
+      try {
+        const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+        if (!outcome.ok) {
+          throw new Error("expected open");
+        }
+        manager.attach("viewer-slow", outcome.sessionId);
+        manager.attach("viewer-healthy", outcome.sessionId);
+
+        fake.emitData("pressure");
+        await vi.advanceTimersByTimeAsync(4);
+        expect(fake.paused).toBe(true);
+
+        if (removal === "disconnect") {
+          manager.handleDisconnect("viewer-slow");
+        } else {
+          expect(manager.close("viewer-slow", outcome.sessionId)).toBe(true);
+        }
+
+        expect(fake.paused).toBe(false);
+        emit.mockClear();
+        fake.emitData("resumed");
+        await vi.advanceTimersByTimeAsync(4);
+        expect(emit).toHaveBeenCalledWith(
+          "viewer-healthy",
+          TERMINAL_EVENT_DATA,
+          expect.objectContaining({ data: "resumed" }),
+        );
+        expect(emit).not.toHaveBeenCalledWith(
+          "viewer-slow",
+          TERMINAL_EVENT_DATA,
+          expect.anything(),
+        );
+      } finally {
+        manager.disposeAll();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps a shared terminal paused when its remaining viewer is still slow", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakePty();
+    const bufferedAmounts = new Map([
+      ["viewer-slow", Number.MAX_SAFE_INTEGER],
+      ["viewer-healthy", 0],
+    ]);
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      getBufferedAmount: (connId) => bufferedAmounts.get(connId),
+      spawn: async () => fake,
+    });
+
+    try {
+      const outcome = await manager.open(baseRequest({ owner: agentOwner }));
+      if (!outcome.ok) {
+        throw new Error("expected open");
+      }
+      manager.attach("viewer-slow", outcome.sessionId);
+      manager.attach("viewer-healthy", outcome.sessionId);
+
+      fake.emitData("pressure");
+      await vi.advanceTimersByTimeAsync(4);
+      expect(fake.paused).toBe(true);
+
+      manager.handleDisconnect("viewer-healthy");
+
+      expect(fake.paused).toBe(true);
+      expect(fake.resumeCalls).toBe(0);
+    } finally {
+      manager.disposeAll();
       vi.useRealTimers();
     }
   });

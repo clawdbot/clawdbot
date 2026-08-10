@@ -1,12 +1,14 @@
 // Qqbot plugin module implements gateway behavior.
 import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isQQBotTokenAuthenticationFailure } from "../api/auth-errors.js";
 import {
   classifyCoreCommandForGroup,
   PRIVATE_CHAT_ONLY_TEXT,
 } from "../commands/command-visibility.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
+import { qqbotNotConfiguredMessage } from "../config/setup-guidance.js";
 import type { HistoryEntry } from "../group/history.js";
 import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
@@ -22,9 +24,9 @@ import {
   sendText as senderSendText,
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
+import { ApiError } from "../types.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
-import { createActiveCfgProvider } from "./active-cfg.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipeline.js";
 import { createInteractionHandler } from "./interaction-handler.js";
@@ -47,7 +49,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   initCommands(adapters.commands);
 
   if (!account.appId || !account.clientSecret) {
-    throw new Error("QQBot not configured (missing appId or clientSecret)");
+    throw new Error(qqbotNotConfiguredMessage(account.accountId));
   }
 
   const diag = await runDiagnostics();
@@ -100,10 +102,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   const groupHistories: Map<string, HistoryEntry[]> | undefined = groupChatEnabled
     ? new Map()
     : undefined;
-  // Live config provider: per-inbound lookup so binding edits applied
-  // through the CLI take effect without a gateway restart (#69546).
-  const activeCfgProvider = createActiveCfgProvider({ fallback: ctx.cfg });
-
   // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
     if (event.turnAdoptionLifecycle?.abortSignal.aborted) {
@@ -124,7 +122,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       direction: "inbound",
     });
 
-    const activeCfg = activeCfgProvider.getActiveCfg();
+    const activeCfg = ctx.getCurrentConfig();
 
     const inbound = await buildInboundContext(event, {
       account,
@@ -252,7 +250,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   };
 
   const handleInteraction = createInteractionHandler(account, ctx.runtime, log, {
-    getActiveCfg: () => activeCfgProvider.getActiveCfg(),
+    getActiveCfg: ctx.getCurrentConfig,
     resolveCommandAuthorized: (params) => adapters.access.resolveSlashCommandAuthorization(params),
   });
 
@@ -320,8 +318,14 @@ async function startTypingForEvent(
     try {
       return await sendNotifyAndStartKeepAlive();
     } catch (notifyErr) {
+      const isStructuredAuthFailure =
+        notifyErr instanceof ApiError &&
+        isQQBotTokenAuthenticationFailure(notifyErr.httpStatus, notifyErr.bizCode);
       const errMsg = String(notifyErr);
-      if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
+      const isSyntheticAuthFailure =
+        !(notifyErr instanceof ApiError) &&
+        (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244"));
+      if (isStructuredAuthFailure || isSyntheticAuthFailure) {
         clearTokenCache(account.appId);
         return await sendNotifyAndStartKeepAlive();
       }

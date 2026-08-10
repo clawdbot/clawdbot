@@ -5,6 +5,7 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -118,9 +119,7 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
     });
 
     try {
-      const response = await page.goto(
-        `${server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`,
-      );
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
       expect(response?.status()).toBe(200);
 
       const notice = page.locator(".chat-workspace-conflict-notice");

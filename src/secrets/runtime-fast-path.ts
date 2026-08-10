@@ -1,21 +1,15 @@
 /** Detects when secrets runtime preparation can safely use a fast path. */
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveDefaultAgentDir,
 } from "../agents/agent-scope-config.js";
-import {
-  AUTH_PROFILE_FILENAME,
-  AUTH_STATE_FILENAME,
-  LEGACY_AUTH_FILENAME,
-} from "../agents/auth-profiles/path-constants.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { resolveOAuthPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -99,16 +93,11 @@ function resolveCandidateAgentDirs(params: {
 }
 
 function hasCandidateAuthProfileStoreSource(agentDir: string): boolean {
-  return (
-    existsSync(resolveAuthProfileDatabasePath(agentDir)) ||
-    existsSync(path.join(agentDir, AUTH_PROFILE_FILENAME)) ||
-    existsSync(path.join(agentDir, AUTH_STATE_FILENAME)) ||
-    existsSync(path.join(agentDir, LEGACY_AUTH_FILENAME))
-  );
+  return existsSync(resolveAuthProfileDatabasePath(agentDir));
 }
 
 /**
- * Returns whether auth profile files or OAuth state exist for candidate agent dirs.
+ * Returns whether canonical auth-profile databases exist for candidate agent dirs.
  */
 function hasCandidateAuthProfileStoreSources(params: {
   config: OpenClawConfig;
@@ -116,11 +105,10 @@ function hasCandidateAuthProfileStoreSources(params: {
   agentDirs?: string[];
 }): boolean {
   const candidateDirs = resolveCandidateAgentDirs(params);
-  const mainAgentDir = resolveUserPath(resolveDefaultAgentDir({}, params.env), params.env);
+  const mainAgentDir = resolveSharedMainAuthAgentDir(params.env as NodeJS.ProcessEnv);
   return (
     candidateDirs.some((agentDir) => hasCandidateAuthProfileStoreSource(agentDir)) ||
-    hasCandidateAuthProfileStoreSource(mainAgentDir) ||
-    existsSync(resolveOAuthPath(params.env as NodeJS.ProcessEnv))
+    hasCandidateAuthProfileStoreSource(mainAgentDir)
   );
 }
 

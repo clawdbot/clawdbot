@@ -1,12 +1,15 @@
 import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
-import { toCssPlacement } from "../../lib/board/grid.ts";
+import {
+  boardChromeRowPx,
+  exactBoardWidgetHeightPx,
+  toCssPlacement,
+} from "../../lib/board/grid.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type {
@@ -65,12 +68,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
+  @property({ attribute: false }) contentHeightPx?: number;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
-  @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
   @property({ attribute: false }) observer?: BoardObserverContext;
+  @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -87,12 +91,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   private pluginRendererKind = "";
   private pluginRendererLoadToken: object | null = null;
   private readonly appView = new BoardMcpAppLifecycle({
+    active: () => this.active,
     connected: () => this.isConnected,
     requestUpdate: () => this.requestUpdate(),
     sessionKey: () => this.sessionKey,
     widget: () => this.widget,
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
+    active: () => this.active,
     connected: () => this.isConnected,
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,
@@ -116,6 +122,16 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       this.frame.widgetChanged(previousWidget, this.widget);
     }
     this.appView.update(this.widget, this.callbacks);
+    if (changed.has("active")) {
+      this.appView.activityChanged();
+      this.frame.activityChanged();
+      if (this.active) {
+        this.appView.observe(
+          this.querySelector(".board-widget"),
+          this.widget?.contentKind === "mcp-app",
+        );
+      }
+    }
     this.syncPluginRenderer();
   }
 
@@ -126,7 +142,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
     this.appView.observe(
       this.querySelector(".board-widget"),
-      this.widget?.contentKind === "mcp-app",
+      this.active && this.widget?.contentKind === "mcp-app",
     );
     queueMicrotask(() => {
       if (this.isConnected) {
@@ -217,6 +233,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       accessNotice,
       appView: this.appView.state,
       busy: this.busy || this.actionPending || !this.canMutate,
+      active: this.active,
       loading: this.appView.loading,
       nearVisible: this.appView.nearVisible,
       rectHeight: this.rect?.h ?? 4,
@@ -256,7 +273,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
       return renderer({
         observer: this.observer,
-        sessions: this.sessions,
         sessionKey: this.sessionKey,
       });
     }
@@ -268,6 +284,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         return this.pluginRenderer({
           widget,
           sessionKey: this.sessionKey,
+          active: this.active,
+          canMutate: this.canMutate && !widget.readOnly,
           requestUpdate: () => this.requestUpdate(),
         });
       }
@@ -393,10 +411,17 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyScrollable || widget.contentKind === "mcp-app" || widget.contentKind === "plugin";
     const presentation =
       widget.contentKind === "html" ? (widget.presentation ?? "card") : undefined;
+    // While a move/resize gesture runs, the card fills its (preview) cell so
+    // the user manipulates the quantized rect they will actually commit.
+    const exactHeightPx = this.dragging
+      ? undefined
+      : exactBoardWidgetHeightPx(widget, this.contentHeightPx, boardChromeRowPx());
+    const exactHeightStyle =
+      exactHeightPx === undefined ? "" : ` height: ${exactHeightPx}px; align-self: start;`;
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
-        style=${toCssPlacement(rect)}
+        style=${`${toCssPlacement(rect)}${exactHeightStyle}`}
         role="listitem"
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}

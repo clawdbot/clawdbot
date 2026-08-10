@@ -98,6 +98,7 @@ function createSinglePluginRegistry(params: {
   pluginRoot: string;
   skills: string[];
   format?: "openclaw" | "bundle";
+  bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   legacyPluginIds?: string[];
 }): PluginManifestRegistry {
   return {
@@ -107,6 +108,7 @@ function createSinglePluginRegistry(params: {
         id: "helper",
         name: "Helper",
         format: params.format,
+        bundleFormat: params.bundleFormat,
         channels: [],
         providers: [],
         cliBackends: [],
@@ -361,6 +363,43 @@ describe("resolvePluginSkillDirs", () => {
       path.resolve(pluginRoot, "skills"),
       path.resolve(pluginRoot, "commands"),
     ]);
+  });
+
+  it("limits Agent Plugins skills to valid immediate child directories", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-agent-bundle-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const skillsRoot = path.join(pluginRoot, "skills");
+    const validSkill = path.join(skillsRoot, "valid");
+    const nestedSkill = path.join(skillsRoot, "group", "deep");
+    await fs.mkdir(validSkill, { recursive: true });
+    await fs.mkdir(nestedSkill, { recursive: true });
+    await fs.mkdir(path.join(skillsRoot, "missing"), { recursive: true });
+    await fs.writeFile(path.join(skillsRoot, "SKILL.md"), "root skill must be ignored\n");
+    await fs.writeFile(path.join(validSkill, "SKILL.md"), "valid immediate skill\n");
+    await fs.writeFile(path.join(nestedSkill, "SKILL.md"), "nested skill must be ignored\n");
+
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        format: "bundle",
+        bundleFormat: "agent",
+        skills: ["skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      pluginSkillsDir,
+      config: {
+        plugins: { entries: { helper: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([validSkill]);
+    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "valid"))).toBe(validSkill);
+    expect(fsSync.existsSync(path.join(pluginSkillsDir, "deep"))).toBe(false);
+    expect(fsSync.existsSync(path.join(pluginSkillsDir, "skills"))).toBe(false);
   });
 
   it("resolves enabled plugin skills through legacy manifest aliases", async () => {

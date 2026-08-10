@@ -5,6 +5,10 @@ read_when:
 title: "Audio and voice notes"
 ---
 
+This page covers inbound transcription and voice-note handling. For inline
+audio and video players in OpenClaw chat clients, see
+[Media playback](/nodes/media-playback).
+
 ## What it does
 
 When audio understanding is enabled (or auto-detected), OpenClaw:
@@ -33,7 +37,8 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
 Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
 Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
-Gemini CLI auto-detect for media understanding was replaced by a sandboxed Antigravity CLI (`agy`) fallback for image/video; audio does not use a CLI fallback beyond the local binaries above.
+Gemini CLI and Antigravity are not auto-detected for media understanding. Audio
+does not use a CLI fallback beyond the local binaries above.
 
 To disable auto-detection, set `tools.media.audio.enabled: false`. To customize, add capability-tagged entries to `tools.media.models`.
 
@@ -63,7 +68,7 @@ The provider inventory reports the local fallback winner separately from global 
         {
           type: "cli",
           command: "whisper",
-          args: ["--model", "base", "{{MediaPath}}"],
+          args: ["--model", "base", "{{AttachmentPath}}"],
           timeoutSeconds: 45,
           capabilities: ["audio"],
         },
@@ -150,7 +155,7 @@ The provider inventory reports the local fallback winner separately from global 
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
 - CLI stdout is capped at 5MB; keep CLI output concise.
-- CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`).
+- CLI `args` should use `{{AttachmentPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.models`). `{{MediaPath}}` remains a deprecated compatibility alias.
 - `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
 
 ### Resident local STT
@@ -198,6 +203,7 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 
 ## Related
 
+- [Media playback](/nodes/media-playback)
 - [Media understanding](/nodes/media-understanding)
 - [Talk mode](/nodes/talk)
 - [Voice wake](/nodes/voicewake)

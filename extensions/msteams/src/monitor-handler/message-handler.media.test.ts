@@ -97,7 +97,13 @@ describe("msteams message handler Graph media recovery", () => {
       expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
       expect(firstDispatchedContext()).toMatchObject({
         BodyForAgent: "Describe the attached image file",
-        MediaPaths: ["/tmp/from-graph.pdf"],
+        media: [
+          expect.objectContaining({
+            path: "/tmp/from-graph.pdf",
+            contentType: "application/pdf",
+            kind: "document",
+          }),
+        ],
         NativeChannelId:
           entry.label === "channel" ? "team-aad-group/19:channel@thread.tacv2" : undefined,
       });
@@ -141,8 +147,13 @@ describe("msteams message handler Graph media recovery", () => {
     );
     expect(firstDispatchedContext()).toMatchObject({
       BodyForAgent: "",
-      MediaPaths: ["/tmp/explicit.pdf"],
-      MediaTypes: ["application/pdf"],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/explicit.pdf",
+          contentType: "application/pdf",
+          kind: "document",
+        }),
+      ],
     });
   });
 
@@ -190,7 +201,7 @@ describe("msteams message handler Graph media recovery", () => {
 
     expect(firstDispatchedContext()).toMatchObject({
       BodyForAgent: "[msteams attachment unavailable]",
-      MediaTypes: ["document"],
+      media: [expect.objectContaining({ kind: "document" })],
     });
   });
 

@@ -1,8 +1,14 @@
 // Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import tsdownConfig from "../../tsdown.config.ts";
+import tsdownConfig, {
+  createStateSchemaInlinePlugin,
+  STATE_SCHEMA_INLINE_PLUGIN_NAME,
+} from "../../tsdown.config.ts";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 
 type TsdownConfigEntry = {
   deps?: {
@@ -12,6 +18,7 @@ type TsdownConfigEntry = {
   entry?: Record<string, string> | string[];
   inputOptions?: TsdownInputOptions;
   outDir?: string;
+  plugins?: Array<{ name?: string }>;
 };
 
 type TsdownLog = {
@@ -87,6 +94,53 @@ function readAgentAuthDiscoverySource(): string {
 }
 
 describe("tsdown config", () => {
+  it.each([
+    {
+      exportName: "OPENCLAW_STATE_SCHEMA_SQL",
+      modulePath: "src/state/openclaw-state-schema.ts",
+      schemaPath: "src/state/openclaw-state-schema.sql",
+      sourceValue: OPENCLAW_STATE_SCHEMA_SQL,
+    },
+    {
+      exportName: "OPENCLAW_AGENT_SCHEMA_SQL",
+      modulePath: "src/state/openclaw-agent-schema.ts",
+      schemaPath: "src/state/openclaw-agent-schema.sql",
+      sourceValue: OPENCLAW_AGENT_SCHEMA_SQL,
+    },
+  ])("inlines canonical schema bytes for $modulePath", (schema) => {
+    const rootDir = process.cwd();
+    const watchedPaths: string[] = [];
+    const plugin = createStateSchemaInlinePlugin(rootDir);
+    const result = plugin.load.call(
+      { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
+      path.resolve(rootDir, schema.modulePath),
+    );
+    const schemaPath = path.resolve(rootDir, schema.schemaPath);
+    const canonicalSql = readFileSync(schemaPath, "utf8");
+
+    expect(result).not.toBeNull();
+    const match = result?.code.match(
+      new RegExp(`^export const ${schema.exportName} = (.*);\\n$`, "su"),
+    );
+    expect(match?.[1]).toBeDefined();
+    expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
+    expect(schema.sourceValue).toBe(canonicalSql);
+    expect(watchedPaths).toEqual([schemaPath]);
+  });
+
+  it("installs schema inlining only on the unified runtime graph", () => {
+    const unifiedGraph = requireUnifiedDistGraph();
+    const inlinePlugins = asConfigArray(tsdownConfig).flatMap(
+      (config) =>
+        config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
+    );
+
+    expect(unifiedGraph.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(inlinePlugins).toHaveLength(1);
+  });
+
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
     const distGraph = requireUnifiedDistGraph();
 
@@ -99,6 +153,7 @@ describe("tsdown config", () => {
       "cli/gateway-lifecycle.runtime",
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
+      "config/sessions/session-accessor.sqlite-archive.worker",
       "state/openclaw-database-verify.worker",
       "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
@@ -108,6 +163,7 @@ describe("tsdown config", () => {
       "media-understanding/apply.runtime",
       "index",
       "commands/status.summary.runtime",
+      "docker-healthcheck",
       "provider-dispatcher.runtime",
       "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
@@ -122,6 +178,12 @@ describe("tsdown config", () => {
     ]) {
       expect(keys).toContain(entry);
     }
+  });
+
+  it("builds the Docker healthcheck as a stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
   });
 
   it("keeps root-package-excluded external plugins out of the root dist graph", () => {

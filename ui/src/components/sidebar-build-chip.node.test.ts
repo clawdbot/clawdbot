@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { formatBuildChipText } from "./sidebar-build-chip-format.ts";
+import {
+  formatBuildChipText,
+  formatSettingsBuildLabel,
+  formatSidebarBuildSubtitle,
+} from "./sidebar-build-chip-format.ts";
 
 const COMMIT = "e8cbc62f0123456789abcdef0123456789abcdef";
 const BUILT_AT = "2026-07-10T12:00:00.000Z";
+const NOW = new Date("2026-07-10T16:00:00.000Z");
 
 function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildInfo {
   return {
@@ -13,6 +18,7 @@ function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildI
     builtAt: BUILT_AT,
     branch: "main",
     dirty: false,
+    release: false,
     buildId: "test",
     ...overrides,
   };
@@ -66,4 +72,71 @@ describe("formatBuildChipText", () => {
       expect(formatBuildChipText(testCase.info)).toBe(testCase.expected);
     });
   }
+});
+
+describe("formatSettingsBuildLabel", () => {
+  it("keeps official release artifacts version-only", () => {
+    expect(formatSettingsBuildLabel(buildInfo({ release: true }), "2026.7.9")).toBe("2026.7.10");
+  });
+
+  it("adds a Git identity for clean main builds", () => {
+    expect(formatSettingsBuildLabel(buildInfo(), "2026.7.9")).toBe("2026.7.10 · git@e8cbc62");
+  });
+
+  it("adds branch and dirty provenance for development builds", () => {
+    expect(formatSettingsBuildLabel(buildInfo({ branch: "feat/x", dirty: true }), "2026.7.9")).toBe(
+      "2026.7.10 · feat/x@e8cbc62*",
+    );
+  });
+
+  it("falls back to the Gateway version when artifact metadata is unavailable", () => {
+    expect(
+      formatSettingsBuildLabel(
+        buildInfo({ version: null, commit: null, branch: null, dirty: null }),
+        "2026.7.9",
+      ),
+    ).toBe("2026.7.9");
+  });
+
+  it("keeps detached clean source builds distinguishable from releases", () => {
+    expect(formatSettingsBuildLabel(buildInfo({ branch: null, dirty: false }), "2026.7.9")).toBe(
+      "2026.7.10 · git@e8cbc62",
+    );
+  });
+});
+
+describe("formatSidebarBuildSubtitle", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("suppresses official release artifacts", () => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ release: true, commitAt: BUILT_AT }))).toBeNull();
+  });
+
+  it.each([
+    { branch: "main", expected: "git@e8cbc62 · 4h ago" },
+    { branch: null, expected: "git@e8cbc62 · 4h ago" },
+  ])("formats a custom $branch build with commit age", ({ branch, expected }) => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ branch, commitAt: BUILT_AT }))).toBe(expected);
+  });
+
+  it("includes branch and dirty state with commit age", () => {
+    expect(
+      formatSidebarBuildSubtitle(buildInfo({ branch: "feat/x", dirty: true, commitAt: BUILT_AT })),
+    ).toBe("feat/x@e8cbc62* · 4h ago");
+  });
+
+  it.each([null, "not-a-timestamp"])("keeps the Git identity when commitAt is %s", (commitAt) => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ commitAt }))).toBe("git@e8cbc62");
+  });
+
+  it("suppresses build identity when the commit is missing", () => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ commit: null, commitAt: BUILT_AT }))).toBeNull();
+  });
 });

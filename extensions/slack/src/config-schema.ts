@@ -30,15 +30,6 @@ const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),
 }).strict();
-const SlackCapabilitiesSchema = z.union([
-  z.array(z.string()),
-  z
-    .object({
-      interactiveReplies: z.boolean().optional(),
-    })
-    .strict(),
-]);
-
 const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -95,7 +86,6 @@ const SlackAccountSchema = z
   .object({
     ...buildCommonChannelAccountShape({
       omit: ["groupAllowFrom"],
-      capabilities: SlackCapabilitiesSchema.optional(),
       streaming: SlackStreamingConfigSchema.optional(),
     }),
     postAs: SlackIdentitySchema.default("bot"),
@@ -176,7 +166,14 @@ function validateSlackSigningSecretRequirements(
   const resolveMode = (mode: unknown) =>
     mode === "http" || mode === "socket" || mode === "relay" ? mode : undefined;
   const baseMode = resolveMode(value.mode) ?? "socket";
-  if (baseMode === "http" && !hasConfiguredSecretInput(value.signingSecret)) {
+  // Named accounts own their inherited HTTP credentials; only an implicit
+  // default account needs a separate root signing secret.
+  const hasImplicitRootAccount = Object.keys(value.accounts ?? {}).length === 0;
+  if (
+    baseMode === "http" &&
+    hasImplicitRootAccount &&
+    !hasConfiguredSecretInput(value.signingSecret)
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
@@ -211,6 +208,10 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
+  if (value.enabled === false) {
+    return;
+  }
+
   const dmPolicy = value.dmPolicy ?? "pairing";
   const allowFrom = value.allowFrom;
   requireOpenAllowFrom({

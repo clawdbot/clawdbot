@@ -5,8 +5,8 @@
  */
 import type { Usage } from "@openclaw/llm-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeSurrogates } from "../internal/shared.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { redactSensitiveText } from "./transport-utils.js";
 
 type ContextUsage = NonNullable<Usage["contextUsage"]>;
@@ -119,6 +119,64 @@ export function createWritableTransportEventStream() {
   };
 }
 
+/**
+ * Abort error to surface for an aborted `signal`.
+ *
+ * Rethrows the caller's abort reason only when it carries a `code`, so that code
+ * survives into `errorCode` on the persisted assistant message and consumers can
+ * recognize an abort's origin without matching error text. A default
+ * `abort()` reason is an uncoded DOMException that carries nothing the synthetic
+ * error does not, so it keeps the "Request was aborted" text every transport
+ * already emits rather than churning it.
+ */
+export function transportAbortError(signal?: AbortSignal): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
+    ? reason
+    : new Error("Request was aborted");
+}
+
+/** Run a provider-response hook before start/body consumption inside the first-event deadline. */
+export function withProviderResponseHook<T>(params: {
+  stream: AsyncIterable<T>;
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  hook?: () => void | Promise<void>;
+  onReady: () => void;
+}): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      let onAbort: (() => void) | undefined;
+      try {
+        if (params.signal.aborted) {
+          throw transportAbortError(params.signal);
+        }
+        if (params.hook) {
+          await Promise.race([
+            Promise.resolve().then(params.hook),
+            new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(transportAbortError(params.signal));
+              params.signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ]);
+        }
+      } catch (error) {
+        params.abort(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      } finally {
+        if (onAbort) {
+          params.signal.removeEventListener("abort", onAbort);
+        }
+      }
+      if (params.signal.aborted) {
+        throw transportAbortError(params.signal);
+      }
+      params.onReady();
+      yield* params.stream;
+    },
+  };
+}
+
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;
@@ -126,7 +184,7 @@ export function finalizeTransportStream(params: {
 }): void {
   const { stream, output, signal } = params;
   if (signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(signal);
   }
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
@@ -140,6 +198,8 @@ type TransportErrorDetails = {
   errorType?: string;
   errorBody?: string;
 };
+
+const MAX_TRANSPORT_ERROR_CAUSE_DEPTH = 8;
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") {
@@ -164,6 +224,24 @@ function readObjectProperty(value: unknown, key: string): Record<string, unknown
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
+}
+
+function readCauseChainErrorCode(value: unknown): string | undefined {
+  const seen = new Set<Record<string, unknown>>();
+  let cause = readObjectProperty(value, "cause");
+  for (
+    let depth = 0;
+    cause && depth < MAX_TRANSPORT_ERROR_CAUSE_DEPTH && !seen.has(cause);
+    depth += 1
+  ) {
+    seen.add(cause);
+    const code = readStringLikeProperty(cause, "code");
+    if (code) {
+      return code;
+    }
+    cause = readObjectProperty(cause, "cause");
+  }
+  return undefined;
 }
 
 function stringifyErrorBody(value: unknown): string | undefined {
@@ -210,7 +288,8 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
   const errorCode =
     readStringLikeProperty(errorObject, "errorCode") ??
     readStringLikeProperty(errorObject, "code") ??
-    readStringLikeProperty(nestedError, "code");
+    readStringLikeProperty(nestedError, "code") ??
+    readCauseChainErrorCode(errorObject);
   const errorType =
     readStringLikeProperty(errorObject, "errorType") ??
     readStringLikeProperty(errorObject, "type") ??

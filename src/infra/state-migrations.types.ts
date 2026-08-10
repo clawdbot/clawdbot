@@ -1,10 +1,11 @@
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
@@ -42,10 +43,6 @@ export type LegacyStateDetection = {
     targetDir: string;
     hasLegacy: boolean;
   };
-  channelPlans: {
-    hasLegacy: boolean;
-    plans: ChannelLegacyStateMigrationPlan[];
-  };
   pluginPlans?: {
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
@@ -66,6 +63,10 @@ export type LegacyStateDetection = {
   stateSchema: {
     hasLegacy: boolean;
     preview: string[];
+  };
+  worktrees: {
+    hasLegacy: boolean;
+    pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
   taskStateSidecars: {
     taskRunsPath: string;
@@ -125,7 +126,9 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
   };
   deviceIdentity: LegacyDeviceIdentityDetection;
+  execApprovals: LegacyExecApprovalsDetection;
   mcpOauth: LegacyMcpOAuthDetection;
+  meetingTranscripts?: LegacyMeetingTranscriptsDetection;
   restartSentinel?: LegacyRestartSentinelDetection;
   workspace: LegacyWorkspaceStateDetection;
   webPush: {

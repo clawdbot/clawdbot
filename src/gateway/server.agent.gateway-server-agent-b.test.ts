@@ -7,11 +7,13 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
@@ -140,8 +142,9 @@ async function writeMainSessionEntry(params: {
       main: {
         sessionId: params.sessionId,
         updatedAt: Date.now(),
-        lastChannel: params.lastChannel,
-        lastTo: params.lastTo,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: params.lastChannel, to: params.lastTo },
+        }),
       },
     },
   });
@@ -369,50 +372,6 @@ describe("gateway server agent", () => {
     expect(res.error?.code).toBe("INVALID_REQUEST");
   });
 
-  test("agent errors when deliver=true and last channel is webchat", async () => {
-    testState.allowFrom = ["+1555"];
-    await writeMainSessionEntry({
-      sessionId: "sess-main-webchat",
-      lastChannel: "webchat",
-      lastTo: "+1555",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      bestEffortDeliver: false,
-      idempotencyKey: "idem-agent-webchat",
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.code).toBe("INVALID_REQUEST");
-    expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
-    expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
-  });
-
-  test("agent downgrades to session-only delivery when best-effort is enabled and last channel is webchat", async () => {
-    testState.allowFrom = ["+1555"];
-    await writeMainSessionEntry({
-      sessionId: "sess-main-webchat-best-effort",
-      lastChannel: "webchat",
-      lastTo: "+1555",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      bestEffortDeliver: true,
-      idempotencyKey: "idem-agent-webchat-best-effort",
-    });
-    expect(res.ok).toBe(true);
-    await expectAgentRoutingCall({
-      channel: "webchat",
-      deliver: false,
-      runId: "idem-agent-webchat-best-effort",
-    });
-  });
-
   test("agent downgrades to session-only when multiple channels are configured but no external target resolves", async () => {
     const registry = createRegistry([
       {
@@ -442,28 +401,6 @@ describe("gateway server agent", () => {
       channel: "webchat",
       deliver: false,
       runId: "idem-agent-multi-configured-best-effort",
-    });
-  });
-
-  test("agent uses webchat for internal runs when last provider is webchat", async () => {
-    await writeMainSessionEntry({
-      sessionId: "sess-main-webchat-internal",
-      lastChannel: "webchat",
-      lastTo: "+1555",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: false,
-      idempotencyKey: "idem-agent-webchat-internal",
-    });
-    expect(res.ok).toBe(true);
-
-    await expectAgentRoutingCall({
-      channel: "webchat",
-      deliver: false,
-      runId: "idem-agent-webchat-internal",
     });
   });
 

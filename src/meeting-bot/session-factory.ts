@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { MeetingPlatformRuntimeMetadata } from "./platform-adapter.js";
+import type { MeetingPlatformRuntimeMetadata } from "./platform-adapter-contract.js";
 import type { MeetingResolvedJoin, MeetingSessionRecord } from "./session-types.js";
 
 export function createMeetingSession<

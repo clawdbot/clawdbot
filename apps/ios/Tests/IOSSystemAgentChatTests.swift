@@ -373,6 +373,22 @@ struct IOSSystemAgentChatTests {
         #expect(store.model(for: appModel) === store.model(for: appModel))
     }
 
+    @Test func `screenshot settings chat localizes display copy but preserves option replies`() throws {
+        let data = try IOSSystemAgentChatModel.screenshotFixtureReply(params: [:])
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let question = try #require(object["question"] as? [String: Any])
+        let options = try #require(question["options"] as? [[String: Any]])
+
+        #expect(object["reply"] as? String ==
+            String(localized: "I can check Gateway status, repair configuration, change models, or connect channels."))
+        #expect(question["question"] as? String == String(localized: "What should we look at first?"))
+        #expect(options.first?["label"] as? String == String(localized: "Check status"))
+        #expect(options.first?["reply"] as? String == "Check Gateway status")
+        #expect(options.last?["label"] as? String == String(localized: "Review setup"))
+        #expect(options.last?["reply"] as? String == "Review setup")
+    }
+
     @Test func `settings chat uses branded and accessible secure input typography`() throws {
         let iosRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -404,6 +420,7 @@ struct IOSSystemAgentChatTests {
         #expect(source.contains("String(localized: \"Gateway Update Required\")"))
         #expect(source.contains("String(localized: \"Skip for now\")"))
         #expect(source.contains("String(localized: \"<redacted secret>\")"))
+        #expect(source.contains("String(localized: \"Gateway is not connected\")"))
         #expect(!source.contains("SecureField(\"Enter secret"))
     }
 

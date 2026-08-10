@@ -101,6 +101,8 @@ describe("mcp-app-view localization", () => {
     document.body.replaceChildren();
     delete (document as unknown as Record<string, unknown>).activeElement;
     delete document.documentElement.dataset.themeMode;
+    document.documentElement.style.removeProperty("--card");
+    document.documentElement.style.removeProperty("--text");
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     await i18n.setLocale("en");
@@ -333,6 +335,8 @@ describe("mcp-app-view localization", () => {
       () => ({ width }) as DOMRect,
     );
     document.documentElement.dataset.themeMode = "dark";
+    document.documentElement.style.setProperty("--card", "#161920");
+    document.documentElement.style.setProperty("--text", "#d4d4d8");
 
     const { bridge, themeListeners, unsubscribe, view } = await mountBridge(
       `view-context-${crypto.randomUUID()}`,
@@ -340,13 +344,29 @@ describe("mcp-app-view localization", () => {
     expect(bridge.options.hostContext).toMatchObject({
       theme: "dark",
       containerDimensions: { width: 640, height: 600 },
+      styles: {
+        variables: {
+          "--color-background-primary": "#161920",
+          "--color-text-primary": "#d4d4d8",
+        },
+      },
     });
     await expect.poll(() => themeListeners.size).toBe(1);
 
     document.documentElement.dataset.themeMode = "light";
+    document.documentElement.style.setProperty("--card", "#ffffff");
+    document.documentElement.style.setProperty("--text", "#403c35");
     themeListeners.values().next().value?.();
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
-      expect.objectContaining({ theme: "light" }),
+      expect.objectContaining({
+        theme: "light",
+        styles: {
+          variables: expect.objectContaining({
+            "--color-background-primary": "#ffffff",
+            "--color-text-primary": "#403c35",
+          }),
+        },
+      }),
     );
 
     width = 720;
@@ -441,6 +461,9 @@ describe("mcp-app-view localization", () => {
       mcpApp: {
         title: "Aplicativo MCP",
         unavailable: "Aplicativo MCP indisponível: {error}",
+        errors: {
+          gatewayUnavailable: "Gateway do aplicativo MCP indisponível",
+        },
       },
     });
     await i18n.setLocale("pt-BR");
@@ -452,7 +475,7 @@ describe("mcp-app-view localization", () => {
 
     await expect
       .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
-      .toBe("Aplicativo MCP indisponível: MCP App gateway unavailable");
+      .toBe("Aplicativo MCP indisponível: Gateway do aplicativo MCP indisponível");
   });
 
   it.each([

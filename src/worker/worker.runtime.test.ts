@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -32,8 +33,8 @@ import {
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
-import { rawDataToString } from "../infra/ws.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, WorkerConnectionStoppedError } from "./worker-connection.js";
 import {
@@ -54,6 +55,15 @@ const SESSION_ID = "worker-session";
 const RUN_ID = "worker-run";
 const OWNER_EPOCH = 4;
 const MODEL_REF = { provider: "openai", model: "gpt-5.6-luna" } as const;
+const WORKER_LOOP_REPLAY = {
+  v: 1 as const,
+  type: "openai-responses-compaction",
+  data: "opaque-worker-loop-replay",
+  provider: "openai",
+  api: "openai-responses",
+  model: MODEL_REF.model,
+  baseUrlHash: "ozhevd1smnk8s",
+};
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 
@@ -65,6 +75,7 @@ type InferencePlan =
   | "fence"
   | "error"
   | "cancelled"
+  | "length"
   | "burst-text"
   | "oversized-text"
   | "oversized-error"
@@ -94,7 +105,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assistantMessage(
   content: WorkerDoneMessage["content"],
-  stopReason: "stop" | "toolUse",
+  stopReason: WorkerDoneMessage["stopReason"],
 ): WorkerDoneMessage {
   return {
     role: "assistant",
@@ -441,7 +452,7 @@ class FakeWorkerGateway {
       this.sendEmptyTerminalTurn(socket, frame.params);
       return;
     }
-    this.sendTextTurn(socket, frame.params);
+    this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
   }
 
   private sendBurstTextTurn(
@@ -536,7 +547,11 @@ class FakeWorkerGateway {
     this.sendTerminal(socket, identity, 4, assistantMessage([], "stop"));
   }
 
-  private sendTextTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
+  private sendTextTurn(
+    socket: WebSocket,
+    identity: WorkerInferenceStartParams,
+    stopReason: "stop" | "length" = "stop",
+  ): void {
     const events: WorkerInferenceEventFrame[] = [
       {
         type: "event",
@@ -586,7 +601,7 @@ class FakeWorkerGateway {
       socket,
       identity,
       5,
-      assistantMessage([{ type: "text", text: "worker reply" }], "stop"),
+      assistantMessage([{ type: "text", text: "worker reply" }], stopReason),
     );
   }
 
@@ -706,7 +721,7 @@ class FakeWorkerGateway {
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
   return {
-    version: 1,
+    version: 2,
     socketPath,
     admission: {
       environmentId: "worker-environment",
@@ -731,6 +746,9 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       initialMessages: [],
       transcript: { baseLeafId: "leaf-base", nextSeq: 3 },
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
+      toolAuthority: {
+        allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+      },
     },
   };
 }
@@ -792,6 +810,10 @@ describe("worker runtime", () => {
     );
     expect(lifecycleEvents).toContain("start");
     expect(lifecycleEvents).toContain("end");
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "end", stopReason: "stop" },
+    });
     expect(gateway.transcriptRequests.length).toBeGreaterThan(0);
     expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual(
       gateway.transcriptRequests.map((_request, index) => index + 3),
@@ -806,6 +828,27 @@ describe("worker runtime", () => {
       transcriptLeafId: `leaf-${lastTranscript?.seq}`,
       transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
     });
+  });
+
+  it("exposes exactly the Gateway-authorized worker tools", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = ["read", "exec"];
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+      "read",
+      "exec",
+    ]);
+  });
+
+  it("runs with no tools when the Gateway authority is empty", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = [];
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
   });
 
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
@@ -955,17 +998,15 @@ describe("worker runtime", () => {
   });
 
   it.each([
-    ["error", "error", "error"],
-    ["cancelled", "aborted", "end"],
+    ["error", "error", "error", { status: "failed", reason: "turn-failed" }],
+    ["cancelled", "aborted", "end", { status: "failed", reason: "turn-failed" }],
+    ["length", "length", "end", { status: "completed" }],
   ] as const)(
-    "reports remote inference %s terminals as failed turns",
-    async (plan, stopReason, lifecyclePhase) => {
+    "reports remote inference %s terminal reasons",
+    async (plan, stopReason, lifecyclePhase, expectedResult) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
-        status: "failed",
-        reason: "turn-failed",
-      });
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject(expectedResult);
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
         .toReversed()
@@ -975,7 +1016,9 @@ describe("worker runtime", () => {
         .map((request) => request.event)
         .toReversed()
         .find((event) => event.kind === "lifecycle");
-      expect(lifecycle).toMatchObject({ payload: { phase: lifecyclePhase } });
+      expect(lifecycle).toMatchObject({
+        payload: { phase: lifecyclePhase, stopReason },
+      });
     },
   );
 
@@ -1115,16 +1158,20 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
-  it("windows near-limit history for every local tool-loop inference", async () => {
+  it("keeps a pinned replay anchor through repeated local tool-loop inference", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
     launch.assignment.initialMessages = Array.from(
-      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES },
+      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 2 },
       (_value, index): WorkerTranscriptMessage => ({
         role: "user",
         content: [{ type: "text", text: `history-${index}` }],
         timestamp: index + 1,
       }),
     );
+    launch.assignment.initialMessages[2] = {
+      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
+      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
+    };
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
@@ -1134,6 +1181,11 @@ describe("worker runtime", () => {
         WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
       );
       expect(request.context.messages[0]?.role).toBe("user");
+      expect(
+        request.context.messages.find(
+          (message) => message.role === "assistant" && message.providerReplay,
+        ),
+      ).toMatchObject({ providerReplay: WORKER_LOOP_REPLAY });
     }
     expect(
       gateway.inferenceRequests[1]?.context.messages.some(
@@ -1149,9 +1201,69 @@ describe("worker runtime", () => {
         .map((message) => message.role),
     ).toEqual(["user", "assistant", "toolResult", "assistant"]);
   });
+
+  it("fails before a second inference when the replay unit outgrows the window", async () => {
+    const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.initialMessages = Array.from(
+      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1 },
+      (_value, index): WorkerTranscriptMessage => ({
+        role: "user",
+        content: [{ type: "text", text: `history-${index}` }],
+        timestamp: index + 1,
+      }),
+    );
+    launch.assignment.initialMessages[0] = {
+      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
+      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+      status: "failed",
+      reason: "turn-failed",
+    });
+
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(gateway.inferenceRequests[0]?.context.messages).toHaveLength(
+      WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
+    );
+    expect(gateway.inferenceRequests[0]?.context.messages[0]).toMatchObject({
+      providerReplay: WORKER_LOOP_REPLAY,
+    });
+    const terminal = gateway.transcriptRequests
+      .flatMap((request) => request.messages)
+      .toReversed()
+      .find((message) => message.role === "assistant");
+    expect(terminal).toMatchObject({
+      stopReason: "error",
+      errorMessage: `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (provider-replay-message-limit)`,
+    });
+  });
 });
 
 describe("worker reconnect clients", () => {
+  it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
+    const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
+    const connection = createWorkerConnection({
+      socketPath: gateway.socketPath,
+      connectParams: buildWorkerConnectParams(launch),
+    });
+    let healthyReadyCalls = 0;
+    connection.onReady(() => {
+      throw new Error("induced ready observer failure");
+    });
+    connection.onReady(() => {
+      healthyReadyCalls += 1;
+    });
+
+    try {
+      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
+      expect(healthyReadyCalls).toBe(1);
+      await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
+    } finally {
+      await connection.stop();
+    }
+  });
+
   it("fails closed when the overall admission deadline expires", async () => {
     const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
     const connection = createWorkerConnection({

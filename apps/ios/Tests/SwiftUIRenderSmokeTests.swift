@@ -16,19 +16,6 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
-    @Test @MainActor func `settings pro tab builds A view hierarchy`() {
-        let appModel = NodeAppModel()
-        let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-        let root = SettingsProTab()
-            .environment(AppAppearanceModel())
-            .environment(appModel)
-            .environment(appModel.voiceWake)
-            .environment(gatewayController)
-
-        _ = Self.host(root)
-    }
-
     @Test @MainActor func `settings pro tab builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
@@ -162,7 +149,6 @@ struct SwiftUIRenderSmokeTests {
                     text: #"Inline math \(E = mc^2\) stays inside prose."#,
                     context: .assistant,
                     variant: .standard,
-                    font: OpenClawChatTypography.body,
                     textColor: OpenClawChatTheme.assistantText)
                 ChatMathBlockView(block: ChatMathBlock(
                     latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
@@ -207,7 +193,6 @@ struct SwiftUIRenderSmokeTests {
                 text: markdown,
                 context: .assistant,
                 variant: .standard,
-                font: OpenClawChatTypography.body,
                 textColor: OpenClawChatTheme.assistantText)
                 .environment(\.dynamicTypeSize, typeSize)
 
@@ -234,7 +219,6 @@ struct SwiftUIRenderSmokeTests {
                     text: markdown,
                     context: .assistant,
                     variant: .standard,
-                    font: OpenClawChatTypography.body,
                     textColor: OpenClawChatTheme.assistantText)
                     .environment(\.dynamicTypeSize, typeSize)
                     .preferredColorScheme(scheme)
@@ -272,11 +256,67 @@ struct SwiftUIRenderSmokeTests {
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
         }
+    }
+
+    @Test @MainActor func `managed assistant image starts its artifact load`() async throws {
+        let artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "image",
+                text: nil,
+                mimeType: "image/png",
+                fileName: nil,
+                artifactId: artifactId,
+                url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
+                alt: "Managed preview",
+                content: nil)],
+            timestamp: 1)
+        var requestedArtifactId: String?
+        let root = ChatMessageBubble(
+            message: message,
+            style: .standard,
+            markdownVariant: .standard,
+            userAccent: nil,
+            displayOptions: [],
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false,
+            contextWindowTokens: nil,
+            userMessageExpanded: false,
+            onToggleUserMessageExpanded: {},
+            inlineWidgetResolverReady: true,
+            inlineWidgetResourceResolver: { _, _ in nil },
+            mediaArtifactResolverReady: true,
+            mediaPlaybackAllowed: { true },
+            loadMediaArtifact: { requested, kind, _ in
+                requestedArtifactId = requested
+                #expect(kind == .image)
+                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
+                    data: Data(base64Encoded:
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                    mimeType: "image/png"))
+            })
+        let window = Self.host(root, size: CGSize(width: 393, height: 420))
+        defer { window.isHidden = true }
+
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while requestedArtifactId == nil, ContinuousClock().now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(requestedArtifactId == artifactId)
     }
 
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
@@ -301,6 +341,62 @@ struct SwiftUIRenderSmokeTests {
             isClean: false)
 
         _ = Self.host(root, size: CGSize(width: 393, height: 400))
+    }
+
+    @Test @MainActor func `completed and streaming assistant trace headings build across type sizes`() {
+        let text = """
+        <think>
+        # Internal plan
+        </think>
+        <final>
+        # Final answer
+        </final>
+        """
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: 1)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = VStack {
+                ChatMessageBubble(
+                    message: message,
+                    style: .standard,
+                    markdownVariant: .standard,
+                    userAccent: nil,
+                    displayOptions: [.reasoning],
+                    assistantName: "OpenClaw",
+                    assistantAvatarText: "OC",
+                    assistantAvatarTint: nil,
+                    showsAssistantAvatar: true,
+                    isClean: false,
+                    contextWindowTokens: nil,
+                    userMessageExpanded: false,
+                    onToggleUserMessageExpanded: {},
+                    inlineWidgetResolverReady: true,
+                    inlineWidgetResourceResolver: { _, _ in nil },
+                    mediaArtifactResolverReady: false,
+                    mediaPlaybackAllowed: { true },
+                    loadMediaArtifact: { _, _, _ in nil })
+                ChatStreamingAssistantBubble(
+                    text: text,
+                    markdownVariant: .standard,
+                    showsReasoning: true,
+                    assistantName: "OpenClaw",
+                    assistantAvatarText: "OC",
+                    assistantAvatarTint: nil,
+                    showsAssistantAvatar: true,
+                    isClean: false)
+            }
+            .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 700))
+        }
     }
 
     @Test @MainActor func `assistant usage footer builds across dynamic type sizes`() throws {
@@ -340,7 +436,10 @@ struct SwiftUIRenderSmokeTests {
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))
@@ -390,7 +489,6 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
-            AnyView(OnboardingPermissionsStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
                 statusLine: "",
                 isConnecting: false,
@@ -509,7 +607,7 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
             .gatewayTrustPromptAlert()
@@ -654,31 +752,26 @@ struct SwiftUIRenderSmokeTests {
     private static func rootTabsShellScenarios() -> [RootTabsShellScenario] {
         [
             RootTabsShellScenario(
-                idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
                 verticalSizeClass: .regular,
                 sidebarVisible: false),
             RootTabsShellScenario(
-                idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
                 verticalSizeClass: .regular,
                 sidebarVisible: true),
             RootTabsShellScenario(
-                idiom: .phone,
                 size: CGSize(width: 852, height: 393),
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .compact,
                 sidebarVisible: false),
             RootTabsShellScenario(
-                idiom: .pad,
                 size: CGSize(width: 1024, height: 1366),
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular,
                 sidebarVisible: true),
             RootTabsShellScenario(
-                idiom: .pad,
                 size: CGSize(width: 1366, height: 1024),
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular,
@@ -687,7 +780,6 @@ struct SwiftUIRenderSmokeTests {
     }
 
     private struct RootTabsShellScenario {
-        let idiom: UIUserInterfaceIdiom
         let size: CGSize
         let horizontalSizeClass: UserInterfaceSizeClass
         let verticalSizeClass: UserInterfaceSizeClass

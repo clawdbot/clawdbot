@@ -1,6 +1,7 @@
 // Google Meet plugin module implements chrome create behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
@@ -18,12 +19,13 @@ const GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS = 10_000;
 const GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS = 1_000;
 const GOOGLE_MEET_BROWSER_POLL_MS = 500;
 
+type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
+
 type BrowserCreateStepResult = {
   meetingUri?: string;
   browserUrl?: string;
   browserTitle?: string;
-  manualAction?: string;
-  manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+  manualAction?: GoogleMeetBrowserManualActionState;
   notes?: string[];
   retryAfterMs?: number;
 };
@@ -38,42 +40,6 @@ type GoogleMeetBrowserCreateResult = {
   notes?: string[];
   source: "browser";
 };
-
-type GoogleMeetBrowserManualAction = {
-  source: "browser";
-  error: string;
-  manualActionRequired: true;
-  manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
-  manualActionMessage: string;
-  browser: {
-    nodeId: string;
-    targetId?: string;
-    browserUrl?: string;
-    browserTitle?: string;
-    notes?: string[];
-  };
-};
-
-class GoogleMeetBrowserManualActionError extends Error {
-  readonly payload: GoogleMeetBrowserManualAction;
-
-  constructor(payload: Omit<GoogleMeetBrowserManualAction, "source" | "error">) {
-    const prefix = payload.manualActionReason ? `${payload.manualActionReason}: ` : "";
-    super(`${prefix}${payload.manualActionMessage}`);
-    this.name = "GoogleMeetBrowserManualActionError";
-    this.payload = {
-      source: "browser",
-      error: this.message,
-      ...payload,
-    };
-  }
-}
-
-export function isGoogleMeetBrowserManualActionError(
-  error: unknown,
-): error is GoogleMeetBrowserManualActionError {
-  return error instanceof GoogleMeetBrowserManualActionError;
-}
 
 function formatBrowserAutomationError(error: unknown): string {
   if (error instanceof Error) {
@@ -142,6 +108,19 @@ function readStringArray(value: unknown): string[] | undefined {
     : undefined;
 }
 
+function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionState | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const action = value as Record<string, unknown>;
+  return typeof action.reason === "string" && typeof action.message === "string"
+    ? {
+        reason: action.reason as GoogleMeetBrowserManualActionState["reason"],
+        message: action.message,
+      }
+    : undefined;
+}
+
 function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
   const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
   const nested =
@@ -152,11 +131,7 @@ function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
     meetingUri: typeof nested.meetingUri === "string" ? nested.meetingUri : undefined,
     browserUrl: typeof nested.browserUrl === "string" ? nested.browserUrl : undefined,
     browserTitle: typeof nested.browserTitle === "string" ? nested.browserTitle : undefined,
-    manualAction: typeof nested.manualAction === "string" ? nested.manualAction : undefined,
-    manualActionReason:
-      typeof nested.manualActionReason === "string"
-        ? (nested.manualActionReason as GoogleMeetChromeHealth["manualActionReason"])
-        : undefined,
+    manualAction: readBrowserManualAction(nested.manualAction),
     notes: readStringArray(nested.notes),
     retryAfterMs:
       typeof nested.retryAfterMs === "number" && Number.isFinite(nested.retryAfterMs)
@@ -169,6 +144,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const current = () => location.href;
+  const manualActionFor = (reason, message) => ({ reason, message });
   const notes = [];
   const findButton = (pattern) =>
     [...document.querySelectorAll("button")].find((button) => {
@@ -192,8 +168,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   };
   if (!current().startsWith("https://meet.google.com/")) {
     return {
-      manualActionReason: "google-login-required",
-      manualAction: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+      manualAction: manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation."),
       browserUrl: current(),
       browserTitle: document.title,
       notes,
@@ -219,8 +194,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   if (/do you want people to hear you in the meeting/i.test(pageText)) {
     return {
-      manualActionReason: "meet-audio-choice-required",
-      manualAction: "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry meeting creation.",
+      manualAction: manualActionFor("meet-audio-choice-required", "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry meeting creation."),
       browserUrl: href,
       browserTitle: document.title,
       notes,
@@ -228,8 +202,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   if (/allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
     return {
-      manualActionReason: "meet-permission-required",
-      manualAction: "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+      manualAction: manualActionFor("meet-permission-required", "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation."),
       browserUrl: href,
       browserTitle: document.title,
       notes,
@@ -237,7 +210,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   if (/couldn't create|unable to create/i.test(pageText)) {
     return {
-      manualAction: "Resolve the Google Meet page prompt in the OpenClaw browser profile, then retry meeting creation.",
+      manualAction: manualActionFor("browser-control-unavailable", "Resolve the Google Meet page prompt in the OpenClaw browser profile, then retry meeting creation."),
       browserUrl: href,
       browserTitle: document.title,
       notes,
@@ -245,8 +218,7 @@ const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   if (location.hostname.toLowerCase() === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText)) {
     return {
-      manualActionReason: "google-login-required",
-      manualAction: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+      manualAction: manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry meeting creation."),
       browserUrl: href,
       browserTitle: document.title,
       notes,
@@ -363,9 +335,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       }
       if (result.manualAction) {
         throw new GoogleMeetBrowserManualActionError({
-          manualActionRequired: true,
-          manualActionReason: result.manualActionReason,
-          manualActionMessage: result.manualAction,
+          manualAction: result.manualAction,
           browser: {
             nodeId,
             targetId,
@@ -385,7 +355,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     }
   }
   throw new Error(
-    lastResult?.manualAction ??
+    lastResult?.manualAction?.message ??
       `Google Meet did not return a meeting URL from the browser create flow before timeout.${
         lastError
           ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}`

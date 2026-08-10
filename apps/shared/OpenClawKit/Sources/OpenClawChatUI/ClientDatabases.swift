@@ -483,6 +483,7 @@ extension OpenClawClientDatabases {
                 FOREIGN KEY(gateway_id, command_id)
                     REFERENCES outbox_commands(gateway_id, client_uuid)
                     ON DELETE CASCADE
+                    ON UPDATE CASCADE
             );
             """)
         }
@@ -532,6 +533,32 @@ extension OpenClawClientDatabases {
                 gateway_id, session_key, agent_id, branch_epoch, needs_reconciliation
             )
             SELECT gateway_id, session_key, agent_id, 0, 1 FROM outbox_commands
+            """)
+        }
+        migrator.registerMigration("client-state-outbox-attachment-rekey-v6") { db in
+            try db.execute(sql: """
+            CREATE TABLE outbox_attachments_v6(
+                gateway_id TEXT NOT NULL,
+                command_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                duration_seconds REAL,
+                PRIMARY KEY(gateway_id, command_id, position),
+                FOREIGN KEY(gateway_id, command_id)
+                    REFERENCES outbox_commands(gateway_id, client_uuid)
+                    ON DELETE CASCADE
+                    ON UPDATE CASCADE
+            );
+            INSERT INTO outbox_attachments_v6(
+                gateway_id, command_id, position, type, mime_type, file_name, payload, duration_seconds
+            )
+            SELECT gateway_id, command_id, position, type, mime_type, file_name, payload, duration_seconds
+            FROM outbox_attachments;
+            DROP TABLE outbox_attachments;
+            ALTER TABLE outbox_attachments_v6 RENAME TO outbox_attachments;
             """)
         }
         try migrator.migrate(queue)

@@ -53,7 +53,7 @@ async function callPluginSessionActionForTest(params: {
     } as GatewayClient,
     isWebchatConnect: () => false,
     respond,
-    context: {} as never,
+    context: { getRuntimeConfig: () => ({}) } as never,
   });
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
@@ -93,6 +93,7 @@ async function callPluginSessionActionThroughGatewayForTest(params: {
       logGateway: {
         warn() {},
       },
+      getRuntimeConfig: () => ({}),
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
   });
   return response ?? { ok: false, error: new Error("handler did not respond") };
@@ -654,7 +655,7 @@ describe("plugin session actions", () => {
       respond: (ok, payload, error) => {
         response = { ok, payload, error };
       },
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({}) } as never,
     });
 
     expect(response).toEqual({

@@ -293,6 +293,65 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
+  it("uses provider-owned config auth for a complete Comfy Cloud workflow", () => {
+    const cfg = buildComfyConfig({
+      mode: "cloud",
+      image: {
+        workflow: { "6": { inputs: { text: "" } } },
+        promptNodeId: "6",
+      },
+    });
+    cfg.models = {
+      providers: {
+        comfy: {
+          apiKey: "comfy-provider-config-key",
+          baseUrl: "https://cloud.comfy.org",
+          models: [],
+        },
+      },
+    };
+
+    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(true);
+  });
+
+  it("does not let provider config auth bypass incomplete Comfy Cloud workflows", () => {
+    const cfg = buildComfyConfig({ mode: "cloud" });
+    cfg.models = {
+      providers: {
+        comfy: {
+          apiKey: "comfy-provider-config-key",
+          baseUrl: "https://cloud.comfy.org",
+          models: [],
+        },
+      },
+    };
+
+    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(false);
+  });
+
+  it("preserves an unavailable plugin-secret veto even with provider config auth", () => {
+    vi.stubEnv("COMFY_MISSING_PLUGIN_SECRET", "");
+    const cfg = buildComfyConfig({
+      mode: "cloud",
+      apiKey: { source: "env", provider: "default", id: "COMFY_MISSING_PLUGIN_SECRET" },
+      image: {
+        workflow: { "6": { inputs: { text: "" } } },
+        promptNodeId: "6",
+      },
+    });
+    cfg.models = {
+      providers: {
+        comfy: {
+          apiKey: "comfy-provider-config-key",
+          baseUrl: "https://cloud.comfy.org",
+          models: [],
+        },
+      },
+    };
+
+    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(false);
+  });
+
   it("submits a local workflow, waits for history, and downloads images", async () => {
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
@@ -860,6 +919,54 @@ describe("comfy image-generation provider", () => {
         }),
       }),
     ).rejects.toThrow("Comfy workflow submit failed: malformed JSON response");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized local workflow submit responses and releases the request", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    const chunk = new Uint8Array(1024 * 1024);
+    const totalBytes = 32 * chunk.length;
+    let bytesPulled = 0;
+    let canceled = false;
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= totalBytes) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      release,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      }),
+    ).rejects.toThrow("Comfy workflow submit failed: JSON response exceeds 16777216 bytes");
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(totalBytes);
     expect(release).toHaveBeenCalledTimes(1);
   });
 

@@ -3,6 +3,8 @@ const PAGE_SHARE_MAX_CONTENT_CHARS = 120_000;
 const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
 const PAGE_SHARE_MAX_TITLE_CHARS = 500;
 const PAGE_SHARE_MAX_URL_CHARS = 2_000;
+// Export precedes relay delivery, so its deadline owns capture settlement.
+const GOOGLE_DOC_EXPORT_TIMEOUT_MS = 30_000;
 
 function googleDocIdFromUrl(url) {
   let parsed;
@@ -22,7 +24,14 @@ function truncateShareText(text, maxChars) {
   if (value.length <= maxChars) {
     return value;
   }
-  return `${value.slice(0, maxChars)}\n\n[Truncated: original was ${value.length} characters]`;
+  const marker = `\n\n[Truncated: original was ${value.length} characters]`;
+  let truncated = value.slice(0, maxChars - marker.length);
+  const lastCodeUnit = truncated.charCodeAt(truncated.length - 1);
+  // Keep the complete marker inside the field cap without splitting an emoji.
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    truncated = truncated.slice(0, -1);
+  }
+  return `${truncated}${marker}`;
 }
 
 export async function waitForCondition(condition, timeoutMs) {
@@ -73,7 +82,7 @@ export async function capturePageShare(tab) {
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId },
       func: fetchGoogleDocExportInTab,
-      args: [docId],
+      args: [docId, GOOGLE_DOC_EXPORT_TIMEOUT_MS],
     });
     const result = injection?.result;
     if (!result || result.error) {
@@ -219,11 +228,11 @@ function capturePageContent() {
 }
 
 /** Self-contained so the request runs in the tab with the user's Google cookies. */
-async function fetchGoogleDocExportInTab(docId) {
+async function fetchGoogleDocExportInTab(docId, timeoutMs) {
   try {
     const response = await fetch(
       `https://docs.google.com/document/d/${encodeURIComponent(docId)}/export?format=txt`,
-      { credentials: "include" },
+      { credentials: "include", signal: AbortSignal.timeout(timeoutMs) },
     );
     if (!response.ok) {
       return { error: `Google Docs export failed (${response.status}).` };

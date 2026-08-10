@@ -1,17 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import {
-  importSqliteSessionRows,
-  loadExactSqliteSessionEntry,
-} from "../config/sessions/session-accessor.sqlite.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
-import { normalizeSessionEntryDelivery } from "../config/sessions/store-load.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -24,7 +21,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
@@ -58,7 +56,10 @@ import {
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 import {
+  createDoctorSessionSqliteTotals,
+  createDoctorSessionSqliteTargetReport,
   isSessionSqliteMigrationWarning,
+  sumDoctorSessionSqliteTargets,
   type DoctorSessionSqliteIssue,
   type DoctorSessionSqliteMode,
   type DoctorSessionSqliteOptions,
@@ -66,7 +67,7 @@ import {
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 import {
-  assertDoctorSqliteMaintenancePathsNotHardLinked,
+  assertDoctorSqliteMaintenancePathsNotAliased,
   isDestructiveDoctorSessionSqliteMode,
 } from "./doctor-sqlite-maintenance-lock.js";
 export {
@@ -89,7 +90,10 @@ type LegacySessionRecord = {
   transcriptPath?: string;
 };
 
-/** Runs the targeted doctor SQLite session migration/inspection submode. */
+/**
+ * Runs the targeted doctor SQLite session migration/inspection submode.
+ * Destructive production callers hold the Gateway/SQLite-maintenance state lock for the full call.
+ */
 export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
 ): Promise<DoctorSessionSqliteReport> {
@@ -104,9 +108,11 @@ export async function runDoctorSessionSqlite(
     store: options.store,
   });
   if (isDestructiveDoctorSessionSqliteMode(options.mode)) {
-    assertDoctorSqliteMaintenancePathsNotHardLinked(
+    const maintenancePaths = resolveDoctorSessionSqliteMaintenancePaths(targets);
+    assertDoctorSqliteMaintenancePathsNotAliased(
       `session SQLite ${options.mode}`,
-      resolveDoctorSessionSqliteMaintenancePaths(targets),
+      maintenancePaths,
+      resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
     );
   }
   if (options.mode === "restore") {
@@ -172,12 +178,53 @@ function resolveDoctorSessionSqliteMaintenancePaths(
   return [...protectedPaths];
 }
 
+function resolveDoctorSessionSqliteMaintenanceRoots(
+  targets: readonly SessionStoreTarget[],
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const stateDir = path.resolve(resolveStateDir(env));
+  const roots = new Set([stateDir]);
+  for (const target of targets) {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (isPathWithin(stateDir, target.storePath) && isPathWithin(stateDir, sqlitePath)) {
+      continue;
+    }
+    const commonRoot = commonPathAncestor(path.dirname(target.storePath), path.dirname(sqlitePath));
+    const parentRoot = path.dirname(commonRoot);
+    roots.add(parentRoot === path.parse(commonRoot).root ? commonRoot : parentRoot);
+  }
+  return [...roots];
+}
+
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+  const relativePath = path.relative(rootPath, path.resolve(candidatePath));
+  return (
+    relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== "..")
+  );
+}
+
+function commonPathAncestor(leftPath: string, rightPath: string): string {
+  let currentPath = path.resolve(leftPath);
+  const resolvedRightPath = path.resolve(rightPath);
+  while (!isPathWithin(currentPath, resolvedRightPath)) {
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      return currentPath;
+    }
+    currentPath = parentPath;
+  }
+  return currentPath;
+}
+
 // Direct store migrations are scoped by path; broader agent discovery needs runtime config.
 function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): OpenClawConfig {
   if (options.cfg) {
     return options.cfg;
   }
-  return options.store ? {} : getRuntimeConfig();
+  const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
+  return options.store
+    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
+    : getRuntimeConfig();
 }
 
 function resolveDoctorSessionSqliteTargets(params: {
@@ -251,13 +298,9 @@ async function inspectOrMigrateTarget(params: {
   const referencedTranscriptFiles = new Set(
     allRecords.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),
   );
-  const report: DoctorSessionSqliteTargetReport = {
+  const report = createDoctorSessionSqliteTargetReport({
     agentId: params.target.agentId,
     archivedLegacyStoreFiles: [],
-    archivedTranscriptFiles: [],
-    archivedUnreferencedJsonlFiles: [],
-    importedEntries: 0,
-    importedTranscriptEvents: 0,
     issues,
     legacyEntries: records.length,
     referencedTranscriptFiles: referencedTranscriptFiles.size,
@@ -267,9 +310,7 @@ async function inspectOrMigrateTarget(params: {
     unreferencedJsonlFiles: listUnreferencedJsonlFiles(params.target.storePath, [
       ...referencedTranscriptFiles,
     ]),
-    validatedEntries: 0,
-    validatedTranscriptEvents: 0,
-  };
+  });
   if (params.mode === "inspect") {
     report.sqliteEntries = readSqliteEntryCount(params.target);
     appendSqliteDbStats(params.target, report);
@@ -282,13 +323,14 @@ async function inspectOrMigrateTarget(params: {
     appendSqliteDbStats(params.target, report);
     return report;
   }
+  const importedTranscriptSources = new Set<string>();
   for (const record of records) {
     if (params.mode === "dry-run") {
       countLegacyTranscript(record, report);
       continue;
     }
     if (params.mode === "import") {
-      await importLegacySessionRecord(params.target, record, report);
+      await importLegacySessionRecord(params.target, record, report, importedTranscriptSources);
       continue;
     }
     validateLegacySessionRecord(params.target, record, report);
@@ -472,18 +514,21 @@ function isLegacySessionRecordOwnedByTarget(
   });
   return ownerAgentId
     ? ownerAgentId === target.agentId
-    : target.agentId === resolveDefaultAgentId(cfg);
+    : target.agentId === tryResolveDefaultAgentId(cfg);
 }
 
 function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {
-  return !resolveSqliteTargetFromSessionStorePath(target.storePath).agentId;
+  // Filtering depends on whether the authored store path encodes an owner,
+  // not on the configured/default owner selected for its SQLite target.
+  return !resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId;
 }
 
 function resolveLegacyTranscriptPath(
   target: SessionStoreTarget,
   entry: SessionEntry,
 ): string | undefined {
-  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+  const legacySessionFile = (entry as { sessionFile?: string }).sessionFile;
+  if (parseSqliteSessionFileMarker(legacySessionFile)) {
     return undefined;
   }
   const defaultPath = resolveSessionFilePath(entry.sessionId, entry, {
@@ -493,7 +538,7 @@ function resolveLegacyTranscriptPath(
   if (fs.existsSync(defaultPath)) {
     return defaultPath;
   }
-  return entry.sessionFile?.trim() ? defaultPath : undefined;
+  return legacySessionFile?.trim() ? defaultPath : undefined;
 }
 
 function countLegacyTranscript(
@@ -529,16 +574,24 @@ async function importLegacySessionRecord(
   target: SessionStoreTarget,
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
+  importedTranscriptSources: Set<string>,
 ): Promise<void> {
   const result = countTranscriptEvents(record);
   const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
+  const transcriptSourceKey = record.transcriptPath
+    ? `${record.entry.sessionId}\0${record.transcriptPath}`
+    : undefined;
+  const shouldImportTranscript =
+    transcriptSourceKey !== undefined && !importedTranscriptSources.has(transcriptSourceKey);
   if (result.status === "missing") {
     if (markAlreadyMigratedTranscript(target, record, report)) {
       return;
     }
     const imported = await importSqliteSessionRows({
+      allowMalformedRowRepair: true,
       agentId: target.agentId,
       entry: record.entry,
+      preserveExactStoredKey: true,
       sessionKey: record.sessionKey,
       storePath: target.storePath,
     });
@@ -552,15 +605,25 @@ async function importLegacySessionRecord(
     return;
   } else if (result.status === "malformed") {
     const imported = await importSqliteSessionRows({
+      allowMalformedRowRepair: true,
       agentId: target.agentId,
       entry: record.entry,
+      preserveExactStoredKey: true,
       sessionKey: record.sessionKey,
       storePath: target.storePath,
-      ...(record.transcriptPath
-        ? { readTranscriptEvents: createTranscriptEventPrefixReader(record.transcriptPath) }
+      ...(record.transcriptPath && shouldImportTranscript
+        ? {
+            readTranscriptEvents: createTranscriptEventPrefixReader(
+              record.transcriptPath,
+              record.entry.sessionId,
+            ),
+          }
         : {}),
       ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
     });
+    if (transcriptSourceKey) {
+      importedTranscriptSources.add(transcriptSourceKey);
+    }
     report.importedEntries += 1;
     report.importedTranscriptEvents += imported.transcriptEvents;
     report.issues.push({
@@ -571,15 +634,25 @@ async function importLegacySessionRecord(
     return;
   }
   const imported = await importSqliteSessionRows({
+    allowMalformedRowRepair: true,
     agentId: target.agentId,
     entry: record.entry,
+    preserveExactStoredKey: true,
     sessionKey: record.sessionKey,
     storePath: target.storePath,
-    ...(record.transcriptPath && result.status === "ok"
-      ? { readTranscriptEvents: createTranscriptEventReader(record.transcriptPath) }
+    ...(record.transcriptPath && result.status === "ok" && shouldImportTranscript
+      ? {
+          readTranscriptEvents: createTranscriptEventReader(
+            record.transcriptPath,
+            record.entry.sessionId,
+          ),
+        }
       : {}),
     ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
   });
+  if (transcriptSourceKey) {
+    importedTranscriptSources.add(transcriptSourceKey);
+  }
   report.importedEntries += 1;
   report.importedTranscriptEvents += imported.transcriptEvents;
 }
@@ -615,13 +688,9 @@ function validateImportedRecordBeforeArchive(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = loadExactSqliteSessionEntry({
-    agentId: target.agentId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  });
-  if (!sqliteEntry) {
+  const normalizedKey = record.sessionKey;
+  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
+  if (!sqliteEntry.ok || !sqliteEntry.entry) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -629,10 +698,10 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  if (sqliteEntry.entry.sessionId !== record.entry.sessionId) {
+  if (sqliteEntry.entry.entry.sessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteEntry.entry.entry.sessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
@@ -937,13 +1006,9 @@ function countAlreadyMigratedTranscriptEventsForImport(
   target: SessionStoreTarget,
   record: LegacySessionRecord,
 ): number | undefined {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = loadExactSqliteSessionEntry({
-    agentId: target.agentId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  });
-  if (sqliteEntry?.entry.sessionId !== record.entry.sessionId) {
+  const normalizedKey = record.sessionKey;
+  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
+  if (!sqliteEntry.ok || sqliteEntry.entry?.entry.sessionId !== record.entry.sessionId) {
     return undefined;
   }
   const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
@@ -1264,6 +1329,8 @@ function summarizeDoctorSessionSqliteReport(
   targets: DoctorSessionSqliteTargetReport[],
   activeRun?: ActiveSessionSqliteMigrationRun,
 ): DoctorSessionSqliteReport {
+  const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
+    sumDoctorSessionSqliteTargets(targets, value);
   return {
     ...(activeRun
       ? {
@@ -1281,51 +1348,18 @@ function summarizeDoctorSessionSqliteReport(
       : {}),
     mode,
     targets,
-    totals: {
-      archivedLegacyStoreFiles: targets.reduce(
-        (total, target) => total + (target.archivedLegacyStoreFiles?.length ?? 0),
-        0,
-      ),
-      archivedTranscriptFiles: targets.reduce(
-        (total, target) => total + target.archivedTranscriptFiles.length,
-        0,
-      ),
-      archivedUnreferencedJsonlFiles: targets.reduce(
-        (total, target) => total + target.archivedUnreferencedJsonlFiles.length,
-        0,
-      ),
-      importedEntries: sumTargets(targets, "importedEntries"),
-      importedTranscriptEvents: sumTargets(targets, "importedTranscriptEvents"),
-      issues: targets.reduce((total, target) => total + target.issues.length, 0),
-      legacyEntries: sumTargets(targets, "legacyEntries"),
-      reclaimedBytes: targets.reduce(
-        (total, target) => total + (target.compact?.reclaimedBytes ?? 0),
-        0,
-      ),
-      sqliteEntries: sumTargets(targets, "sqliteEntries"),
-      targets: targets.length,
-      unreferencedJsonlFiles: targets.reduce(
-        (total, target) => total + target.unreferencedJsonlFiles.length,
-        0,
-      ),
-      validatedEntries: sumTargets(targets, "validatedEntries"),
-      validatedTranscriptEvents: sumTargets(targets, "validatedTranscriptEvents"),
-    },
+    totals: createDoctorSessionSqliteTotals(targets, {
+      archivedLegacyStoreFiles: sum((target) => target.archivedLegacyStoreFiles?.length ?? 0),
+      archivedTranscriptFiles: sum((target) => target.archivedTranscriptFiles.length),
+      archivedUnreferencedJsonlFiles: sum((target) => target.archivedUnreferencedJsonlFiles.length),
+      importedEntries: sum((target) => target.importedEntries),
+      importedTranscriptEvents: sum((target) => target.importedTranscriptEvents),
+      legacyEntries: sum((target) => target.legacyEntries),
+      reclaimedBytes: sum((target) => target.compact?.reclaimedBytes ?? 0),
+      unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
+      validatedEntries: sum((target) => target.validatedEntries),
+      validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
+    }),
   };
-}
-
-function sumTargets(
-  targets: DoctorSessionSqliteTargetReport[],
-  key: keyof Pick<
-    DoctorSessionSqliteTargetReport,
-    | "importedEntries"
-    | "importedTranscriptEvents"
-    | "legacyEntries"
-    | "sqliteEntries"
-    | "validatedEntries"
-    | "validatedTranscriptEvents"
-  >,
-): number {
-  return targets.reduce((total, target) => total + target[key], 0);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

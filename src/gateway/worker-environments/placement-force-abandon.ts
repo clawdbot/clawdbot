@@ -7,6 +7,9 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
+export const FORCED_WORKER_ABANDONMENT_ERROR =
+  "Cloud worker result abandoned by forced operator teardown";
+
 async function tryResolveWorkspacePath(
   resolveWorkspacePath: (placement: {
     sessionId: string;
@@ -48,7 +51,7 @@ export async function forceAbandonWorkerEnvironment(params: {
   onCleanupError?: (error: unknown) => void;
 }): Promise<void> {
   const { environmentId, placements } = params;
-  const recoveryError = "Cloud worker result abandoned by forced operator teardown";
+  const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
   const journalOwners = params.placements
     .listWorkspaceReconciliationOwners()
     .filter((owner) => owner.environmentId === environmentId);

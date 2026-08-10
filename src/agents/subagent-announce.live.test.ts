@@ -4,11 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-  type OpenClawConfig,
-} from "../config/config.js";
+import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { callGateway as realCallGateway } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { dispatchGatewayMethodInProcess as realDispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
@@ -16,13 +12,13 @@ import { startGatewayServer, type GatewayServer } from "../gateway/server.js";
 import { extractPayloadText } from "../gateway/test-helpers.agent-results.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
@@ -190,11 +186,12 @@ function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForReques
     runs.map((run) => ({
       runId: run.runId,
       taskName: run.taskName,
-      ended: typeof run.endedAt === "number",
+      ended: typeof run.execution.endedAt === "number",
       endedReason: run.endedReason,
       pauseReason: run.pauseReason,
-      outcome: run.outcome?.status,
-      outcomeError: run.outcome?.status === "error" ? run.outcome.error : undefined,
+      outcome: run.execution.outcome?.status,
+      outcomeError:
+        run.execution.outcome?.status === "error" ? run.execution.outcome.error : undefined,
       delivery: run.delivery?.status,
       deliveryError: run.delivery?.lastError,
       suppressAnnounceReason: run.suppressAnnounceReason,
@@ -361,7 +358,7 @@ describeLive("subagent announce live", () => {
           (run) =>
             run.taskName === "issue_82913_child" &&
             run.completion?.resultText?.includes(childToken) === true &&
-            run.outcome?.status === "ok",
+            run.execution.outcome?.status === "ok",
         );
       });
       expect(completedRunBeforeDelivery.delivery?.announcedAt).toBeUndefined();
@@ -389,7 +386,7 @@ describeLive("subagent announce live", () => {
       console.log(
         `[issue-82913] repro ${JSON.stringify({
           runId: completedRun.runId,
-          childEndedAt: completedRun.endedAt,
+          childEndedAt: completedRun.execution.endedAt,
           completionEnqueuedAt: enqueuedAt,
           completionDeliveredAt: deliveredAt,
           completionAnnouncedAt: announcedAt,
@@ -572,12 +569,12 @@ describeLive("subagent announce live", () => {
         );
       });
       const runStateBeforeSteer = summarizeSubagentRuns(listSteeredChildRuns());
-      expect(runBeforeSteer.endedAt, runStateBeforeSteer).toBeUndefined();
+      expect(runBeforeSteer.execution.endedAt, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
       console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
 
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       const steerResult = await steerControlledSubagentRun({
         cfg,
         controller: resolveSubagentController({ cfg, agentSessionKey: sessionKey }),
@@ -598,7 +595,7 @@ describeLive("subagent announce live", () => {
         return listSteeredChildRuns().find(
           (run) =>
             run.completion?.resultText?.includes(childToken) === true &&
-            run.outcome?.status === "ok",
+            run.execution.outcome?.status === "ok",
         );
       }).catch((error: unknown) => {
         throw new Error(
@@ -778,7 +775,7 @@ describeLive("subagent announce live", () => {
           runs.some(
             (run) =>
               run.completion?.resultText?.includes(childToken) === true &&
-              run.outcome?.status === "ok",
+              run.execution.outcome?.status === "ok",
           ),
         );
         return completed ? runs : undefined;

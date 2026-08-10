@@ -1,8 +1,12 @@
-export type BoardFace = "chat" | "dashboard";
-export type BoardVisibleChatDock = "bottom" | "left" | "right";
+import type { SessionBoardFace } from "../../../../src/shared/session-types.js";
+import type { BoardTab } from "./types.ts";
+
+export type BoardFace = SessionBoardFace;
+// Canonical visible-dock union, derived from the protocol BoardTab shape so
+// persisted settings and render code can never drift from the wire contract.
+export type BoardVisibleChatDock = Exclude<BoardTab["chatDock"], "hidden">;
 
 export type BoardSessionView = {
-  face: BoardFace;
   activeTabId?: string;
   reopenDockByTab?: Record<string, BoardVisibleChatDock>;
 };
@@ -21,9 +25,6 @@ export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
       continue;
     }
     const view = rawView as Record<string, unknown>;
-    if (view.face !== "chat" && view.face !== "dashboard") {
-      continue;
-    }
     const activeTabId = typeof view.activeTabId === "string" ? view.activeTabId.trim() : "";
     const reopenDockByTab: Record<string, BoardVisibleChatDock> = {};
     if (
@@ -38,8 +39,10 @@ export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
         }
       }
     }
+    if (!activeTabId && Object.keys(reopenDockByTab).length === 0) {
+      continue;
+    }
     normalized[sessionKey] = {
-      face: view.face,
       ...(activeTabId ? { activeTabId } : {}),
       ...(Object.keys(reopenDockByTab).length > 0 ? { reopenDockByTab } : {}),
     };
@@ -57,7 +60,7 @@ export function updateBoardSessionView(
     return normalizeBoardSessionViews(current);
   }
   const views = normalizeBoardSessionViews(current);
-  const previous = views[key] ?? { face: "chat" as const };
+  const previous = views[key] ?? {};
   delete views[key];
   views[key] = {
     ...previous,

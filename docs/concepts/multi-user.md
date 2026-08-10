@@ -17,7 +17,9 @@ If people must not access each other's sessions, tools, credentials, or files, g
 
 ## Ownership and presence
 
-New sessions record their creator when the Gateway has a trusted identity available. Trusted-proxy identity takes priority; otherwise OpenClaw uses the paired device's operator label or display name. Older sessions and sessions created without either identity have no owner stamp.
+New sessions record a write-once `createdActor` when the creation path can prove who caused it. Authenticated people use their durable Gateway profile id; requesting agents and system paths use the same actor field. Sessions created without a proven actor remain unattributed.
+
+Human display names are resolved from the current Gateway profile when session rows are returned. OpenClaw does not store labels on session entries, so changing a profile name updates the ownership UI without rewriting session history.
 
 The web app keeps ownership and presence visually distinct:
 
@@ -26,6 +28,10 @@ The web app keeps ownership and presence visually distinct:
 - The sidebar's person filter shows sessions created by one identity while preserving the existing custom groups.
 
 When fewer than two distinct creators appear in the loaded session list, OpenClaw hides all ownership and person-filter chrome. A single-user gateway therefore looks unchanged.
+
+## Drafts
+
+Start a session as a draft to keep work in progress out of teammates' sidebars until you publish it. Drafts are never hidden from admins, who see other people's drafts with a faded ghost marker. This is a coordination feature, not a security boundary.
 
 ## Turn attribution
 

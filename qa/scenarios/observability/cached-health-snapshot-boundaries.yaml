@@ -1,0 +1,33 @@
+title: Cached health snapshot boundaries
+
+scenario:
+  id: cached-health-snapshot-boundaries
+  surface: observability
+  category: observability.health-and-repair
+  coverage:
+    primary:
+      - observability.cached-health-snapshots-kitchen-sink
+      - observability.cached-health-snapshots-lifecycle
+      - observability.cached-health-snapshots-performance
+      - observability.cached-health-snapshots-plugin-tools
+  objective: Prove health cache reuse, invalidation, live overlays, scope isolation, and plugin tool coexistence.
+  successCriteria:
+    - Fresh cache hits preserve snapshot timestamps and emit the production cached response metadata.
+    - Request-driven passive refresh is bounded while stale, explicit probe, and lifecycle mismatch requests refresh synchronously.
+    - Cached responses merge current live overlays and public refreshes omit sensitive collection.
+    - A real fixture plugin loads, exposes, and executes a Gateway tool without disrupting health collection.
+  docsRefs:
+    - docs/gateway/health.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/gateway/server-methods/health.ts
+    - src/gateway/server/health-state.ts
+    - test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts
+    summary: Exercises the production health handler cache boundary and crosses a real authenticated Gateway plugin-tool invocation.
+    args:
+      - --artifact-base
+      - ${outputDir}

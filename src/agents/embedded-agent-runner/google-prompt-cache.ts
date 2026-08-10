@@ -2,17 +2,22 @@
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
 import crypto from "node:crypto";
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  sortPromptCacheToolsByName,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
-import { readResponseWithLimit } from "../../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -24,11 +29,8 @@ import {
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
-import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
-import { stableStringify } from "../stable-stringify.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
-import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
 // CachedContent metadata responses are tiny (name + expireTime); cap the read so
@@ -193,7 +195,7 @@ async function appendGooglePromptCacheEntry(
   try {
     await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
   } catch (err) {
-    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockAcquireError(err)) {
+    if (err instanceof SessionTranscriptWriterClaimReboundError) {
       throw err;
     }
     // ignore persistence failures
@@ -213,7 +215,7 @@ function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,
@@ -281,12 +283,6 @@ function buildManagedContextForCachedContent(context: GooglePromptCacheContext) 
     systemPrompt: undefined,
     tools: undefined,
   };
-}
-
-async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
-  if (response && !response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 /**

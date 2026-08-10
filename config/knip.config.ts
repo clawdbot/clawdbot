@@ -1,6 +1,9 @@
 /**
  * Knip configuration for OpenClaw root and bundled plugin dependency hygiene.
  */
+import fs from "node:fs";
+import path from "node:path";
+
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
 function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
@@ -16,11 +19,14 @@ const repositoryScriptEntries = [
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
-  "scripts/build-discord-activity-sdk.mjs!",
+  "scripts/bundle-a2ui.mts!",
+  "scripts/build-discord-activity-sdk.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
+  // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
+  "scripts/docker-e2e.mts!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -38,7 +44,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
-  "scripts/e2e/lib/npm-telegram-live/prepare-package.mjs!",
+  "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
   "scripts/e2e/lib/openai-chat-tools/client.mjs!",
@@ -47,40 +53,45 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
+  "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs!",
   "scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs!",
   "scripts/e2e/lib/release-scenarios/write-marketplace.mjs!",
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
+  "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
-  "scripts/ios-release-signing.mjs!",
+  "scripts/ios-release-cut.ts!",
+  "scripts/ios-release-plan.ts!",
+  "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  "scripts/lib/openclaw-test-state.mjs!",
+  "scripts/lib/openclaw-test-state.mts!",
   "scripts/list-prod-store-packages.mjs!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  "scripts/memory-index-manager.sync-repro.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
-  "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  "scripts/plugin-prerelease-liveish-matrix.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
-  "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
-  "scripts/repro/tsx-name-repro.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
+  "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
-  "scripts/test-built-bundled-channel-entry-smoke.mjs!",
+  "scripts/test-built-bundled-channel-entry-smoke.mts!",
   "scripts/update-clawtributors.ts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
@@ -90,8 +101,25 @@ const repositoryScriptEntries = [
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
+// Compatibility shims are executable roots and load their typed implementations by computed URL,
+// which Knip cannot follow in either direction.
+function listScriptShimEntries(dir = "scripts"): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return listScriptShimEntries(entryPath);
+    }
+    if (!entry.isFile() || (!entry.name.endsWith(".mjs") && !entry.name.endsWith(".js"))) {
+      return [];
+    }
+    const implementationPath = entryPath.replace(/\.(?:mjs|js)$/u, ".mts");
+    return fs.existsSync(implementationPath) ? [`${entryPath}!`, `${implementationPath}!`] : [];
+  });
+}
+
 const rootEntries = [
   ...repositoryScriptEntries,
+  ...listScriptShimEntries(),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -99,35 +127,42 @@ const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Built as the official image's Docker HEALTHCHECK entrypoint.
+  "src/docker-healthcheck.ts!",
+  // Uploaded in the worker bundle and launched by rsync; no static host import exists.
+  "src/worker/workspace-rsync-receiver.ts!",
+  // Shipped compatibility facade for statusCommand and getStatusSummary.
+  "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
-  "scripts/repro/code-mode-namespace-live.ts!",
-  "scripts/repro/tool-schema-hint-bench.ts!",
-  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
-  "scripts/bench-transcript-cursors.ts!",
+  // Spawned by the agent concurrency benchmark; no static import edge exists.
+  "scripts/bench-agent-concurrency-worker.ts!",
+  // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
+  "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/audit/audit-event-writer.worker.ts!",
+  // Loaded by URL from the SQLite lifecycle archive owner.
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagent-registry.runtime.ts!",
-  // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
-  "src/agents/subagent-orphan-recovery.ts!",
+  // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
+  "src/agents/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
-  "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
@@ -147,7 +182,7 @@ const rootEntries = [
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
-  // Imported by scripts/tsdown-build.mjs as the AI package build configuration.
+  // Imported by scripts/tsdown-build.mts as the AI package build configuration.
   "tsdown.ai.config.ts!",
   // Maintainer-owned compatibility data referenced by release/docs workflows.
   "src/commands/doctor/shared/deprecation-compat.ts!",
@@ -164,13 +199,13 @@ const rootEntries = [
   "apps/android/app/src/main/assets/katex/renderer.js!",
   "apps/linux/ui/main.js!",
   "apps/linux/ui/quickchat.js!",
-  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
-  "src/plugin-sdk/*.ts!",
+  // Local-only test-state consumers are modeled by the full-tree test scan.
+  "src/plugin-sdk/!(test-state).ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -231,6 +266,7 @@ const rootBundledPluginRuntimeDependencies = [
   "@homebridge/ciao",
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
+  "@trycua/cua-driver",
   "@slack/bolt",
   "@slack/types",
   "@slack/web-api",
@@ -250,7 +286,8 @@ const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
   "@lit-labs/signals",
   "@lit/context",
-  // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
+  "@lit/task",
+  // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
   // Root typecheck/test projects compile @openclaw/net-policy source directly.
@@ -258,9 +295,13 @@ const rootToolingAndWorkspaceDependencies = [
   "ipaddr.js",
   "jscpd",
   "lit",
+  // Runtime postbuild resolves this build input from its caller-selected root.
+  "marked",
   "oxlint",
   "oxlint-tsgolint",
   "signal-utils",
+  // Root declaration builds compile terminal-core source and resolve this package from root.
+  "string-width",
 ] as const;
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
@@ -352,22 +393,37 @@ const config = {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
-    "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     // Test and E2E callers reach these hooks through runtime.test-support.ts;
     // the full-tree companion config still audits their actual consumers.
     "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
-    // GatewayBoardProvider and boardExists are constructed/asserted by the
-    // focused Control UI provider tests, not by a separate production module.
-    "ui/src/lib/board/provider.ts": ["exports"],
+    // Focused startup tests consume this explicit seam; production imports only the bootstrap.
+    "src/gateway/server-startup-bootstrap.ts": ["exports"],
+    // Registry facades retain direct registration/reset compatibility seams used by focused
+    // tests; the full-tree scan still audits every named export against those consumers.
+    "src/agents/harness/registry.ts": ["exports"],
+    "src/context-engine/registry.ts": ["exports", "types"],
+    "src/plugins/compaction-provider.ts": ["exports"],
+    "src/plugins/interactive-registry.ts": ["exports"],
+    "src/plugins/memory-state.ts": ["exports", "types"],
+    "src/plugins/session-discussion-registry.ts": ["exports"],
+    "src/tasks/detached-task-runtime-state.ts": ["exports"],
+    // Focused media tests consume these explicit seams; production uses the helpers in-module.
+    "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
+    "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
+    // Focused CLI tests exercise plan construction through this explicit test seam.
+    "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
+    // Mirror config parsing, redaction mapping, cap fitting, and the runner are
+    // asserted by the focused Beam mirror tests; production wires only the service.
+    "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
@@ -396,6 +452,8 @@ const config = {
       ],
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // The stylelint config lives under config/, not a root default path.
+      stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -462,8 +520,6 @@ const config = {
         "src/types.ts!",
         "src/harness/messages.ts!",
         "src/harness/env/kill-tree.ts!",
-        "src/harness/compaction.ts!",
-        "src/harness/branch-summarization.ts!",
         "src/harness/prompt-template-arguments.ts!",
         "src/harness/utils/truncate.ts!",
       ],
@@ -484,6 +540,21 @@ const config = {
         "src/schema.ts!",
         "src/startup-unavailable.ts!",
         "src/version.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/model-catalog-core": {
+      // Mirror the published export map so package-owned runtime dependencies
+      // are traced from the TypeScript sources instead of the JS fallback.
+      entry: [
+        "src/index.ts!",
+        "src/configured-model-refs.ts!",
+        "src/model-catalog-normalize.ts!",
+        "src/model-catalog-refs.ts!",
+        "src/model-catalog-types.ts!",
+        "src/provider-id.ts!",
+        "src/provider-model-id-normalization.ts!",
+        "src/provider-model-id-normalize.ts!",
       ],
       project: ["src/**/*.ts!"],
     },
@@ -541,10 +612,7 @@ const config = {
     "packages/acp-core": {
       entry: [
         "src/index.ts!",
-        "src/normalize-text.ts!",
         "src/meta.ts!",
-        "src/numeric-options.ts!",
-        "src/record-shared.ts!",
         "src/session.ts!",
         "src/session-interaction-mode.ts!",
         "src/session-lineage-meta.ts!",
@@ -583,11 +651,6 @@ const config = {
     "packages/memory-host-sdk": {
       entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
-    },
-    "packages/speech-core": {
-      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
-      project: ["**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
     },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
@@ -649,7 +712,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/diffs`]: bundledPluginWorkspace([
-      // scripts/build-diffs-viewer-runtime.mjs bundles this browser entry.
+      // scripts/build-diffs-viewer-runtime.mts bundles this browser entry.
       "src/viewer-client.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: bundledPluginWorkspace(),
@@ -699,17 +762,18 @@ const config = {
       "media-understanding-provider.ts!",
       "model-route-contract.ts!",
       "native-web-search.ts!",
-      "openai-chatgpt-oauth-abort.runtime.ts!",
       "openai-chatgpt-oauth-flow.runtime.ts!",
-      "openai-chatgpt-oauth-types.runtime.ts!",
       "openai-chatgpt-oauth.runtime.ts!",
-      "openai-chatgpt-pkce.runtime.ts!",
       "openai-chatgpt-provider.runtime.ts!",
       "openai-provider.ts!",
       "prompt-overlay.ts!",
       "realtime-provider-shared.ts!",
       "tts.ts!",
       "usage.ts!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/onepassword`]: bundledPluginWorkspace([
+      // Shipped resolver child process declared as a static plugin artifact.
+      "onepassword-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: bundledPluginWorkspace([
       // Session catalog and provider helpers are plugin-owned runtime surfaces.

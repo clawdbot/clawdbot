@@ -31,6 +31,11 @@ struct ChatSessionSidebar: View {
             groups: self.groups,
             query: self.query)
         List(selection: self.selectionBinding) {
+            Color.clear
+                .frame(height: 8)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .accessibilityHidden(true)
             ForEach(sections) { section in
                 if section.id.hasPrefix("group:"), let title = section.title {
                     Section {

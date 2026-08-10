@@ -23,6 +23,8 @@ title: OpenClaw QA Scenario Pack
 # - taxonomy feature coverage IDs are exact proof targets, not aliases
 # - scenario primary can list multiple IDs only when this scenario is primary
 #   proof for each
+# - taxonomy profiles select every primary owner of each requested coverage ID;
+#   scenario file and taxonomy order do not affect membership or execution order
 # - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 # - avoid copying the scenario title into coverage IDs
 # - use `pnpm openclaw qa coverage` to render the current inventory
@@ -32,6 +34,9 @@ title: OpenClaw QA Scenario Pack
 # - use `scenario.execution.suiteIsolation: isolated` for flow scenarios that
 #   mutate gateway/runtime state in non-obvious ways; add `isolationReason`
 #   so reviewers know why the suite scheduler must not share the worker
+# - set `scenario.execution.parallelSafe: true` only for script producers that
+#   own their mutable state, ports, caches, processes, and credentials, and do
+#   not rebuild or mutate shared checkout output
 # - use `runtimePairLane` only for runtime-pair batch membership: `core`,
 #   `extended`, or `soak`; provider/model/auth/channel eligibility stays in
 #   independent execution constraints

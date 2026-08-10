@@ -6,7 +6,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
+import {
+  applySessionStoreProjection,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
@@ -33,16 +36,25 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 }
 
-function writeSessionStore(
+async function writeSessionStore(
   name: string,
   entries: Record<string, { sessionId: string; updatedAt: number; archivedAt?: number }>,
-): string {
+): Promise<string> {
   if (!tempDir) {
     throw new Error("tempDir not initialized");
   }
   const storePath = path.join(tempDir, name);
-  fs.writeFileSync(storePath, `${JSON.stringify(entries)}\n`, "utf8");
-  clearSessionStoreCacheForTest();
+  await applySessionStoreProjection({
+    storePath,
+    skipMaintenance: true,
+    update: (store) => {
+      for (const sessionKey of Object.keys(store)) {
+        delete store[sessionKey];
+      }
+      Object.assign(store, entries);
+      return { persist: true, result: undefined };
+    },
+  });
   return storePath;
 }
 
@@ -428,7 +440,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "main-session-incarnation";
-    const storePath = writeSessionStore("scoped-grant.json", {
+    const storePath = await writeSessionStore("scoped-grant.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     const requests: CallGatewayRequest[] = [];
@@ -474,7 +486,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-race";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
-    const storePath = writeSessionStore("scoped-grant-race.json", {
+    const storePath = await writeSessionStore("scoped-grant-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     let grantChecks = 0;
@@ -488,9 +500,10 @@ describe("sessions_history redaction", () => {
       }
       grantChecks += 1;
       if (grantChecks === 2) {
-        writeSessionStore("scoped-grant-race.json", {
-          [targetSessionKey]: { sessionId: "replacement-incarnation", updatedAt: 2 },
-        });
+        replaceSessionEntrySync(
+          { storePath, sessionKey: targetSessionKey },
+          { sessionId: "replacement-incarnation", updatedAt: 2 },
+        );
       }
       return { expectedSessionId };
     });
@@ -527,7 +540,7 @@ describe("sessions_history redaction", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-archive-race";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "main-incarnation";
-    const storePath = writeSessionStore("scoped-grant-archive-race.json", {
+    const storePath = await writeSessionStore("scoped-grant-archive-race.json", {
       [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
     });
     let grantChecks = 0;
@@ -541,9 +554,10 @@ describe("sessions_history redaction", () => {
       }
       grantChecks += 1;
       if (grantChecks === 2) {
-        writeSessionStore("scoped-grant-archive-race.json", {
-          [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },
-        });
+        replaceSessionEntrySync(
+          { storePath, sessionKey: targetSessionKey },
+          { sessionId: expectedSessionId, updatedAt: 2, archivedAt: 2 },
+        );
       }
       return { expectedSessionId };
     });

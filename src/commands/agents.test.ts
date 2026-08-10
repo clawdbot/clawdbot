@@ -106,11 +106,19 @@ describe("agents helpers", () => {
     expect(work?.model).toBe("anthropic/claude");
   });
 
+  it("applyAgentConfig marks the first roster entry as default", () => {
+    const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
+
+    expect(next.agents?.entries).toEqual({ work: { name: "Work", default: true } });
+  });
+
   it("applyAgentConfig clears a model override", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-        entries: { work: { workspace: "/work-ws", model: "anthropic/claude" } },
+        entries: {
+          work: { default: true, workspace: "/work-ws", model: "anthropic/claude" },
+        },
       },
     };
 

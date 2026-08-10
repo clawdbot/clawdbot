@@ -4,17 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-} from "../../agents/session-write-lock.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { serializeJsonlEntry, serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
+import { serializeJsonlLines } from "./transcript-jsonl.js";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
@@ -23,6 +19,30 @@ import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
+
+function serializeJsonlLine(entry: unknown): string {
+  const serialized = JSON.stringify(entry);
+  if (serialized === undefined) {
+    throw new TypeError(`entry of type ${typeof entry} is not JSON-serializable`);
+  }
+  return serialized;
+}
+
+function serializeJsonlEntry(entry: unknown): string {
+  return `${serializeJsonlLine(entry)}\n`;
+}
+
+async function writeJsonlLines(
+  filePath: string,
+  lines: readonly string[],
+  options?: { encoding?: BufferEncoding; flag?: string; mode?: number },
+): Promise<void> {
+  await fs.writeFile(filePath, serializeJsonlLines(lines), {
+    encoding: options?.encoding ?? "utf-8",
+    ...(options?.flag ? { flag: options.flag } : {}),
+    ...(options?.mode !== undefined ? { mode: options.mode } : {}),
+  });
+}
 
 const transcriptAppendQueue = new KeyedAsyncQueue();
 
@@ -422,8 +442,6 @@ async function withSessionTranscriptAppendQueue<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const queueKey = await resolveTranscriptAppendQueueKey(transcriptPath);
-  // Per-file queue is in-process only; the external session write lock still owns cross-process
-  // ordering.
   return await transcriptAppendQueue.enqueue(queueKey, fn);
 }
 
@@ -436,7 +454,7 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   useRawWhenLinear?: boolean;
   /** Opt into transcript idempotency lookup; default append stays O(1) for fresh keyed messages. */
   idempotencyLookup?: "scan" | "caller-checked";
-  /** Runs under the transcript write lock after idempotency replay checks and before append. */
+  /** Runs in the transcript append queue after idempotency replay checks and before append. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   config?: OpenClawConfig;
   /** Internal owned-batch hook for publishing a newly created transcript header. */
@@ -470,7 +488,7 @@ export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
-    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
+    appendSessionTranscriptMessageLocked(params),
   );
 }
 
@@ -480,29 +498,13 @@ type AppendSessionTranscriptEventParams = {
   transcriptPath: string;
 };
 
-/** Appends a raw transcript event using the same write lock and FIFO as message appends. */
+/** Appends a raw transcript event using the same FIFO as message appends. */
 export async function appendSessionTranscriptEvent(
   params: AppendSessionTranscriptEventParams,
 ): Promise<void> {
   await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
-    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
+    appendSessionTranscriptEventLocked(params),
   );
-}
-
-async function withSessionTranscriptWriteLock<T>(
-  params: Pick<AppendSessionTranscriptMessageParams, "transcriptPath" | "config">,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: params.transcriptPath,
-    ...resolveSessionWriteLockOptions(params.config),
-    allowReentrant: true,
-  });
-  try {
-    return await run();
-  } finally {
-    await lock.release();
-  }
 }
 
 async function appendSessionTranscriptEventLocked(

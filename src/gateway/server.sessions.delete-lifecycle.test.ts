@@ -2,7 +2,6 @@
 // active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
@@ -23,6 +22,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -119,12 +119,12 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
 }
 
 test("sessions.delete snapshots and removes session worktrees", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-delete-worktree-"),
-  );
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-delete-worktree-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeRemoteBackedGitWorkspace(root);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
@@ -194,13 +194,8 @@ test("sessions.delete snapshots and removes session worktrees", async () => {
       await managedWorktrees.remove({ id: dirtyWorktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
@@ -684,26 +679,6 @@ test("sessions.delete keeps lifecycle admission blocked through session unbindin
   }
 });
 
-test("sessions.patch rejects archiving active runs", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "discord:group:dev": sessionStoreEntry("sess-active"),
-    },
-  });
-  embeddedRunMock.activeIds.add("sess-active");
-
-  const archived = await directSessionReq("sessions.patch", {
-    key: "discord:group:dev",
-    archived: true,
-  });
-
-  expect(archived.ok).toBe(false);
-  expect(archived.error).toMatchObject({
-    message: "Cannot archive a session with an active run.",
-  });
-});
-
 test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-owned", "owned");
@@ -960,7 +935,7 @@ test("sessions.delete sessions.changed event always carries the resolved owner",
     "sessions.changed",
     expect.objectContaining({ sessionKey: "agent:main:side", agentId: "main", reason: "delete" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true },
+    { agentId: "main", dropIfSlow: true },
   );
 });
 

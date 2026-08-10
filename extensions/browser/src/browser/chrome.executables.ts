@@ -118,6 +118,19 @@ function exists(filePath: string) {
   }
 }
 
+function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {
+  try {
+    if (!fs.statSync(filePath).isFile()) {
+      return false;
+    }
+    // Windows has no POSIX execute bit; a visible regular file preserves its native contract.
+    fs.accessSync(filePath, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function execText(
   command: string,
   args: string[],
@@ -217,7 +230,7 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
     return null;
   }
   const exePath = path.join(appPath, "Contents", "MacOS", exeName);
-  if (!exists(exePath)) {
+  if (!isExecutable(exePath, "darwin")) {
     return null;
   }
   return { kind: inferKindFromIdentifier(bundleId), path: exePath };
@@ -298,7 +311,7 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
     return null;
   }
   const resolved = resolveLinuxExecutablePath(command);
-  if (!resolved) {
+  if (!resolved || !isExecutable(resolved, "linux")) {
     return null;
   }
   const exeName = normalizeLowercaseStringOrEmpty(path.posix.basename(resolved));
@@ -320,7 +333,7 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exePath) {
     return null;
   }
-  if (!exists(exePath)) {
+  if (!isExecutable(exePath, "win32")) {
     return null;
   }
   const directPath = resolveDirectWindowsBrowserExecutable(exePath);
@@ -519,9 +532,12 @@ function extractWindowsExecutablePath(command: string): string | null {
   return null;
 }
 
-function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecutable | null {
+function findFirstExecutable(
+  candidates: Array<BrowserExecutable>,
+  platform: NodeJS.Platform,
+): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (exists(candidate.path)) {
+    if (isExecutable(candidate.path, platform)) {
       return candidate;
     }
   }
@@ -529,9 +545,12 @@ function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecu
   return null;
 }
 
-function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
+function findFirstChromeExecutable(
+  candidates: string[],
+  platform: NodeJS.Platform,
+): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (exists(candidate)) {
+    if (isExecutable(candidate, platform)) {
       const normalizedPath = normalizeLowercaseStringOrEmpty(candidate);
       return {
         kind:
@@ -642,19 +661,22 @@ function findChromeExecutableMac(): BrowserExecutable | null {
     },
   ];
 
-  return findFirstExecutable(candidates);
+  return findFirstExecutable(candidates, "darwin");
 }
 
 function findGoogleChromeExecutableMac(): BrowserExecutable | null {
-  return findFirstChromeExecutable([
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    path.join(
-      os.homedir(),
-      "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-    ),
-  ]);
+  return findFirstChromeExecutable(
+    [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      path.join(
+        os.homedir(),
+        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      ),
+    ],
+    "darwin",
+  );
 }
 
 /** Find the best Chromium-family executable on Linux. */
@@ -679,18 +701,21 @@ function findChromeExecutableLinux(): BrowserExecutable | null {
     ...findPlaywrightChromiumExecutableCandidatesLinux(),
   ];
 
-  return findFirstExecutable(candidates);
+  return findFirstExecutable(candidates, "linux");
 }
 
 function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
-  return findFirstChromeExecutable([
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome-beta",
-    "/usr/bin/google-chrome-unstable",
-    "/opt/google/chrome/chrome",
-    "/snap/bin/google-chrome",
-  ]);
+  return findFirstChromeExecutable(
+    [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/google-chrome-beta",
+      "/usr/bin/google-chrome-unstable",
+      "/opt/google/chrome/chrome",
+      "/snap/bin/google-chrome",
+    ],
+    "linux",
+  );
 }
 
 /** Find the best Chromium-family executable on Windows. */
@@ -758,7 +783,7 @@ function findChromeExecutableWindows(): BrowserExecutable | null {
     path: joinWin(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
   });
 
-  return findFirstExecutable(candidates);
+  return findFirstExecutable(candidates, "win32");
 }
 
 function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
@@ -774,7 +799,7 @@ function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
   candidates.push(joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"));
   candidates.push(joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"));
 
-  return findFirstChromeExecutable(candidates);
+  return findFirstChromeExecutable(candidates, "win32");
 }
 
 /** Resolve the Google Chrome executable for a named platform when available. */

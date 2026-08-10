@@ -58,7 +58,12 @@ describe("detectInferenceBackends", () => {
 
   it("orders the ladder: existing model, logged-in subscriptions, env keys, then fallback CLIs", async () => {
     const candidates = await detectInferenceBackends({
-      config: { agents: { defaults: { model: "zai/glm-5.2" } } },
+      config: {
+        agents: {
+          defaults: { model: "zai/glm-5.2" },
+          entries: { main: { default: true } },
+        },
+      },
       env: { OPENAI_API_KEY: "sk-x", ANTHROPIC_API_KEY: "sk-y" },
       platform: "linux",
       deps: {
@@ -147,6 +152,36 @@ describe("detectInferenceBackends", () => {
     expect(candidates[1]?.credentials).toBeUndefined();
   });
 
+  it("keeps a lower-version Claude wrapper selectable with capability guidance", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command) => ({
+          command,
+          found: command === "claude",
+          ...(command === "claude" ? { version: "2.1.205 (Claude Code)" } : {}),
+        }),
+        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        resolveClaudeLiveSessionRequirement: () => ({
+          capability: "msg_lifecycle_v1",
+          minimumVersion: "2.1.206",
+          versionArgs: ["--version"],
+          updateCommand: "claude update",
+        }),
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      {
+        kind: "claude-cli",
+        credentials: true,
+        detail:
+          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
+      },
+    ]);
+  });
+
   it("keeps a logged-in Gemini CLI after environment keys", async () => {
     const candidates = await detectInferenceBackends({
       env: { OPENAI_API_KEY: "sk-x" },
@@ -162,7 +197,12 @@ describe("detectInferenceBackends", () => {
 
   it("keeps the existing model first and definitively logged-out CLIs last", async () => {
     const candidates = await detectInferenceBackends({
-      config: { agents: { defaults: { model: "zai/glm-5.2" } } },
+      config: {
+        agents: {
+          defaults: { model: "zai/glm-5.2" },
+          entries: { main: { default: true } },
+        },
+      },
       env: { OPENAI_API_KEY: "sk-x" },
       platform: "linux",
       deps: {
@@ -177,8 +217,8 @@ describe("detectInferenceBackends", () => {
       "existing-model",
       "codex-cli",
       "openai-api-key",
-      "claude-cli",
       "gemini-cli",
+      "claude-cli",
     ]);
   });
 
@@ -215,6 +255,7 @@ describe("detectInferenceBackends", () => {
             model: { primary: "opus" },
             models: { "anthropic/claude-opus-4-8": { alias: "opus" } },
           },
+          entries: { main: { default: true } },
         },
       },
       env: {},
@@ -249,7 +290,7 @@ describe("detectInferenceBackends", () => {
     );
   });
 
-  it("gives each logged-out CLI its sign-in remediation", async () => {
+  it("keeps Gemini private-store auth distinct from definitive CLI logouts", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
@@ -263,6 +304,10 @@ describe("detectInferenceBackends", () => {
 
     expect(candidates).toMatchObject([
       {
+        kind: "gemini-cli",
+        detail: "installed; login status unavailable",
+      },
+      {
         kind: "claude-cli",
         detail: "installed, not logged in — run `claude auth login`, then check again",
       },
@@ -270,11 +315,10 @@ describe("detectInferenceBackends", () => {
         kind: "codex-cli",
         detail: "installed, not logged in — run `codex login`, then check again",
       },
-      {
-        kind: "gemini-cli",
-        detail: "installed, not logged in — sign in to Gemini CLI, then check again",
-      },
     ]);
+    expect(
+      candidates.find((candidate) => candidate.kind === "gemini-cli")?.credentials,
+    ).toBeUndefined();
   });
 
   it("recognizes Codex login status across native credential stores", async () => {

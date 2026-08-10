@@ -44,6 +44,8 @@ describe("system run command public boundary", () => {
     { argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"], expected: "script.ps1" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["bash", "script.sh"], expected: null },
+    { argv: ["osh", "-c", "echo hi"], expected: null },
+    { argv: ["tcsh", "-c", "echo hi"], expected: null },
   ])("extracts the shell payload for $argv", ({ argv, expected }) => {
     expect(extractShellCommandFromArgv(argv)).toBe(expected);
   });
@@ -116,6 +118,11 @@ describe("system run command public boundary", () => {
       rawCommand: '$0 "$1"',
     },
     {
+      name: "opaque shell positional-argv carrier",
+      argv: ["tcsh", "-c", "source $argv[1]", "/tmp/evil.csh"],
+      rawCommand: "source $argv[1]",
+    },
+    {
       name: "environment prelude",
       argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
       rawCommand: "echo hi",
@@ -123,6 +130,16 @@ describe("system run command public boundary", () => {
     {
       name: "interactive shell startup flag",
       argv: ["/bin/bash", "-i", "-c", "/usr/bin/printf ok"],
+      rawCommand: "/usr/bin/printf ok",
+    },
+    {
+      name: "nushell interactive execute startup flag",
+      argv: ["nu", "--interactive", "--execute", "/usr/bin/printf ok"],
+      rawCommand: "/usr/bin/printf ok",
+    },
+    {
+      name: "nushell attached execute startup flag",
+      argv: ["nu", "--interactive", "--execute=/usr/bin/printf ok"],
       rawCommand: "/usr/bin/printf ok",
     },
     {

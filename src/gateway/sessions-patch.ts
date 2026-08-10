@@ -9,14 +9,11 @@ import {
   type ErrorShape,
   errorShape,
   normalizeSessionIconInput,
+  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../agents/inherited-tool-deny.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -36,11 +33,12 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
+import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
-  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -49,6 +47,7 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
   resolveMissingAgentHarnessSessionError,
 } from "../sessions/agent-harness-session-key.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
   applyTraceOverride,
   applyVerboseOverride,
@@ -56,7 +55,6 @@ import {
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
 import {
-  applyModelOverrideToSessionEntry,
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
@@ -71,9 +69,9 @@ import {
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
-  shouldPreserveSessionAuthProfileOverride,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -127,40 +125,49 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
-function supportsSpawnLineage(storeKey: string): boolean {
-  return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
+function normalizeSessionToolOverrides(
+  raw: SessionToolOverrides,
+): SessionToolOverrides | undefined {
+  const normalizeBooleanMap = (value: Record<string, boolean> | undefined) => {
+    const entries = Object.entries(value ?? {}).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  };
+  const mcpToolsDeny = Object.fromEntries(
+    Object.entries(raw.mcpToolsDeny ?? {})
+      .map(
+        ([serverName, toolNames]) =>
+          [
+            serverName,
+            [...new Set(toolNames)].toSorted((left, right) => left.localeCompare(right)),
+          ] as const,
+      )
+      .filter(([, toolNames]) => toolNames.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+  const mcpServers = normalizeBooleanMap(raw.mcpServers);
+  const skills = normalizeBooleanMap(raw.skills);
+  const normalized: SessionToolOverrides = {
+    ...(mcpServers ? { mcpServers } : {}),
+    ...(Object.keys(mcpToolsDeny).length > 0 ? { mcpToolsDeny } : {}),
+    ...(skills ? { skills } : {}),
+    ...(raw.webSearch === false ? { webSearch: false } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
-
-function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "orchestrator" || normalized === "leaf") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "children" || normalized === "none") {
-    return normalized;
-  }
-  return undefined;
-}
-
-type SessionPatchProjectionEntry = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
 
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  entries: readonly SessionPatchProjectionEntry[];
   existingEntry?: SessionEntry;
+  isLabelInUse: (label: string) => boolean;
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
@@ -219,7 +226,9 @@ export async function projectSessionsPatchEntry(params: {
     return loadedModelCatalog;
   };
 
-  const existing = params.existingEntry;
+  const existing = params.existingEntry
+    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
@@ -229,7 +238,6 @@ export async function projectSessionsPatchEntry(params: {
     : {
         ...existing,
         sessionId: randomUUID(),
-        sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
   if (existing && !existing.sessionId) {
@@ -238,185 +246,14 @@ export async function projectSessionsPatchEntry(params: {
     delete next.displayName;
   }
 
-  type PatchError = ReturnType<typeof invalid> | null;
-  const checkSpawnLineage = (field: string): PatchError =>
-    supportsSpawnLineage(storeKey)
-      ? null
-      : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
-  const applyImmutableString = (
-    field: "spawnedBy" | "completionOwnerSessionKey" | "spawnedWorkspaceDir" | "spawnedCwd",
-    checkLineageBeforeEmpty: boolean,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
-    if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const earlyLineage = checkLineageBeforeEmpty ? checkSpawnLineage(field) : null;
-    if (earlyLineage) {
-      return earlyLineage;
-    }
-    const trimmed = normalizeOptionalString(raw) ?? "";
-    if (!trimmed) {
-      return invalid(`invalid ${field}: empty`);
-    }
-    const lateLineage = checkLineageBeforeEmpty ? null : checkSpawnLineage(field);
-    if (lateLineage) {
-      return lateLineage;
-    }
-    if (existing?.[field] && existing[field] !== trimmed) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = trimmed;
-    return null;
-  };
-  const applyImmutableNormalized = <T extends "subagentRole" | "subagentControlScope">(
-    field: T,
-    normalize: (raw: string) => NonNullable<SessionEntry[T]> | undefined,
-    invalidMessage: string,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
-    if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const lineage = checkSpawnLineage(field);
-    if (lineage) {
-      return lineage;
-    }
-    const normalized = normalize(raw);
-    if (!normalized) {
-      return invalid(invalidMessage);
-    }
-    if (existing?.[field] && existing[field] !== normalized) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = normalized;
-    return null;
-  };
-
-  for (const fieldParams of [
-    { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
-    { field: "completionOwnerSessionKey" as const, checkLineageBeforeEmpty: false },
-    { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
-    { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
-  ]) {
-    const result = applyImmutableString(fieldParams.field, fieldParams.checkLineageBeforeEmpty);
-    if (result) {
-      return result;
-    }
-  }
-
-  if ("spawnDepth" in patch) {
-    const raw = patch.spawnDepth;
-    if (raw === null) {
-      if (typeof existing?.spawnDepth === "number") {
-        return invalid("spawnDepth cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnDepth is only supported for subagent:* or acp:* sessions");
-      }
-      const numeric = raw;
-      if (!Number.isInteger(numeric) || numeric < 0) {
-        return invalid("invalid spawnDepth (use an integer >= 0)");
-      }
-      const normalized = numeric;
-      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
-        return invalid("spawnDepth cannot be changed once set");
-      }
-      next.spawnDepth = normalized;
-    }
-  }
-
-  for (const fieldParams of [
-    {
-      field: "subagentRole" as const,
-      normalize: normalizeSubagentRole,
-      invalidMessage: 'invalid subagentRole (use "orchestrator" or "leaf")',
-    },
-    {
-      field: "subagentControlScope" as const,
-      normalize: normalizeSubagentControlScope,
-      invalidMessage: 'invalid subagentControlScope (use "children" or "none")',
-    },
-  ]) {
-    const result = applyImmutableNormalized(
-      fieldParams.field,
-      fieldParams.normalize,
-      fieldParams.invalidMessage,
-    );
-    if (result) {
-      return result;
-    }
-  }
-
-  if ("inheritedToolPolicyVersion" in patch) {
-    const raw = patch.inheritedToolPolicyVersion;
-    if (raw === null) {
-      if (existing?.inheritedToolPolicyVersion !== undefined) {
-        return invalid("inheritedToolPolicyVersion cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      const lineage = checkSpawnLineage("inheritedToolPolicyVersion");
-      if (lineage) {
-        return lineage;
-      }
-      if (raw !== 1) {
-        return invalid("invalid inheritedToolPolicyVersion (expected 1)");
-      }
-      next.inheritedToolPolicyVersion = 1;
-    }
-  }
-
-  if ("inheritedToolDeny" in patch) {
-    const raw = patch.inheritedToolDeny;
-    if (raw === null) {
-      delete next.inheritedToolDeny;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolDeny (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
-      if (inheritedToolDeny.length > 0) {
-        next.inheritedToolDeny = inheritedToolDeny;
-      } else {
-        delete next.inheritedToolDeny;
-      }
-    }
-  }
-
-  if ("inheritedToolAllow" in patch) {
-    const raw = patch.inheritedToolAllow;
-    if (raw === null) {
-      delete next.inheritedToolAllow;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolAllow (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolAllow is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolAllow = normalizeInheritedToolAllowlist(raw);
-      if (inheritedToolAllow.length > 0) {
-        next.inheritedToolAllow = inheritedToolAllow;
-      } else {
-        delete next.inheritedToolAllow;
-      }
-    }
+  const subagentPolicyError = applySessionsPatchSubagentPolicy({
+    existing,
+    next,
+    patch,
+    storeKey,
+  });
+  if (subagentPolicyError) {
+    return invalid(subagentPolicyError);
   }
 
   if ("label" in patch) {
@@ -428,13 +265,8 @@ export async function projectSessionsPatchEntry(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const { sessionKey, entry } of params.entries) {
-        if (sessionKey === storeKey) {
-          continue;
-        }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
+      if (params.isLabelInUse(parsed.label)) {
+        return invalid(`label already in use: ${parsed.label}`);
       }
       next.label = parsed.label;
     }
@@ -455,6 +287,10 @@ export async function projectSessionsPatchEntry(params: {
       }
       next.category = trimmed;
     }
+  }
+
+  if ("boardFace" in patch && patch.boardFace !== undefined) {
+    next.boardFace = patch.boardFace;
   }
 
   if ("icon" in patch) {
@@ -511,10 +347,18 @@ export async function projectSessionsPatchEntry(params: {
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
-      next.archivedAt ??= now;
+      if (next.archivedAt === undefined) {
+        next.archivedAt = now;
+        if (params.archivedBy) {
+          next.archivedBy = params.archivedBy;
+        } else {
+          delete next.archivedBy;
+        }
+      }
       delete next.pinnedAt;
     } else {
       delete next.archivedAt;
+      delete next.archivedBy;
     }
   }
 
@@ -570,6 +414,21 @@ export async function projectSessionsPatchEntry(params: {
         return invalid('invalid fastMode (use true, false, or "auto")');
       }
       next.fastMode = normalized;
+    }
+  }
+
+  if ("toolOverrides" in patch) {
+    const raw = patch.toolOverrides;
+    if (raw === null) {
+      delete next.toolOverrides;
+    } else if (raw !== undefined) {
+      // Session patches replace this sparse overlay atomically; they never deep-merge old policy.
+      const normalized = normalizeSessionToolOverrides(raw);
+      if (normalized) {
+        next.toolOverrides = normalized;
+      } else {
+        delete next.toolOverrides;
+      }
     }
   }
 
@@ -698,19 +557,19 @@ export async function projectSessionsPatchEntry(params: {
     delete next.modelFallback;
     const raw = patch.model;
     if (raw === null) {
-      applyModelOverrideToSessionEntry({
+      applyModelOverrideWithAuthProfileCompatibility({
+        cfg,
+        agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
+        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection: {
           provider: resolvedDefault.provider,
           model: resolvedDefault.model,
           isDefault: true,
         },
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-          cfg,
-          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-          entry: next,
-          provider: resolvedDefault.provider,
-        }),
+        ...(params.providerAuthMetadataSnapshot
+          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+          : {}),
       });
       delete next.liveModelSwitchPending;
     } else if (raw !== undefined) {
@@ -742,20 +601,20 @@ export async function projectSessionsPatchEntry(params: {
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      applyModelOverrideToSessionEntry({
+      applyModelOverrideWithAuthProfileCompatibility({
+        cfg,
+        agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
+        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection: {
           provider: resolved.provider,
           model: resolved.model,
           isDefault: resolved.isDefault,
         },
         profileOverride: resolved.profile,
-        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
-          cfg,
-          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-          entry: next,
-          provider: resolved.provider,
-        }),
+        ...(params.providerAuthMetadataSnapshot
+          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+          : {}),
         markLiveSwitchPending: true,
       });
     }
@@ -839,31 +698,3 @@ export async function projectSessionsPatchEntry(params: {
 
   return { ok: true, entry: next };
 }
-
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  storeKey: string;
-  agentId?: string;
-  patch: SessionsPatchParams;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  /** Exact harness owner authorized to project its new reserved session row. */
-  authorizedAgentHarnessId?: string;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const projected = await projectSessionsPatchEntry({
-    cfg: params.cfg,
-    entries: Object.entries(params.store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-    existingEntry: params.store[params.storeKey],
-    storeKey: params.storeKey,
-    agentId: params.agentId,
-    patch: params.patch,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
-  });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
-  }
-  return projected;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

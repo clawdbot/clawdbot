@@ -174,4 +174,64 @@ describe("config model reference validation", () => {
       expect(res.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
     }
   });
+  it.each([
+    [
+      "default policy",
+      {
+        agents: {
+          defaults: {
+            modelPolicy: {
+              allow: [
+                " openai / gpt-5.5 ",
+                "clawrouter/ anthropic/claude-haiku-4-5",
+                " openai / * ",
+                " clawrouter / anthropic / * ",
+              ],
+            },
+          },
+        },
+      },
+    ],
+    [
+      "per-agent policy",
+      {
+        agents: {
+          list: [
+            {
+              id: "worker",
+              modelPolicy: {
+                allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "],
+              },
+            },
+          ],
+        },
+      },
+    ],
+  ])("accepts separator padding in the %s", (_label, config) => {
+    const res = validateConfigObjectWithPlugins(config, { pluginValidation: "skip" });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each(["clawrouter/anthropic /claude-haiku-4-5", "openai/gpt 5.5", "openai//gpt-5.5"])(
+    "still rejects malformed model policy ref %j",
+    (ref) => {
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: [ref] },
+            },
+          },
+        },
+        { pluginValidation: "skip" },
+      );
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path).toBe("agents.defaults.modelPolicy.allow.0");
+        expect(res.issues[0]?.message).toContain("invalid model policy ref");
+      }
+    },
+  );
 });

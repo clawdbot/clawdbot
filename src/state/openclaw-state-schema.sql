@@ -68,6 +68,69 @@ CREATE TABLE IF NOT EXISTS skill_curator_state (
   last_result_json TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
+  proposal_id TEXT NOT NULL PRIMARY KEY,
+  record_json TEXT NOT NULL,
+  owner_agent_id TEXT,
+  workspace_dir TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('create', 'update')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected', 'quarantined', 'stale')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  draft_hash TEXT NOT NULL,
+  origin_agent_id TEXT,
+  origin_session_key TEXT,
+  origin_run_id TEXT,
+  origin_message_id TEXT,
+  applied_at TEXT,
+  rejected_at TEXT,
+  quarantined_at TEXT,
+  stale_at TEXT,
+  status_reason TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_origin_runs (
+  proposal_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  mutation_count INTEGER NOT NULL CHECK (mutation_count > 0),
+  PRIMARY KEY (proposal_id, run_id),
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_rollbacks (
+  proposal_id TEXT NOT NULL PRIMARY KEY,
+  written_at TEXT NOT NULL,
+  target_skill_file TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create', 'update')),
+  previous_content_hash TEXT,
+  previous_content TEXT,
+  support_files_json TEXT,
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS skill_workshop_proposal_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  proposal_id TEXT NOT NULL,
+  proposed_version TEXT NOT NULL,
+  revision_hash TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN (
+    'created',
+    'revised',
+    'evaluation_completed',
+    'applied',
+    'rejected',
+    'quarantined',
+    'stale'
+  )),
+  occurred_at TEXT NOT NULL,
+  actor_json TEXT NOT NULL,
+  correlation_id TEXT,
+  payload_json TEXT,
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -132,6 +195,21 @@ CREATE TABLE IF NOT EXISTS audit_identity_keys (
   key BLOB NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS execution_identity_contexts (
+  context_id TEXT NOT NULL PRIMARY KEY CHECK (length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT NOT NULL UNIQUE CHECK (length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  coverage_state TEXT NOT NULL CHECK (
+    coverage_state IN ('attribution-only', 'unattributed', 'unknown', 'unsupported')
+  ),
+  context_bytes INTEGER NOT NULL CHECK (context_bytes BETWEEN 1 AND 16384),
+  context_json TEXT NOT NULL CHECK (length(context_json) > 0),
+  UNIQUE (created_at, context_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
+  ON execution_identity_contexts (run_id, created_at, execution_id);
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -475,6 +553,16 @@ CREATE TABLE IF NOT EXISTS device_auth_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
   ON device_auth_tokens(updated_at_ms DESC, device_id, role);
+
+CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
+  gateway_scope TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  token TEXT NOT NULL,
+  scopes_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (gateway_scope, device_id, role)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
   package_name TEXT NOT NULL PRIMARY KEY,
@@ -1322,6 +1410,25 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- Scratch is separate from cron_jobs so scheduler state writes and downgraded
+-- full-row replacement preserve it. New builds prune rows explicitly on job removal.
+-- content NULL is a tombstone: it keeps the revision lineage monotonic across
+-- unset/recreate so stale compare-and-swap writes cannot resurrect old content.
+CREATE TABLE IF NOT EXISTS cron_job_scratch (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  content TEXT,
+  revision INTEGER NOT NULL,
+  source_sha256 TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id),
+  CHECK (revision >= 1),
+  CHECK (content IS NULL OR length(CAST(content AS BLOB)) <= 262144)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_cron_job_scratch_store_updated
+  ON cron_job_scratch(store_key, updated_at_ms DESC, job_id);
+
 CREATE TABLE IF NOT EXISTS command_log_entries (
   id TEXT NOT NULL PRIMARY KEY,
   timestamp_ms INTEGER NOT NULL,
@@ -1574,6 +1681,71 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 
+-- Durable meeting-capture sessions are gateway-global rather than agent-session
+-- transcripts. JSON/JSONL files are doctor import inputs or explicit CLI exports.
+CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
+  session_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  selector TEXT NOT NULL UNIQUE,
+  export_key TEXT NOT NULL,
+  session_slug TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  title TEXT,
+  source_json TEXT NOT NULL,
+  stopped_at TEXT,
+  metadata_json TEXT,
+  export_manifest_json TEXT NOT NULL DEFAULT '{}',
+  export_pending_json TEXT NOT NULL DEFAULT '[]',
+  next_utterance_seq INTEGER NOT NULL DEFAULT 0 CHECK (next_utterance_seq >= 0),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, started_at)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_started
+  ON meeting_transcript_sessions(started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_id
+  ON meeting_transcript_sessions(session_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_slug
+  ON meeting_transcript_sessions(session_slug, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_export_key
+  ON meeting_transcript_sessions(export_key);
+
+CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
+  session_id TEXT NOT NULL,
+  session_started_at TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK (sequence >= 0),
+  utterance_id TEXT,
+  started_at TEXT,
+  ended_at TEXT,
+  speaker_id TEXT,
+  speaker_label TEXT,
+  text TEXT NOT NULL,
+  final INTEGER CHECK (final IN (0, 1)),
+  metadata_json TEXT,
+  PRIMARY KEY (session_id, session_started_at, sequence),
+  FOREIGN KEY (session_id, session_started_at)
+    REFERENCES meeting_transcript_sessions(session_id, started_at)
+    ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
+  session_id TEXT NOT NULL,
+  session_started_at TEXT NOT NULL,
+  generated_at TEXT,
+  summary_json TEXT,
+  markdown TEXT,
+  utterance_count INTEGER NOT NULL CHECK (utterance_count >= 0),
+  PRIMARY KEY (session_id, session_started_at),
+  FOREIGN KEY (session_id, session_started_at)
+    REFERENCES meeting_transcript_sessions(session_id, started_at)
+    ON DELETE CASCADE,
+  CHECK (summary_json IS NOT NULL OR markdown IS NOT NULL)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS migration_runs (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,
@@ -1631,7 +1803,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
-  removed_at INTEGER
+  removed_at INTEGER,
+  run_end_cleanup_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -1657,6 +1830,13 @@ CREATE TABLE IF NOT EXISTS session_groups (
   created_at INTEGER NOT NULL
 ) STRICT;
 
+-- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
+-- category:<name>; pinned sessions are ordered separately and never stored.
+CREATE TABLE IF NOT EXISTS sidebar_sections (
+  section_id TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL
+) STRICT;
+
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
 -- stays in plugins; this table records only core reconciliation facts.
 CREATE TABLE IF NOT EXISTS worker_environments (
@@ -1671,6 +1851,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   ssh_user TEXT,
   ssh_host_key TEXT,
   ssh_key_ref_json TEXT,
+  desktop_json TEXT,
   state TEXT NOT NULL CHECK (
     state IN (
       'requested',
@@ -1697,12 +1878,24 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   state_changed_at_ms INTEGER NOT NULL,
   idle_since_at_ms INTEGER,
   destroy_requested_at_ms INTEGER,
-  last_error TEXT
+  last_error TEXT,
+  shared_host INTEGER
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
+
+-- Provider-advertised fallback ports preserve stable retry order separately
+-- from the downgrade-sensitive canonical worker environment row.
+CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
+  environment_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
+  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
+  PRIMARY KEY (environment_id, position),
+  UNIQUE (environment_id, port),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+) STRICT;
 
 -- Session placement lives in the shared state database so local admission,
 -- worker admission, and environment attachment use one durable authority.
@@ -1949,6 +2142,8 @@ CREATE TABLE IF NOT EXISTS claw_installs (
   workspace TEXT NOT NULL UNIQUE,
   agent_config_digest TEXT NOT NULL,
   agent_owned_paths_json TEXT NOT NULL,
+  bootstrap_source_path TEXT,
+  bootstrap_content_digest TEXT,
   status TEXT NOT NULL CHECK (
     status IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial')
   ),
@@ -1982,6 +2177,12 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
   origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  extension_id TEXT,
+  extension_format TEXT,
+  extension_detected_format TEXT,
+  extension_mapped_json TEXT,
+  extension_unavailable_json TEXT,
+  extension_adapter_identity TEXT,
   installed_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
@@ -2023,4 +2224,15 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_catalog_remote (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bundle_json TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  min_version TEXT,
+  source_url TEXT NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checked_at INTEGER NOT NULL
 ) STRICT;

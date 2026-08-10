@@ -12,6 +12,7 @@ import {
   ZAI_GLOBAL_BASE_URL,
 } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("zai onboard", () => {
   let defaultCfg: ReturnType<typeof applyZaiConfig>;
@@ -28,22 +29,7 @@ describe("zai onboard", () => {
     expect(defaultCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
     expect(defaultCfg.models?.providers?.zai?.api).toBe("openai-completions");
     const ids = defaultCfg.models?.providers?.zai?.models?.map((m) => m.id);
-    expect(ids).toEqual([
-      "glm-5.2",
-      "glm-5.1",
-      "glm-5",
-      "glm-5-turbo",
-      "glm-5v-turbo",
-      "glm-4.7",
-      "glm-4.7-flash",
-      "glm-4.7-flashx",
-      "glm-4.6",
-      "glm-4.6v",
-      "glm-4.5",
-      "glm-4.5-air",
-      "glm-4.5-flash",
-      "glm-4.5v",
-    ]);
+    expect(ids).toEqual(manifest.modelCatalog.providers.zai.models.map((model) => model.id));
     expect(
       defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.2"),
     ).toMatchObject({
@@ -53,6 +39,13 @@ describe("zai onboard", () => {
     expect(
       defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.2"),
     ).not.toHaveProperty("baseUrl");
+  });
+
+  it("uses the manifest default and alias for a fresh general endpoint setup", () => {
+    expect(resolveAgentModelPrimaryValue(defaultCfg.agents?.defaults?.model)).toBe("zai/glm-5.2");
+    expect(defaultCfg.agents?.defaults?.models).toEqual({
+      "zai/glm-5.2": { alias: "GLM" },
+    });
   });
 
   it("resolves GLM-5.2 through the selected Coding Plan or custom endpoint", async () => {
@@ -106,7 +99,7 @@ describe("zai onboard", () => {
     }
   });
 
-  it("defaults Coding Plan endpoints to GLM-5.2 without changing the general API default", () => {
+  it("defaults general and Coding Plan endpoints to GLM-5.2", () => {
     const codingCfg = applyZaiConfig({}, { endpoint: "coding-global" });
     const existingCodingCfg = applyZaiConfig({
       models: {
@@ -120,7 +113,7 @@ describe("zai onboard", () => {
       },
     });
 
-    expect(resolveAgentModelPrimaryValue(defaultCfg.agents?.defaults?.model)).toBe("zai/glm-5.1");
+    expect(resolveAgentModelPrimaryValue(defaultCfg.agents?.defaults?.model)).toBe("zai/glm-5.2");
     expect(codingCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
     expect(resolveAgentModelPrimaryValue(codingCfg.agents?.defaults?.model)).toBe("zai/glm-5.2");
     expect(resolveAgentModelPrimaryValue(existingCodingCfg.agents?.defaults?.model)).toBe(

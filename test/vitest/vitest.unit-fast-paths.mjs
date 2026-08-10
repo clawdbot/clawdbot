@@ -25,7 +25,6 @@ const unitFastCandidateGlobs = [
   "src/compat/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/daemon/**/*.test.ts",
-  "src/i18n/**/*.test.ts",
   "src/hooks/**/*.test.ts",
   "src/image-generation/**/*.test.ts",
   "src/infra/**/*.test.ts",
@@ -66,7 +65,6 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
   "packages/memory-host-sdk/src/host/internal.test.ts",
   "packages/memory-host-sdk/src/host/post-json.test.ts",
-  "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
   "src/acp/control-plane/manager.failover.test.ts",
@@ -104,13 +102,12 @@ export const forcedUnitFastTestFiles = [
   "src/entry.test.ts",
   "src/flows/doctor-startup-channel-maintenance.test.ts",
   "src/flows/search-setup.test.ts",
-  "src/i18n/registry.test.ts",
   "src/image-generation/openai-compatible-image-provider.test.ts",
-  "src/image-generation/provider-registry.test.ts",
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
   "src/mcp/openclaw-tools-serve.test.ts",
+  "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
@@ -154,7 +151,6 @@ export const forcedUnitFastTestFiles = [
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
-  "src/video-generation/provider-registry.test.ts",
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
@@ -169,7 +165,9 @@ const broadUnitFastCandidateGlobs = [
   "test/**/*.test.ts",
 ];
 const ownerRoutedUnitTestPatterns = [
+  "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [

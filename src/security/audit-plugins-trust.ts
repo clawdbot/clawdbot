@@ -1,6 +1,7 @@
 // Audits installed plugins for trust, provenance, and filesystem risks.
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -357,12 +358,12 @@ export async function collectPluginsTrustFindings(params: {
         agentId?: string;
         tools?: AgentToolsConfig;
       }> = [{ label: "default" }];
-      for (const entry of params.cfg.agents?.list ?? []) {
+      for (const entry of listAgentEntries(params.cfg)) {
         if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
           continue;
         }
         contexts.push({
-          label: `agents.list.${entry.id}`,
+          label: `agents.entries.${entry.id}`,
           agentId: entry.id,
           tools: entry.tools,
         });

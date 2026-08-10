@@ -25,6 +25,10 @@ import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import {
+  prepareInternalSessionEffectsSession,
+  removeInternalSessionEffectsSession,
+} from "../../agents/internal-session-effects.js";
+import {
   hasUsableCustomProviderApiKey,
   resolveEnvApiKey,
   resolveProviderEntryApiKeyBinding,
@@ -35,16 +39,19 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/m
 import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import {
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../config/sessions/paths.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../../config/types.secrets.js";
+import type {
+  EmbeddedStateLockHandle,
+  EmbeddedStateSignalProcess,
+} from "../../infra/embedded-state-lock.js";
+import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
@@ -718,12 +725,13 @@ async function probeTarget(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  sessionDir: string;
+  storePath: string;
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
+  abortSignal?: AbortSignal;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, storePath, target, timeoutMs, maxTokens } = params;
   // Marker credentials must be resolved by the runtime from config, but the
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
@@ -748,11 +756,10 @@ async function probeTarget(params: {
   }
   const model = target.model;
 
-  const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
-  const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
-  await fs.mkdir(sessionDir, { recursive: true });
+  const runId = `probe-${target.provider}-${crypto.randomUUID()}`;
   let isolatedAgentDir: string | null = null;
   let isolatedProfileId: string | undefined;
+  let sessionTarget: Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>> | undefined;
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
@@ -767,6 +774,12 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
+    sessionTarget = await prepareInternalSessionEffectsSession({
+      agentId,
+      cwd: workspaceDir,
+      runId,
+      storePath,
+    });
     // Any bound-value target runs in an empty agent dir so stored profiles are
     // absent and cannot satisfy the probe via failover. Direct values pin a
     // synthetic profile; marker values are resolved by the runtime from the
@@ -806,8 +819,9 @@ async function probeTarget(params: {
     }
     const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedAgent({
-      sessionId,
-      sessionFile,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+      sessionTarget,
       agentId,
       workspaceDir,
       agentDir: isolatedAgentDir ?? agentDir,
@@ -818,7 +832,7 @@ async function probeTarget(params: {
       authProfileId: isolatedProfileId ?? target.profileId,
       authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,
       timeoutMs,
-      runId: `probe-${crypto.randomUUID()}`,
+      runId,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
       thinkLevel: "off",
       reasoningLevel: "off",
@@ -827,6 +841,7 @@ async function probeTarget(params: {
       disableTools: true,
       modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
+      abortSignal: params.abortSignal,
     });
     return buildResult("ok");
   } catch (err) {
@@ -836,6 +851,7 @@ async function probeTarget(params: {
       redactAuthProbeError(described.message),
     );
   } finally {
+    await removeInternalSessionEffectsSession(sessionTarget);
     if (isolatedAgentDir) {
       clearRuntimeAuthProfileStoreSnapshot(isolatedAgentDir);
       disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(isolatedAgentDir));
@@ -854,6 +870,7 @@ async function runTargetsWithConcurrency(params: {
   maxTokens: number;
   concurrency: number;
   onProgress?: (update: { completed: number; total: number; label?: string }) => void;
+  abortSignal?: AbortSignal;
 }): Promise<AuthProbeResult[]> {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
@@ -864,7 +881,7 @@ async function runTargetsWithConcurrency(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -882,17 +899,57 @@ async function runTargetsWithConcurrency(params: {
         agentId,
         agentDir,
         workspaceDir,
-        sessionDir,
+        storePath,
         target,
         timeoutMs,
         maxTokens,
+        abortSignal: params.abortSignal,
       });
       completed += 1;
       onProgress?.({ completed, total: targets.length });
       return result;
     },
-    { concurrency, stopOnError: true },
+    {
+      concurrency,
+      stopOnError: true,
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+    },
   );
+}
+
+function formatActiveGatewayModelsProbeRefusal(identity: GatewayLockIdentity): string {
+  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then rerun models status --probe.`;
+}
+
+type AuthProbeStateOwnership = {
+  mode: "exclusive";
+  gatewayLockOptions?: GatewayLockOptions;
+  process?: EmbeddedStateSignalProcess;
+};
+
+/** Own canonical state only for direct CLI probes; Gateway RPC probes already run under its lock. */
+export async function withAuthProbeStateOwnership<T>(
+  ownership: AuthProbeStateOwnership | undefined,
+  run: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!ownership) {
+    return await run();
+  }
+  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+    await import("../../infra/embedded-state-lock.js");
+  const signalBridge = createEmbeddedStateSignalBridge(ownership.process ?? process);
+  let stateLock: EmbeddedStateLockHandle | null | undefined;
+  try {
+    stateLock = await acquireEmbeddedStateLock({
+      options: ownership.gatewayLockOptions,
+      signal: signalBridge.signal,
+      formatActiveGatewayRefusal: formatActiveGatewayModelsProbeRefusal,
+    });
+    return await run(signalBridge.signal);
+  } finally {
+    await stateLock?.release();
+    signalBridge.dispose();
+  }
 }
 
 /** Runs all auth probes with bounded concurrency and returns a summary. */
@@ -905,45 +962,49 @@ export async function runAuthProbes(params: {
   modelCandidates: string[];
   options: AuthProbeOptions;
   onProgress?: (update: { completed: number; total: number; label?: string }) => void;
+  stateOwnership?: AuthProbeStateOwnership;
 }): Promise<AuthProbeSummary> {
-  const startedAt = Date.now();
-  const plan = await buildProbeTargets({
-    cfg: params.cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    providers: params.providers,
-    modelCandidates: params.modelCandidates,
-    options: params.options,
+  return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
+    const startedAt = Date.now();
+    const plan = await buildProbeTargets({
+      cfg: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      providers: params.providers,
+      modelCandidates: params.modelCandidates,
+      options: params.options,
+    });
+
+    const totalTargets = plan.targets.length;
+    params.onProgress?.({ completed: 0, total: totalTargets });
+
+    const results = totalTargets
+      ? await runTargetsWithConcurrency({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          targets: plan.targets,
+          timeoutMs: params.options.timeoutMs,
+          maxTokens: params.options.maxTokens,
+          concurrency: params.options.concurrency,
+          onProgress: params.onProgress,
+          abortSignal,
+        })
+      : [];
+
+    const finishedAt = Date.now();
+
+    return {
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt - startedAt,
+      totalTargets,
+      options: params.options,
+      results: [...plan.results, ...results],
+    };
   });
-
-  const totalTargets = plan.targets.length;
-  params.onProgress?.({ completed: 0, total: totalTargets });
-
-  const results = totalTargets
-    ? await runTargetsWithConcurrency({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        targets: plan.targets,
-        timeoutMs: params.options.timeoutMs,
-        maxTokens: params.options.maxTokens,
-        concurrency: params.options.concurrency,
-        onProgress: params.onProgress,
-      })
-    : [];
-
-  const finishedAt = Date.now();
-
-  return {
-    startedAt,
-    finishedAt,
-    durationMs: finishedAt - startedAt,
-    totalTargets,
-    options: params.options,
-    results: [...plan.results, ...results],
-  };
 }
 
 /** Formats probe latency for table output. */

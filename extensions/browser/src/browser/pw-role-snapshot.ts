@@ -18,6 +18,9 @@ type RoleRef = {
 /** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
 
+/** Identity strategy used to compare consecutive ref-bearing snapshots. */
+export type RoleSnapshotIdentityMode = "role" | "aria";
+
 type RoleSnapshotStats = {
   lines: number;
   chars: number;
@@ -57,6 +60,54 @@ function findSnapshotLineRef(line: string): string | undefined {
   return ROLE_SNAPSHOT_LINE_REF_RE.exec(line)?.[1];
 }
 
+/** Build the stable identity set used for per-tab snapshot deltas. */
+export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
+  refs: Record<string, T>,
+  mode: RoleSnapshotIdentityMode,
+): Set<string> {
+  // Duplicate role+name elements are identified positionally by nth, so insertion can mark a
+  // sibling duplicate. This is acceptable: they are actor-indistinguishable without DOM backing.
+  return new Set(
+    Object.entries(refs).map(([ref, value]) =>
+      mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,
+    ),
+  );
+}
+
+/** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
+function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
+  snapshot: string;
+  refs: Record<string, T>;
+  mode: RoleSnapshotIdentityMode;
+  previousKeys?: ReadonlySet<string>;
+}): { snapshot: string; keys: Set<string>; newElements?: number } {
+  const keys = getRoleSnapshotIdentityKeys(params.refs, params.mode);
+  if (params.previousKeys === undefined) {
+    return { snapshot: params.snapshot, keys };
+  }
+  const keyByRef = new Map(
+    Object.entries(params.refs).map(([ref, value]) => [
+      ref,
+      params.mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,
+    ]),
+  );
+  const markedKeys = new Set<string>();
+  const lines = params.snapshot.split("\n").map((line) => {
+    const ref = findSnapshotLineRef(line);
+    const key = ref ? keyByRef.get(ref) : undefined;
+    if (!key || params.previousKeys?.has(key)) {
+      return line;
+    }
+    markedKeys.add(key);
+    return `${line} [new]`;
+  });
+  const newElements = markedKeys.size;
+  if (newElements > 0) {
+    lines.push(`${newElements} new element(s) since last snapshot`);
+  }
+  return { snapshot: lines.join("\n"), keys, newElements };
+}
+
 function truncateRoleSnapshot(snapshot: string, maxChars: number): string {
   const marker =
     maxChars >= ROLE_SNAPSHOT_TRUNCATION_MARKER.length ? ROLE_SNAPSHOT_TRUNCATION_MARKER : "…";
@@ -72,23 +123,37 @@ function truncateRoleSnapshot(snapshot: string, maxChars: number): string {
 }
 
 /** Apply the final output budget, then keep only refs present on complete output lines. */
-export function finalizeRoleSnapshot<T extends { role: string }>(params: {
+export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   snapshot: string;
   refs: Record<string, T>;
   maxChars?: number;
+  delta?: {
+    mode: RoleSnapshotIdentityMode;
+    previousKeys?: ReadonlySet<string>;
+  };
 }): {
   snapshot: string;
   truncated?: boolean;
   refs: Record<string, T>;
   stats: RoleSnapshotStats;
+  newElements?: number;
 } {
   const normalizedMaxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
       ? Math.floor(params.maxChars)
       : undefined;
   const maxChars = normalizedMaxChars && normalizedMaxChars > 0 ? normalizedMaxChars : undefined;
-  const truncated = maxChars !== undefined && params.snapshot.length > maxChars;
-  const snapshot = truncated ? truncateRoleSnapshot(params.snapshot, maxChars) : params.snapshot;
+  const annotated = params.delta
+    ? annotateRoleSnapshotDelta({
+        snapshot: params.snapshot,
+        refs: params.refs,
+        mode: params.delta.mode,
+        previousKeys: params.delta.previousKeys,
+      })
+    : undefined;
+  const sourceSnapshot = annotated?.snapshot ?? params.snapshot;
+  const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;
+  const snapshot = truncated ? truncateRoleSnapshot(sourceSnapshot, maxChars) : sourceSnapshot;
   const visibleRefs = new Set(
     snapshot
       .split("\n")
@@ -98,10 +163,17 @@ export function finalizeRoleSnapshot<T extends { role: string }>(params: {
   const refs = Object.fromEntries(
     Object.entries(params.refs).filter(([ref]) => visibleRefs.has(ref)),
   ) as Record<string, T>;
+  const newElements =
+    params.delta?.previousKeys === undefined
+      ? undefined
+      : [...getRoleSnapshotIdentityKeys(refs, params.delta.mode)].filter(
+          (key) => !params.delta?.previousKeys?.has(key),
+        ).length;
   const result = {
     snapshot,
     refs,
     stats: getRoleSnapshotStats(snapshot, refs),
+    ...(newElements !== undefined ? { newElements } : {}),
   };
   return truncated ? { ...result, truncated: true } : result;
 }

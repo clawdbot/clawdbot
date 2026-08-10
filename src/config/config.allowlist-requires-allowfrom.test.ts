@@ -1,6 +1,5 @@
 // Regresses allowlist config requiring explicit allowFrom entries.
 import { describe, expect, it } from "vitest";
-import { IMessageConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 function expectSchemaAllowlistIssue(
@@ -27,12 +26,6 @@ function expectSchemaAllowlistIssue(
 describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
   it.each([
     {
-      name: "telegram",
-      schema: TelegramConfigSchema,
-      config: { dmPolicy: "allowlist", botToken: "fake" },
-      issuePath: "allowFrom",
-    },
-    {
       name: "whatsapp",
       schema: WhatsAppConfigSchema,
       config: { dmPolicy: "allowlist" },
@@ -44,32 +37,14 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
       expectSchemaAllowlistIssue(schema, config, issuePath);
     },
   );
-
-  it('accepts dmPolicy="pairing" without allowFrom', () => {
-    const res = TelegramConfigSchema.safeParse({ dmPolicy: "pairing", botToken: "fake" });
-    expect(res.success).toBe(true);
-  });
 });
 
 describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
   it.each([
     {
-      name: "telegram",
-      schema: TelegramConfigSchema,
-      config: {
-        allowFrom: ["12345"],
-        accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
-      },
-    },
-    {
       name: "whatsapp",
       schema: WhatsAppConfigSchema,
       config: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
-    },
-    {
-      name: "imessage",
-      schema: IMessageConfigSchema,
-      config: { allowFrom: ["alice"], accounts: { work: { dmPolicy: "allowlist" } } },
     },
   ] as const)(
     "accepts $name account allowlist when parent allowFrom exists",
@@ -77,12 +52,4 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
       expect(schema.safeParse(config).success).toBe(true);
     },
   );
-
-  it("rejects telegram account allowlist when neither account nor parent has allowFrom", () => {
-    expectSchemaAllowlistIssue(
-      TelegramConfigSchema,
-      { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
-      "allowFrom",
-    );
-  });
 });

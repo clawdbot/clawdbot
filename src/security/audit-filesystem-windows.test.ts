@@ -11,6 +11,31 @@ const windowsAuditEnv = {
   USERDOMAIN: "DESKTOP-TEST",
 };
 
+function isStateDirectoryTarget(target: string): boolean {
+  return /(?:^|[\\/])state$/u.test(target);
+}
+
+function windowsOwnerQueryResult(command: string): { stdout: string; stderr: string } | undefined {
+  if (!command.toLowerCase().endsWith("powershell.exe")) {
+    return undefined;
+  }
+  const currentUserSid = "S-1-5-21-1-2-3-1001";
+  return {
+    stdout: JSON.stringify({
+      ownerSid: currentUserSid,
+      currentUserSid,
+      principalSids: [
+        { name: "NT AUTHORITY\\SYSTEM", sid: "S-1-5-18" },
+        { name: "BUILTIN\\Users", sid: "S-1-5-32-545" },
+        { name: "DESKTOP-TEST\\Tester", sid: currentUserSid },
+      ],
+      principalTranslationFailed: false,
+      remote: false,
+    }),
+    stderr: "",
+  };
+}
+
 describe("security audit filesystem Windows findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-win-");
 
@@ -31,7 +56,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          {},
+          { agents: { list: [{ id: "main", default: true }] } },
           {
             stateDir,
             configPath,
@@ -39,10 +64,11 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (_cmd: string, args: string[]) => ({
-              stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-              stderr: "",
-            }),
+            execIcacls: async (cmd: string, args: string[]) =>
+              windowsOwnerQueryResult(cmd) ?? {
+                stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
+                stderr: "",
+              },
           },
         );
         const forbidden = new Set([
@@ -67,7 +93,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          {},
+          { agents: { list: [{ id: "main", default: true }] } },
           {
             stateDir,
             configPath,
@@ -75,9 +101,13 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (_cmd: string, args: string[]) => {
+            execIcacls: async (cmd: string, args: string[]) => {
+              const ownerResult = windowsOwnerQueryResult(cmd);
+              if (ownerResult) {
+                return ownerResult;
+              }
               const target = expectDefined(args[0], "args[0] test invariant");
-              if (target.endsWith(`${path.sep}state`)) {
+              if (isStateDirectoryTarget(target)) {
                 return {
                   stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
                   stderr: "",
@@ -104,7 +134,7 @@ describe("security audit filesystem Windows findings", () => {
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
         const findings = await collectSecurityAuditFindings(
-          {},
+          { agents: { list: [{ id: "main", default: true }] } },
           {
             stateDir,
             configPath,
@@ -112,9 +142,13 @@ describe("security audit filesystem Windows findings", () => {
             configSnapshot: null,
             platform: "win32",
             env: windowsAuditEnv,
-            execIcacls: async (_cmd: string, args: string[]) => {
+            execIcacls: async (cmd: string, args: string[]) => {
+              const ownerResult = windowsOwnerQueryResult(cmd);
+              if (ownerResult) {
+                return ownerResult;
+              }
               const target = expectDefined(args[0], "args[0] test invariant");
-              if (target.endsWith(`${path.sep}state`)) {
+              if (isStateDirectoryTarget(target)) {
                 return {
                   stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
                   stderr: "",

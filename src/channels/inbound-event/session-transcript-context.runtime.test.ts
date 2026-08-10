@@ -101,7 +101,7 @@ describe("session transcript inbound context", () => {
         historyLimit: 3,
         senderLabels: { assistant: "OpenClaw", user: "User" },
       },
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           source: "telegram",
@@ -132,7 +132,7 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
-    expect(ctx.UntrustedStructuredContext?.[0]).toMatchObject({
+    expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {
         messages: [
@@ -150,7 +150,7 @@ describe("session transcript inbound context", () => {
     ]);
     const ctx = context({
       SessionTranscriptContext: { chatWindow: true, historyLimit: 1 },
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           type: "chat_window",
@@ -165,9 +165,22 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
-    expect(ctx.UntrustedStructuredContext?.[0]?.payload).toEqual({
+    expect(ctx.ChannelStructuredContext?.[0]?.payload).toEqual({
       messages: [{ body: "target", is_reply_target: true }],
     });
+  });
+
+  it("fails closed for an unscoped session key without a routed agent owner", async () => {
+    const ctx = context({ AgentId: undefined, SessionKey: "slack:channel:c1" });
+
+    await expect(
+      mergeSessionTranscriptContext({
+        ctx,
+        sessionKey: ctx.SessionKey!,
+        storePath: "/tmp/sessions.json",
+      }),
+    ).rejects.toThrow("Session transcript context requires an agent owner.");
+    expect(readRecent).not.toHaveBeenCalled();
   });
 
   it("skips canonical history for session-boundary commands", async () => {

@@ -2,9 +2,9 @@
  * Tests iOS push notification dispatch for exec approval requests.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
-import { createDeferred } from "../test-utils/deferred.js";
 
 const listDevicePairingMock = vi.fn();
 const loadApnsRegistrationMock = vi.fn();
@@ -85,6 +85,7 @@ function pluginApprovalRequest(id: string): PluginApprovalRequest {
     request: {
       title: "Install plugin update",
       description: "Allow the plugin to update its managed package.",
+      detail: '{"package":"@openclaw/example","token":"review-only"}',
       severity: "warning",
       toolName: "plugins.update",
     },
@@ -403,6 +404,7 @@ describe("createExecApprovalIosPushDelivery", () => {
           description: "Allow the plugin to update its managed package.",
         }),
       );
+      expect(sendApnsPluginApprovalAlertMock.mock.calls[0]?.[0]).not.toHaveProperty("detail");
     });
 
     it("uses the shared relay delivery plan for plugin alerts", async () => {

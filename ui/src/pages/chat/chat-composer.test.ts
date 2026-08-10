@@ -51,6 +51,36 @@ function renderComposer(overrides: Partial<ComposerProps> = {}) {
   return { container, props: composerProps };
 }
 
+describe("suggestion composer", () => {
+  it("labels the send action as Suggest and emits ephemeral typing state", () => {
+    const onTypingChange = vi.fn();
+    const view = renderComposer({
+      suggestionComposer: true,
+      draft: "",
+      onTypingChange,
+    });
+    expect(view.container.querySelector(".agent-chat__control-label")?.textContent).toContain(
+      "Suggest",
+    );
+    expect(
+      view.container.querySelector<HTMLButtonElement>('button[aria-label="Add attachment"]')
+        ?.disabled,
+    ).toBe(true);
+
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    textarea.value = "hello";
+    textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    expect(onTypingChange).toHaveBeenNthCalledWith(1, true);
+    expect(onTypingChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
 function questionPrompt(id: string, question: string): QuestionPrompt {
   return {
     id,
@@ -166,11 +196,15 @@ describe("renderChatComposer controls", () => {
     expect(online.container.querySelector(".agent-chat__offline-hint")).toBeNull();
   });
 
-  it("renders and invokes the archived-session banner action", () => {
+  it("replaces the composer with the archived-session notice", () => {
     const onAction = vi.fn();
+    const onAbort = vi.fn();
     const { container } = renderComposer({
       canSend: false,
+      canAbort: true,
+      onAbort,
       disabledBanner: {
+        kind: "composer-replacement",
         text: "This session is archived. Unarchive it to continue the conversation.",
         actionLabel: "Unarchive",
         onAction,
@@ -179,8 +213,23 @@ describe("renderChatComposer controls", () => {
 
     const banner = container.querySelector(".agent-chat__disabled-banner");
     expect(banner?.textContent).toContain("This session is archived.");
+    expect(container.querySelector(".agent-chat__input")).toBeNull();
+    expect(container.querySelector("textarea")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAction).toHaveBeenCalledOnce();
+    button(container, t("chat.runControls.stopGenerating")).click();
+    expect(onAbort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the disabled composer mounted for a catalog read-only state", () => {
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "This catalog session is read-only.",
+    });
+
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
   it("switches the primary action between voice, send, queue, and stop", () => {
@@ -809,6 +858,11 @@ describe("renderChatComposer status", () => {
     expect(container.querySelector(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
       "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
     );
+    expect(
+      container.querySelector(".compaction-indicator--fallback")?.getAttribute("aria-label"),
+    ).toBe(
+      "Selected: fireworks/minimax-m2p5 • Active: deepinfra/moonshotai/Kimi-K2.5 • Attempts: fireworks/minimax-m2p5: rate limit",
+    );
   });
 
   it("renders an expandable live plan checklist and hides it when idle", () => {
@@ -843,194 +897,5 @@ describe("renderChatComposer status", () => {
 
     const idle = renderComposer({ planStatus });
     expect(idle.container.querySelector(".plan-checklist")).toBeNull();
-  });
-
-  it("renders session context and plan usage through the full composer", () => {
-    const { container } = renderComposer({
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 46_000,
-            contextTokens: 200_000,
-          },
-        ],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
-            },
-          ],
-        },
-      },
-    });
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Thread context usage: 46k of 200k (23%)",
-    );
-    expect(container.querySelector(".context-usage__plan-header")?.textContent).toContain(
-      "Plan usage",
-    );
-    expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
-  });
-
-  it("renders plan usage before session metrics arrive", () => {
-    const { container } = renderComposer({
-      sessions: null,
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Usage Remaining",
-    );
-    expect(container.querySelector(".context-usage__bar")).toBeNull();
-    expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
-    expect(
-      container
-        .querySelector<HTMLAnchorElement>("[data-chat-provider-usage='true']")
-        ?.getAttribute("href"),
-    ).toBe("/control/usage");
-  });
-
-  it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
-    const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
-    const usage = {
-      providerId: "anthropic",
-      plan: "Max (20x)",
-      windows: [
-        { label: "5h", usedPercent: 22, resetAt },
-        { label: "Week", usedPercent: 25 },
-        { label: "Fable", usedPercent: 92 },
-      ],
-      billing: [{ type: "budget" as const, used: 157.85, limit: 400, unit: "USD" }],
-    };
-    const { container } = renderComposer({
-      messages: [{ role: "user", content: "hi" }],
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            inputTokens: 2,
-            outputTokens: 3,
-            totalTokens: 78_700,
-            contextTokens: 1_000_000,
-            estimatedCostUsd: 0.02,
-            model: "claude-fable-5",
-            modelProvider: "anthropic",
-          },
-        ],
-        defaults: { contextTokens: 1_000_000 },
-      } as never,
-      providerUsage: {
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "anthropic",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
-              usage,
-            },
-            {
-              provider: "claude-cli",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
-              usage,
-            },
-          ],
-        },
-      },
-    });
-
-    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
-    expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
-    expect(
-      [...container.querySelectorAll(".context-usage__limit")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual([
-      "5-hour limit Resets 2h 22%",
-      "Weekly · all models 25%",
-      "Fable 92%",
-      "Usage credits $157.85 of $400.00",
-    ]);
-    expect(container.querySelector(".context-usage__stats")).not.toBeNull();
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
-    expect(container.textContent).not.toContain("Est. cost");
-  });
-
-  it("warns on fresh high usage but keeps stale usage approximate and nonactionable", () => {
-    const onCompact = vi.fn();
-    let view = renderComposer({
-      onCompact,
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 190_000,
-            contextTokens: 200_000,
-          },
-        ],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-    });
-    expect(view.container.querySelector(".context-ring")?.textContent?.trim()).toBe("95%");
-    expect(view.container.querySelector(".context-ring")?.classList).toContain(
-      "context-ring--warning",
-    );
-    view.container.querySelector<HTMLButtonElement>(".context-ring__action")?.click();
-    expect(onCompact).toHaveBeenCalledOnce();
-
-    view = renderComposer({
-      onCompact,
-      sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 190_000,
-            totalTokensFresh: false,
-            contextTokens: 200_000,
-          },
-        ],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-    });
-    expect(view.container.querySelector(".context-ring")?.textContent?.trim()).toBe("~95%");
-    expect(view.container.querySelector(".context-ring")?.classList).not.toContain(
-      "context-ring--warning",
-    );
-    expect(view.container.querySelector(".context-ring__action")).toBeNull();
   });
 });

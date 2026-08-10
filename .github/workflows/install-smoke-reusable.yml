@@ -82,7 +82,7 @@ jobs:
           NODE
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
@@ -124,13 +124,13 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -244,13 +244,13 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.preflight.outputs.workflow_repository }}
           ref: ${{ needs.preflight.outputs.workflow_sha }}
@@ -258,7 +258,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -351,7 +351,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
@@ -369,13 +369,13 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.preflight.outputs.workflow_repository }}
           ref: ${{ needs.preflight.outputs.workflow_sha }}
@@ -419,34 +419,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -565,21 +540,21 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - name: Checkout trusted installer harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.preflight.outputs.workflow_repository }}
           ref: ${{ needs.preflight.outputs.workflow_sha }}
           persist-credentials: false
 
       - name: Checkout candidate CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           path: candidate
           persist-credentials: false
 
       - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.preflight.outputs.workflow_repository }}
           ref: ${{ needs.preflight.outputs.workflow_sha }}
@@ -623,34 +598,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -680,7 +630,7 @@ jobs:
         run: docker image inspect "$IMAGE_REF" >/dev/null
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -754,13 +704,13 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.preflight.outputs.workflow_repository }}
           ref: ${{ needs.preflight.outputs.workflow_sha }}
@@ -804,34 +754,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -883,13 +808,13 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 

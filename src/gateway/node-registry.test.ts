@@ -7,6 +7,8 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -19,6 +21,35 @@ let testNodeHostCommands: NonNullable<
   ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
 > = [];
 const activeTestRegistries = new Set<NodeRegistry>();
+
+type TestNodeSocket = {
+  readyState: number;
+  bufferedAmount: number;
+  send: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+};
+
+const NON_OPEN_NODE_SOCKET_STATES = [
+  { state: "connecting", readyState: WebSocket.CONNECTING },
+  { state: "closing", readyState: WebSocket.CLOSING },
+  { state: "closed", readyState: WebSocket.CLOSED },
+];
+
+function createTestNodeSocket(
+  sent: string[] = [],
+  readyState: TestNodeSocket["readyState"] = WebSocket.OPEN,
+): TestNodeSocket {
+  return {
+    readyState,
+    bufferedAmount: 0,
+    send: vi.fn((frame: unknown) => {
+      if (typeof frame === "string") {
+        sent.push(frame);
+      }
+    }),
+    close: vi.fn(),
+  };
+}
 
 function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
   const registry = new NodeRegistry(options);
@@ -60,15 +91,7 @@ function makeClient(
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket:
-      opts.socket ??
-      ({
-        send(frame: unknown) {
-          if (typeof frame === "string") {
-            sent.push(frame);
-          }
-        },
-      } as unknown as GatewayWsClient["socket"]),
+    socket: opts.socket ?? (createTestNodeSocket(sent) as unknown as GatewayWsClient["socket"]),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -105,6 +128,19 @@ function registerNodeSession(
 ) {
   const { pairingIdentity = "identity-a", ...registration } = opts;
   return registry.register(client, { ...registration, pairingIdentity });
+}
+
+function registerTestNodeSocket(
+  registry: NodeRegistry,
+  socket: TestNodeSocket,
+  sent: string[] = [],
+) {
+  return registerNodeSession(
+    registry,
+    makeClient("conn-1", "node-1", sent, {
+      socket: socket as unknown as GatewayWsClient["socket"],
+    }),
+  );
 }
 
 function registerDemoNodePluginTool(params: {
@@ -592,6 +628,44 @@ describe("gateway/node-registry", () => {
     await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
   });
 
+  it("does not advance streamed input sequence when the node websocket is closing", async () => {
+    const registry = createNodeRegistry();
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames);
+    registerTestNodeSocket(registry, socket, frames);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "codex.terminal.resume.v1",
+      timeoutMs: 0,
+      signal: controller.signal,
+      onProgress: () => {},
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    socket.readyState = WebSocket.CLOSING;
+    expect(() => registry.sendInvokeInput(invokeId, { kind: "data", data: "lost" })).toThrow(
+      "failed to send node invoke input",
+    );
+    expect(frames).toHaveLength(1);
+
+    socket.readyState = WebSocket.OPEN;
+    registry.sendInvokeInput(invokeId, { kind: "data", data: "delivered" });
+    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+      event: "node.invoke.input",
+      payload: {
+        id: invokeId,
+        nodeId: "node-1",
+        seq: 0,
+        payloadJSON: JSON.stringify({ kind: "data", data: "delivered" }),
+      },
+    });
+
+    controller.abort();
+    await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
+  });
+
   it("rejects node invoke input above 16 KiB", async () => {
     const registry = new NodeRegistry();
     const frames = registerNode(registry);
@@ -816,6 +890,143 @@ describe("gateway/node-registry", () => {
     await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
   });
 
+  it("does not probe an invalidated node connection", async () => {
+    const registry = createTestNodeRegistry();
+    const socket = makeConnectivitySocket(true);
+    const ping = vi.spyOn(socket, "ping");
+    const client = makeClient("conn-invalidated", "node-1", [], { socket });
+    registerNodeSession(registry, client, {});
+    client.invalidated = true;
+
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_CONNECTED", message: "node not connected" },
+    });
+    expect(ping).not.toHaveBeenCalled();
+  });
+
+  it("does not report an old websocket as connected after its node reconnects", async () => {
+    const registry = createTestNodeRegistry();
+    const oldSocket = makeConnectivitySocket(false);
+    registerNodeSession(registry, makeClient("conn-old", "node-1", [], { socket: oldSocket }), {});
+
+    const connectivity = registry.checkConnectivity("node-1", 50);
+    const replacement = registerNodeSession(
+      registry,
+      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      {},
+    );
+    (oldSocket as unknown as EventEmitter).emit("pong");
+
+    await expect(connectivity).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "NOT_CONNECTED",
+        message: "node connection changed during connectivity probe",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("does not report a replaced polling transport as connected", async () => {
+    const registry = createTestNodeRegistry();
+    let resolveProbe: ((result: { ok: true }) => void) | undefined;
+    const transportProbe = new Promise<{ ok: true }>((resolve) => {
+      resolveProbe = resolve;
+    });
+    registry.registerTransport(
+      makeClient("conn-old", "node-1"),
+      { pairingIdentity: "identity-a" },
+      {
+        send: () => true,
+        sendRaw: () => true,
+        checkConnectivity: () => transportProbe,
+      },
+    );
+
+    const connectivity = registry.checkConnectivity("node-1", 50);
+    const replacement = registerNodeSession(
+      registry,
+      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      {},
+    );
+    resolveProbe?.({ ok: true });
+
+    await expect(connectivity).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "NOT_CONNECTED",
+        message: "node connection changed during connectivity probe",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+  });
+
+  it("keeps connectivity and invocations isolated across repeated node reconnects", async () => {
+    const registry = createTestNodeRegistry();
+    const makeTrackedSocket = (sent: string[]) => {
+      const trackedSocket = makeConnectivitySocket(false);
+      (trackedSocket as unknown as { send: (frame: unknown) => void }).send = (frame) => {
+        if (typeof frame === "string") {
+          sent.push(frame);
+        }
+      };
+      return trackedSocket;
+    };
+    let frames: string[] = [];
+    let socket = makeTrackedSocket(frames);
+    registerNodeSession(registry, makeClient("conn-0", "node-1", frames, { socket }), {});
+
+    for (let attempt = 1; attempt <= 50; attempt += 1) {
+      const previousSocket = socket;
+      const previousFrames = frames;
+      const connectivity = registry.checkConnectivity("node-1", 1_000);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+      });
+      const request = JSON.parse(previousFrames[0] ?? "{}") as {
+        payload?: { id?: string };
+      };
+      expect(request.payload?.id).toEqual(expect.any(String));
+
+      frames = [];
+      socket = makeTrackedSocket(frames);
+      const replacement = registerNodeSession(
+        registry,
+        makeClient(`conn-${attempt}`, "node-1", frames, { socket }),
+        {},
+      );
+      (previousSocket as unknown as EventEmitter).emit("pong");
+
+      await expect(connectivity).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "NOT_CONNECTED",
+          message: "node connection changed during connectivity probe",
+        },
+      });
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "DISCONNECTED",
+          message: "node disconnected (debug.ping)",
+        },
+      });
+      expect(
+        registry.handleInvokeResult({
+          id: request.payload?.id ?? "",
+          nodeId: "node-1",
+          connId: `conn-${attempt - 1}`,
+          ok: true,
+        }),
+      ).toBe(false);
+      expect(registry.get("node-1")).toBe(replacement);
+    }
+  });
+
   it("reports stale node websocket connectivity before invoke timeout", async () => {
     const registry = createTestNodeRegistry();
     registerNodeSession(
@@ -834,7 +1045,7 @@ describe("gateway/node-registry", () => {
     });
   });
 
-  it("keeps a reconnected node when the old connection unregisters", async () => {
+  it("settles zero-timeout invokes when a node reconnects before its old connection closes", async () => {
     const registry = createTestNodeRegistry();
     const oldFrames: string[] = [];
     const newClient = makeClient("conn-new", "node-1");
@@ -843,9 +1054,8 @@ describe("gateway/node-registry", () => {
     const oldInvoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",
-      timeoutMs: 1_000,
+      timeoutMs: 0,
     });
-    const oldDisconnected = oldInvoke.catch((err: unknown) => err);
     const oldRequest = JSON.parse(oldFrames[0] ?? "{}") as { payload?: { id?: string } };
     const newSession = registerNodeSession(registry, newClient, {});
 
@@ -857,14 +1067,45 @@ describe("gateway/node-registry", () => {
         ok: true,
       }),
     ).toBe(false);
+    await expect(oldInvoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (system.run)",
+      },
+    });
+    expect(registry.get("node-1")).toBe(newSession);
     expect(registry.unregister("conn-old")).toBeNull();
     expect(registry.get("node-1")).toBe(newSession);
-    await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+  });
+
+  it("settles zero-timeout MCP calls without disconnecting the replacement node", async () => {
+    const registry = createNodeRegistry();
+    registerNodeSession(registry, makeClient("conn-old", "node-1"));
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "mcp.tools.call.v1",
+      timeoutMs: 0,
+    });
+
+    const replacement = registerNodeSession(registry, makeClient("conn-new", "node-1"));
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "MCP_SERVER_UNAVAILABLE",
+        message: "node host disconnected during MCP tool call",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    expect(registry.unregister("conn-old")).toBeNull();
+    expect(registry.get("node-1")).toBe(replacement);
   });
 
   it("rejects invoke when the node connection changed before dispatch", async () => {
     const registry = createNodeRegistry();
     const replacementFrames: string[] = [];
+    const onDispatchReady = vi.fn();
     registerNodeSession(registry, makeClient("conn-old", "node-1"), {});
     registerNodeSession(registry, makeClient("conn-new", "node-1", replacementFrames), {});
 
@@ -873,12 +1114,14 @@ describe("gateway/node-registry", () => {
         nodeId: "node-1",
         expectedConnId: "conn-old",
         command: "system.run",
+        onDispatchReady,
       }),
     ).resolves.toEqual({
       ok: false,
       error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
     });
     expect(replacementFrames).toEqual([]);
+    expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
   it("matches pending system.run events to the issuing connection", async () => {
@@ -1003,6 +1246,28 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("returns unavailable without dispatching an invoke to a closing node websocket", async () => {
+    const registry = createNodeRegistry();
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames, WebSocket.CLOSING);
+    registerTestNodeSocket(registry, socket, frames);
+    const onDispatchReady = vi.fn();
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+        onDispatchReady,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(onDispatchReady).not.toHaveBeenCalled();
+  });
+
   it("forwards the agent session that owns a stateful node invoke", async () => {
     const registry = createNodeRegistry();
     const frames = registerNode(registry);
@@ -1028,7 +1293,7 @@ describe("gateway/node-registry", () => {
     await expect(invoke).resolves.toMatchObject({ ok: true });
   });
 
-  it("rejects zero-timeout invokes when the node disconnects", async () => {
+  it("returns a structured result when a zero-timeout invoke disconnects", async () => {
     const registry = createNodeRegistry();
     registerNode(registry);
     const invoke = registry.invoke({
@@ -1036,12 +1301,120 @@ describe("gateway/node-registry", () => {
       command: "debug.ping",
       timeoutMs: 0,
     });
-    const disconnected = invoke.catch((error: unknown) => error);
 
     expect(registry.unregister("conn-1")).toBe("node-1");
-    const error = await disconnected;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("node disconnected (debug.ping)");
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (debug.ping)",
+      },
+    });
+  });
+
+  it("accepts results before the hard deadline and times out results at the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const beforeDispatch = vi.fn();
+
+    const beforeDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      onDispatchReady: beforeDispatch,
+    });
+    const beforeRequest = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    vi.setSystemTime(1_099);
+    expect(
+      registry.handleInvokeResult({
+        id: beforeRequest.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    await expect(beforeDeadline).resolves.toMatchObject({ ok: true });
+
+    vi.setSystemTime(2_000);
+    const atDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+    });
+    const atRequest = JSON.parse(frames[1] ?? "{}") as { payload?: { id?: string } };
+    vi.setSystemTime(2_100);
+    const terminalResult = {
+      id: atRequest.payload?.id ?? "",
+      nodeId: "node-1",
+      connId: "conn-1",
+      ok: true,
+    };
+
+    expect(registry.handleInvokeResult(terminalResult)).toBe(false);
+    expect(registry.handleInvokeResult(terminalResult)).toBe(false);
+    await expect(atDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+  });
+
+  it("prefers an elapsed hard deadline when disconnect beats the timer callback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+    });
+
+    vi.setSystemTime(1_100);
+    expect(registry.unregister("conn-1")).toBe("node-1");
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+  });
+
+  it("prefers an elapsed hard deadline when abort beats the timer callback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const registry = createNodeRegistry();
+    registerNode(registry);
+
+    const beforeDeadlineController = new AbortController();
+    const beforeDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      signal: beforeDeadlineController.signal,
+    });
+    vi.setSystemTime(1_099);
+    beforeDeadlineController.abort();
+    await expect(beforeDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "ABORTED", message: "node invoke cancelled" },
+    });
+
+    vi.setSystemTime(2_000);
+    const atDeadlineController = new AbortController();
+    const atDeadline = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 100,
+      signal: atDeadlineController.signal,
+    });
+    vi.setSystemTime(2_100);
+    atDeadlineController.abort();
+    await expect(atDeadline).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
   });
 
   it("orders streamed invoke progress and drops state after the final result", async () => {
@@ -1309,12 +1682,17 @@ describe("gateway/node-registry", () => {
       idleTimeoutMs: 100,
       onProgress: () => {},
     });
-    const disconnected = invoke.catch((error: unknown) => error);
     const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
     const invokeId = request.payload?.id ?? "";
 
     expect(registry.unregister("conn-1")).toBe("node-1");
-    await expect(disconnected).resolves.toBeInstanceOf(Error);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "DISCONNECTED",
+        message: "node disconnected (agent.cli.claude.run.v1)",
+      },
+    });
     expect(
       registry.handleInvokeProgress({
         invokeId,
@@ -1364,6 +1742,79 @@ describe("gateway/node-registry", () => {
         chunk: "late",
       }),
     ).toBe(false);
+  });
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards cancellation of first-party non-streaming %s calls",
+    async (command) => {
+      const registry = createNodeRegistry();
+      const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+      const controller = new AbortController();
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+      controller.abort();
+
+      await expect(invoke).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ABORTED" },
+      });
+      expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+        event: "node.invoke.cancel",
+        payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+      });
+    },
+  );
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards timeouts of first-party non-streaming %s calls",
+    async (command) => {
+      vi.useFakeTimers();
+      try {
+        const registry = createNodeRegistry();
+        const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+        const invoke = registry.invoke({ nodeId: "node-1", command, timeoutMs: 100 });
+        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await expect(invoke).resolves.toMatchObject({
+          ok: false,
+          error: { code: "TIMEOUT" },
+        });
+        expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+          event: "node.invoke.cancel",
+          payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves legacy non-streaming node cancellation behavior", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(invoke).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ABORTED" },
+    });
+    expect(frames).toHaveLength(1);
   });
 
   it("cancels the node when a streamed progress consumer fails", async () => {
@@ -1688,6 +2139,32 @@ describe("gateway/node-registry", () => {
     ]);
   });
 
+  it.each(NON_OPEN_NODE_SOCKET_STATES)(
+    "rejects normal event sends while the node websocket is $state",
+    ({ readyState }) => {
+      const registry = createTestNodeRegistry();
+      const socket = createTestNodeSocket([], readyState);
+      registerTestNodeSocket(registry, socket);
+
+      expect(registry.sendEvent("node-1", "node.test", { ok: true })).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(NON_OPEN_NODE_SOCKET_STATES)(
+    "rejects raw event sends while the node websocket is $state",
+    ({ readyState }) => {
+      const registry = createTestNodeRegistry();
+      const socket = createTestNodeSocket([], readyState);
+      registerTestNodeSocket(registry, socket);
+
+      expect(
+        registry.sendEventRaw("node-1", "node.test", serializeEventPayload({ ok: true })),
+      ).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+    },
+  );
+
   it("drops a delayed voice-wake snapshot after persistent generation changes", async () => {
     let resolveCurrent!: (state: { identity: string; generation?: string } | undefined) => void;
     const currentPairingState = new Promise<{ identity: string; generation?: string } | undefined>(
@@ -1748,17 +2225,12 @@ describe("gateway/node-registry", () => {
     const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
     const registry = createTestNodeRegistry();
     const socket = {
+      readyState: WebSocket.OPEN,
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
       close: vi.fn(),
     };
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        socket: socket as unknown as GatewayWsClient["socket"],
-      }),
-      {},
-    );
+    registerTestNodeSocket(registry, socket);
     const payload = serializeEventPayload({ foo: "bar" });
 
     try {

@@ -1,3 +1,5 @@
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+
 export type SandboxHostCsp = {
   connectDomains?: string[];
   resourceDomains?: string[];
@@ -72,12 +74,6 @@ const RESOLVE_LEADING_DOCTYPE_END_SOURCE = `(html) => {
   }
   return 0;
 }`;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function normalizeDomains(
   value: unknown,

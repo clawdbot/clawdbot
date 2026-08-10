@@ -1,14 +1,20 @@
 // Telegram tests cover exec approvals plugin behavior.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type {
   OpenClawConfig,
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
@@ -21,7 +27,7 @@ import {
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 
-const tempDirs: string[] = [];
+const tempWorkspaces: TempWorkspaceSync[] = [];
 
 type TelegramExecApprovalRequest = Parameters<
   typeof shouldHandleTelegramExecApprovalRequest
@@ -29,16 +35,10 @@ type TelegramExecApprovalRequest = Parameters<
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  for (const workspace of tempWorkspaces.splice(0)) {
+    workspace.cleanup();
   }
 });
-
-function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-exec-approvals-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>["execApprovals"],
@@ -232,7 +232,12 @@ describe("telegram exec approvals", () => {
   });
 
   it("scopes non-telegram turn sources to the stored telegram account", async () => {
-    const tmpDir = createTempDir();
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-telegram-exec-approvals-",
+    });
+    tempWorkspaces.push(workspace);
+    const tmpDir = workspace.dir;
     const storePath = path.join(tmpDir, "sessions.json");
     await upsertSessionEntry({
       storePath,
@@ -240,13 +245,10 @@ describe("telegram exec approvals", () => {
       entry: {
         sessionId: "main",
         updatedAt: 1,
-        origin: {
-          provider: "telegram",
-          accountId: "ops",
-        },
-        lastChannel: "slack",
-        lastTo: "channel:C999",
-        lastAccountId: "work",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", accountId: "ops" },
+          origin: { provider: "telegram", accountId: "ops" },
+        }),
       },
     });
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });

@@ -8,7 +8,7 @@ import {
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
-import { pruneStaleEntries } from "./store.js";
+import { pruneStaleEntries } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionRegistryMaintenanceStoreSummary = {
@@ -79,7 +79,11 @@ function pruneSessionRegistryStore(params: {
     log: false,
     onPruned: params.removals
       ? ({ key, entry }) => {
-          params.removals?.push({ sessionKey: key, expectedEntry: entry });
+          params.removals?.push({
+            sessionKey: key,
+            expectedEntry: entry,
+            archiveRemovedTranscript: true,
+          });
         }
       : undefined,
     preserveKeys,

@@ -63,6 +63,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         self.inject(into: menu)
         self.injectNodes(into: menu)
+        MenuGatewaysInjector.shared.inject(into: menu)
 
         // Refresh in the background for the next open. Rebuilding custom menu
         // rows while AppKit is tracking the menu causes visible flicker.
@@ -215,6 +216,13 @@ extension MenuSessionsInjector {
             cursor += 1
         }
 
+        if let notice = self.nodesStore.persistentServiceNotice {
+            menu.insertItem(
+                self.makeMessageItem(text: notice, symbolName: "info.circle", width: width),
+                at: cursor)
+            cursor += 1
+        }
+
         if case .connecting = ControlChannel.shared.state {
             menu.insertItem(
                 self.makeMessageItem(text: "Connecting…", symbolName: "circle.dashed", width: width),
@@ -288,6 +296,7 @@ extension MenuSessionsInjector {
         return self.sortedNodeEntries().isEmpty
             || self.nodesStore.lastError?.nonEmpty != nil
             || self.nodesStore.statusMessage?.nonEmpty != nil
+            || self.nodesStore.persistentServiceNotice != nil
     }
 
     private func buildContextSubmenu(

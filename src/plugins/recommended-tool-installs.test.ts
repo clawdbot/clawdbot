@@ -17,6 +17,19 @@ describe("recommended tool installs", () => {
       "grok-build",
     ]);
     expect(new Set(installs.map((entry) => entry.id)).size).toBe(installs.length);
+    expect(
+      Object.fromEntries(
+        installs.flatMap((entry) => (entry.brandId ? [[entry.id, entry.brandId]] : [])),
+      ),
+    ).toEqual({
+      ollama: "ollama",
+      "claude-code": "claude",
+      "codex-cli": "openai",
+      opencode: "opencode",
+      "gemini-cli": "gemini",
+      "kimi-code": "kimi",
+      "grok-build": "grok",
+    });
     for (const entry of installs) {
       expect(entry.label).not.toBe("");
       expect(entry.hint).not.toBe("");

@@ -1,4 +1,5 @@
 import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
@@ -10,6 +11,7 @@ import {
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { visitSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntryReadOnly } from "./session-utils.js";
 
@@ -42,12 +44,6 @@ type TranscriptResult = Omit<ReconstructionData, "toolInput"> & { modelToolName:
 type TranscriptResultRead =
   | { kind: "restorable"; value: TranscriptResult }
   | { kind: "unavailable" };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key];
@@ -350,15 +346,7 @@ export async function restoreMcpAppView(params: {
 }): Promise<ReconstructionResult | undefined> {
   const key = `${params.sessionKey}\0${params.viewId}`;
   const inFlight = getRestoreInFlight();
-  const existing = inFlight.get(key);
-  if (existing) {
-    return await existing;
-  }
-  const pending = restoreMcpAppViewOnce(params).finally(() => {
-    if (inFlight.get(key) === pending) {
-      inFlight.delete(key);
-    }
+  return await getOrCreatePromise(inFlight, key, () => restoreMcpAppViewOnce(params), {
+    evictOnSettled: true,
   });
-  inFlight.set(key, pending);
-  return await pending;
 }

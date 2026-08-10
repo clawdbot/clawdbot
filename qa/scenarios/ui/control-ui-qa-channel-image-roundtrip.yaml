@@ -24,7 +24,7 @@ scenario:
     - extensions/qa-lab/src/scenario-runtime-api.ts
     - extensions/qa-lab/src/suite.ts
     - extensions/qa-lab/src/web-runtime.ts
-    - ui/src/ui/views/chat.ts
+    - ui/src/pages/chat/chat-view.ts
   gatewayRuntime:
     forwardHostHome: true
   execution:

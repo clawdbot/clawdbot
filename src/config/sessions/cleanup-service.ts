@@ -27,7 +27,6 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -291,8 +290,14 @@ function pruneMissingTranscriptEntries(params: {
     ) {
       continue;
     }
-    // Header-only supervised transcripts are valid while their first native turn is pending.
-    if (parseAgentSessionKey(key) && entry.sessionId === key && !entry.sessionFile) {
+    const legacySessionFile = (entry as { sessionFile?: unknown }).sessionFile;
+    // Explicitly pending sessions and their shipped pre-flag shape may not have a first turn yet.
+    if (
+      parseAgentSessionKey(key) &&
+      (entry.initializationPending === true ||
+        (entry.sessionId === key &&
+          (typeof legacySessionFile !== "string" || !legacySessionFile.trim())))
+    ) {
       continue;
     }
     if (!entry?.sessionId) {
@@ -355,7 +360,7 @@ async function previewStoreCleanup(params: {
     createIfMissing: !params.dryRun,
   });
   // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
-  const previewStore = cloneSessionStoreRecord(beforeStore);
+  const previewStore = structuredClone(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
@@ -547,7 +552,7 @@ export async function runSessionsCleanup(params: {
           onPruned: (sessionKey, entry) => {
             missingRemovals.push({
               sessionKey,
-              expectedEntry: cloneSessionStoreRecord({ entry }).entry,
+              expectedEntry: structuredClone(entry),
             });
           },
         });
@@ -561,7 +566,7 @@ export async function runSessionsCleanup(params: {
           onRetired: (sessionKey, entry) => {
             dmScopeRetiredRemovals.push({
               sessionKey,
-              expectedEntry: cloneSessionStoreRecord({ entry }).entry,
+              expectedEntry: structuredClone(entry),
               archiveRemovedTranscript: true,
             });
           },
@@ -575,12 +580,10 @@ export async function runSessionsCleanup(params: {
         storePath: target.storePath,
         removals,
         activeSessionKey: opts.activeKey,
-        preserveActiveWork: true,
         maintenanceOverride: {
           ...maintenance,
           mode,
         },
-        restrictArchivedTranscriptsToStoreDir: true,
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const appliedUnreferencedArtifacts =

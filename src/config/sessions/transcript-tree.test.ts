@@ -116,6 +116,38 @@ describe("session transcript tree helpers", () => {
     expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([]);
   });
 
+  it("retains a reset kept tail before a disjoint selected branch", () => {
+    const keptUser = { type: "message", id: "kept-user", parentId: null };
+    const keptAssistant = {
+      type: "message",
+      id: "kept-assistant",
+      parentId: keptUser.id,
+    };
+    const reset = {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: keptAssistant.id,
+      firstKeptEntryId: keptUser.id,
+    };
+    const branchUser = { type: "message", id: "branch-user", parentId: null };
+    const leafControl = {
+      type: "leaf",
+      id: "branch-leaf",
+      parentId: reset.id,
+      targetId: branchUser.id,
+    };
+
+    expect(
+      selectSessionTranscriptLeafControlledPath([
+        keptUser,
+        keptAssistant,
+        reset,
+        branchUser,
+        leafControl,
+      ]),
+    ).toEqual([keptUser, keptAssistant, reset, { ...branchUser, parentId: reset.id }]);
+  });
+
   it("keeps visible history when the next append starts at the root", () => {
     const activeRoot = { type: "message", id: "active-root", parentId: null };
     const leafControl = {
