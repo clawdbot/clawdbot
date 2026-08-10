@@ -244,7 +244,6 @@ describe("command-path-policy", () => {
 
   it.each([
     ["approvals", "pending"],
-    ["commitments"],
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
@@ -254,7 +253,6 @@ describe("command-path-policy", () => {
     expectResolvedPolicy(commandPath, {
       configGuard: "skip",
       loadPlugins: "never",
-      ...(commandPath[0] === "commitments" ? { ensureCliPath: false } : {}),
       networkProxy: "bypass",
     });
   });

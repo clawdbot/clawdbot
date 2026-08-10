@@ -9,8 +9,6 @@ import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
   FailoverError,
@@ -19,6 +17,8 @@ import {
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
 } from "./failover-error.js";
+import { isLikelyContextOverflowError } from "./failover/classify.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { MissingAgentHarnessError, isAgentHarnessPreflightError } from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";

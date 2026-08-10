@@ -1,7 +1,6 @@
 import "../../components/modal-dialog.ts";
 import { html, nothing } from "lit";
 import type {
-  SessionObserverDigest,
   SessionSuggestionEvent,
   SessionTypingEvent,
   TaskSuggestionEvent,
@@ -273,23 +272,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
 
     setChatError(state, null);
     if (preservesBoard) {
-      // Captured before the await: the reset can land and refresh session rows
-      // mid-flight, and invalidating the post-reset id would eat fresh digests.
-      const preResetSessionId = state.sessionsResult?.sessions.find((row) =>
-        areUiSessionKeysEquivalent(row.key, previousSessionKey),
-      )?.sessionId;
       const resetResult = await clearChatHistory(state);
-      if (resetResult !== "failed") {
-        // A reset reuses the session key; prior-run digests must not survive
-        // into the fresh conversation or keep injecting the observer card.
-        this.observerDigestHistory.markReset(
-          this.resolveObserverDigestHistoryKey(previousSessionKey),
-          preResetSessionId,
-        );
-        // Recompute rather than null: the builtin snapshot also carries the
-        // swarm card, which must survive an observer-only invalidation.
-        this.refreshBuiltinBoardSnapshot();
-      }
       return resetResult !== "failed";
     }
     const nextSessionKey = await sessions.create(createParams);
@@ -594,9 +577,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
           }
           if (event.event === "session.typing" && event.payload) {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
-          }
-          if (event.event === "session.observer" && event.payload) {
-            this.recordObserverDigest(event.payload as SessionObserverDigest);
           }
           handlePageGatewayEvent(state, event);
         }

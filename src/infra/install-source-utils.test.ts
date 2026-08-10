@@ -378,7 +378,13 @@ describe("packNpmSpecToArchive", () => {
       ]),
     });
 
-    const result = await runPack("openclaw-plugin@1.2.3", cwd);
+    const signal = new AbortController().signal;
+    const result = await packNpmSpecToArchive({
+      spec: "openclaw-plugin@1.2.3",
+      timeoutMs: 1000,
+      cwd,
+      signal,
+    });
 
     expect(result).toEqual({
       ok: true,
@@ -396,6 +402,8 @@ describe("packNpmSpecToArchive", () => {
       {
         cwd,
         timeoutMs: 300_000,
+        signal,
+        killProcessTree: true,
         env: {
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
           NPM_CONFIG_IGNORE_SCRIPTS: "true",

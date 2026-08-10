@@ -6,13 +6,9 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
+import { isCronSessionKey } from "../lib/session-display.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import {
-  compareSessionRowsByUpdatedAt,
-  filterVisibleSessionRows,
-  sessionMatchesArchivedFilter,
-} from "../lib/sessions/index.ts";
+import { filterVisibleSessionRows, sessionMatchesArchivedFilter } from "../lib/sessions/index.ts";
 import {
   composerDraftSearch,
   resolveSessionPreferredFace,
@@ -20,7 +16,6 @@ import {
 } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
@@ -34,6 +29,8 @@ import {
   applySidebarSessionCreatorFilter,
   buildReconciledSidebarZone,
   buildSidebarSessionNavigationState,
+  compareSidebarSessionRowsByMode,
+  collectKnownSidebarSessionCatalogIds,
   collectKnownSidebarSessionGroups,
   extendSidebarSessionSelection,
   findSidebarMainSessionRow,
@@ -41,6 +38,8 @@ import {
   latestVisibleAgentSessionRow,
   partitionSidebarVisibleSections,
   promoteSidebarSessionCreatedOrder,
+  resolveSidebarAgentChipSubtitle,
+  resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
   toggleSidebarSessionSelection,
   type SidebarSessionNavigationState,
@@ -77,15 +76,35 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   protected readonly compareSidebarSessionRows = (
     a: SessionsListResult["sessions"][number],
     b: SessionsListResult["sessions"][number],
-  ) => {
-    if (this.sessionSortMode === "updated") {
-      return compareSessionRowsByUpdatedAt(a, b);
-    }
-    return (
-      (this.sessionData.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
-      (this.sessionData.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
-    );
-  };
+  ) =>
+    compareSidebarSessionRowsByMode({
+      a,
+      b,
+      sortMode: this.effectiveSessionSortMode(),
+      creators: this.sessionData.sessionsResult?.creators,
+      createdOrder: this.sessionData.sessionCreatedOrder,
+    });
+
+  private sessionPeopleSortCapability(): boolean | undefined {
+    return this.context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities;
+  }
+
+  sessionPeopleSortAvailable(): boolean {
+    return this.sessionPeopleSortCapability() === true;
+  }
+
+  effectiveSessionSortMode(): SidebarSessionSortMode {
+    // A reconnect can temporarily hide the capability. Render Created without
+    // discarding People until an authoritative single-identity hello arrives.
+    return this.sessionSortMode === "people" && !this.sessionPeopleSortAvailable()
+      ? "created"
+      : this.sessionSortMode;
+  }
+
+  setSessionSortMode(mode: SidebarSessionSortMode) {
+    this.sessionSortMode =
+      mode === "people" && this.sessionPeopleSortCapability() === false ? "created" : mode;
+  }
 
   @state() sessionCreatorFilterId: string | null = null;
 
@@ -165,6 +184,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     super.updated(changedProperties);
     const selectedId = this.sessionCreatorFilterId;
     const creators = this.sessionData.sessionsResult?.creators;
+    if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
+      this.setSessionSortMode("created");
+    }
     if (
       selectedId &&
       creators &&
@@ -494,14 +516,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   private agentResumeKey(agentId: string): string {
-    const latest = this.latestAgentSessionRow(agentId);
-    if (latest) {
-      return latest.key;
-    }
-    return buildAgentMainSessionKey({
+    return resolveSidebarAgentResumeKey(
+      this.latestAgentSessionRow(agentId),
       agentId,
-      mainKey: this.sessionMainKey(),
-    });
+      this.sessionMainKey(),
+    );
   }
 
   protected sessionMainKey(): string {
@@ -521,14 +540,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   agentChipSubtitle(agentId: string): string {
-    const latest = this.latestAgentSessionRow(agentId);
-    if (latest?.hasActiveRun) {
-      return t("agentChip.working");
-    }
-    if (latest) {
-      return resolveSessionDisplayName(latest.key, latest);
-    }
-    return t("agentChip.ready");
+    return resolveSidebarAgentChipSubtitle(this.latestAgentSessionRow(agentId));
   }
 
   switchChipAgent(agentId: string) {
@@ -565,21 +577,14 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
   }
 
-  knownSectionOrder(): string[] {
-    return [...(this.context?.sessions.state.sectionOrder ?? [])];
-  }
+  readonly knownSectionOrder = () => [...(this.context?.sessions.state.sectionOrder ?? [])];
 
   knownSessionCatalogIds(): string[] {
-    const loadedCatalogIds = this.sessionData.sessionCatalogs.map((catalog) => catalog.id);
-    if (this.sessionData.sessionCatalogRefreshStatus.hasLoaded) {
-      return loadedCatalogIds;
-    }
-    // Until the first authoritative list completes, progressive rows are only
-    // a partial view. Preserve stored slots so an unrelated drag cannot erase them.
-    const storedCatalogIds = this.knownSectionOrder().flatMap((sectionId) =>
-      sectionId.startsWith("catalog:") ? [sectionId.slice("catalog:".length)] : [],
-    );
-    return [...new Set([...loadedCatalogIds, ...storedCatalogIds])];
+    return collectKnownSidebarSessionCatalogIds({
+      loadedCatalogIds: this.sessionData.sessionCatalogs.map((catalog) => catalog.id),
+      hasLoaded: this.sessionData.sessionCatalogRefreshStatus.hasLoaded,
+      sectionOrder: this.knownSectionOrder(),
+    });
   }
 
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {

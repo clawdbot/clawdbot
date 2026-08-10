@@ -41,6 +41,7 @@ import {
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
+  shouldRunWrapperShadowingCheck,
   createNpmLockGuardCommand,
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
@@ -1469,6 +1470,7 @@ describe("scripts/changed-lanes", () => {
       "format changed files",
       "deprecated API usage",
       "plugin boundaries",
+      "wrapper shadowing",
       "package patch guard",
       // These live-Docker paths include `src/gateway/*.live.test.ts`, and the
       // full-tree knip scan sees test files, so a deleted last consumer can
@@ -1651,6 +1653,7 @@ describe("scripts/changed-lanes", () => {
       "--import",
       "check:deprecated-api-usage",
       "plugins:boundary-report:ci",
+      "check:wrapper-shadowing",
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
@@ -1916,6 +1919,28 @@ describe("scripts/changed-lanes", () => {
         args: ["plugins:boundary-report:ci"],
       });
     }
+  });
+
+  it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(
+      shouldRunWrapperShadowingCheck([
+        "src/channels/turn/run-channel-turn.ts",
+        "scripts/check-wrapper-shadowing.mts",
+        "scripts/check-export-name-collisions.mts",
+        "scripts/lib/wrapper-shadowing-baseline.json",
+        "scripts/lib/ts-guard-utils.mts",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunWrapperShadowingCheck(["docs/concepts/message-lifecycle.md"])).toBe(false);
+
+    const plan = createChangedCheckPlan(
+      detectChangedLanes(["scripts/check-wrapper-shadowing.mts"]),
+    );
+    expect(plan.commands).toContainEqual({
+      name: "wrapper shadowing",
+      args: ["check:wrapper-shadowing"],
+    });
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

@@ -63,6 +63,50 @@ function sessionsList(includeConflict: boolean) {
   };
 }
 
+function workerRecoverySessionsList(includeError: boolean) {
+  const now = Date.now();
+  return {
+    count: 1,
+    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+    path: "",
+    sessions: [
+      {
+        contextTokens: null,
+        displayName: "Cloud worker failure proof",
+        hasActiveRun: false,
+        key: sessionKey,
+        kind: "direct",
+        label: "Cloud worker failure proof",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        placement: {
+          state: includeError ? "failed" : "active",
+          generation: 2,
+          createdAtMs: now - 10_000,
+          updatedAtMs: now,
+          stateChangedAtMs: now - 1_000,
+          environmentId: "worker:lost-proof",
+          activeOwnerEpoch: 4,
+          workspaceBaseManifestRef: "sha256:workspace-base",
+          remoteWorkspaceDir: "/home/crabbox/workspace",
+          workerBundleHash: "a".repeat(64),
+          ...(includeError
+            ? {
+                recoveryError: "cloud worker disappeared: provider reported lease destroyed",
+                terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+                terminalAtMs: now,
+              }
+            : {}),
+        },
+        status: "done",
+        totalTokens: 0,
+        updatedAt: now,
+      },
+    ],
+    ts: now,
+  };
+}
+
 async function capture(page: import("playwright").Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
@@ -147,6 +191,44 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
         conflict.stagedResultRef,
       );
       await capture(page, "03-reloaded-durable-history.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows a durable selected-chat alert while workspace recovery is pending", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Remote work completed successfully." }],
+          timestamp: Date.now() - 2_000,
+        },
+      ],
+      methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
+      sessionKey,
+    });
+
+    try {
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+      expect(response?.status()).toBe(200);
+      await page.getByText("Remote work completed successfully.").waitFor({ timeout: 10_000 });
+      expect(await page.getByRole("alert").count()).toBe(0);
+      await capture(page, "04-before-workspace-recovery-error.png");
+
+      await gateway.setMethodResponse("sessions.list", workerRecoverySessionsList(true));
+      await page.reload();
+      const alert = page.getByRole("alert").filter({ hasText: "Cloud worker failed" });
+      await alert.waitFor({ timeout: 10_000 });
+      expect(await alert.textContent()).toContain("provider reported lease destroyed");
+      await capture(page, "05-after-workspace-recovery-error.png");
     } finally {
       await context.close();
     }

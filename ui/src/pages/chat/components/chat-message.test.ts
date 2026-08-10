@@ -8,6 +8,8 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { renderChatNotice } from "./chat-divider.ts";
+import { isTextyDocumentAttachment } from "./chat-message-document-preview.ts";
+import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   dismissConfirmedActionPopovers,
@@ -19,6 +21,7 @@ import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts"
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const localStorageValues = new Map<string, string>();
+const documentPreviewSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
@@ -161,8 +164,12 @@ function createAttachmentBlock(
   kind: "audio" | "video" | "document",
   label: string,
   mimeType: string,
+  attachmentOverrides: TestMessage = {},
 ) {
-  return { type: "attachment", attachment: { url, kind, label, mimeType } };
+  return {
+    type: "attachment",
+    attachment: { url, kind, label, mimeType, ...attachmentOverrides },
+  };
 }
 
 function expectElement<T extends Element>(
@@ -661,6 +668,10 @@ async function requireVideoPlayer(container: HTMLElement) {
 }
 
 afterEach(() => {
+  for (const subscriber of documentPreviewSubscribers) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
+  documentPreviewSubscribers.clear();
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-media-player-test-fixture]").forEach((element) => {
     element.remove();
@@ -677,6 +688,26 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it.each([
+    ["text/plain MIME", { label: "note.bin", mimeType: "text/plain" }, true],
+    ["JSON MIME", { label: "data.bin", mimeType: "application/json" }, true],
+    ["NDJSON MIME", { label: "data.bin", mimeType: "application/x-ndjson" }, true],
+    ["XML MIME", { label: "data.bin", mimeType: "application/xml" }, true],
+    ["YAML MIME", { label: "data.bin", mimeType: "application/yaml" }, true],
+    ["x-yaml MIME", { label: "data.bin", mimeType: "application/x-yaml" }, true],
+    ["TOML MIME", { label: "data.bin", mimeType: "application/toml" }, true],
+    ["missing MIME text extension", { label: "README.markdown" }, true],
+    [
+      "octet-stream text extension",
+      { label: "changes.patch", mimeType: "application/octet-stream" },
+      true,
+    ],
+    ["non-text MIME", { label: "renamed.txt", mimeType: "application/pdf" }, false],
+    ["non-text extension", { label: "report.pdf" }, false],
+  ] as const)("detects texty documents from $0", (_name, attachment, expected) => {
+    expect(isTextyDocumentAttachment(attachment)).toBe(expected);
+  });
+
   it("preserves paragraph breaks around assistant attachments in rendered markdown", () => {
     const container = document.createElement("div");
 
@@ -3571,6 +3602,233 @@ describe("grouped chat rendering", () => {
         .querySelector<HTMLAnchorElement>(".chat-assistant-video-fallback a")
         ?.getAttribute("download"),
     ).toBe("clip.mp4");
+  });
+
+  it("renders a text document preview with an explicit download action", async () => {
+    const previewText = "A pasted note\nwith a second line.";
+    const fetchMock = vi.fn(async () => new Response(previewText));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "blob:https://example.com/pasted-text-preview",
+          "document",
+          "pasted-text-1723000000000.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-text-document-preview" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(previewText);
+    });
+    const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("pasted-text-1723000000000.txt");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a non-text document card without fetching a preview", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      createAssistantMessage(
+        [
+          createAttachmentBlock(
+            "https://example.com/report.pdf",
+            "document",
+            "report.pdf",
+            "application/pdf",
+          ),
+        ],
+        { id: "assistant-pdf-document-card" },
+      ),
+      { showToolCalls: false },
+    );
+
+    const card = expectElement(container, ".chat-assistant-attachment-card--document", HTMLElement);
+    expect(
+      card
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("download"),
+    ).toBe("report.pdf");
+    expect(card.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch a preview for an oversized text document", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      createAssistantMessage(
+        [
+          createAttachmentBlock(
+            "https://example.com/large.txt",
+            "document",
+            "large.txt",
+            "text/plain",
+            { sizeBytes: 256 * 1024 + 1 },
+          ),
+        ],
+        { id: "assistant-oversized-text-document" },
+      ),
+      { showToolCalls: false },
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card--document")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__preview-text")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("truncates text document previews at 16 KiB", async () => {
+    const prefix = "x".repeat(16 * 1024);
+    const fetchMock = vi.fn(async () => new Response(`${prefix}tail`));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/truncated.txt",
+          "document",
+          "truncated.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-truncated-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${prefix}…`);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an unknown-size text document stream at the preview budget", async () => {
+    const chunkBytes = new TextEncoder().encode("y".repeat(1024));
+    let pulls = 0;
+    let cancelled = false;
+    const endlessBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunkBytes);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(endlessBody));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/endless.txt",
+          "document",
+          "endless.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-endless-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${"y".repeat(16 * 1024)}…`);
+    });
+    expect(cancelled).toBe(true);
+    // The preview budget is ~17 KiB of 1 KiB chunks; an unbounded read would
+    // keep pulling forever. Allow generous readahead slack.
+    expect(pulls).toBeLessThan(64);
+  });
+
+  it("decodes only the preview budget from a single oversized chunk", async () => {
+    const giantChunk = new TextEncoder().encode("z".repeat(1024 * 1024));
+    const giantBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(giantChunk);
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(giantBody));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const decodedByteLengths: number[] = [];
+    class TrackingTextDecoder extends TextDecoder {
+      override decode(input?: AllowSharedBufferSource, options?: TextDecodeOptions): string {
+        if (input) {
+          decodedByteLengths.push(input.byteLength);
+        }
+        return super.decode(input, options);
+      }
+    }
+    vi.stubGlobal("TextDecoder", TrackingTextDecoder);
+    const container = document.createElement("div");
+    const message = createAssistantMessage(
+      [
+        createAttachmentBlock(
+          "https://example.com/one-giant-chunk.txt",
+          "document",
+          "one-giant-chunk.txt",
+          "text/plain",
+        ),
+      ],
+      { id: "assistant-oversized-chunk-text-document" },
+    );
+    const rerender = () =>
+      renderAssistantMessage(container, message, {
+        showToolCalls: false,
+        onRequestUpdate: rerender,
+      });
+    documentPreviewSubscribers.add(rerender);
+
+    rerender();
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+      ).toBe(`${"z".repeat(16 * 1024)}…`);
+    });
+    // The 1 MiB chunk must be sliced to the byte budget before decoding.
+    expect(Math.max(...decodedByteLengths)).toBeLessThanOrEqual((16 * 1024 + 1) * 4);
   });
 
   it("omits attachment anchors for unsafe transcript URLs", async () => {

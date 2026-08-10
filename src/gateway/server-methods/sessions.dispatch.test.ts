@@ -45,6 +45,8 @@ function reclaimedPlacementRecord(): WorkerSessionPlacementRecord {
     lastTranscriptAckCursor: 3,
     lastLiveEventAckCursor: 2,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
     turnClaim: null,
     createdAtMs: 1,
     updatedAtMs: 2,
@@ -288,6 +290,8 @@ describe("sessions.dispatch", () => {
       lastTranscriptAckCursor: null,
       lastLiveEventAckCursor: null,
       recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
       turnClaim: null,
       createdAtMs: 1,
       updatedAtMs: 3,
@@ -466,6 +470,68 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("classifies workspace preflight rejection as an invalid request", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Cloud workspace inventory exceeds its entry limit"), {
+        code: "invalid_state",
+      }),
+    );
+
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Cloud workspace inventory exceeds its entry limit",
+      }),
+    );
+  });
+
+  it("classifies workspace preflight operational failures as unavailable", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("spawn failed"), { code: "ENOENT" }));
+
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    const error = vi.mocked(respond).mock.calls[0]?.[2];
+    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE, message: "spawn failed" });
+  });
+
   it("dispatches an existing managed-worktree session and projects placement", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
@@ -492,6 +558,8 @@ describe("sessions.dispatch", () => {
       lastTranscriptAckCursor: null,
       lastLiveEventAckCursor: null,
       recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
       turnClaim: null,
       createdAtMs: 1,
       updatedAtMs: 2,

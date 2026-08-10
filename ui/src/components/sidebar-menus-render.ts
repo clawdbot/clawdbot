@@ -312,7 +312,8 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     position,
     trigger: controller.sessionSortMenuTrigger,
     grouping: host.sessionsGrouping,
-    sortMode: host.sessionSortMode,
+    sortMode: host.effectiveSessionSortMode(),
+    peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
     showCron: host.sessionsShowCron,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
@@ -322,7 +323,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onSortModeChange: (mode) => {
-      host.sessionSortMode = mode;
+      host.setSessionSortMode(mode);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onStatusFilterChange: (statusFilter) => {

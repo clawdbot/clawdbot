@@ -36,7 +36,6 @@ describe("command-startup-policy", () => {
       ["status"],
       ["agents", "bindings"],
       ["approvals", "pending"],
-      ["commitments"],
       ["skills"],
       ["skills", "list"],
       ["skills", "check"],

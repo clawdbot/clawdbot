@@ -419,6 +419,14 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
         workspaceGit: true,
+        operatorScopes: ["operator.read", "operator.write"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "fs.listDir",
+          "sessions.create",
+          "worktrees.branches",
+        ],
         methodResponses: {
           "agents.list": mainAgentList(),
           "worktrees.branches": GIT_BRANCHES,

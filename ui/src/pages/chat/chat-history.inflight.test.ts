@@ -71,7 +71,7 @@ function activeHistory(runId: string): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
-  it("restores active tool state from the in-flight run snapshot", async () => {
+  it("restores active tool state and authoritative preamble time from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
     (history.inFlightRun as { events?: unknown[] }).events = [
       {
@@ -114,6 +114,7 @@ describe("chat history in-flight assistant recovery", () => {
         itemId: "preamble-restored",
         runId: "run-live",
         text: "Checking the workspace",
+        ts: 900,
       }),
     );
   });

@@ -29,7 +29,7 @@ export async function runManagerCancelSession(params: {
   const actorKey = normalizeActorKey(params.sessionKey);
   const activeTurn = params.activeTurnBySession.get(actorKey);
   if (activeTurn) {
-    await cancelActiveTurn({
+    await cancelManagerActiveTurn({
       activeTurn,
       reason: params.reason,
     });
@@ -72,7 +72,8 @@ export async function runManagerCancelSession(params: {
   });
 }
 
-async function cancelActiveTurn(params: {
+/** Aborts and deduplicates runtime cancellation for one active manager turn. */
+export async function cancelManagerActiveTurn(params: {
   activeTurn: ActiveTurnState;
   reason?: string;
 }): Promise<void> {

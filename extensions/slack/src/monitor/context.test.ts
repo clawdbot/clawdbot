@@ -100,6 +100,44 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
       }),
     ).toBe(false);
   });
+
+  it("reads updated identity fields and mismatch guards after auth recovery", () => {
+    const ctx = createTestContext();
+
+    ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+    };
+    ctx.teamId = "";
+    ctx.apiAppId = "A_ENTERPRISE";
+
+    expect(ctx.installationIdentity).toEqual({
+      kind: "enterprise",
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+    });
+    expect(ctx.teamId).toBe("");
+    expect(ctx.apiAppId).toBe("A_ENTERPRISE");
+    expect(ctx.shouldDropMismatchedSlackEvent({ api_app_id: "A_EXPECTED" })).toBe(true);
+
+    ctx.installationIdentity = {
+      kind: "workspace",
+      apiAppId: "A_RECOVERED",
+      teamId: "T_RECOVERED",
+    };
+    ctx.teamId = "T_RECOVERED";
+    ctx.apiAppId = "A_RECOVERED";
+
+    expect(ctx.teamId).toBe("T_RECOVERED");
+    expect(ctx.apiAppId).toBe("A_RECOVERED");
+    expect(
+      ctx.shouldDropMismatchedSlackEvent({
+        api_app_id: "A_RECOVERED",
+        team_id: "T_WRONG",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("createSlackMonitorContext isChannelAllowed", () => {

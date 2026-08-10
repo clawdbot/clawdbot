@@ -508,6 +508,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             {
               steeringMode: "all",
               debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
+              isInboundUserMessage: true,
             },
           ).catch(() => undefined);
           if (outcome?.queued) {

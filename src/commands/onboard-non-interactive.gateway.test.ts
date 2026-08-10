@@ -15,6 +15,9 @@ import type { installGatewayDaemonNonInteractive } from "./onboard-non-interacti
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 const testConfigStore = new Map<string, OpenClawConfig>();
+const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const pluginLifecycleLeaseState = vi.hoisted(() => ({ depth: 0 }));
+const configWritePluginLeaseDepths: number[] = [];
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
@@ -52,33 +55,59 @@ function readTestConfig<T = OpenClawConfig>(): T {
   return (testConfigStore.get(resolveTestConfigPath()) ?? {}) as T;
 }
 
+readConfigFileSnapshotMock.mockImplementation(async () => {
+  const configPath = resolveTestConfigPath();
+  const config = testConfigStore.get(configPath);
+  if (config) {
+    const raw = `${JSON.stringify(config, null, 2)}\n`;
+    return {
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+      raw,
+      hash: "test-config-hash",
+    };
+  }
+  return {
+    exists: false,
+    valid: true,
+    config: {},
+    sourceConfig: {},
+    raw: null,
+    hash: undefined,
+  };
+});
+
 vi.mock("../config/io.js", () => ({
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
   loadConfig: () => testConfigStore.get(resolveTestConfigPath()) ?? {},
-  readConfigFileSnapshot: async () => {
-    const configPath = resolveTestConfigPath();
-    const config = testConfigStore.get(configPath);
-    if (config) {
-      const raw = `${JSON.stringify(config, null, 2)}\n`;
-      return {
-        exists: true,
-        valid: true,
-        config,
-        sourceConfig: config,
-        raw,
-        hash: "test-config-hash",
-      };
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+}));
+
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: async (
+    _options: unknown,
+    run: (lease: {
+      databasePath: string;
+      signal: AbortSignal;
+      assertOwned: () => void;
+      assertOwnedInTransaction: () => void;
+    }) => Promise<unknown>,
+  ) => {
+    pluginLifecycleLeaseState.depth += 1;
+    try {
+      return await run({
+        databasePath: path.join(path.dirname(resolveTestConfigPath()), "openclaw.sqlite"),
+        signal: new AbortController().signal,
+        assertOwned: () => {},
+        assertOwnedInTransaction: () => {},
+      });
+    } finally {
+      pluginLifecycleLeaseState.depth -= 1;
     }
-    return {
-      exists: false,
-      valid: true,
-      config: {},
-      sourceConfig: {},
-      raw: null,
-      hash: undefined,
-    };
   },
 }));
 
@@ -95,6 +124,7 @@ vi.mock("../config/config.js", () => ({
     nextConfig: OpenClawConfig;
     writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
   }) => {
+    configWritePluginLeaseDepths.push(pluginLifecycleLeaseState.depth);
     capturedReplaceConfigFileCalls.push({ nextConfig, ...(writeOptions ? { writeOptions } : {}) });
     testConfigStore.set(resolveTestConfigPath(), nextConfig);
   },
@@ -352,12 +382,74 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     waitForGatewayReachableMock = undefined;
     testConfigStore.clear();
     capturedReplaceConfigFileCalls.length = 0;
+    configWritePluginLeaseDepths.length = 0;
+    readConfigFileSnapshotMock.mockClear();
     ensureWorkspaceAndSessionsMock.mockClear();
     installGatewayDaemonNonInteractiveMock.mockClear();
     healthCommandMock.mockClear();
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
+  });
+
+  it("serializes concurrent onboarding runs sharing one state directory", async () => {
+    await withStateDir("state-concurrent-onboard-", async (stateDir) => {
+      let activeWorkspaceSetups = 0;
+      let maxActiveWorkspaceSetups = 0;
+      let workspaceSetupCalls = 0;
+      let releaseFirstSetup!: () => void;
+      const firstSetupEntered = new Promise<void>((resolve) => {
+        ensureWorkspaceAndSessionsMock.mockImplementation(async () => {
+          workspaceSetupCalls += 1;
+          activeWorkspaceSetups += 1;
+          maxActiveWorkspaceSetups = Math.max(maxActiveWorkspaceSetups, activeWorkspaceSetups);
+          try {
+            if (workspaceSetupCalls === 1) {
+              resolve();
+              await new Promise<void>((release) => {
+                releaseFirstSetup = release;
+              });
+            }
+          } finally {
+            activeWorkspaceSetups -= 1;
+          }
+        });
+      });
+      const options = {
+        nonInteractive: true,
+        mode: "local" as const,
+        workspace: path.join(stateDir, "openclaw"),
+        authChoice: "skip" as const,
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+      };
+
+      try {
+        const first = runNonInteractiveSetup(options, runtime);
+        await firstSetupEntered;
+        const readsBeforeSecond = readConfigFileSnapshotMock.mock.calls.length;
+        const writesBeforeSecond = capturedReplaceConfigFileCalls.length;
+        const second = runNonInteractiveSetup(options, runtime);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 100);
+        });
+
+        expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond);
+        expect(capturedReplaceConfigFileCalls).toHaveLength(writesBeforeSecond);
+        expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledOnce();
+
+        releaseFirstSetup();
+        await Promise.all([first, second]);
+        expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond + 1);
+        expect(maxActiveWorkspaceSetups).toBe(1);
+        expect(configWritePluginLeaseDepths).toHaveLength(2);
+        expect(configWritePluginLeaseDepths.every((depth) => depth > 0)).toBe(true);
+      } finally {
+        releaseFirstSetup?.();
+        ensureWorkspaceAndSessionsMock.mockImplementation(async () => {});
+      }
+    });
   });
 
   it("writes the implicit workspace under a non-default state directory", async () => {

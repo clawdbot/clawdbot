@@ -42,7 +42,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelType: auth.channelType,
     senderId,
-    ...(params.eventScope ? { eventScope: params.eventScope } : {}),
+    eventScope: params.eventScope,
   });
   return {
     channelLabel,

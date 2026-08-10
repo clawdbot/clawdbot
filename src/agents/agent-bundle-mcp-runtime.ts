@@ -1074,6 +1074,10 @@ export function createSessionMcpRuntime(params: {
     peekCatalog() {
       return catalog;
     },
+    /** Session-owned timeout that survives catalog invalidation. */
+    getServerRequestTimeoutMs(serverName: string) {
+      return sessions.get(serverName)?.requestTimeoutMs;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },

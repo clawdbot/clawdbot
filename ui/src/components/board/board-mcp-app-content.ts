@@ -1,7 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
-import type { BoardWidgetAppViewState, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 
 const GRANT_NOTICE_HEIGHT_PX = 112;
 
@@ -14,7 +15,7 @@ type BoardMcpAppContentOptions = {
   nearVisible: boolean;
   rectHeight: number;
   sessionKey: string;
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   expired: () => void;
   remove: () => void;
   retry: () => void;

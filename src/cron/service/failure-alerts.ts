@@ -2,7 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
