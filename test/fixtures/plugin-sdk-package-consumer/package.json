@@ -1,0 +1,5 @@
+{
+  "name": "plugin-sdk-package-consumer",
+  "private": true,
+  "type": "module"
+}

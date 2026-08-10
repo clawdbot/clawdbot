@@ -3,12 +3,23 @@
 /**
  * Verifies that public plugin-sdk subpaths are present in the compiled dist output.
  *
- * Run after `pnpm build` to catch missing exports or leaked repo-only type aliases
+ * Run after the package build to catch missing exports or leaked repo-only type aliases
  * before release.
  */
 
-import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, dirname, relative, sep } from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -20,6 +31,19 @@ import {
 import { publicPluginSdkEntrypoints, publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mts";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(scriptDir, "..");
+const nativePreviewPackageJsonPath = resolve(
+  repoRoot,
+  "node_modules/@typescript/native-preview/package.json",
+);
+const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8")) as {
+  bin?: { tsgo?: string };
+};
+const nativePreviewTsgoBin = nativePreviewPackageJson.bin?.tsgo;
+if (!nativePreviewTsgoBin) {
+  throw new Error("@typescript/native-preview does not declare the tsgo binary");
+}
+const tsgoPath = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewTsgoBin);
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
@@ -35,6 +59,37 @@ const requiredSubpathExports: Record<string, string[]> = {
 };
 
 let missing = 0;
+
+{
+  const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-sdk-consumer-"));
+  const consumerRoot = join(tempRoot, "consumer");
+  try {
+    cpSync(resolve(repoRoot, "test/fixtures/plugin-sdk-package-consumer"), consumerRoot, {
+      recursive: true,
+    });
+    const openclawPackagePath = join(consumerRoot, "node_modules", "openclaw");
+    mkdirSync(dirname(openclawPackagePath), { recursive: true });
+    symlinkSync(repoRoot, openclawPackagePath, process.platform === "win32" ? "junction" : "dir");
+
+    const result = spawnSync(
+      process.execPath,
+      [tsgoPath, "-p", join(consumerRoot, "tsconfig.json"), "--pretty", "false"],
+      { cwd: consumerRoot, encoding: "utf8" },
+    );
+    if (result.error) {
+      console.error("BROKEN PLUGIN SDK CONSUMER: failed to start tsgo");
+      console.error(result.error.message);
+      missing += 1;
+    } else if (result.status !== 0) {
+      console.error("BROKEN PLUGIN SDK CONSUMER: mixed public subpaths are not assignable");
+      process.stderr.write(result.stdout || "");
+      process.stderr.write(result.stderr || "");
+      missing += 1;
+    }
+  } finally {
+    rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
 
 for (const entry of publicPluginSdkSubpaths) {
   const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
@@ -151,11 +206,9 @@ if (declarationBudget.shouldFail) {
 }
 
 if (missing > 0) {
-  console.error(
-    `\nERROR: ${missing} required plugin-sdk artifact(s) missing (named exports or subpath files).`,
-  );
+  console.error(`\nERROR: ${missing} plugin-sdk artifact check(s) failed.`);
   console.error("This will break published plugin-sdk artifacts.");
-  console.error("Check generated d.ts rewrites, subpath entries, and rebuild.");
+  console.error("Check generated d.ts rewrites, subpath entries, type compatibility, and rebuild.");
   process.exit(1);
 }
 
