@@ -580,6 +580,11 @@ export const en: TranslationMap = {
       rejectPromptBody: "The client must send a new pairing request before it can connect.",
       revokePromptTitle: "Revoke the {role} token?",
       revokePromptBody: "This token stops working immediately and cannot be restored.",
+      rotatePromptTitle: "New {role} token",
+      rotatePromptBody:
+        "Copy this token now and store it securely. It is shown once and cannot be recovered.",
+      rotateAcknowledge: "I saved this token",
+      rotateDismissHint: "This dialog stays open until you confirm the token is saved.",
       gateway: "gateway",
       unpaired: "unpaired",
       unknownClient: "unknown client",
