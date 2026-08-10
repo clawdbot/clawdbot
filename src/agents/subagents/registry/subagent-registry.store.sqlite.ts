@@ -93,7 +93,8 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   if (!isCanonicalSubagentRunRecord(payload)) {
     return null;
   }
-  if (payload.delivery.suspendedReason === "retry-limit") {
+  const suspendedReason: unknown = payload.delivery.suspendedReason;
+  if (suspendedReason === "retry-limit") {
     payload.delivery.suspendedReason = "permanent_failure";
   }
   // This module owns every production write and commits indexed columns with
