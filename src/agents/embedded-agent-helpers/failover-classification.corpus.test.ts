@@ -11,13 +11,27 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../plugins/provider-runtime.js", () => providerRuntimeMocks);
 
 import { classifyProviderRequestError } from "../../auto-reply/reply/provider-request-error-classifier.js";
-import { classifyFailoverSignal, type FailoverClassification } from "./errors.js";
-import { failoverClassificationCorpus } from "./failover-classification.corpus-cases.js";
+import { classifyFailoverSignal } from "./errors.js";
+import { authFormatCases } from "./failover-classification.auth-format.cases.js";
+import { billingCases } from "./failover-classification.billing.cases.js";
+import { overflowServerMiscCases } from "./failover-classification.overflow-server-misc.cases.js";
+import { overflowCases } from "./failover-classification.overflow.cases.js";
+import { rateLimitOverloadCases } from "./failover-classification.rate-limit-overload.cases.js";
+import { structuredMiscCases } from "./failover-classification.structured-misc.cases.js";
 
 afterEach(() => {
   providerRuntimeMocks.classifyProviderFailoverReasonWithPlugin.mockClear();
   providerRuntimeMocks.matchesProviderContextOverflowWithPlugin.mockClear();
 });
+
+const failoverClassificationCorpus = [
+  ...overflowCases,
+  ...billingCases,
+  ...rateLimitOverloadCases,
+  ...overflowServerMiscCases,
+  ...authFormatCases,
+  ...structuredMiscCases,
+];
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
