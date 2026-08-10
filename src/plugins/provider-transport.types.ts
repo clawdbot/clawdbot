@@ -32,6 +32,14 @@ export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
 };
 
 /**
+ * Provider-owned WebSocket session policy.
+ */
+export type ProviderWebSocketSessionPolicy = {
+  headers?: Record<string, string>;
+  degradeCooldownMs?: number;
+};
+
+/**
  * Provider-owned transport turn state.
  *
  * Use this for provider-native request headers or metadata that should stay
@@ -40,6 +48,7 @@ export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
 export type ProviderTransportTurnState = {
   headers?: Record<string, string>;
   metadata?: Record<string, string>;
+  websocket?: ProviderWebSocketSessionPolicy;
 };
 
 /**
@@ -59,21 +68,7 @@ export type ProviderResolveTransportTurnStateContext = {
 };
 
 /**
- * Provider-owned WebSocket session policy.
- *
- * Use this for session-scoped headers or cool-down behavior that should apply
- * before a generic WebSocket transport decides to retry or fall back.
- */
-export type ProviderWebSocketSessionPolicy = {
-  headers?: Record<string, string>;
-  degradeCooldownMs?: number;
-};
-
-/**
  * Provider-owned WebSocket session policy input.
- *
- * Use this when the provider wants to control native session handshake headers
- * or the post-failure cool-down window for a generic WebSocket transport.
  */
 export type ProviderResolveWebSocketSessionPolicyContext = {
   provider: string;

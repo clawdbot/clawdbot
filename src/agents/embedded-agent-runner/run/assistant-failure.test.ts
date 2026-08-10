@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../../llm/types.js";
 import { FailoverError } from "../../failover-error.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import {
@@ -101,6 +102,23 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("does not rotate profiles or models after an ambiguous post-dispatch failure", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.emptyErrorRetries = 0;
+    if (!fixture.input.attemptAssistant) {
+      throw new Error("expected assistant fixture");
+    }
+    fixture.input.attemptAssistant.errorCode = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+    fixture.input.attemptAssistant.errorMessage = "reasoning is required";
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome.action).toBe("proceed");
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([]);
+  });
+
   it("falls back after exhausted replay-safe credential-file retries without touching auth state", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
 

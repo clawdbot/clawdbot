@@ -200,6 +200,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    // Attempt disposal must not close the durable provider session shared by later turns.
+    cleanupProviderSessionResourcesOnDispose: false,
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,

@@ -24,8 +24,9 @@ import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
-import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
+import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
 import { resolveCompactionFailureReason } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
@@ -217,21 +218,27 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // shaping, and the embedded system prompt all reflect the fallback level.
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
-        let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+        let session: AgentSession | undefined;
         try {
-          const createdSession = await createAgentSession({
-            cwd: effectiveCwd,
-            agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: sessionToolAllowlist,
-            customTools,
-            sessionManager,
-            settingsManager,
-            resourceLoader,
-          });
+          const createdSession = await createAgentSessionForEmbeddedRunner(
+            {
+              cwd: effectiveCwd,
+              agentDir,
+              authStorage,
+              modelRegistry,
+              model: effectiveModel,
+              thinkingLevel: mapThinkingLevel(thinkLevel),
+              tools: sessionToolAllowlist,
+              customTools,
+              sessionManager,
+              settingsManager,
+              resourceLoader,
+            },
+            {
+              // Compaction disposal must not close the durable provider session used by later turns.
+              cleanupProviderSessionResourcesOnDispose: false,
+            },
+          );
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);
           applySystemPromptToSession(session, systemPromptText);

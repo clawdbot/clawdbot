@@ -782,7 +782,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("keeps the embedded compaction system prompt after active tool selection", async () => {
+  it("keeps the compaction prompt and durable provider resources after disposal", async () => {
     buildEmbeddedSystemPromptMock.mockReturnValueOnce("compaction system prompt");
 
     await compactEmbeddedAgentSessionDirect({
@@ -809,6 +809,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         "createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0] test invariant",
       ),
     );
+    expect(createAgentSessionMock.mock.calls[0]?.[1]).toEqual({
+      cleanupProviderSessionResourcesOnDispose: false,
+    });
   });
 
   it("routes compaction through shared stream resolution and extra params", async () => {

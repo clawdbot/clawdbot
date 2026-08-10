@@ -186,7 +186,12 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
 type SupportedTransport = AgentRuntimeTransport;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
-  return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
+  return value === "sse" ||
+    value === "websocket" ||
+    value === "websocket-cached" ||
+    value === "auto"
+    ? value
+    : undefined;
 }
 
 function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {

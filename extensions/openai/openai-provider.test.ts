@@ -2260,7 +2260,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expectFields(extraParams, {
-      transport: "sse",
+      transport: "auto",
     });
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
@@ -2537,7 +2537,7 @@ describe("buildOpenAIProvider", () => {
       } as never),
     ).toEqual({
       effort: "high",
-      transport: "sse",
+      transport: "auto",
     });
     expect(
       provider.prepareExtraParams?.({
@@ -2575,9 +2575,6 @@ describe("buildOpenAIProvider", () => {
     expect(provider.wrapStreamFn).toBe(codexProvider.wrapStreamFn);
     expect(provider.buildReplayPolicy).toBe(codexProvider.buildReplayPolicy);
     expect(provider.resolveTransportTurnState).toBe(codexProvider.resolveTransportTurnState);
-    expect(provider.resolveWebSocketSessionPolicy).toBe(
-      codexProvider.resolveWebSocketSessionPolicy,
-    );
   });
 
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {

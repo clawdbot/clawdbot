@@ -267,7 +267,12 @@ async function runEmbeddedAgentInternal(
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
-            : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
+            : acquireAgentRunPreparedModelRuntime(preparedInput, {
+                retainIdleRunOwner,
+                // A one-shot turn needs only configured turn-admission facts. Full live model
+                // inventory remains available through the snapshot's lazy control-plane loader.
+                ...(params.oneShotCliRun ? { catalogMode: "static" } : {}),
+              }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;

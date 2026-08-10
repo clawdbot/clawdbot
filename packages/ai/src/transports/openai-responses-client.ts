@@ -22,6 +22,7 @@ import {
 } from "./openai-responses-compaction-replay.js";
 import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+  OpenAIResponsesWebSocketPreDispatchError,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
@@ -34,6 +35,7 @@ import {
 } from "./openai-responses-debug.js";
 import {
   buildOpenAIResponsesParams,
+  convertOpenAIResponsesMessagesForRequest,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -43,6 +45,11 @@ import {
 } from "./openai-responses-replay-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import {
+  createOpenAIResponsesWebSocketStream,
+  type OpenAIResponsesWebSocketMode,
+  supportsNativeOpenAIResponsesWebSocket,
+} from "./openai-responses-websocket.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -60,6 +67,40 @@ import {
   transportAbortError,
 } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
+
+function resolveNativeOpenAIResponsesWebSocketMode(
+  model: Model,
+  transport: OpenAIResponsesOptions["transport"],
+): OpenAIResponsesWebSocketMode | undefined {
+  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
+    return undefined;
+  }
+  if (getAiTransportHost().requiresManagedTransport(model)) {
+    return undefined;
+  }
+  return supportsNativeOpenAIResponsesWebSocket({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+  })
+    ? transport
+    : undefined;
+}
+
+function combineWebSocketTimeoutSignal(
+  signal: AbortSignal,
+  model: Model,
+  timeoutMs: number | undefined,
+) {
+  const resolvedTimeoutMs =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : getAiTransportHost().resolveModelRequestTimeoutMs(model);
+  if (resolvedTimeoutMs === undefined || !Number.isFinite(resolvedTimeoutMs)) {
+    return signal;
+  }
+  return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
+}
 
 function resolveProviderTransportTurnState(
   model: Model,
@@ -163,12 +204,26 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+        const websocketMode = resolveNativeOpenAIResponsesWebSocketMode(
+          model,
+          responsesOptions?.transport,
+        );
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId: options?.sessionId,
           turnId: randomUUID(),
           attempt: 1,
-          transport: "stream",
+          transport: websocketMode ? "websocket" : "stream",
         });
+        const websocketSessionPolicy = websocketMode ? turnState?.websocket : undefined;
+        const websocketHeaders = websocketMode
+          ? buildOpenAIClientHeaders(
+              model,
+              context,
+              options?.headers,
+              websocketSessionPolicy?.headers,
+              options?.sessionId,
+            )
+          : undefined;
         const client = config.createClient(
           model,
           context,
@@ -221,6 +276,11 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           timeoutMs: options?.timeoutMs,
           maxRetries: options?.maxRetries,
         });
+        const websocketSignal = combineWebSocketTimeoutSignal(
+          firstEventAbort.signal,
+          model,
+          requestOptions?.timeout,
+        );
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -228,46 +288,129 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
-        const { stream: responseStream, response } = await config.createResponseStream({
-          client,
-          request: params,
-          requestOptions,
-          model,
-          observePrompt,
-          buildFullHistoryRequest: () => buildRequest("full-history"),
-          onCompactionRejected: () =>
-            suppressOpenAIResponsesCompaction(output, model, {
+        const createSseStream = async (): Promise<AsyncIterable<unknown>> => {
+          const { stream: responseStream, response } = await config.createResponseStream({
+            client,
+            request: params,
+            requestOptions,
+            model,
+            observePrompt,
+            buildFullHistoryRequest: () => buildRequest("full-history"),
+            onCompactionRejected: () =>
+              suppressOpenAIResponsesCompaction(output, model, {
+                sessionId: options?.sessionId,
+                authProfileId: responsesOptions?.authProfileId,
+              }),
+          });
+          await options?.onResponse?.(
+            { status: response.status, headers: headersToRecord(response.headers) },
+            model,
+          );
+          emitModelTransportDebug(
+            log,
+            `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
+              `transport=sse elapsedMs=${Date.now() - requestStartedAt}`,
+          );
+          return responseStream;
+        };
+
+        let responseStream: AsyncIterable<unknown>;
+        let finishWebSocket: ((options?: { keep?: boolean }) => void) | undefined;
+        let transport: "sse" | "websocket" = "sse";
+        const logWebSocketFallback = (reason: string) =>
+          emitModelTransportDebug(
+            log,
+            `[responses] websocket_fallback provider=${model.provider} api=${model.api} ` +
+              `model=${model.id} reason=${reason}`,
+          );
+        if (websocketMode) {
+          try {
+            const websocket = createOpenAIResponsesWebSocketStream({
+              client,
+              request: params,
+              mode: websocketMode,
               sessionId: options?.sessionId,
-              authProfileId: responsesOptions?.authProfileId,
-            }),
-        });
-        await options?.onResponse?.(
-          { status: response.status, headers: headersToRecord(response.headers) },
-          model,
-        );
+              headers: websocketHeaders,
+              signal: websocketSignal,
+              callerSignal: options?.signal,
+              degradeCooldownMs: websocketSessionPolicy?.degradeCooldownMs,
+              resolveContinuationItems: () =>
+                convertOpenAIResponsesMessagesForRequest(
+                  model,
+                  { messages: [output] },
+                  responsesOptions,
+                  "checkpoint",
+                ).filter((item) => item.type !== "function_call_output"),
+            });
+            finishWebSocket = websocket.finish;
+            observePrompt?.(websocket.request, {
+              egress: "responses-websocket",
+              payloadVariant: "initial",
+            });
+            transport = "websocket";
+            emitModelTransportDebug(
+              log,
+              `[responses] websocket_selected provider=${model.provider} api=${model.api} model=${model.id} ` +
+                `mode=${websocketMode} reused=${websocket.reusedConnection} ` +
+                `continuation=${websocket.continuationStatus === "continued"} continuationStatus=${websocket.continuationStatus} ` +
+                `sessionIdHash=${redactIdentifier(options?.sessionId)} ` +
+                `headersHash=${redactIdentifier(JSON.stringify(Object.entries(websocketHeaders ?? {}).toSorted(([a], [b]) => a.localeCompare(b))))}`,
+            );
+            responseStream = {
+              async *[Symbol.asyncIterator]() {
+                try {
+                  yield* websocket.stream;
+                } catch (error) {
+                  if (
+                    websocketSignal.aborted ||
+                    !(error instanceof OpenAIResponsesWebSocketPreDispatchError)
+                  ) {
+                    throw error;
+                  }
+                  transport = "sse";
+                  logWebSocketFallback("before_first_event");
+                  yield* await createSseStream();
+                }
+              },
+            };
+          } catch {
+            finishWebSocket?.({ keep: false });
+            finishWebSocket = undefined;
+            logWebSocketFallback("setup_failure");
+            responseStream = await createSseStream();
+          }
+        } else {
+          responseStream = await createSseStream();
+        }
+        stream.push({ type: "start", partial: output as never });
+        try {
+          await processResponsesStream(
+            observeResponsesStream(responseStream, model, requestStartedAt),
+            output,
+            stream,
+            model,
+            {
+              ...config.pricingOptions?.(responsesOptions),
+              firstEventTimeoutMs:
+                getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
+              abortFirstEventStream: firstEventAbort.abort,
+              onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+              signal: options?.signal,
+              reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+                authProfileId: responsesOptions?.authProfileId,
+                sessionId: options?.sessionId,
+              }),
+            },
+          );
+          finishWebSocket?.();
+        } catch (error) {
+          finishWebSocket?.({ keep: false });
+          throw error;
+        }
         emitModelTransportDebug(
           log,
-          `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
-            `elapsedMs=${Date.now() - requestStartedAt}`,
-        );
-        stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(
-          observeResponsesStream(responseStream, model),
-          output,
-          stream,
-          model,
-          {
-            ...config.pricingOptions?.(responsesOptions),
-            firstEventTimeoutMs:
-              getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
-            abortFirstEventStream: firstEventAbort.abort,
-            onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-            signal: options?.signal,
-            reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
-              authProfileId: responsesOptions?.authProfileId,
-              sessionId: options?.sessionId,
-            }),
-          },
+          `[responses] completed provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `transport=${transport} elapsedMs=${Date.now() - requestStartedAt}`,
         );
         if (options?.signal?.aborted) {
           throw transportAbortError(options.signal);

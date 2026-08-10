@@ -1,4 +1,5 @@
 import path from "node:path";
+import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-settlement behavior.
@@ -36,7 +37,7 @@ import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
@@ -57,6 +58,30 @@ const testModel: Model = {
 describe("createAgentSession runtime ownership", () => {
   it("keeps embedded recovery construction out of the public sessions barrel", () => {
     expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+  });
+
+  it("keeps durable provider resources when an embedded attempt session is disposed", async () => {
+    const cleanup = vi.fn();
+    const unregisterCleanup = registerSessionResourceCleanup(cleanup);
+    try {
+      const sessionManager = SessionManager.inMemory();
+      const { session } = await createAgentSessionForEmbeddedRunner(
+        {
+          model: testModel,
+          resourceLoader: createEmptyResourceLoader(),
+          sessionManager,
+          settingsManager: SettingsManager.inMemory(),
+          modelRegistry: createTestModelRegistry(),
+        },
+        { cleanupProviderSessionResourcesOnDispose: false },
+      );
+
+      session.dispose();
+
+      expect(cleanup).not.toHaveBeenCalled();
+    } finally {
+      unregisterCleanup();
+    }
   });
 
   it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
