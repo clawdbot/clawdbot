@@ -11,7 +11,7 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
-import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-prepare.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";

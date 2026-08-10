@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-prepare.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 

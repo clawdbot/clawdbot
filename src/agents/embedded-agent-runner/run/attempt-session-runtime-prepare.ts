@@ -7,10 +7,12 @@ import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import type { createEmbeddedAttemptExternalAbortController } from "./attempt-abort.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
-import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
-import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
+import {
+  prepareEmbeddedAttemptAgentSession,
+  prepareEmbeddedAttemptSessionBoundary,
+  prepareEmbeddedAttemptSessionManager,
+} from "./attempt-session-prepare.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
-import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
