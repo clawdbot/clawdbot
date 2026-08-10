@@ -61,7 +61,7 @@ function resolveClientNodeId(
 }
 
 /** Gateway handlers for queueing work until a paired node reconnects. */
-export const nodePendingHandlers: GatewayRequestHandlers = {
+export const nodePendingWorkHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client, context }) => {
     if (!validateNodePendingDrainParams(params)) {
       respondInvalidParams({

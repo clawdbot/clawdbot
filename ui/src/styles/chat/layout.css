@@ -3208,6 +3208,20 @@ openclaw-chat-video-player {
   color: var(--warn);
 }
 
+/* Sole content of the popover when no input can be selected, so it carries the
+   row's own weight instead of reading as a footnote under the heading. */
+.chat-talk-input-picker__empty {
+  padding: 4px 8px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.chat-talk-input-picker__empty--fault {
+  color: var(--warn);
+}
+
 .chat-talk-input-picker__hint {
   margin-top: 3px;
   border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);

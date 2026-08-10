@@ -153,24 +153,14 @@ injection behavior from the shared defaults. Omitted fields inherit from
 }
 ```
 
-### `agents.defaults.bootstrapPromptTruncationWarning`
+### Bootstrap truncation notice
 
-Controls the agent-visible system-prompt notice when bootstrap context is truncated.
-Default: `"always"`.
-
-- `"off"`: never inject truncation notice text into the system prompt.
-- `"once"`: inject a concise notice once per unique truncation signature.
-- `"always"`: inject a concise notice on every run when truncation exists (recommended).
-
-Detailed raw/injected counts and config tuning fields stay in diagnostics such
-as context/status reports and logs; routine WebChat user/runtime context only
-gets the concise recovery notice.
-
-```json5
-{
-  agents: { defaults: { bootstrapPromptTruncationWarning: "always" } }, // off | once | always
-}
-```
+When bootstrap context is truncated, OpenClaw always injects a concise
+agent-visible notice into the system prompt saying some bootstrap files were
+truncated and to read the affected files directly. This notice is built in
+and not configurable, and it deliberately omits per-file diagnostics: file
+names, raw vs injected counts, and limit causes stay in diagnostics such as
+context/status reports and logs.
 
 ### Context budget ownership map
 
@@ -505,27 +495,19 @@ as shown above. See [CLI backends](/gateway/cli-backends) for operations and
 [building CLI backend plugins](/plugins/cli-backend-plugins) for command,
 session, image, and parser registration.
 
-### `agents.defaults.promptOverlays`
+### GPT-5 prompt overlay
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
+The GPT-5 prompt overlay is provider-owned, not an agent default. GPT-5-family
+model ids on OpenAI-family providers receive a tagged behavior contract on
+OpenClaw-assembled prompts, and the OpenAI plugin's
+`plugins.entries.openai.config.personality` setting (`"friendly"`/`"on"` or
+`"off"`) toggles only the friendly interaction-style layer. Native Codex
+app-server routes keep Codex-owned base/model instructions instead of this
+overlay. See [GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution).
 
-```json5
-{
-  agents: {
-    defaults: {
-      promptOverlays: {
-        gpt5: {
-          personality: "friendly", // friendly | on | off
-        },
-      },
-    },
-  },
-}
-```
-
-- `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
-- `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
-- Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
+The retired `agents.defaults.promptOverlays` key is rejected by config
+validation; `openclaw doctor --fix` migrates its personality value into
+`plugins.entries.openai.config.personality` when that key is unset.
 
 ### `agents.defaults.heartbeat`
 

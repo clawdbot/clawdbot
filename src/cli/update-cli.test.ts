@@ -43,6 +43,7 @@ const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
 const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
+const serviceEnabled = vi.fn();
 const serviceStop = vi.fn();
 const serviceRestart = vi.fn();
 const isDefaultInstallIdentity = vi.hoisted(() =>
@@ -380,6 +381,7 @@ vi.mock("../daemon/service.js", () => ({
   },
   resolveGatewayService: vi.fn(() => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+    isEnabled: (...args: unknown[]) => serviceEnabled(...args),
     readCommand: (...args: unknown[]) => serviceReadCommand(...args),
     readRuntime: (...args: unknown[]) => serviceReadRuntime(...args),
     stop: (...args: unknown[]) => serviceStop(...args),
@@ -1337,6 +1339,7 @@ describe("update-cli", () => {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     restartHealthTestControl.snapshot = undefined;
     vi.clearAllMocks();
+    serviceEnabled.mockResolvedValue(true);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
     restorePersistedInstalledPluginIndex.mockResolvedValue(undefined);
     restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
@@ -1729,7 +1732,7 @@ describe("update-cli", () => {
       },
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     pathExists.mockImplementation(
       async (candidate: string) =>
         entrypoints.includes(candidate) || candidate.endsWith("package.json"),
@@ -1747,6 +1750,7 @@ describe("update-cli", () => {
     );
 
     expect(serviceStop).not.toHaveBeenCalled();
+    expect(serviceEnabled).not.toHaveBeenCalled();
     expect(spawnCall()?.[2]?.env).toMatchObject({
       OPENCLAW_PROFILE: "personal",
       OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
@@ -4597,6 +4601,165 @@ describe("update-cli", () => {
     expect(processOffSpy).toHaveBeenCalledWith("SIGBREAK", expect.any(Function));
     processOnSpy.mockRestore();
     processOffSpy.mockRestore();
+  });
+
+  it.each([
+    { platform: "darwin" as const, handoff: undefined },
+    { platform: "linux" as const, handoff: "1" },
+    { platform: "win32" as const, handoff: "1" },
+  ])(
+    "quiesces a stopped loaded managed gateway on $platform before package replacement",
+    async ({ platform, handoff }) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const tempDir = await createTrackedTempDir(`openclaw-update-stopped-loaded-${platform}-`);
+      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+      primeServiceCommand(["node", entryPath, "gateway", "run"], {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      });
+      serviceLoaded.mockResolvedValue(true);
+      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      mockFileBackedPathExists();
+      mockNpmGlobalRoot(nodeModules);
+      let finishStop: (() => void) | undefined;
+      let markStopStarted: (() => void) | undefined;
+      const stopStarted = new Promise<void>((resolve) => {
+        markStopStarted = resolve;
+      });
+      serviceStop.mockImplementationOnce(() => {
+        markStopStarted?.();
+        return new Promise<void>((resolve) => {
+          finishStop = resolve;
+        });
+      });
+
+      try {
+        await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
+          const updatePromise = updateCommand({ yes: true });
+          const firstOutcome = await Promise.race([
+            stopStarted.then(() => "stop" as const),
+            updatePromise.then(() => "update" as const),
+          ]);
+
+          expect(firstOutcome).toBe("stop");
+          expect(serviceStop).toHaveBeenCalledOnce();
+          expect(packageInstallCommandCall()).toBeUndefined();
+          const pluginRecordCallsBeforeStop =
+            loadInstalledPluginIndexInstallRecords.mock.calls.length;
+          if (!finishStop) {
+            throw new Error("expected the managed service stop to remain pending");
+          }
+          finishStop();
+          await updatePromise;
+          expect(loadInstalledPluginIndexInstallRecords.mock.calls.length).toBeGreaterThan(
+            pluginRecordCallsBeforeStop,
+          );
+        });
+      } finally {
+        platformSpy.mockRestore();
+      }
+
+      expect(packageInstallCommandCall()).toBeDefined();
+      expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalled();
+      expect(serviceStop.mock.invocationCallOrder[0]).toBeLessThan(
+        requireValue(
+          loadInstalledPluginIndexInstallRecords.mock.invocationCallOrder.at(-1),
+          "owned managed update context capture order",
+        ),
+      );
+    },
+  );
+
+  it.each([
+    { name: "an unloaded Darwin LaunchAgent", platform: "darwin" as const, loaded: false },
+    { name: "an ordinary stopped systemd unit", platform: "linux" as const, loaded: true },
+    { name: "an ordinary stopped Scheduled Task", platform: "win32" as const, loaded: true },
+  ])("leaves $name stopped during package replacement", async ({ platform, loaded }) => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    const tempDir = await createTrackedTempDir(`openclaw-update-stopped-${platform}-`);
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    primeServiceCommand(["node", entryPath, "gateway", "run"]);
+    serviceLoaded.mockResolvedValue(loaded);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+
+    try {
+      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, async () => {
+        await updateCommand({ yes: true });
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeDefined();
+  });
+
+  it("restarts a quiesced stopped LaunchAgent after package replacement fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const tempDir = await createTrackedTempDir("openclaw-update-stopped-launchagent-failure-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    primeServiceCommand(["node", entryPath, "gateway", "run"]);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+        throw new Error("package replacement failed");
+      }
+      return commandResult();
+    });
+
+    try {
+      await expect(updateCommand({ yes: true })).rejects.toThrow("package replacement failed");
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(serviceRestart).toHaveBeenCalledOnce();
+    const packageInstallCallIndex = commandCalls().findIndex(
+      ([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
+    );
+    const packageInstallCallOrder = requireValue(
+      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[packageInstallCallIndex],
+      "package replacement call order",
+    );
+    expect(serviceStop.mock.invocationCallOrder[0]).toBeLessThan(packageInstallCallOrder);
+    expect(packageInstallCallOrder).toBeLessThan(
+      requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart call order"),
+    );
+  });
+
+  it("leaves a disabled stopped LaunchAgent disabled when package replacement fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const tempDir = await createTrackedTempDir("openclaw-update-disabled-launchagent-failure-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    primeServiceCommand(["node", entryPath, "gateway", "run"]);
+    serviceLoaded.mockResolvedValue(true);
+    serviceEnabled.mockResolvedValue(false);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
+        throw new Error("package replacement failed");
+      }
+      return commandResult();
+    });
+
+    try {
+      await expect(updateCommand({ yes: true })).rejects.toThrow("package replacement failed");
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(serviceEnabled).toHaveBeenCalledOnce();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {

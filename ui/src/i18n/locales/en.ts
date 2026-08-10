@@ -580,6 +580,11 @@ export const en: TranslationMap = {
       rejectPromptBody: "The client must send a new pairing request before it can connect.",
       revokePromptTitle: "Revoke the {role} token?",
       revokePromptBody: "This token stops working immediately and cannot be restored.",
+      rotatePromptTitle: "New {role} token",
+      rotatePromptBody:
+        "Copy this token now and store it securely. It is shown once and cannot be recovered.",
+      rotateAcknowledge: "I saved this token",
+      rotateDismissHint: "This dialog stays open until you confirm the token is saved.",
       gateway: "gateway",
       unpaired: "unpaired",
       unknownClient: "unknown client",
@@ -5188,7 +5193,7 @@ export const en: TranslationMap = {
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",
       noMicrophones: "No additional microphones found",
-      microphoneNoneFound: "No microphone inputs were found.",
+      microphoneNoneFound: "No microphone found. Plug one in and it appears here.",
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",

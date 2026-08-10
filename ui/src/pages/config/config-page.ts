@@ -53,6 +53,8 @@ import { loadModels } from "../chat/models.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
+  observeRealtimeTalkDevices,
+  realtimeTalkDeviceIssueMessage,
   type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
@@ -242,6 +244,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
   @state() private sessionObserverModelsUnavailable = false;
+  private mediaDeviceWatch: (() => void) | null = null;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
   @state() private microphonePermissionRequired = true;
   @state() private microphoneLoading = false;
@@ -390,6 +393,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.theme.serverSelection,
     );
     this.settings = loadSettings();
+    // Passive refresh only: the media rows already own the permission prompt
+    // behind their own controls, and a hardware change must never turn into an
+    // unasked-for browser dialog on a settings page.
+    this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
+      void this.refreshMicrophones(false);
+      void this.refreshCameras(false);
+    });
     this.syncRouteData();
   }
 
@@ -399,6 +409,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.hiddenSessionCatalogsChanged,
     );
     this.customThemeImportOwner.retireImport();
+    this.mediaDeviceWatch?.();
+    this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
     this.updateCountdownPolling.stop();
     this.invalidateSystemInfoRequest();
@@ -455,7 +467,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       const result = await discoverRealtimeTalkInputs(requestPermission);
       this.microphoneDevices = result.devices;
       this.microphonePermissionRequired = result.permissionRequired;
-      this.microphoneError = result.warning;
+      this.microphoneError = result.issue
+        ? realtimeTalkDeviceIssueMessage(result.issue, "audioinput")
+        : null;
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
@@ -484,7 +498,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       const result = await discoverRealtimeTalkCameras(requestPermission);
       this.cameraDevices = result.devices;
       this.cameraPermissionRequired = result.permissionRequired;
-      this.cameraError = result.warning;
+      this.cameraError = result.issue
+        ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
+        : null;
     } catch (error) {
       this.cameraError = error instanceof Error ? error.message : String(error);
     } finally {
