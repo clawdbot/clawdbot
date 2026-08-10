@@ -1251,13 +1251,14 @@ async function deliverSlackSlashResponseWithWebApi(params: {
     "mrkdwn" in payload && typeof payload.mrkdwn === "boolean" ? payload.mrkdwn : undefined;
 
   if (payload.response_type === "in_channel") {
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack Web API method, not Window.postMessage.
+    // oxlint-disable unicorn/require-post-message-target-origin -- Slack Web API method, not Window.postMessage.
     await params.client.chat.postMessage({
       channel: params.command.channel_id,
       text,
       ...(blocks ? { blocks } : {}),
       ...(mrkdwn !== undefined ? { mrkdwn } : {}),
     });
+    // oxlint-enable unicorn/require-post-message-target-origin
   } else {
     await params.client.chat.postEphemeral({
       channel: params.command.channel_id,
