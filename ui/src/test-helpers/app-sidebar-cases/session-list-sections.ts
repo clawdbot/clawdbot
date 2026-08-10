@@ -174,4 +174,46 @@ describe("AppSidebar session section visibility", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
   });
+
+  it("renders no chat rows when only the main session exists", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    await sidebar.updateComplete;
+
+    // The identity card is the main-session entry; the list stays empty.
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
+    expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
+  });
+
+  it("keeps a selected child reachable when its parent is outside the loaded window", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:child"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:child",
+            spawnedBy: "agent:main:missing-parent",
+            kind: "direct",
+            label: "Reachable orphan",
+            updatedAt: 2,
+            status: "done",
+          },
+        ],
+      },
+    });
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:child";
+    await sidebar.updateComplete;
+
+    const row = sidebar.querySelector('[data-session-key="agent:main:child"]');
+    expect(row?.textContent).toContain("Reachable orphan");
+    expect(row?.classList.contains("sidebar-recent-session--child")).toBe(false);
+  });
 });

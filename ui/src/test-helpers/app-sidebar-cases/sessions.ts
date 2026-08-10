@@ -319,17 +319,6 @@ describe("AppSidebar session accessibility", () => {
     );
     expect(row?.querySelector(".session-row-trail")).toBeNull();
   });
-
-  it("renders no chat rows when only the main session exists", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-    await sidebar.updateComplete;
-
-    // The identity card is the main-session entry; the list stays empty.
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
-  });
 });
 
 describe("AppSidebar session navigation", () => {
