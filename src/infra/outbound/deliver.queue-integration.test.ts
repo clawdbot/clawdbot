@@ -613,7 +613,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     ).toBe("pending");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
-      recoveryState: "send_attempt_started",
+      recoveryState: "unknown_after_send",
     });
     await expect(deliverOutboundPayloads(params)).rejects.toThrow(
       `Stable delivery intent is already queued: ${deliveryIntentId}`,
@@ -886,7 +886,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
-  it("marks the later payload active before send and unknown after failure", async () => {
+  it("advances queued entry to unknown_after_send before a later payload fails", async () => {
     let sendCount = 0;
     let stateBeforeSecondSend: string | undefined;
     const sendMatrix = vi.fn(async () => {
@@ -900,7 +900,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
 
     await deliverPartialMatrixBatch(sendMatrix, tmpDir);
 
-    expect(stateBeforeSecondSend).toBe("send_attempt_started");
+    expect(stateBeforeSecondSend).toBe("unknown_after_send");
     const entries = await loadPendingDeliveries(tmpDir);
     expect(entries).toHaveLength(1);
     const entry = expectDefined(entries[0], "entries[0] test invariant");
