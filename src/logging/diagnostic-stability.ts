@@ -808,14 +808,9 @@ function parseOptionalNonNegativeInteger(value: unknown, field: string): number 
     if (!/^\d+$/.test(value)) {
       throw new Error(`${field} must be a non-negative integer`);
     }
-    const parsedString = parseStrictNonNegativeInteger(value);
-    if (parsedString === undefined) {
-      throw new Error(`${field} must be a non-negative integer`);
-    }
-    return parsedString;
   }
-  const parsed = typeof value === "number" ? value : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
     throw new Error(`${field} must be a non-negative integer`);
   }
   return parsed;
