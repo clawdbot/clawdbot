@@ -290,7 +290,7 @@ openclaw-session-owner-chip {
   display: block;
   margin: 4px 0 2px;
   padding: 5px 10px;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1018,7 +1018,7 @@ openclaw-session-owner-chip {
   align-items: center;
   padding: 0 12px;
   color: var(--text);
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 13px;
   letter-spacing: 0.08em;
   line-height: 1;

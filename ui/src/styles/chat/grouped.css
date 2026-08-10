@@ -908,7 +908,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
   padding: 1px 6px;
   border-radius: var(--radius-sm, 4px);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--mono);
 }
 
 .msg-meta__cost {

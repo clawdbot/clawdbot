@@ -2,7 +2,7 @@ openclaw-custodian-panel {
   position: fixed;
   z-index: 60;
   color: var(--text);
-  font-family: var(--font-sans);
+  font-family: var(--font-body);
 }
 
 .cp {
