@@ -158,7 +158,7 @@ suite.define(() => {
           welcomeVariant: "onboarding",
         });
         await page.getByRole("button", { name: "Skip for now" }).click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .not.toContain("shell--onboarding");
