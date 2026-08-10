@@ -70,7 +70,8 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
-import { buildQaMockProfileId, stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import { buildQaMockProfileId } from "./providers/shared/mock-auth-profile-id.js";
+import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";

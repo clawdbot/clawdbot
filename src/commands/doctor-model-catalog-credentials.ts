@@ -39,13 +39,20 @@ function credentialMatches(
   credential: AuthProfileCredential | undefined,
   { provider, key }: PlaintextCredential,
 ): boolean {
-  if (normalizeProviderId(credential?.provider ?? "") !== normalizeProviderId(provider)) {
+  if (!credentialProviderMatches(credential, provider)) {
     return false;
   }
   return (
     (credential?.type === "api_key" && credential.key === key) ||
     (credential?.type === "token" && credential.token === key)
   );
+}
+
+function credentialProviderMatches(
+  credential: AuthProfileCredential | undefined,
+  provider: string,
+): boolean {
+  return normalizeProviderId(credential?.provider ?? "") === normalizeProviderId(provider);
 }
 
 function collectCredentials(
@@ -65,7 +72,7 @@ function collectCredentials(
     if (
       !key.trim() ||
       isNonSecretApiKeyMarker(key) ||
-      store.profiles[key] !== undefined ||
+      credentialProviderMatches(store.profiles[key], provider) ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
     ) {
       return [];

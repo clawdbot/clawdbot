@@ -155,6 +155,40 @@ describe("doctor model catalog credential migration", () => {
     expect(store?.order?.custom).toEqual(["custom:default"]);
   });
 
+  it("migrates a plugin key that collides with another provider's profile id", async () => {
+    const state = createState();
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "literal-plugin-key": {
+            type: "api_key",
+            provider: "other",
+            key: "other-secret",
+          },
+        },
+      },
+      state.agentDir,
+    );
+    replacePersistedPluginModelCatalogs({
+      agentDir: state.agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("plugin-owner")]: `${JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: { custom: provider("literal-plugin-key") },
+        })}\n`,
+      },
+    });
+
+    const result = await maybeMigrateModelCatalogCredentials(migrationParams(state, {}));
+
+    expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
+    expect(loadPersistedAuthProfileStore(state.agentDir)?.profiles).toMatchObject({
+      "literal-plugin-key": { provider: "other", key: "other-secret" },
+      "custom:default": { provider: "custom", key: "literal-plugin-key" },
+    });
+  });
+
   it("refuses to overwrite an unreadable canonical auth store", async () => {
     const state = createState();
     const { agentDir } = state;

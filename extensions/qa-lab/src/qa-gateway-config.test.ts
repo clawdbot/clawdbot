@@ -93,6 +93,7 @@ describe("buildQaGatewayConfig", () => {
       "mock-openai/gpt-5.6-luna-alt",
     ]);
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(cfg.models?.providers?.["mock-openai"]?.apiKey).toBe("qa-mock-mock-openai");
     expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.["mock-openai"]?.models).toEqual(
       expect.arrayContaining([
@@ -101,8 +102,10 @@ describe("buildQaGatewayConfig", () => {
       ]),
     );
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(cfg.models?.providers?.openai?.apiKey).toBe("qa-mock-openai");
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
+    expect(cfg.models?.providers?.anthropic?.apiKey).toBe("qa-mock-anthropic");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.memory?.search).toMatchObject({
       provider: "openai-compatible",

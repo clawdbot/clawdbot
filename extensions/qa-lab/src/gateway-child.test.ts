@@ -581,7 +581,7 @@ describe("buildQaRuntimeEnv", () => {
         },
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
-    ).rejects.toThrow(/installed package mock auth bootstrap failed for openai: .*ENOENT/u);
+    ).rejects.toThrow(/installed package mock auth bootstrap failed for mock-openai: .*ENOENT/u);
 
     await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
@@ -1431,9 +1431,12 @@ describe("buildQaRuntimeEnv", () => {
       stateDir,
     });
 
-    // Config side: both providers should have a profile entry with mode
+    // Config side: every mock catalog provider should have a profile entry with mode
     // "api_key" so the runtime picks up the staging without any further
     // config mutation.
+    const mockOpenaiConfigProfile = requireAuthProfile(cfg.auth?.profiles, "qa-mock-mock-openai");
+    expect(mockOpenaiConfigProfile.provider).toBe("mock-openai");
+    expect(mockOpenaiConfigProfile.mode).toBe("api_key");
     const openaiConfigProfile = requireAuthProfile(cfg.auth?.profiles, "qa-mock-openai");
     expect(openaiConfigProfile.provider).toBe("openai");
     expect(openaiConfigProfile.mode).toBe("api_key");
@@ -1446,6 +1449,10 @@ describe("buildQaRuntimeEnv", () => {
     // Store side: each agent dir has its own canonical SQLite credential rows.
     for (const agentId of ["main", "qa"]) {
       const parsed = readAuthProfileStore(stateDir, agentId);
+      const mockOpenaiStoreProfile = requireAuthProfile(parsed.profiles, "qa-mock-mock-openai");
+      expect(mockOpenaiStoreProfile.type).toBe("api_key");
+      expect(mockOpenaiStoreProfile.provider).toBe("mock-openai");
+      expect(mockOpenaiStoreProfile.key).toBe("qa-mock-not-a-real-key");
       const openaiStoreProfile = requireAuthProfile(parsed.profiles, "qa-mock-openai");
       expect(openaiStoreProfile.type).toBe("api_key");
       expect(openaiStoreProfile.provider).toBe("openai");
@@ -1481,8 +1488,19 @@ describe("buildQaRuntimeEnv", () => {
 
     const records = await readJsonLines(recordPath);
     const authRecords = records.filter((record) => record.kind === "auth");
-    expect(authRecords).toHaveLength(2);
+    expect(authRecords).toHaveLength(3);
     expect(authRecords.map((record) => record.args)).toEqual([
+      [
+        "models",
+        "auth",
+        "--agent",
+        "qa",
+        "paste-api-key",
+        "--provider",
+        "mock-openai",
+        "--profile-id",
+        "qa-mock-mock-openai",
+      ],
       [
         "models",
         "auth",
@@ -1515,7 +1533,7 @@ describe("buildQaRuntimeEnv", () => {
     }
     expect(records.at(-1)).toMatchObject({
       kind: "gateway",
-      fixtureProfiles: ["openai", "anthropic"],
+      fixtureProfiles: ["mock-openai", "openai", "anthropic"],
     });
   });
 
@@ -1551,12 +1569,23 @@ describe("buildQaRuntimeEnv", () => {
       "installed package mock auth bootstrap failed for openai: OpenClaw CLI exited 9: Authorization: Bearer <redacted>",
     );
     const records = await readJsonLines(recordPath);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ kind: "auth", dbExists: false });
-    const submittedKey = String(records[0]?.stdin).trim();
-    expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
-    expect(error.message).not.toContain(submittedKey);
-    expect(String(error.cause)).not.toContain(submittedKey);
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      kind: "auth",
+      args: expect.arrayContaining(["mock-openai"]),
+      dbExists: false,
+    });
+    expect(records[1]).toMatchObject({
+      kind: "auth",
+      args: expect.arrayContaining(["openai"]),
+      dbExists: false,
+    });
+    for (const record of records) {
+      const submittedKey = String(record.stdin).trim();
+      expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
+      expect(error.message).not.toContain(submittedKey);
+      expect(String(error.cause)).not.toContain(submittedKey);
+    }
     expect(records.some((record) => record.kind === "gateway")).toBe(false);
   });
 

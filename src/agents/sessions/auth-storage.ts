@@ -45,6 +45,13 @@ import {
   loginAuthStorageOAuthProvider,
   resolveAuthStoragePluginOAuthCredential,
 } from "./auth-storage-oauth-registry.js";
+import {
+  attachAuthStorageProfiles,
+  collectStateOnlyAuthProfileIds,
+  hasUnmaterializedDefaultAuthProfileSecret,
+  isAuthStorageCredentialFree,
+  registerAuthStorageRuntimeOverride,
+} from "./auth-storage-profiles.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
 export type ApiKeyCredential = {
@@ -153,19 +160,11 @@ function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData
 }
 
 function assertAuthStorageSecretRefsMaterialized(store: AuthProfileStore): void {
-  for (const [profileId, credential] of Object.entries(store.profiles)) {
-    if (profileId !== `${credential.provider}:default`) {
-      continue;
-    }
-    if (
-      (credential.type === "api_key" && credential.keyRef && !credential.key) ||
-      (credential.type === "token" && credential.tokenRef && !credential.token)
-    ) {
-      throw new AuthStoragePersistenceError(
-        "AuthStorage.forAgent requires the active secrets runtime to materialize SecretRef credentials.",
-        undefined,
-      );
-    }
+  if (hasUnmaterializedDefaultAuthProfileSecret(store)) {
+    throw new AuthStoragePersistenceError(
+      "AuthStorage.forAgent requires the active secrets runtime to materialize SecretRef credentials.",
+      undefined,
+    );
   }
 }
 
@@ -256,15 +255,6 @@ function applyAuthStorageData(
           : { ...credential, provider };
   }
   return { ...store, profiles };
-}
-
-function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
-  const referenced = new Set([
-    ...Object.values(store.order ?? {}).flat(),
-    ...Object.values(store.lastGood ?? {}),
-    ...Object.keys(store.usageStats ?? {}),
-  ]);
-  return [...referenced].filter((profileId) => !store.profiles[profileId]);
 }
 
 function loadSqliteAuthStorageStore(
@@ -440,6 +430,7 @@ export class AuthStorage {
   private constructor(storage: AuthStorageBackend, migrationOwnerAgentDir?: string) {
     this.storage = storage;
     this.migrationOwnerAgentDir = migrationOwnerAgentDir ?? storage.migrationOwnerAgentDir;
+    registerAuthStorageRuntimeOverride(this, (provider) => this.runtimeOverrides.get(provider));
     this.reload();
   }
 
@@ -449,7 +440,11 @@ export class AuthStorage {
       getRuntimeAuthProfileStoreSnapshot(agentDir) ??
       loadAuthProfileStoreForSecretsRuntime(agentDir);
     assertAuthStorageSecretRefsMaterialized(preparedStore);
-    return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);
+    return attachAuthStorageProfiles(
+      new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir),
+      preparedStore,
+      { liveDefault: true },
+    );
   }
 
   /**
@@ -520,10 +515,7 @@ export class AuthStorage {
   }
 
   private parseStorageData(content: string | undefined): AuthStorageData {
-    if (!content) {
-      return {};
-    }
-    return JSON.parse(content) as AuthStorageData;
+    return content ? (JSON.parse(content) as AuthStorageData) : {};
   }
 
   /**
@@ -624,8 +616,9 @@ export class AuthStorage {
    * Unlike getApiKey(), this doesn't refresh OAuth tokens.
    */
   hasAuth(provider: string): boolean {
-    if (this.runtimeOverrides.has(provider)) {
-      return true;
+    const runtimeOverride = this.runtimeOverrides.has(provider);
+    if (runtimeOverride || isAuthStorageCredentialFree(this)) {
+      return runtimeOverride;
     }
     if (this.data[provider]) {
       return true;
@@ -643,12 +636,14 @@ export class AuthStorage {
    * Return auth status without exposing credential values or refreshing tokens.
    */
   getAuthStatus(provider: string): AuthStatus {
+    const runtimeOverride = this.runtimeOverrides.has(provider);
+    if (runtimeOverride || isAuthStorageCredentialFree(this)) {
+      return runtimeOverride
+        ? { configured: false, source: "runtime", label: "--api-key" }
+        : { configured: false };
+    }
     if (this.data[provider]) {
       return { configured: true, source: "stored" };
-    }
-
-    if (this.runtimeOverrides.has(provider)) {
-      return { configured: false, source: "runtime", label: "--api-key" };
     }
 
     const envKeys = findEnvKeys(provider);
@@ -771,7 +766,7 @@ export class AuthStorage {
   ): Promise<string | undefined> {
     // Runtime override takes highest priority
     const runtimeKey = this.runtimeOverrides.get(providerId);
-    if (runtimeKey) {
+    if (runtimeKey || isAuthStorageCredentialFree(this)) {
       return runtimeKey;
     }
 

@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { attachAuthStorageProfiles } from "./sessions/auth-storage-profiles.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 type LoadStaticCatalog =
@@ -251,6 +252,7 @@ export function resetPreparedModelRuntimeHarness(): void {
     custom: { type: "api_key", key: "test-key" },
   });
   preparedModelRuntimeMocks.authStorage.getOAuthProviders.mockReset().mockReturnValue([]);
+  attachAuthStorageProfiles(preparedModelRuntimeMocks.authStorage, { version: 1, profiles: {} });
   preparedModelRuntimeMocks.preparedAuthStore = undefined;
   preparedModelRuntimeMocks.preparedAuthMaterializations = [];
   preparedModelRuntimeMocks.modelRegistry.fork

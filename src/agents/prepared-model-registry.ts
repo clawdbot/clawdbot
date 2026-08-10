@@ -16,6 +16,7 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
 } from "./prepared-model-runtime.js";
+import { markAuthStorageCredentialFree } from "./sessions/auth-storage-profiles.js";
 import { AuthStorage, type ModelRegistry } from "./sessions/index.js";
 
 type LoadPreparedAgentModelRegistryOptions = {
@@ -147,7 +148,7 @@ export async function loadPreparedAgentModelRegistry(
     // applies normalization. Credential-free owners therefore preserve configured IDs as well as
     // preventing credential-dependent discovery during generation construction.
     const modelRegistry = usesCredentialFreeRegistry(options)
-      ? stores.modelRegistry.fork(AuthStorage.inMemory({}))
+      ? stores.modelRegistry.fork(markAuthStorageCredentialFree(AuthStorage.inMemory()))
       : stores.modelRegistry;
     return {
       agentDir: snapshot.agentDir,

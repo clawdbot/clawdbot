@@ -9,6 +9,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -16,6 +17,12 @@ import {
 } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
+import {
+  attachAuthStorageProfiles,
+  markAuthStorageCredentialFree,
+} from "./sessions/auth-storage-profiles.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   normalizeProviderConfigWithPlugin: vi.fn<
@@ -125,6 +132,17 @@ function createImplicitGoogleVertexProvider(): ProviderConfig {
   };
 }
 
+const ZAI_PLUGIN_METADATA_SNAPSHOT = {
+  index: { plugins: [{ pluginId: "zai", enabled: true }] },
+  normalizePluginId: (pluginId: string) => pluginId,
+  manifestRegistry: { plugins: [], diagnostics: [] },
+  owners: {
+    providers: new Map([["zai", ["zai"]]]),
+    modelCatalogProviders: new Map([["zai", ["zai"]]]),
+    setupProviders: new Map(),
+  },
+} as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+
 async function resolveProvidersForConfigEnvTest(params: {
   cfg: OpenClawConfig;
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
@@ -172,7 +190,18 @@ async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
   return { discoveryEnv, providers };
 }
 
-let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawModelsJsonWithDeps>>;
+type ModelsJsonPlan = Awaited<ReturnType<typeof planOpenClawModelsJsonWithDeps>>;
+
+function expectWritePlan(
+  plan: ModelsJsonPlan,
+): asserts plan is Extract<ModelsJsonPlan, { action: "write" }> {
+  expect(plan.action).toBe("write");
+  if (plan.action !== "write") {
+    throw new Error("Expected models.json write plan");
+  }
+}
+
+let unauthenticatedProviderWritePlan: ModelsJsonPlan;
 let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
 let googleVertexProfileCatalogPlan: Awaited<ReturnType<typeof planGoogleVertexProfileCatalog>>;
 
@@ -251,9 +280,7 @@ beforeAll(async () => {
       }),
     },
   );
-  if (unauthenticatedProviderWritePlan.action !== "write") {
-    throw new Error("Expected models.json write plan");
-  }
+  expectWritePlan(unauthenticatedProviderWritePlan);
   unauthenticatedProviderParsed = JSON.parse(unauthenticatedProviderWritePlan.contents) as {
     providers?: Record<string, unknown>;
   };
@@ -437,7 +464,7 @@ describe("models-config", () => {
         {
           cfg: { models: { providers: {} } },
           agentDir: "/tmp/openclaw-models-config-policy-registry-test",
-          env: {},
+          env: { POLICY_ALIAS_API_KEY: "policy-test-secret" },
           existingRaw: "",
           existingParsed: null,
           pluginMetadataSnapshot,
@@ -487,62 +514,174 @@ describe("models-config", () => {
       },
     );
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
+    expectWritePlan(plan);
     expect(JSON.parse(plan.contents)).toEqual({ providers: {} });
     expect(plan.pluginCatalogWrites).toEqual({});
   });
 
   it("moves plugin-owned provider catalogs into plugin-scoped files", async () => {
-    const pluginMetadataSnapshot = {
-      index: { plugins: [{ pluginId: "zai", enabled: true }] },
-      normalizePluginId: (pluginId: string) => pluginId,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      owners: {
-        providers: new Map([["zai", ["zai"]]]),
-        modelCatalogProviders: new Map([["zai", ["zai"]]]),
-        setupProviders: new Map(),
-      },
-    } as unknown as Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
     const plan = await planOpenClawModelsJsonWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: { ZAI_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
+        env: {
+          _PLUGIN_CUSTOM_KEY: "plugin-test-secret",
+          _CUSTOM_API_KEY: "custom-test-secret",
+        } as NodeJS.ProcessEnv,
         existingRaw: "",
         existingParsed: null,
-        pluginMetadataSnapshot,
+        pluginMetadataSnapshot: ZAI_PLUGIN_METADATA_SNAPSHOT,
       },
       {
         resolveImplicitProviders: async () => ({
           zai: createImplicitOpenAiProvider({
             baseUrl: "https://api.z.ai/api/paas/v4",
-            apiKey: "ZAI_API_KEY",
+            apiKey: "_PLUGIN_CUSTOM_KEY",
           }),
           custom: createImplicitOpenAiProvider({
             baseUrl: "https://custom.example/v1",
-            apiKey: "CUSTOM_API_KEY",
+            apiKey: "_CUSTOM_API_KEY",
           }),
         }),
       },
     );
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
+    expectWritePlan(plan);
     const root = JSON.parse(plan.contents) as {
-      providers?: Record<string, unknown>;
+      providers?: Record<string, { apiKey?: string }>;
     };
     expect(Object.keys(root.providers ?? {})).toEqual(["custom"]);
+    expect(root.providers?.custom?.apiKey).toBe("_CUSTOM_API_KEY");
     expect(root).not.toHaveProperty("pluginCatalogs");
     const zaiCatalogPath = encodePluginModelCatalogRelativePath("zai");
     const zaiCatalog = JSON.parse(plan.pluginCatalogWrites?.[zaiCatalogPath] ?? "{}") as {
-      providers?: Record<string, unknown>;
+      providers?: Record<string, { apiKey?: string }>;
     };
     expect(Object.keys(zaiCatalog.providers ?? {})).toEqual(["zai"]);
+    expect(zaiCatalog.providers?.zai?.apiKey).toBe("_PLUGIN_CUSTOM_KEY");
+
+    await withEnvAsync({ _CUSTOM_API_KEY: undefined, _PLUGIN_CUSTOM_KEY: undefined }, async () => {
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), "/virtual/models.json", {
+        includePluginCatalogs: true,
+        modelsJsonContents: plan.contents,
+        pluginCatalogs: [
+          {
+            pluginId: "zai",
+            contents: plan.pluginCatalogWrites?.[zaiCatalogPath] ?? "",
+          },
+        ],
+        pluginMetadataSnapshot: ZAI_PLUGIN_METADATA_SNAPSHOT,
+      });
+      process.env["_CUSTOM_API_KEY"] = "custom-test-secret";
+      process.env["_PLUGIN_CUSTOM_KEY"] = "plugin-test-secret";
+      await expect(registry.getApiKeyForProvider("custom")).resolves.toBe("custom-test-secret");
+      await expect(registry.getApiKeyForProvider("zai")).resolves.toBe("plugin-test-secret");
+      await expect(
+        registry.getApiKeyAndHeaders(registry.find("custom", "gpt-5.5")!),
+      ).resolves.toEqual({ ok: true, apiKey: "custom-test-secret", headers: undefined });
+      await expect(registry.getApiKeyAndHeaders(registry.find("zai", "gpt-5.5")!)).resolves.toEqual(
+        { ok: true, apiKey: "plugin-test-secret", headers: undefined },
+      );
+      const credentialFree = registry.fork(markAuthStorageCredentialFree(AuthStorage.inMemory()));
+      await expect(credentialFree.getApiKeyForProvider("custom")).resolves.toBeUndefined();
+      await expect(credentialFree.getApiKeyForProvider("zai")).resolves.toBeUndefined();
+      await expect(
+        credentialFree.getApiKeyAndHeaders(credentialFree.find("custom", "gpt-5.5")!),
+      ).resolves.toEqual({ ok: true, apiKey: undefined, headers: undefined });
+      await expect(
+        credentialFree.getApiKeyAndHeaders(credentialFree.find("zai", "gpt-5.5")!),
+      ).resolves.toEqual({ ok: true, apiKey: undefined, headers: undefined });
+      delete process.env["_CUSTOM_API_KEY"];
+      delete process.env["_PLUGIN_CUSTOM_KEY"];
+      await expect(registry.getApiKeyForProvider("custom")).resolves.toBeUndefined();
+      await expect(registry.getApiKeyForProvider("zai")).resolves.toBeUndefined();
+    });
+  });
+
+  it("serializes verified profile references instead of root or plugin secrets", async () => {
+    const agentDir = "/tmp/openclaw-models-config-profile-persistence-test";
+    const canonicalStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "custom:models-json": { type: "api_key", provider: "custom", key: "ABCDEF123456" },
+        "zai:default": { type: "api_key", provider: "zai", key: "zai-profile-secret" },
+      },
+    };
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: canonicalStore }]);
+
+    try {
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: { models: { providers: {} } },
+          agentDir,
+          env: {},
+          existingRaw: "",
+          existingParsed: null,
+          pluginMetadataSnapshot: ZAI_PLUGIN_METADATA_SNAPSHOT,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            custom: createImplicitOpenAiProvider({
+              baseUrl: "https://custom.example/v1",
+              apiKey: "ABCDEF123456",
+            }),
+            zai: createImplicitOpenAiProvider({
+              baseUrl: "https://api.z.ai/api/paas/v4",
+              apiKey: "zai-profile-secret",
+            }),
+          }),
+        },
+      );
+
+      expectWritePlan(plan);
+      const root = JSON.parse(plan.contents) as {
+        providers?: Record<string, { apiKey?: string }>;
+      };
+      const pluginContents =
+        plan.pluginCatalogWrites?.[encodePluginModelCatalogRelativePath("zai")] ?? "{}";
+      const plugin = JSON.parse(pluginContents) as {
+        providers?: Record<string, { apiKey?: string }>;
+      };
+      expect(root.providers?.custom?.apiKey).toBe("custom:models-json");
+      expect(plugin.providers?.zai?.apiKey).toBe("zai:default");
+
+      const authStorage = AuthStorage.inMemory();
+      attachAuthStorageProfiles(authStorage, canonicalStore);
+      const registry = ModelRegistry.create(authStorage, "/virtual/models.json", {
+        modelsJsonContents: plan.contents,
+        pluginCatalogs: [{ pluginId: "zai", contents: pluginContents }],
+        pluginMetadataSnapshot: ZAI_PLUGIN_METADATA_SNAPSHOT,
+      });
+      await expect(registry.getApiKeyForProvider("custom")).resolves.toBe("ABCDEF123456");
+      await expect(registry.getApiKeyForProvider("zai")).resolves.toBe("zai-profile-secret");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("rejects uppercase-shaped plaintext without environment or profile provenance", async () => {
+    const agentDir = "/tmp/openclaw-models-config-uppercase-plaintext-test";
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: { version: 1, profiles: {} } }]);
+    try {
+      await expect(
+        planOpenClawModelsJsonWithDeps(
+          {
+            cfg: { models: { providers: {} } },
+            agentDir,
+            env: {},
+            existingRaw: "",
+            existingParsed: null,
+          },
+          {
+            resolveImplicitProviders: async () => ({
+              custom: createImplicitOpenAiProvider({ apiKey: "ABCDEF123456" }),
+            }),
+          },
+        ),
+      ).rejects.toThrow("Run openclaw doctor --fix before starting OpenClaw");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
   });
 
   it("falls back to canonical env markers when provider runtime has no api-key policy", async () => {
@@ -561,10 +700,7 @@ describe("models-config", () => {
       },
     );
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
+    expectWritePlan(plan);
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<string, { apiKey?: string }>;
     };
@@ -617,10 +753,7 @@ describe("models-config", () => {
       },
     );
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
+    expectWritePlan(plan);
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<string, { models?: Array<{ id?: string }> }>;
     };
@@ -632,10 +765,7 @@ describe("models-config", () => {
   it("keeps google-vertex static catalog rows when an auth profile supplies the API key", () => {
     const plan = googleVertexProfileCatalogPlan;
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
+    expectWritePlan(plan);
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<
         string,
@@ -680,10 +810,7 @@ describe("models-config", () => {
       },
     );
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
+    expectWritePlan(plan);
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<
         string,

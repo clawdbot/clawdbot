@@ -19,6 +19,10 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+import {
+  attachAuthStorageProfiles,
+  resolveAuthStorageProfileApiKey,
+} from "./sessions/auth-storage-profiles.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -545,6 +549,12 @@ describe("prepared model runtime snapshots", () => {
   it("reuses one lifecycle-owned snapshot without rediscovering files", async () => {
     const config = {};
     const input = { config, agentDir: "/tmp/prepared-model-runtime-reuse" };
+    attachAuthStorageProfiles(mocks.authStorage, {
+      version: 1,
+      profiles: {
+        "custom:models-json": { type: "api_key", provider: "custom", key: "catalog-key" },
+      },
+    });
 
     const first = await publishPreparedModelRuntimeSnapshot(input);
     const second = await prepareModelRuntimeSnapshot(input);
@@ -564,6 +574,9 @@ describe("prepared model runtime snapshots", () => {
     const secondStores = first.createStores();
     expect(secondStores.authStorage).not.toBe(firstStores.authStorage);
     expect(secondStores.modelRegistry).not.toBe(firstStores.modelRegistry);
+    expect(
+      resolveAuthStorageProfileApiKey(firstStores.authStorage, "custom", "custom:models-json"),
+    ).toBe("catalog-key");
   });
 
   it.each([

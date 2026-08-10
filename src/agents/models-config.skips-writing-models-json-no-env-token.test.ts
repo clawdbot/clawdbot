@@ -103,6 +103,7 @@ installModelsConfigTestHooks();
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
+let saveAuthProfileStore: typeof import("./auth-profiles/store.js").saveAuthProfileStore;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
 
@@ -154,7 +155,8 @@ describe("models-config", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } =
+      await import("./auth-profiles/store.js"));
     ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
     ({ resetModelsJsonReadyCacheForTest } = await import("./models-config-state.test-support.js"));
   });
@@ -207,15 +209,30 @@ describe("models-config", () => {
 
   it("writes models.json for configured providers", async () => {
     await withTempHome(async () => {
+      const agentDir = resolveDefaultAgentDir({});
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "custom-proxy:default": {
+              type: "api_key",
+              provider: "custom-proxy",
+              key: "TEST_KEY",
+            },
+          },
+        },
+        agentDir,
+      );
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
+      const modelPath = path.join(agentDir, "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<
           string,
           {
             baseUrl?: string;
+            apiKey?: string;
             models?: Array<{
               id?: string;
               cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
@@ -225,6 +242,7 @@ describe("models-config", () => {
       };
 
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers["custom-proxy"]?.apiKey).toBe("custom-proxy:default");
       const model = parsed.providers["custom-proxy"]?.models?.[0];
       expect(model?.id).toBe("llama-3.1-8b");
       expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });

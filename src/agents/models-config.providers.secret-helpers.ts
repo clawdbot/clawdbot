@@ -61,6 +61,10 @@ export type ProviderAuthResolver = (
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
+export function isProviderApiKeyEnvVarName(value: string): boolean {
+  return ENV_VAR_NAME_RE.test(value.trim());
+}
+
 /** Normalizes `${ENV_VAR}` config syntax to the raw environment variable name. */
 export function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -290,7 +294,7 @@ export function normalizeResolvedEnvApiKey(params: {
   if (
     typeof currentApiKey !== "string" ||
     !currentApiKey.trim() ||
-    ENV_VAR_NAME_RE.test(currentApiKey.trim())
+    isProviderApiKeyEnvVarName(currentApiKey)
   ) {
     return params.provider;
   }

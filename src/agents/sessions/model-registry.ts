@@ -20,8 +20,10 @@ import type {
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { isNonSecretApiKeyMarker } from "../model-auth-markers.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
+import { isProviderApiKeyEnvVarName } from "../models-config.providers.secret-helpers.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
@@ -30,6 +32,11 @@ import {
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
+import {
+  hasAuthStorageProfile,
+  isAuthStorageCredentialFree,
+  resolveAuthStorageProfileApiKey,
+} from "./auth-storage-profiles.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import {
   getModelRegistryRuntime,
@@ -232,6 +239,8 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 
 interface ProviderRequestConfig {
   apiKey?: string;
+  catalogEnvVar?: string;
+  catalogProfileId?: string;
   auth?: ProviderAuthMode;
   headers?: Record<string, string>;
   authHeader?: boolean;
@@ -256,6 +265,32 @@ interface CustomModelsResult {
 
 function emptyCustomModelsResult(error?: string): CustomModelsResult {
   return { models: [], error };
+}
+
+function stripProviderRequestCredentials(config: ProviderConfigInput): ProviderConfigInput {
+  const { apiKey: _apiKey, authHeader: _authHeader, headers: _headers, ...rest } = config;
+  return rest;
+}
+
+function classifyCatalogAuth(
+  authStorage: AuthStorage,
+  provider: string,
+  value: string | undefined,
+): Pick<ProviderRequestConfig, "catalogEnvVar" | "catalogProfileId"> {
+  if (!value) {
+    return {};
+  }
+  if (
+    hasAuthStorageProfile(authStorage, provider, value, {
+      includeRuntimeOverride: false,
+    })
+  ) {
+    return { catalogProfileId: value };
+  }
+  if (isProviderApiKeyEnvVarName(value)) {
+    return { catalogEnvVar: value };
+  }
+  return isNonSecretApiKeyMarker(value) ? {} : { catalogProfileId: value };
 }
 
 type ModelRegistryOptions = {
@@ -347,8 +382,12 @@ export class ModelRegistry {
       this.sourceSnapshot = sourceSnapshot;
       this.baseCatalogSnapshot = sourceSnapshot;
       this.restoreSourceCatalog(sourceSnapshot);
+      const credentialFree = isAuthStorageCredentialFree(authStorage);
       this.registeredProviders = new Map(
-        [...source.registeredProviders].map(([provider, config]) => [provider, { ...config }]),
+        [...source.registeredProviders].map(([provider, config]) => [
+          provider,
+          credentialFree ? stripProviderRequestCredentials(config) : { ...config },
+        ]),
       );
       getAuthStorageOAuthProviderRegistry(authStorage).reset();
       for (const oauthProvider of sourceSnapshot.oauthProviders) {
@@ -569,7 +608,11 @@ export class ModelRegistry {
 
       for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
         if ((providerConfig.models ?? []).length > 0) {
-          this.storeProviderRequestConfig(providerName, providerConfig);
+          const { apiKey, ...requestConfig } = providerConfig;
+          this.storeProviderRequestConfig(providerName, {
+            ...requestConfig,
+            ...classifyCatalogAuth(this.authStorage, providerName, apiKey),
+          });
         }
       }
 
@@ -750,10 +793,21 @@ export class ModelRegistry {
    * Get API key for a model.
    */
   hasConfiguredAuth(model: Model): boolean {
+    const requestConfig = this.providerRequestConfigs.get(model.provider);
+    if (requestConfig?.auth === "aws-sdk") {
+      return true;
+    }
+    if (requestConfig?.catalogProfileId) {
+      return hasAuthStorageProfile(
+        this.authStorage,
+        model.provider,
+        requestConfig.catalogProfileId,
+      );
+    }
     return (
       this.authStorage.hasAuth(model.provider) ||
-      this.providerRequestConfigs.get(model.provider)?.auth === "aws-sdk" ||
-      this.providerRequestConfigs.get(model.provider)?.apiKey !== undefined
+      Boolean(this.resolveCatalogEnvironmentAuth(requestConfig?.catalogEnvVar)) ||
+      requestConfig?.apiKey !== undefined
     );
   }
 
@@ -761,21 +815,22 @@ export class ModelRegistry {
     return `${provider}:${modelId}`;
   }
 
-  private storeProviderRequestConfig(
-    providerName: string,
-    config: {
-      apiKey?: string;
-      auth?: ProviderAuthMode;
-      headers?: Record<string, string>;
-      authHeader?: boolean;
-    },
-  ): void {
-    if (!config.apiKey && !config.auth && !config.headers && !config.authHeader) {
+  private storeProviderRequestConfig(providerName: string, config: ProviderRequestConfig): void {
+    if (
+      !config.apiKey &&
+      !config.catalogEnvVar &&
+      !config.catalogProfileId &&
+      !config.auth &&
+      !config.headers &&
+      !config.authHeader
+    ) {
       return;
     }
 
     this.providerRequestConfigs.set(providerName, {
       apiKey: config.apiKey,
+      catalogEnvVar: config.catalogEnvVar,
+      catalogProfileId: config.catalogProfileId,
       auth: config.auth,
       headers: config.headers,
       authHeader: config.authHeader,
@@ -795,6 +850,25 @@ export class ModelRegistry {
     this.modelRequestHeaders.set(key, headers);
   }
 
+  private resolveCatalogEnvironmentAuth(envVar: string | undefined) {
+    return envVar && !isAuthStorageCredentialFree(this.authStorage)
+      ? process.env[envVar]?.trim() || undefined
+      : undefined;
+  }
+
+  private async resolveCanonicalRequestApiKey(
+    provider: string,
+    config: ProviderRequestConfig | undefined,
+  ): Promise<string | undefined> {
+    if (config?.catalogProfileId) {
+      return resolveAuthStorageProfileApiKey(this.authStorage, provider, config.catalogProfileId);
+    }
+    return (
+      (await this.authStorage.getApiKey(provider, { includeFallback: false })) ??
+      this.resolveCatalogEnvironmentAuth(config?.catalogEnvVar)
+    );
+  }
+
   /**
    * Get API key and request headers for a model.
    */
@@ -802,13 +876,10 @@ export class ModelRegistry {
     try {
       const providerConfig = this.providerRequestConfigs.get(model.provider);
       const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
-      const apiKeyFromAuthStorage = usesAwsSdkAuth
-        ? undefined
-        : await this.authStorage.getApiKey(model.provider, {
-            includeFallback: false,
-          });
       const apiKey =
-        apiKeyFromAuthStorage ??
+        (usesAwsSdkAuth
+          ? undefined
+          : await this.resolveCanonicalRequestApiKey(model.provider, providerConfig)) ??
         (!usesAwsSdkAuth && providerConfig?.apiKey
           ? resolveConfigValueOrThrow(
               providerConfig.apiKey,
@@ -860,11 +931,34 @@ export class ModelRegistry {
       return { configured: true, source: "models_json_key", label: providerRequestConfig.auth };
     }
 
+    if (providerRequestConfig?.catalogProfileId) {
+      const authStatus = this.authStorage.getAuthStatus(provider);
+      if (authStatus.source === "runtime") {
+        return authStatus;
+      }
+      return hasAuthStorageProfile(
+        this.authStorage,
+        provider,
+        providerRequestConfig.catalogProfileId,
+      )
+        ? { configured: true, source: "stored" }
+        : { configured: false };
+    }
+
     const authStatus = this.authStorage.getAuthStatus(provider);
     if (authStatus.source) {
       return authStatus;
     }
-
+    if (
+      providerRequestConfig?.catalogEnvVar &&
+      this.resolveCatalogEnvironmentAuth(providerRequestConfig.catalogEnvVar)
+    ) {
+      return {
+        configured: true,
+        source: "environment",
+        label: providerRequestConfig.catalogEnvVar,
+      };
+    }
     const providerApiKey = providerRequestConfig?.apiKey;
     if (!providerApiKey) {
       return authStatus;
@@ -901,12 +995,13 @@ export class ModelRegistry {
    * Get API key for a provider.
    */
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
-    const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
+    const providerConfig = this.providerRequestConfigs.get(provider);
+    const apiKey = await this.resolveCanonicalRequestApiKey(provider, providerConfig);
     if (apiKey !== undefined) {
       return apiKey;
     }
 
-    const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
+    const providerApiKey = providerConfig?.apiKey;
     return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
   }
 

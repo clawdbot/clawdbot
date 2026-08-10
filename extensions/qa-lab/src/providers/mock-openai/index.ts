@@ -6,5 +6,5 @@ export const mockOpenAiProviderDefinition = createMockQaProviderDefinition({
   commandName: "mock-openai",
   commandDescription: "Run the local mock OpenAI Responses API server for QA",
   serverLabel: "QA mock OpenAI",
-  mockAuthProviders: ["openai", "anthropic"],
+  mockAuthProviders: ["mock-openai", "openai", "anthropic"],
 });

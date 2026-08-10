@@ -1,5 +1,6 @@
 // Qa Lab helper module supports mock model config behavior.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildQaMockProfileId } from "./mock-auth-profile-id.js";
 
 const ZERO_COST = Object.freeze({
   input: 0,
@@ -52,12 +53,13 @@ function createMockOpenAiTextModel(id: string): ModelProviderConfig["models"][nu
 }
 
 function createMockOpenAiResponsesProvider(
+  providerId: string,
   baseUrl: string,
   modelIds: readonly string[],
 ): ModelProviderConfig {
   return {
     baseUrl,
-    apiKey: "test",
+    apiKey: buildQaMockProfileId(providerId),
     api: "openai-responses",
     request: {
       allowPrivateNetwork: true,
@@ -81,7 +83,7 @@ function createMockOpenAiResponsesProvider(
 function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConfig {
   return {
     baseUrl: trimTrailingApiV1(baseUrl),
-    apiKey: "test",
+    apiKey: buildQaMockProfileId("anthropic"),
     api: "anthropic-messages",
     request: {
       allowPrivateNetwork: true,
@@ -117,12 +119,13 @@ export function createMockProviderMap(
   selectedModelRefs: readonly (string | undefined)[] = [],
 ) {
   const primaryProvider = createMockOpenAiResponsesProvider(
+    primaryProviderId,
     providerBaseUrl,
     selectedOpenAiModelIds(primaryProviderId, selectedModelRefs),
   );
   return {
     [primaryProviderId]: primaryProvider,
-    openai: cloneProvider(primaryProvider),
+    openai: { ...cloneProvider(primaryProvider), apiKey: buildQaMockProfileId("openai") },
     anthropic: createMockAnthropicMessagesProvider(providerBaseUrl),
   };
 }

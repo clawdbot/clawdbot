@@ -15,6 +15,7 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 /** Options for discovering credentials without prompting for secret material. */
 export type DiscoverAuthStorageOptions = {
@@ -83,11 +84,11 @@ export function resolveAmbientAgentCredentialsForDiscovery(
   return credentials;
 }
 
-/** Resolves agent credentials from auth profiles, env, and synthetic auth hooks. */
-export function resolveAgentCredentialsForDiscovery(
+/** Resolves the canonical profile store and its provider-selected credential projection. */
+export function resolveAgentAuthForDiscovery(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): AgentCredentialMap {
+): { credentials: AgentCredentialMap; store: AuthProfileStore } {
   const storeOptions = {
     allowKeychainPrompt: false,
     ...(options?.config ? { config: options.config } : {}),
@@ -124,5 +125,5 @@ export function resolveAgentCredentialsForDiscovery(
     // Ambient auth is a lifecycle-owned fallback. Agent-local profiles remain authoritative.
     credentials[provider] = credential;
   }
-  return credentials;
+  return { credentials, store };
 }

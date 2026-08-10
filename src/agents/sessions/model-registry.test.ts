@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   loadPersistedPluginModelCatalogs,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -120,6 +121,7 @@ function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfig
 }
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -231,30 +233,6 @@ describe("ModelRegistry models.json auth", () => {
     expect(first.find("custom", "example-model")).toBeDefined();
   });
 
-  it("preserves models.json provider auth in a catalog fork", async () => {
-    const modelsPath = writeModelsJson({
-      providers: {
-        custom: {
-          baseUrl: "https://models.example/v1",
-          api: "openai-responses",
-          apiKey: "test-token-placeholder",
-          models: [{ id: "example-model" }],
-        },
-      },
-    });
-    const template = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
-    const fork = template.fork(AuthStorage.inMemory());
-    const model = fork.find("custom", "example-model");
-
-    expect(model).toBeDefined();
-    await expect(fork.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
-    await expect(fork.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "test-token-placeholder",
-      headers: undefined,
-    });
-  });
-
   it("does not restore a source provider after unregistering it from a fork", () => {
     const template = ModelRegistry.inMemory(AuthStorage.inMemory());
     template.registerProvider("template-only", oauthProviderConfig("Template only", "template"));
@@ -325,7 +303,7 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getAvailable().map((model) => model.id)).toEqual(["example-model"]);
   });
 
-  it("automatically migrates released provider models before the first registry load", async () => {
+  it("migrates released provider models without using their catalog credential", async () => {
     const modelsPath = writeModelsJson({ providers: {} });
     const agentDir = dirname(modelsPath);
     const catalogPath = join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
@@ -349,9 +327,7 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-    await expect(registry.getApiKeyForProvider("zai")).resolves.toBe(
-      "released-zai-provider-test-key",
-    );
+    await expect(registry.getApiKeyForProvider("zai")).resolves.toBeUndefined();
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     expect(existsSync(catalogPath)).toBe(false);
   });
