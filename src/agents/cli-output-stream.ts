@@ -184,6 +184,7 @@ export function createCliJsonlStreamingParser(params: {
   let rawLines = 0;
   const texts: string[] = [];
   let sawCustomJsonlEvent = false;
+  let sawGeminiStructuredOutput = false;
   const toolTracker = createToolUseTracker();
   const outputLimits = resolveCliStreamJsonOutputLimits(params.backend);
   // Classification is keyed on consumer presence so reclassified pre-tool text
@@ -467,6 +468,12 @@ export function createCliJsonlStreamingParser(params: {
     const geminiErrorText = isGeminiStreamJsonDialect(params)
       ? readGeminiCliStreamJsonError(parsed)
       : undefined;
+    if (
+      isGeminiStreamJsonDialect(params) &&
+      (parsed.type === "tool_use" || parsed.type === "tool_result" || parsed.type === "result")
+    ) {
+      sawGeminiStructuredOutput = true;
+    }
     if (geminiErrorText) {
       output = {
         text: "",
@@ -775,6 +782,9 @@ export function createCliJsonlStreamingParser(params: {
       if (output) {
         return output;
       }
+      if (rawLines === 0) {
+        return null;
+      }
       if (sawCustomJsonlEvent) {
         return { text: texts.join("\n").trim() || assistantText.trim(), sessionId, usage };
       }
@@ -784,6 +794,17 @@ export function createCliJsonlStreamingParser(params: {
           sessionId,
           usage,
           ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        };
+      }
+      if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {
+        return { text: "", sessionId, usage };
+      }
+      if (isStreamJsonDialect(params)) {
+        return {
+          text: "",
+          sessionId,
+          usage,
+          errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
         };
       }
       const text = texts.join("\n").trim();
