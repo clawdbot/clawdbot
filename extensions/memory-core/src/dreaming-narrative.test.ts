@@ -4,7 +4,7 @@ import path from "node:path";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readRecentDreamDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { readRecentDreamDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-diary-file.js";
 import { runDreamNarrative, type DreamingCompletion } from "./dreaming-narrative.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";

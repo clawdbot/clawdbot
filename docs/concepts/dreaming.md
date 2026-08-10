@@ -28,6 +28,8 @@ and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps
 existing annotated entries byte-for-byte unless it explicitly merges or
 supersedes them.
 
+Dreaming's managed-block update buffers up to 16 MiB from a daily inline memory file or `DREAMS.md`. If either file is larger, that managed-block update uses a bounded streaming replacement so existing large notes and diary text can stay in place without blocking the sweep. Other diary transforms (narrative entries, backfill, and consolidation) keep their existing full-diary read behavior. Oversized replacements stage data in a protected temporary file and commit through a workspace-root-relative writer. Native fs-safe publication uses directory-relative descriptors; OpenClaw's default native-off mode uses fs-safe's documented canonical and identity checks, which detect the tested parent-directory swap but are not race-atomic against a hostile same-privilege process. Set `FS_SAFE_NATIVE_MODE=require` when that threat model applies; unsupported native environments then fail closed instead of falling back. Existing daily-memory symlinks remain supported only when the resolved target and its parent directories stay under `<workspace>/memory`; external targets or parents are rejected before a managed write and are left untouched. To recover, copy or move the desired contents into an in-workspace `memory/<day>.md` file, repoint the daily symlink to that file, and rerun dreaming. `DREAMS.md` symlinks remain rejected.
+
 ## Phase model
 
 Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep. These are internal implementation phases, not separate user-configured modes.

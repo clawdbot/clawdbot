@@ -7,7 +7,7 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-dreams-file.js";
+import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-diary-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 

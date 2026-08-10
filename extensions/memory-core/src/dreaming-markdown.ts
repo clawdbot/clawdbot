@@ -1,19 +1,14 @@
 // Memory Core plugin module implements dreaming markdown behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   formatMemoryDreamingDay,
   type MemoryDreamingPhaseName,
   type MemoryDreamingStorageConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import {
-  replaceManagedMarkdownBlock,
-  withTrailingNewline,
-} from "openclaw/plugin-sdk/memory-host-markdown";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
+import { updateDeepDreamsFile, updateManagedDreamingMarkdownFile } from "./dreaming-dreams-file.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -25,6 +20,7 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
   light: "light",
   rem: "rem",
 };
+const DEFAULT_DAILY_MEMORY_FILE_MODE = 0o600;
 
 function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   start: string;
@@ -92,22 +88,18 @@ export async function writeDailyDreamingPhaseBlock(params: {
 
   if (shouldWriteInline(params.storage)) {
     inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
-    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
-    const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
-      if (extractErrorCode(err) === "ENOENT") {
-        return "";
-      }
-      throw err;
-    });
     const markers = resolvePhaseMarkers(params.phase);
-    const updated = replaceManagedMarkdownBlock({
-      original,
+    await updateManagedDreamingMarkdownFile({
+      filePath: inlinePath,
+      workspaceDir: params.workspaceDir,
       heading: DAILY_PHASE_HEADINGS[params.phase],
       startMarker: markers.start,
       endMarker: markers.end,
       body,
+      tempPrefix: `${path.basename(inlinePath)}.dreaming`,
+      allowSymlink: true,
+      creationMode: DEFAULT_DAILY_MEMORY_FILE_MODE,
     });
-    await replaceDreamingMarkdownFile(inlinePath, withTrailingNewline(updated));
   }
 
   if (shouldWriteSeparate(params.storage)) {
