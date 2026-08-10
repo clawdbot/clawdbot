@@ -39,6 +39,11 @@ const mocks = vi.hoisted(() => ({
     migrated: 0,
     warnings: [],
   }),
+  maybeMigrateModelCatalogCredentials: vi.fn(async () => ({
+    detected: 0,
+    migrated: 0,
+    warnings: [],
+  })),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
@@ -246,6 +251,10 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
 
 vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
   maybeMigrateLegacyPluginModelCatalogs: mocks.maybeMigrateLegacyPluginModelCatalogs,
+}));
+
+vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
+  maybeMigrateModelCatalogCredentials: mocks.maybeMigrateModelCatalogCredentials,
 }));
 
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
@@ -1980,6 +1989,11 @@ describe("doctor health contributions", () => {
       mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
     );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
+    });
+    expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,
       runtime: ctx.runtime,
