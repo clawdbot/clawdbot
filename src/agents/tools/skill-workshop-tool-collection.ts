@@ -10,6 +10,7 @@ import {
   restoreLatestSkillCollectionBackup,
   type SkillCollectionPlanEntry,
   type SkillCollectionReconcileContext,
+  type SkillCollectionReconcileResult,
 } from "../../skills/workshop/collection-reconcile.js";
 import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -74,22 +75,32 @@ export async function executeSkillCollectionReconcile(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  if (params.context?.result) {
+  if (params.context?.result || params.context?.reconciling) {
     throw new ToolInputError("this skill collection has already been reconciled");
   }
-  const result = await reconcileSkillCollection({
-    workspaceDir: params.workspaceDir,
-    plan: readCollectionPlanParam(params.toolParams),
-    readSkillHashes: params.readSkillHashes,
-    readSkillTreeHashes: params.context?.readSkillTreeHashes ?? new Map(),
-    config: params.config,
-    agentId: params.agentId,
-    agentIds: params.context?.agentIds,
-    approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
-    env: params.env,
-  });
   if (params.context) {
-    params.context.result = result;
+    params.context.reconciling = true;
+  }
+  let result: SkillCollectionReconcileResult;
+  try {
+    result = await reconcileSkillCollection({
+      workspaceDir: params.workspaceDir,
+      plan: readCollectionPlanParam(params.toolParams),
+      readSkillHashes: params.readSkillHashes,
+      readSkillTreeHashes: params.context?.readSkillTreeHashes ?? new Map(),
+      config: params.config,
+      agentId: params.agentId,
+      agentIds: params.context?.agentIds,
+      approvedSkillNamesByAgent: params.context?.approvedSkillNamesByAgent,
+      env: params.env,
+    });
+    if (params.context) {
+      params.context.result = result;
+    }
+  } finally {
+    if (params.context) {
+      params.context.reconciling = false;
+    }
   }
   return {
     content: [

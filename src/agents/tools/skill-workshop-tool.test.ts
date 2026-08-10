@@ -8,6 +8,7 @@ import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
+import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
@@ -65,6 +66,49 @@ describe("skill_workshop tool", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "duplicate", "SKILL.md"), "utf8"),
     ).resolves.toContain("Duplicate procedure");
+  });
+
+  it("reserves the one reconciliation before awaiting its commit", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-concurrent-tool-");
+    await writeWorkspaceSkills(workspaceDir, [{ name: "procedure", description: "Procedure" }]);
+    const collectionReconcile = { approvedSkillNames: new Set(["procedure"]) };
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      collectionReconcile,
+    });
+    await tool.execute("read", { action: "read", skill_name: "procedure" });
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+
+    const first = tool.execute("first", {
+      action: "reconcile",
+      collection: [{ action: "keep", name: "procedure" }],
+    });
+    await expect(
+      tool.execute("second", {
+        action: "reconcile",
+        collection: [{ action: "drop", name: "procedure", reason: "duplicate" }],
+      }),
+    ).rejects.toThrow("already been reconciled");
+
+    releaseLock?.();
+    await heldLock;
+    await first;
   });
 
   it("bounds total collection text returned to the reviewer", async () => {

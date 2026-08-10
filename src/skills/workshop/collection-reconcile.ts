@@ -66,6 +66,7 @@ export type SkillCollectionReconcileContext = {
   readSkillTreeHashes?: Map<string, string>;
   readSkillBytes?: Map<string, number>;
   readByteCount?: number;
+  reconciling?: boolean;
   result?: SkillCollectionReconcileResult;
 };
 
@@ -202,12 +203,6 @@ export async function reconcileSkillCollection(params: {
       });
       await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
       const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
-      try {
-        await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, prepared);
-      } catch (error) {
-        await discardPendingCollectionBackup(backup);
-        throw error;
-      }
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
       if (shouldDispatch) {
@@ -225,6 +220,12 @@ export async function reconcileSkillCollection(params: {
             }),
           );
         }
+      }
+      try {
+        await assertCollectionMutationCurrent(current, params.readSkillTreeHashes, prepared);
+      } catch (error) {
+        await discardPendingCollectionBackup(backup);
+        throw error;
       }
       try {
         for (const mutation of prepared) {

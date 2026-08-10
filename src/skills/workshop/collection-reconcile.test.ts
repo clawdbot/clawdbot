@@ -22,9 +22,10 @@ import { withSkillCollectionLock } from "./target-lock.js";
 const dispatchCommittedSkillChangeBestEffort = vi.hoisted(() =>
   vi.fn(async (_event: { action: string }) => {}),
 );
+const snapshotCommittedSkillArtifactBestEffort = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../lifecycle/skill-change-hook.js", () => ({
   hasCommittedSkillChangeHooks: () => true,
-  snapshotCommittedSkillArtifactBestEffort: vi.fn(async () => undefined),
+  snapshotCommittedSkillArtifactBestEffort,
   dispatchCommittedSkillChangeBestEffort,
 }));
 
@@ -34,6 +35,8 @@ let workspaceDir: string;
 
 beforeEach(async () => {
   dispatchCommittedSkillChangeBestEffort.mockClear();
+  snapshotCommittedSkillArtifactBestEffort.mockReset();
+  snapshotCommittedSkillArtifactBestEffort.mockResolvedValue(undefined);
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-collection-state-",
@@ -209,10 +212,53 @@ describe("skill collection reconciliation", () => {
     await expect(fs.readFile(supportFile, "utf8")).resolves.toContain("External edit");
   });
 
+  it("preserves an external edit made after backup validation", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Procedure", body: "# Original\n" },
+    ]);
+    const skillDir = path.join(workspaceDir, "skills", "procedure");
+    const supportFile = path.join(skillDir, "references", "live.md");
+    await fs.mkdir(path.dirname(supportFile), { recursive: true });
+    await fs.writeFile(supportFile, "Before\n", "utf8");
+    const receipt = await readCollectionReceipt();
+    snapshotCommittedSkillArtifactBestEffort.mockImplementationOnce(async () => {
+      await fs.appendFile(supportFile, "External edit\n", "utf8");
+      return undefined;
+    });
+
+    await expect(
+      reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...receipt,
+        plan: [
+          {
+            action: "write",
+            name: "procedure",
+            description: "Rewritten procedure",
+            content: "# Rewritten\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Skill tree changed before collection mutation: procedure");
+
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "# Original",
+    );
+    await expect(fs.readFile(supportFile, "utf8")).resolves.toContain("External edit");
+  });
+
   it("waits behind the same collection commit lock used by proposal apply", async () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "obsolete", description: "Obsolete procedure" },
     ]);
+    const aliasParent = await tempDirs.make("openclaw-skill-collection-lock-alias-");
+    const workspaceAlias = path.join(aliasParent, "workspace-alias");
+    await fs.symlink(
+      workspaceDir,
+      workspaceAlias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const receipt = await readCollectionReceipt();
     let releaseLock: (() => void) | undefined;
     let markAcquired: (() => void) | undefined;
@@ -220,7 +266,7 @@ describe("skill collection reconciliation", () => {
       markAcquired = resolve;
     });
     const heldLock = withSkillCollectionLock(
-      workspaceDir,
+      workspaceAlias,
       async () => {
         markAcquired?.();
         await new Promise<void>((resolve) => {
