@@ -24,6 +24,8 @@ type ProviderOptions = {
   completeness?: Partial<Record<string, boolean>>;
   headShaInitial?: string;
   headShaFinal?: string;
+  prLastEditedAtInitial?: string | null;
+  prLastEditedAtFinal?: string | null;
 };
 
 function successfulCheck(name: string, id: number) {
@@ -38,11 +40,17 @@ function successfulCheck(name: string, id: number) {
   };
 }
 
-function clawsweeperComment(params: { id: number; body: string; createdAt?: string }) {
+function clawsweeperComment(params: {
+  id: number;
+  body: string;
+  createdAt?: string;
+  updatedAt?: string;
+}) {
   return {
     id: params.id,
     html_url: `${prUrl}#issuecomment-${params.id}`,
     created_at: params.createdAt ?? "2026-07-26T09:00:00Z",
+    updated_at: params.updatedAt ?? params.createdAt ?? "2026-07-26T09:00:00Z",
     user: {
       login: "clawsweeper[bot]",
       type: "Bot",
@@ -78,6 +86,10 @@ function createProvider(options: ProviderOptions = {}) {
             sha: pullReads === 1 ? initialHead : finalHead,
             ref: "codex/pr-convergence-audit",
           },
+          last_edited_at:
+            pullReads === 1
+              ? (options.prLastEditedAtInitial ?? null)
+              : (options.prLastEditedAtFinal ?? options.prLastEditedAtInitial ?? null),
         };
       },
       async fetchFormalReviews() {
@@ -252,6 +264,28 @@ describe("pr-convergence-audit", () => {
     expect(result.reason).toContain("No trusted exact-head ClawSweeper pass");
   });
 
+  it("does not treat ClawSweeper command receipts as durable review findings", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      issueComments: [
+        clawsweeperComment({
+          id: 9104,
+          body: [
+            "<!-- clawsweeper-command-ack:9000 -->",
+            `<!-- clawsweeper-command-status:${pr}:re_review:${staleSha} -->`,
+            "Re-review requested for the previous head.",
+          ].join("\n"),
+        }),
+        clawsweeperComment({ id: 9105, body: passBody }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.READY);
+    expect(result.findingCounts).toEqual({});
+  });
+
   it("returns UNKNOWN when target-branch required-check policy is unavailable", async () => {
     const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
     const { provider } = createProvider({
@@ -382,6 +416,7 @@ describe("pr-convergence-audit", () => {
       headSha,
       headRef: "branch",
       prUrl,
+      prLastEditedAt: null,
       formalReviews: [
         {
           id: "1",
@@ -414,7 +449,9 @@ describe("pr-convergence-audit", () => {
       evidence,
       findings: [],
       headStable: true,
+      prContentStable: true,
       hasExactHeadClawSweeperPass: false,
+      hasFreshExactHeadClawSweeperPass: false,
     });
 
     expect(decision.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
@@ -432,6 +469,7 @@ describe("pr-convergence-audit", () => {
       headSha,
       headRef: "branch",
       prUrl,
+      prLastEditedAt: null,
       formalReviews: [
         {
           id: "2",
@@ -464,7 +502,9 @@ describe("pr-convergence-audit", () => {
       evidence,
       findings: [],
       headStable: true,
+      prContentStable: true,
       hasExactHeadClawSweeperPass: false,
+      hasFreshExactHeadClawSweeperPass: false,
     });
 
     expect(decision.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
@@ -502,6 +542,67 @@ describe("pr-convergence-audit", () => {
     expect(result.evidence.errors).toEqual(
       expect.arrayContaining([expect.stringContaining("rate limit")]),
     );
+  });
+
+  it("invalidates an exact-head pass when the PR content was edited afterward", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      prLastEditedAtInitial: "2026-07-26T10:00:00Z",
+      issueComments: [
+        clawsweeperComment({
+          id: 9650,
+          body: passBody,
+          updatedAt: "2026-07-26T09:59:59Z",
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toContain("predates the latest PR title or description edit");
+    expect(result.nextAction).toMatch(/fresh exact-head ClawSweeper review/i);
+  });
+
+  it("accepts an in-place exact-head verdict update after the latest PR content edit", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      prLastEditedAtInitial: "2026-07-26T10:00:00Z",
+      issueComments: [
+        clawsweeperComment({
+          id: 9651,
+          body: passBody,
+          createdAt: "2026-07-26T09:00:00Z",
+          updatedAt: "2026-07-26T10:00:01Z",
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.READY);
+    expect(result.evidence.prLastEditedAt).toBe("2026-07-26T10:00:00Z");
+  });
+
+  it("fails closed when PR content changes during evidence collection", async () => {
+    const passBody = `<!-- clawsweeper-verdict:pass item=${pr} sha=${headSha} confidence=high -->`;
+    const { provider } = createProvider({
+      prLastEditedAtInitial: "2026-07-26T10:00:00Z",
+      prLastEditedAtFinal: "2026-07-26T10:01:00Z",
+      issueComments: [
+        clawsweeperComment({
+          id: 9652,
+          body: passBody,
+          updatedAt: "2026-07-26T10:01:01Z",
+        }),
+      ],
+    });
+
+    const result = await auditPrConvergence({ repo, pr, provider });
+
+    expect(result.decision).toBe(CONVERGENCE_DECISIONS.UNKNOWN);
+    expect(result.reason).toContain("changed between the initial and final audit reads");
+    expect(result.nextAction).toMatch(/content stabilizes/i);
   });
 
   it("returns UNKNOWN when actionable evidence lacks an exact reviewed SHA", async () => {

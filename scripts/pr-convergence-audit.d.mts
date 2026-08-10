@@ -47,6 +47,7 @@ export type EvidenceCollection = {
   headSha: string;
   headRef: string;
   prUrl: string;
+  prLastEditedAt: string | null;
   formalReviews: NormalizedEvidenceItem[];
   inlineReviewComments: NormalizedEvidenceItem[];
   issueComments: NormalizedEvidenceItem[];
@@ -75,6 +76,7 @@ export type PrConvergenceProvider = {
     number: number;
     html_url: string;
     head: { sha: string; ref: string };
+    last_edited_at?: string | null;
   }>;
   fetchFormalReviews: (params: { repo: string; pr: number }) => Promise<{
     items: Record<string, unknown>[];
@@ -92,7 +94,7 @@ export type PrConvergenceProvider = {
     logins: string[];
     complete: boolean;
   }>;
-  fetchCheckRuns: (params: { repo: string; headSha: string }) => Promise<{
+  fetchCheckRuns: (params: { repo: string; pr: number; headSha: string }) => Promise<{
     items: Record<string, unknown>[];
     complete: boolean;
     requiredPolicy?: "resolved" | "unknown";
@@ -131,7 +133,9 @@ export function decidePrConvergence(params: {
   evidence: EvidenceCollection;
   findings: NormalizedFinding[];
   headStable: boolean;
+  prContentStable: boolean;
   hasExactHeadClawSweeperPass: boolean;
+  hasFreshExactHeadClawSweeperPass: boolean;
 }): {
   decision: ConvergenceDecision;
   reason: string;

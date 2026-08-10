@@ -85,6 +85,8 @@ Fail closed to `UNKNOWN` when evidence is incomplete or unsafe to trust:
 - required checks still pending
 - stale blocking evidence for an older head
 - the PR head changes between the initial and final reads
+- the PR title or description changes between the initial and final reads
+- the latest trusted exact-head pass predates the latest PR title or description edit
 
 Stale blocking bot comments must produce `UNKNOWN` with a refresh or re-review
 next action. They must never be silently dismissed.
@@ -119,10 +121,14 @@ Run the convergence audit read-only at these points:
 ## Implementation
 
 - audit logic: `scripts/pr-convergence-audit.mjs`
+- live provider: `scripts/pr-convergence-provider.mjs`
+- landing CLI: `scripts/pr-convergence-audit-cli.mjs`
 - deterministic tests: `test/scripts/pr-convergence-audit.test.ts`
 
-Live GitHub access belongs behind an injected provider. Tests use fixtures only
-and do not call GitHub.
+The canonical `scripts/pr merge-verify` and `scripts/pr merge-run` landing paths
+invoke the audit automatically and fail closed unless it returns `READY`.
+The live CLI uses the read-only GitHub provider; deterministic tests use injected
+fixtures and do not call GitHub.
 
 ## Related
 
