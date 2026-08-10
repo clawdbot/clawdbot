@@ -82,18 +82,33 @@
    :where(p + ...) spacing rule below which intentionally omits table. */
 .chat-text :where(table) {
   margin-top: 0.75em;
-  border-collapse: collapse;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: var(--radius-md);
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
   max-width: 100%;
+  background: color-mix(in srgb, var(--accent) 2%, var(--bg-elevated));
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 4%, transparent);
   font-size: 13px;
   display: block;
   overflow-x: auto;
 }
 
 .chat-text :where(th, td) {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  vertical-align: top;
+  padding: 8px 12px;
+  border-right: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  text-align: left;
+  vertical-align: middle;
+}
+
+.chat-text :where(th:last-child, td:last-child) {
+  border-right: none;
+}
+
+.chat-text :where(tbody tr:last-child td) {
+  border-bottom: none;
 }
 
 .chat-text :where(th:first-child, td:first-child) {
@@ -103,10 +118,32 @@
 }
 
 .chat-text :where(th) {
-  font-family: var(--mono);
+  border-bottom-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 10%, var(--secondary)),
+    color-mix(in srgb, var(--accent) 6%, var(--secondary))
+  );
+  color: var(--text-strong);
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+
+.chat-text :where(tbody tr) {
+  transition: background var(--duration-fast) ease;
+}
+
+.chat-text :where(tbody tr:nth-child(even)) {
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+
+.chat-text :where(tbody tr:hover) {
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-elevated));
+}
+
+.chat-text :where(tbody td:first-child) {
+  color: var(--text-strong);
   font-weight: 500;
-  color: var(--muted);
-  background: var(--secondary);
 }
 
 .chat-text :where(ul, ol) {
