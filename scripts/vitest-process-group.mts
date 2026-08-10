@@ -160,10 +160,12 @@ async function joinVitestProcessGroup(
 }
 
 function waitForChildCompletionEvent(child: ChildProcess, event: "exit" | "close") {
-  return new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
-    child.once(event, (code, signal) => resolve({ code, signal }));
-    child.once("error", reject);
-  });
+  return new Promise<{ code: number | null; signal: ChildProcess["signalCode"] }>(
+    (resolve, reject) => {
+      child.once(event, (code, signal) => resolve({ code, signal }));
+      child.once("error", reject);
+    },
+  );
 }
 
 /**
