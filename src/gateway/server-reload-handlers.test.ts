@@ -1225,6 +1225,49 @@ describe("gateway hot reload model state", () => {
     });
   });
 
+  it("treats machine-managed metadata paths as scope-neutral", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(
+      buildGatewayReloadPlan(["agents.entries.agentD.model", "meta"]),
+      nextConfig,
+    );
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      agentIds: new Set(["agentd"]),
+    });
+  });
+
+  it("reverts to full refresh when an agent default marker changes", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan(["agents.entries.alpha.default"]), nextConfig);
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+    });
+  });
+
+  it("reverts to full refresh when an agentDir changes", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {} as OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan(["agents.entries.alpha.agentDir"]), nextConfig);
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+    });
+  });
+
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
     const newCron = {

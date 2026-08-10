@@ -56,6 +56,12 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
  * than a bounded set of agents. Only paths under `agents.entries.<id>.*` scope the prepared-model
  * runtime refresh to those agents; any more global config change (models, defaults, plugins, ...)
  * reports undefined so every configured owner is rebuilt as today.
+ *
+ * Machine-managed metadata paths (e.g. `meta.*`) are scope-neutral: they are filtered out before
+ * the agent-scope decision so they never disable agent-scoped reloads.
+ *
+ * Changes to an agent's `default` marker or its `agentDir` affect the default-agent-derived
+ * `inheritedAuthDir` shared by every configured owner, so they force a full refresh (undefined).
  */
 function resolveModelRuntimeAgentIdsFromChangedPaths(
   changedPaths: readonly string[],
@@ -65,8 +71,15 @@ function resolveModelRuntimeAgentIdsFromChangedPaths(
   }
   const agentIds = new Set<string>();
   for (const path of changedPaths) {
+    if (path === "meta" || path.startsWith("meta.")) {
+      continue;
+    }
     const match = /^agents\.entries\.([^.]+)(?:\.|$)/.exec(path);
     if (!match) {
+      return undefined;
+    }
+    const field = path.slice(`agents.entries.${match[1]}`.length + 1);
+    if (field === "default" || field === "agentDir" || field.startsWith("agentDir.")) {
       return undefined;
     }
     agentIds.add(normalizeAgentId(match[1]!));
