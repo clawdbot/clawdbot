@@ -282,6 +282,49 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["hello", "!"]);
   });
 
+  it("does not let a superseded recovery drain the replacement stream queue", async () => {
+    const { client, conn } = makeHarness();
+    const oldReplay = deferred<void>();
+    const oldReplayEvents: string[] = [];
+    await openSession(conn, {
+      onData: () => {},
+      onReplay: async () => {
+        oldReplayEvents.push("start");
+        await oldReplay.promise;
+        oldReplayEvents.push("done");
+      },
+    });
+    client.nextResponse = sessionResult({ buffer: "old snapshot", seq: 12 });
+    emitData(client, 5, "hello");
+    emitData(client, 12, "world");
+    await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start"]));
+
+    const newReplay = deferred<void>();
+    const newReplayEvents: string[] = [];
+    const newData: string[] = [];
+    client.nextResponse = sessionResult({ buffer: "new snapshot", seq: 20 });
+    const newAttach = conn.attach("s1", {
+      onData: (chunk) => newData.push(chunk),
+      onReplay: async () => {
+        newReplayEvents.push("start");
+        await newReplay.promise;
+        newReplayEvents.push("done");
+      },
+      onExit: () => {},
+    });
+    await vi.waitFor(() => expect(newReplayEvents).toEqual(["start"]));
+    emitData(client, 21, "!");
+
+    oldReplay.resolve();
+    await vi.waitFor(() => expect(oldReplayEvents).toEqual(["start", "done"]));
+    await Promise.resolve();
+    newReplay.resolve();
+    await newAttach;
+
+    expect(newReplayEvents).toEqual(["start", "done"]);
+    expect(newData).toEqual(["!"]);
+  });
+
   it("never appends a recovery snapshot when the sink cannot reset", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];

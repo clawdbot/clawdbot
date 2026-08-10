@@ -379,6 +379,9 @@ export class TerminalConnection {
             ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
             : 0;
         await stream.sink.onReplay(result.buffer, newlyObservedFrom, "recovery");
+        if (this.streams.get(sessionId) !== stream) {
+          return;
+        }
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })
