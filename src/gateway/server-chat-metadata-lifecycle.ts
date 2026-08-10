@@ -11,7 +11,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
   log: GatewayLogger;
 }) {
   let context: GatewayRequestContext | undefined;
-  const { createGatewayChatMetadataRuntime } =
+  const { ChatMetadataSnapshotUnavailableError, createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: params.getConfig,
@@ -94,12 +94,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
       const sidecar = await registerRefreshListeners();
       if (sidecar) {
         sidecars.push(sidecar);
-        // Auth/model snapshots published before listener registration are otherwise never
-        // observed; one awaited catch-up refresh reconciles facts (revision-aware, no-op when
-        // fresh) so post-attach reads cannot serve a pre-publication generation. Failures are
-        // logged, not thrown: startup must not die on a metadata build error.
+        // Publications that complete before listener registration would otherwise be missed.
+        // During ordinary startup the owner is published after attachment, so an unavailable
+        // snapshot here is expected and the publication listener performs the first refresh.
         await runtime.refresh().catch((error: unknown) => {
-          params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+          if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
+            params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+          }
         });
       }
     },
