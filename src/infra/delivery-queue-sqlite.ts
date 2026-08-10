@@ -544,6 +544,20 @@ type FailedDeliveryQueueCount = {
   oldestFailedAt: number | null;
 };
 
+/** Metadata-only failed queue group used by bounded health projections. */
+export type FailedDeliveryQueueMetadataGroup = {
+  queueName: string;
+  channel: string | null;
+  recoveryState: string | null;
+  count: number;
+  oldestFailedAt: number | null;
+  newestFailedAt: number | null;
+};
+
+export type FailedDeliveryQueueMetadataBreakdown =
+  | { truncated: false; groups: FailedDeliveryQueueMetadataGroup[] }
+  | { truncated: true };
+
 /** Count dead-lettered (failed) entries per queue namespace for health reporting. */
 export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDeliveryQueueCount[] {
   const database = openStateDatabase(stateDir);
@@ -570,6 +584,70 @@ export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDelive
     count: Number(row.failed_count),
     oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
   }));
+}
+
+/**
+ * Group failed entries using only routing and recovery metadata.
+ *
+ * The extra row is an overflow sentinel: callers never receive a partial
+ * breakdown when the fixed response bound is exceeded.
+ */
+export function countFailedDeliveryQueueEntriesByMetadata(params: {
+  queueNames: readonly string[];
+  maxGroups: number;
+  stateDir?: string;
+}): FailedDeliveryQueueMetadataBreakdown {
+  if (!Number.isSafeInteger(params.maxGroups) || params.maxGroups < 1 || params.maxGroups > 1_000) {
+    throw new Error("maxGroups must be an integer between 1 and 1000");
+  }
+  const queueNames = [...new Set(params.queueNames)];
+  if (queueNames.length === 0) {
+    return { truncated: false, groups: [] };
+  }
+
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => [
+        "queue_name",
+        "channel",
+        "recovery_state",
+        eb.fn.countAll().as("failed_count"),
+        eb.fn.min("failed_at").as("oldest_failed_at"),
+        eb.fn.max("failed_at").as("newest_failed_at"),
+      ])
+      .where("queue_name", "in", queueNames)
+      .where("status", "=", "failed")
+      .groupBy(["queue_name", "channel", "recovery_state"])
+      .orderBy("queue_name", "asc")
+      .orderBy("channel", "asc")
+      .orderBy("recovery_state", "asc")
+      .limit(params.maxGroups + 1),
+  ).rows as Array<{
+    queue_name: string;
+    channel: string | null;
+    recovery_state: string | null;
+    failed_count: number | bigint;
+    oldest_failed_at: number | bigint | null;
+    newest_failed_at: number | bigint | null;
+  }>;
+  if (rows.length > params.maxGroups) {
+    return { truncated: true };
+  }
+  return {
+    truncated: false,
+    groups: rows.map((row) => ({
+      queueName: row.queue_name,
+      channel: row.channel,
+      recoveryState: row.recovery_state,
+      count: Number(row.failed_count),
+      oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
+      newestFailedAt: row.newest_failed_at == null ? null : Number(row.newest_failed_at),
+    })),
+  };
 }
 
 /** Mark a pending delivery queue entry as failed for later diagnostics. */

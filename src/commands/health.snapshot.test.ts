@@ -592,8 +592,8 @@ describe("collectGatewayHealthSnapshot", () => {
       await ingressQueue.fail(claim, { reason: "handler-error", failedAt: 50_000 });
 
       const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-      expect(snap.deliveryQueues).toEqual({
-        failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
+      expect(snap.deliveryQueues).toMatchObject({
+        outboundFailed: { count: 1 },
         ingressFailed: [
           { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
         ],

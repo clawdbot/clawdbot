@@ -2,6 +2,7 @@ import { countFailedChannelIngressQueueEntries } from "../../channels/message/in
 import { countFailedDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { summarizeOutboundFailedDeliveryQueueEntries } from "../../infra/outbound/delivery-queue-health.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { DeliveryQueueHealthSummary } from "./types.js";
 
@@ -50,11 +51,19 @@ export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | 
     debugHealth("channel ingress queue health read failed", error);
   }
 
-  if (failed.length === 0 && ingressFailed.length === 0) {
+  let outboundFailed: DeliveryQueueHealthSummary["outboundFailed"];
+  try {
+    outboundFailed = summarizeOutboundFailedDeliveryQueueEntries();
+  } catch (error) {
+    debugHealth("outbound dead-letter breakdown health read failed", error);
+  }
+
+  if (failed.length === 0 && ingressFailed.length === 0 && !outboundFailed) {
     return undefined;
   }
   return {
     failed,
     ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
+    ...(outboundFailed ? { outboundFailed } : {}),
   };
 }

@@ -88,4 +88,71 @@ describe("SnapshotSchema", () => {
 
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
   });
+
+  it("accepts the optional bounded outbound dead-letter breakdown", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        deliveryQueues: {
+          failed: [{ queueName: "outbound-prepared-v1", count: 2, oldestFailedAt: 1_000 }],
+          ingressFailed: [
+            { channelId: "telegram", accountId: "default", count: 1, oldestFailedAt: 900 },
+          ],
+          outboundFailed: {
+            count: 2,
+            oldestFailedAt: 1_000,
+            newestFailedAt: 2_000,
+            buckets: [
+              {
+                queue: "prepared",
+                channel: "telegram",
+                recoveryState: "unknownAfterSend",
+                count: 2,
+                oldestFailedAt: 1_000,
+                newestFailedAt: 2_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+  });
+
+  it("rejects unknown categories and extra sensitive breakdown fields", () => {
+    const outboundFailed = {
+      count: 1,
+      buckets: [
+        {
+          queue: "prepared",
+          channel: "telegram",
+          recoveryState: "none",
+          count: 1,
+        },
+      ],
+    };
+    const snapshot = (value: Record<string, unknown>) => ({
+      ...snapshotWithPresence({ ts: 1 }),
+      health: { deliveryQueues: { failed: [], outboundFailed: value } },
+    });
+
+    expect(
+      Value.Check(SnapshotSchema, {
+        ...snapshot(outboundFailed),
+        health: {
+          deliveryQueues: {
+            failed: [],
+            outboundFailed: {
+              ...outboundFailed,
+              buckets: [{ ...outboundFailed.buckets[0], recoveryState: "private_future_state" }],
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(Value.Check(SnapshotSchema, snapshot({ ...outboundFailed, accountId: "secret" }))).toBe(
+      false,
+    );
+  });
 });

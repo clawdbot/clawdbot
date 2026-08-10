@@ -77,6 +77,7 @@ export type DeliveryQueueHealthSummary = {
     count: number;
     oldestFailedAt?: number;
   }>;
+  outboundFailed?: import("../../infra/outbound/delivery-queue-health.js").OutboundDeadLetterHealthSummary;
 };
 
 /** Config hot-reload watcher status, present only when a reloader is running. */

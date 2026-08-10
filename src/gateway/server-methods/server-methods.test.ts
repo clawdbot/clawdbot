@@ -4758,6 +4758,17 @@ describe("gateway healthHandlers.health cache freshness", () => {
         | {
             deliveryQueues?: {
               failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
+              outboundFailed?: {
+                count?: number;
+                oldestFailedAt?: number;
+                newestFailedAt?: number;
+                buckets?: Array<{
+                  queue?: string;
+                  channel?: string;
+                  recoveryState?: string;
+                  count?: number;
+                }>;
+              };
             };
           }
         | undefined;
@@ -4767,6 +4778,19 @@ describe("gateway healthHandlers.health cache freshness", () => {
         count: 1,
       });
       expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(payload?.deliveryQueues?.outboundFailed).toMatchObject({
+        count: 1,
+        buckets: [
+          {
+            queue: "legacy",
+            channel: "[missing]",
+            recoveryState: "none",
+            count: 1,
+          },
+        ],
+      });
+      expect(typeof payload?.deliveryQueues?.outboundFailed?.oldestFailedAt).toBe("number");
+      expect(typeof payload?.deliveryQueues?.outboundFailed?.newestFailedAt).toBe("number");
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     } finally {
       await openClawState.cleanup();

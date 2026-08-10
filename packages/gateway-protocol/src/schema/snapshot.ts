@@ -129,6 +129,46 @@ const HealthSnapshotSchema = closedObject({
           oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
         }),
       ),
+      ingressFailed: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            count: Type.Integer({ minimum: 0 }),
+            oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          }),
+        ),
+      ),
+      outboundFailed: Type.Optional(
+        closedObject({
+          count: Type.Integer({ minimum: 0 }),
+          oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          newestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          buckets: Type.Array(
+            closedObject({
+              queue: Type.Union([
+                Type.Literal("prepared"),
+                Type.Literal("preparation"),
+                Type.Literal("migration"),
+                Type.Literal("legacy"),
+                Type.Literal("mediaStaging"),
+              ]),
+              channel: Type.String({ maxLength: 64 }),
+              recoveryState: Type.Union([
+                Type.Literal("none"),
+                Type.Literal("producerClaimed"),
+                Type.Literal("sendAttemptStarted"),
+                Type.Literal("unknownAfterSend"),
+                Type.Literal("other"),
+              ]),
+              count: Type.Integer({ minimum: 0 }),
+              oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+              newestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+            }),
+            { maxItems: 50 },
+          ),
+        }),
+      ),
     }),
   ),
   modelPricing: Type.Optional(
