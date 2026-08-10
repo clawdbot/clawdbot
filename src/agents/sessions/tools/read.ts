@@ -7,7 +7,6 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import { detectMime } from "@openclaw/media-core/mime";
 import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
@@ -215,7 +214,10 @@ export interface ReadOperations {
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
   /** Detect image MIME type, return null or undefined for non-images */
-  detectImageMimeType?: (absolutePath: string) => Promise<string | null | undefined>;
+  detectImageMimeType?: (
+    absolutePath: string,
+    buffer: Buffer,
+  ) => Promise<string | null | undefined>;
 }
 
 const defaultReadOperations: ReadOperations = {
@@ -231,13 +233,9 @@ async function detectReadImageMimeType(
   absolutePath: string,
 ): Promise<string | null | undefined> {
   if (ops.detectImageMimeType) {
-    return await ops.detectImageMimeType(absolutePath);
+    return await ops.detectImageMimeType(absolutePath, buffer);
   }
-  if (ops === defaultReadOperations) {
-    return detectSupportedImageMimeType(buffer);
-  }
-  const mime = await detectMime({ buffer, filePath: absolutePath });
-  return mime?.startsWith("image/") ? mime : undefined;
+  return detectSupportedImageMimeType(buffer);
 }
 
 export interface ReadToolOptions {
@@ -552,8 +550,6 @@ export function createReadToolDefinition(
                 outputText = "File is empty (0 bytes).";
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (allLines.every((line) => line.length === 0)) {
-                outputText = `File contains ${totalFileLines} blank line${totalFileLines === 1 ? "" : "s"}.`;
               } else {
                 const endLine =
                   limit === undefined
@@ -562,38 +558,50 @@ export function createReadToolDefinition(
                         startLine + normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
                         totalFileLines,
                       );
-                let selectedContent = allLines.slice(startLine, endLine).join("\n");
-                if (endLine === totalFileLines && textContent.endsWith("\n")) {
-                  selectedContent += "\n";
-                }
+                const selectedLines = allLines.slice(startLine, endLine);
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
-                const truncation = truncateHead(selectedContent);
-                if (truncation.firstLineExceedsLimit) {
-                  const lineBreak = selectedContent.indexOf("\n");
-                  const firstLine =
-                    lineBreak === -1 ? selectedContent : selectedContent.slice(0, lineBreak);
-                  const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
-                  outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
-                  truncationDetails = { ...truncation, totalLines: totalFileLines };
-                } else if (truncation.truncated) {
-                  const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
-                  const nextOffset = endLineDisplay + 1;
-                  outputText = truncation.content;
-                  if (truncation.truncatedBy === "lines") {
-                    outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
-                  } else {
-                    outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
+                if (selectedLines.every((line) => line.length === 0)) {
+                  const selectedLineCount = selectedLines.length;
+                  const subject =
+                    startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
+                  outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
+                  if (userLimitedLines !== undefined && endLine < totalFileLines) {
+                    const remaining = totalFileLines - endLine;
+                    outputText += `\n\n[${remaining} more line${remaining === 1 ? "" : "s"} in file. Use offset=${endLine + 1} to continue.]`;
                   }
-                  truncationDetails = { ...truncation, totalLines: totalFileLines };
-                } else if (
-                  userLimitedLines !== undefined &&
-                  startLine + userLimitedLines < totalFileLines
-                ) {
-                  const remaining = totalFileLines - (startLine + userLimitedLines);
-                  const nextOffset = startLine + userLimitedLines + 1;
-                  outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
                 } else {
-                  outputText = truncation.content;
+                  let selectedContent = selectedLines.join("\n");
+                  if (endLine === totalFileLines && textContent.endsWith("\n")) {
+                    selectedContent += "\n";
+                  }
+                  const truncation = truncateHead(selectedContent);
+                  if (truncation.firstLineExceedsLimit) {
+                    const lineBreak = selectedContent.indexOf("\n");
+                    const firstLine =
+                      lineBreak === -1 ? selectedContent : selectedContent.slice(0, lineBreak);
+                    const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
+                    outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
+                    truncationDetails = { ...truncation, totalLines: totalFileLines };
+                  } else if (truncation.truncated) {
+                    const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+                    const nextOffset = endLineDisplay + 1;
+                    outputText = truncation.content;
+                    if (truncation.truncatedBy === "lines") {
+                      outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
+                    } else {
+                      outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
+                    }
+                    truncationDetails = { ...truncation, totalLines: totalFileLines };
+                  } else if (
+                    userLimitedLines !== undefined &&
+                    startLine + userLimitedLines < totalFileLines
+                  ) {
+                    const remaining = totalFileLines - (startLine + userLimitedLines);
+                    const nextOffset = startLine + userLimitedLines + 1;
+                    outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+                  } else {
+                    outputText = truncation.content;
+                  }
                 }
               }
               content = [{ type: "text", text: outputText }];

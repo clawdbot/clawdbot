@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
+import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { isMissingPathError, toErrorObject } from "../infra/errors.js";
@@ -1043,6 +1044,10 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
+    detectImageMimeType: async (absolutePath: string, buffer: Buffer) => {
+      const mime = await detectMime({ buffer, filePath: absolutePath });
+      return mime?.startsWith("image/") ? mime : undefined;
+    },
   } as const;
 }
 

@@ -214,6 +214,46 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("File contains 1 blank line.");
   });
 
+  it("applies line limits before describing blank-only content", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from("\n\n"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-blank-range",
+      { path: "blank.txt", limit: 1 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe(
+      "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
+    );
+  });
+
+  it("does not classify plaintext from a custom backend by its extension", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from("plain text"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-custom-png",
+      { path: "report.png" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("plain text");
+  });
+
   it("resolves one Unicode-equivalent filename and names the correction", async () => {
     const tempDir = tempDirs.make("openclaw-read-unicode-");
     const storedName = "re\u0301sume\u0301 3.04\u202fPM d\u2019accord.txt";
