@@ -1,5 +1,6 @@
 // Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -9,6 +10,7 @@ import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
@@ -214,6 +216,13 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   if (opts.client) {
     return opts.client;
   }
+  const accountId = opts.cfg
+    ? resolveSlackAccount({
+        cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
+        accountId: opts.accountId,
+      }).accountId
+    : normalizeAccountId(opts.accountId);
+  assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   if (mode === "write") {
     return getSlackWriteClient(token, { teamId: opts.teamId });

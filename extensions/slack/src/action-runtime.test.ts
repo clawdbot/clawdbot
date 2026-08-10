@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
@@ -80,6 +81,22 @@ describe("handleSlackAction", () => {
       cfg,
       teamId: "T123",
     });
+  });
+
+  it("rejects a bare detached target for an authenticated Enterprise install", async () => {
+    const cfg = slackConfig();
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        handleSlackAction(
+          { action: "react", channelId: "C123", messageId: "123.456", emoji: "thumbsup" },
+          cfg,
+        ),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(reactSlackMessage).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("reads the current requester from the trusted current workspace", async () => {
@@ -473,26 +490,30 @@ describe("handleSlackAction", () => {
 
   it("qualifies a bare reaction target from the trusted current conversation", async () => {
     const cfg = slackConfig();
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await handleSlackAction(
+        {
+          action: "react",
+          channelId: "C123",
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        cfg,
+        {
+          currentChannelProvider: "slack",
+          currentChannelId: "team:T123:channel:C123",
+          requesterAccountId: "default",
+        },
+      );
 
-    await handleSlackAction(
-      {
-        action: "react",
-        channelId: "C123",
-        messageId: "123.456",
-        emoji: "✅",
-      },
-      cfg,
-      {
-        currentChannelProvider: "slack",
-        currentChannelId: "team:T123:channel:C123",
-        requesterAccountId: "default",
-      },
-    );
-
-    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
-      cfg,
-      teamId: "T123",
-    });
+      expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+        cfg,
+        teamId: "T123",
+      });
+    } finally {
+      installationState.release();
+    }
   });
 
   it.each([

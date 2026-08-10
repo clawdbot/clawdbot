@@ -3,6 +3,7 @@ import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -1108,7 +1109,26 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-enterprise" });
   });
 
-  it("admits deferred messages with bare or workspace-qualified targets", () => {
+  it("rejects a bare Enterprise target before invoking an injected sender", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "should-not-send" });
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        requireSlackSendText()({
+          cfg,
+          to: "C456",
+          text: "hello",
+          accountId: "default",
+          deps: { sendSlack },
+        }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(sendSlack).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it("rejects bare deferred Enterprise messages and admits workspace-qualified targets", () => {
     const admit = slackPlugin.message?.durableFinal?.admitDeferredDelivery;
     if (!admit) {
       throw new Error("slack deferred-delivery admission unavailable");
@@ -1121,12 +1141,25 @@ describe("slackPlugin outbound", () => {
       payloads: [{ text: "hello" }],
     };
 
-    expect(admit({ ...base, to: "team:T123:channel:C456" } as never)).toEqual({
-      status: "allowed",
-    });
-    expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({
-      status: "allowed",
-    });
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({
+        status: "permanent_rejection",
+        reason: expect.stringContaining("unsupported_enterprise_slack_delivery"),
+      });
+      expect(admit({ ...base, to: "team:T123:channel:C456" } as never)).toEqual({
+        status: "allowed",
+      });
+    } finally {
+      installationState.release();
+    }
+    const workspaceState = registerSlackInstallationState("default", "workspace");
+    try {
+      expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({ status: "allowed" });
+    } finally {
+      workspaceState.release();
+    }
+    expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({ status: "allowed" });
   });
 
   it("forwards agent identity through the registered text sender", async () => {

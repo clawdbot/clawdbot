@@ -56,6 +56,7 @@ import {
 } from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
@@ -194,6 +195,8 @@ async function resolveSlackSendContext(params: {
   // expected to be resolved from this snapshot. Strict mode
   // is intentional so boot-time misconfigurations surface loudly. See #68237.
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const target = parseSlackTarget(params.to, { defaultKind: "channel" });
+  assertSlackDetachedTargetAllowed(account.accountId, target?.teamId);
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
@@ -217,6 +220,7 @@ async function setSlackHeartbeatThreadStatus(params: {
     return;
   }
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, target.teamId);
   const botToken = normalizeOptionalString(account.botToken);
   if (!botToken) {
     return;
@@ -615,7 +619,19 @@ const slackMessageAdapter = {
       ...slackMessageAdapterBase.durableFinal?.capabilities,
       reconcileUnknownSend: true,
     },
-    admitDeferredDelivery: () => ({ status: "allowed" as const }),
+    admitDeferredDelivery: ({ cfg, accountId, to }) => {
+      const account = resolveSlackAccount({ cfg, accountId });
+      const target = parseSlackTarget(to, { defaultKind: "channel" });
+      try {
+        assertSlackDetachedTargetAllowed(account.accountId, target?.teamId);
+        return { status: "allowed" as const };
+      } catch (error) {
+        return {
+          status: "permanent_rejection" as const,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
     reconcileUnknownSendKinds: { text: true },
     reconcileUnknownSend: async (ctx) =>
       await (await loadSlackSendRuntime()).reconcileSlackUnknownSend(ctx),

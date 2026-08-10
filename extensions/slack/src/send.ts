@@ -40,6 +40,7 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { formatSlackError } from "./errors.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
@@ -279,18 +280,20 @@ export async function updateMessageSlack(params: {
   cfg: OpenClawConfig;
   accountId?: string;
   channelId: string;
+  teamId?: string;
   messageTs: string;
   text: string;
   blocks: (Block | KnownBlock)[];
 }): Promise<void> {
   const cfg = requireRuntimeConfig(params.cfg, "Slack update");
   const account = resolveSlackAccount({ cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
   const token = resolveToken({
     accountId: account.accountId,
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = getSlackWriteClient(token);
+  const client = getSlackWriteClient(token, { teamId: params.teamId });
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
@@ -948,6 +951,15 @@ export async function reconcileSlackUnknownSend(
     };
   }
   const recipient = parseRecipient(ctx.to);
+  try {
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
+  } catch (error) {
+    return {
+      status: "unresolved",
+      error: error instanceof Error ? error.message : String(error),
+      retryable: false,
+    };
+  }
   const readToken = resolveSlackOperationToken(account, "read");
   if (!readToken) {
     return {
@@ -1062,6 +1074,9 @@ export async function sendMessageSlack(
   });
   const eventScope = resolveSlackSendEventScope({ opts });
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
+  if (!eventScope) {
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
+  }
   if (isSilentReplyText(normalizedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return {

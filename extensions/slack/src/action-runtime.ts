@@ -10,6 +10,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
@@ -527,6 +528,7 @@ function resolveSlackActionTarget(
   }
   const teamId =
     parsed.teamId ?? resolveTrustedCurrentSlackTeamId({ account, target: parsed, context });
+  assertSlackDetachedTargetAllowed(account.accountId, teamId);
   return {
     routingTarget: teamId ? formatSlackTarget({ teamId, kind: parsed.kind, id: parsed.id }) : raw,
     teamId,
@@ -1000,6 +1002,7 @@ export async function handleSlackAction(
     const userId = readStringParam(params, "userId", { required: true });
     assertSlackMemberInfoAllowed({ account, context, userId });
     const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
+    assertSlackDetachedTargetAllowed(account.accountId, teamId);
     const info = await slackActionRuntime.getSlackMemberInfo(
       userId,
       buildActionOpts("read", teamId),
@@ -1015,6 +1018,7 @@ export async function handleSlackAction(
       message: "limit must be a positive integer.",
     });
     const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
+    assertSlackDetachedTargetAllowed(account.accountId, teamId);
     const result = await slackActionRuntime.listSlackEmojis(buildActionOpts("read", teamId));
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
