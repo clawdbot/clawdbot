@@ -147,7 +147,7 @@ export function isRecoverableAgentWaitError(error: string | undefined): boolean 
   if (!message) {
     return false;
   }
-  if (message.includes("gateway timeout")) {
+  if (message.includes("gateway timeout") || message.includes("gateway request timeout")) {
     return false;
   }
   return (
