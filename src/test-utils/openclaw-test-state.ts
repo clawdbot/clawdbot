@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  closeAuthProfileReadPool,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/config.js";
@@ -366,6 +369,7 @@ export async function createOpenClawTestState(
       }
       cleaned = true;
       await cleanupSessionStateForTest().catch(() => undefined);
+      closeAuthProfileReadPool({ kind: "root", rootPath: paths.stateDir });
       // Agent close releases leases through shared state; closing shared state first
       // can reopen it during teardown and leave Windows handles under the fixture root.
       for (const database of listOpenClawAgentDatabasesForTest()) {

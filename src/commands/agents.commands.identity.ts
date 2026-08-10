@@ -18,13 +18,13 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import {
   type AgentIdentity,
   findAgentEntryIndex,
   listAgentEntries,
   loadAgentIdentity,
 } from "./agents.config.js";
+import { requireValidConfigFileSnapshot } from "./config-validation.js";
 
 type AgentsSetIdentityOptions = {
   agent?: string;

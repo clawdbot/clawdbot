@@ -1978,7 +1978,46 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
-  it("stores hello-ok device tokens in the bound gateway origin", async () => {
+  it("preserves stored scopes when hello returns the same origin-scoped token", async () => {
+    loadOriginDeviceTokenMock.mockReturnValue({
+      token: "stored-origin-token",
+      scopes: ["operator.admin", "operator.read"],
+    });
+    const client = createClientWithIdentity("device-1", () => {}, {
+      deviceAuthScope: "wss://one.example/rpc",
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            deviceToken: "stored-origin-token",
+          },
+        },
+      }),
+    );
+
+    await waitForFast(() => {
+      expect(storeOriginDeviceTokenMock).toHaveBeenCalledWith({
+        gatewayScope: "wss://one.example/rpc",
+        deviceId: "device-1",
+        role: "operator",
+        token: "stored-origin-token",
+        scopes: ["operator.admin", "operator.read"],
+        env: undefined,
+      });
+    });
+    client.stop();
+  });
+
+  it("stores hello scopes for a new token in the bound gateway origin", async () => {
     const client = createClientWithIdentity("device-1", () => {}, {
       deviceAuthScope: "wss://one.example/rpc",
     });

@@ -84,6 +84,7 @@ type RenderMessageGroupOptions = {
   userName?: string | null;
   userAvatar?: string | null;
   showAvatarGutter?: boolean;
+  showAssistantAvatar?: boolean;
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
@@ -253,7 +254,9 @@ export function renderActivityGroup(
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
     >
-      ${showAvatarGutter
+      ${showAvatarGutter &&
+      (normalizeRoleForGrouping(firstGroup.role) !== "assistant" ||
+        opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             firstGroup.role,
             {
@@ -414,7 +417,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${showAvatarGutter
+      ${showAvatarGutter && (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             group.role,
             {

@@ -14,12 +14,12 @@ import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;

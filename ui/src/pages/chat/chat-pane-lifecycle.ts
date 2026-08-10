@@ -48,6 +48,7 @@ import {
   NEW_SESSION_CREATE_FAILED_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
 } from "./chat-pane-shared.ts";
+import { subscribeChatPaneStartup } from "./chat-pane-startup-subscriptions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -61,7 +62,10 @@ import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import {
+  admitInitialTurnHandoff,
+  admitInitialUserMessageHandoff as admitInitialMessage,
+} from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
@@ -531,7 +535,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        admitInitialUserMessageHandoff(pageState.initialUserMessage, pageState, initialSessionKey);
+        admitInitialMessage(pageState.initialUserMessage, pageState, initialSessionKey);
       }
     }
     chatState.attach(pageState);
@@ -613,17 +617,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       }),
     );
     this.applyApplicationConfig(this.context.config.current);
-    chatState.addCleanup(
-      this.context.config.subscribe((config) => {
-        this.applyApplicationConfig(config);
-      }),
-    );
+    chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
     this.applySessionsState(this.context.sessions.state);
-    chatState.addCleanup(
-      this.context.sessions.subscribe((state) => {
-        this.applySessionsState(state);
-      }),
-    );
+    chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
+    chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
 
@@ -652,11 +649,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        const acceptedPrompt = admitInitialUserMessageHandoff(
-          this.state.initialUserMessage,
-          this.state,
-          nextSessionKey,
-        );
+        const initialUserMessage = this.state.initialUserMessage;
+        const acceptedPrompt = admitInitialMessage(initialUserMessage, this.state, nextSessionKey);
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
@@ -694,8 +688,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     const selectedSessionRow = this.state ? selectedChatSessionRow(this.state) : undefined;
-    // Active runs count even without a digest: a hidden observer generates
-    // none, and the rail module owns the restore control for turning it back on.
+    // Active runs count even without a digest; the rail owns observer restoration.
     const observerRunId = resolveChatPaneObserverRunId({
       localRunId: this.state?.chatRunId ?? null,
       session: selectedSessionRow,

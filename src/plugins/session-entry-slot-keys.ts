@@ -20,7 +20,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "archivedAt",
   "archivedBy",
   "pinnedAt",
-  "icon",
   "lastReadAt",
   "agentStatus",
   "observerDigest",
@@ -184,6 +183,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
+  "icon",
   "channel",
   "origin",
   "route",

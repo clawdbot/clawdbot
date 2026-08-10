@@ -22,15 +22,16 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
+import { deleteCloudDraftSession } from "../../lib/sessions/cloud-startup.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { clearChatModelSearchOnEscape } from "../chat/components/chat-model-picker.ts";
@@ -49,7 +50,6 @@ import {
   resolveScope,
   type SubmissionOutcomeReason,
 } from "./cloud-recovery-state.ts";
-import { advanceCloudDraftSession, type CloudRecoveryRetirement } from "./cloud-submit.ts";
 import {
   NewSessionComposerTextareaController,
   renderDraftError,
@@ -890,24 +890,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.submissionOutcomeUnknown = null;
   }
 
-  private showCloudDraftOwnershipLost() {
-    this.error = t("newSession.cloudOwnershipLost");
-  }
-
-  private clearPendingCloudRecoveryFor(
-    gatewayUrl: string,
-    recoveryScope: string,
-    sessionKey: string,
-    retirement: CloudRecoveryRetirement,
-  ) {
-    const submissionOutcome = this.submissionOutcomeUnknown;
-    this.pendingCloud.clearFor(gatewayUrl, recoveryScope, sessionKey);
-    if (!this.pendingCloud.sessionKey) {
-      this.submissionOutcomeUnknown =
-        retirement === "interrupted" ? (submissionOutcome ?? "cloud-interrupted") : null;
-    }
-  }
-
   private restorePendingCloudRecovery(gatewayUrl: string, recoveryScope: string) {
     const recovery = this.pendingCloud.restore(gatewayUrl, recoveryScope);
     if (!recovery) {
@@ -1293,7 +1275,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         });
         return;
       }
-      let recoveryOwnerKey = submissionCloudRecovery?.sessionKey ?? "";
+      const recoveryOwnerKey = submissionCloudRecovery?.sessionKey ?? "";
       const ownsSubmissionRecovery = () =>
         this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
       const isSubmissionLifecycleCurrent = () =>
@@ -1320,10 +1302,24 @@ class NewSessionPage extends OpenClawLightDomElement {
         return;
       }
       if (cloudProfileId && submissionCloudRecovery) {
-        const recoveryPhase =
-          submissionCloudRecovery.phase === "creating"
-            ? "dispatching"
-            : submissionCloudRecovery.phase;
+        if (
+          submissionCloudRecovery.phase === "creating" &&
+          (!isSubmissionLifecycleCurrent() || !ownsSubmissionRecovery())
+        ) {
+          const cleanupError = await deleteCloudDraftSession(
+            submissionClient,
+            result.key,
+            submissionAgentId,
+          );
+          if (cleanupError) {
+            this.pendingCloud.promoteToDispatching(result.key);
+            this.pendingCloud.retryAllowed = true;
+            this.error = t("newSession.cloudStartFailed", { error: cleanupError });
+          } else {
+            this.clearPendingCloudRecovery();
+          }
+          return;
+        }
         if (
           submissionCloudRecovery.phase === "creating" &&
           isSubmissionLifecycleCurrent() &&
@@ -1335,136 +1331,85 @@ class NewSessionPage extends OpenClawLightDomElement {
             });
             return;
           }
-          recoveryOwnerKey = result.key;
         }
-        const cloudStart = await advanceCloudDraftSession({
-          client: submissionClient,
-          key: result.key,
-          agentId: submissionAgentId,
-          profileId: cloudProfileId,
-          message: submissionCloudRecovery.message,
-          attachments: submissionCloudRecovery.attachments,
-          messageId: submissionCloudRecovery.messageId,
-          gatewayUrl: submissionGatewayUrl,
-          recoveryScope: submissionRecoveryScope,
-          recoveryPhase,
-          persistRecovery: this.pendingCloud.persistent,
-          recovering: pendingCloud,
-          isLifecycleCurrent: isSubmissionLifecycleCurrent,
-          ownsRecovery: ownsSubmissionRecovery,
-          clearRecovery: (retirement) =>
-            this.clearPendingCloudRecoveryFor(
-              submissionGatewayUrl,
-              submissionRecoveryScope,
-              result.key,
-              retirement,
-            ),
-          setRecoveryPhase: (phase) => {
-            if (ownsSubmissionRecovery()) {
-              this.pendingCloud.phase = phase;
-            }
-          },
-        });
-        if (cloudStart.status === "cancelled") {
-          if (!ownsSubmissionRecovery()) {
-            return;
-          }
-          if (cloudStart.cleanupError) {
-            this.pendingCloud.retryAllowed = cloudStart.recoveryPersisted;
-            this.submissionOutcomeUnknown = cloudStart.recoveryPersisted
-              ? null
-              : "cloud-interrupted";
-            this.error = t("newSession.cloudStartFailed", { error: cloudStart.cleanupError });
-          } else if (!cloudStart.recoveryPersisted) {
-            this.error = t("newSession.createFailed");
-          }
-          return;
-        }
-        if (cloudStart.status === "cleanup-rejected") {
-          if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
-            return;
-          }
-          // Retain durable identity; clearing it could hide a failed teardown's billable worker.
-          this.pendingCloud.sessionKey = result.key;
-          if (cloudStart.messageId) {
-            this.pendingCloud.messageId = cloudStart.messageId;
-          }
-          const retryAllowed = requestId === this.submitRequestToken;
-          this.pendingCloud.retryAllowed = retryAllowed;
-          this.submissionOutcomeUnknown = retryAllowed ? null : "cloud-interrupted";
-          this.setMessage(this.pendingCloud.message);
-          this.error = t("newSession.cloudStartFailed", { error: cloudStart.error });
-          return;
-        }
-        if (cloudStart.status === "dispatch-rejected") {
+        const recovery = this.pendingCloud.capture();
+        if (!recovery || recovery.phase === "creating") {
           this.error = t("newSession.cloudStartFailed", {
-            error: cloudStart.error || t("newSession.createFailed"),
+            error: "cloud recovery storage is unavailable",
           });
-          return;
-        }
-        if (cloudStart.status === "interrupted") {
-          return;
-        }
-        if (cloudStart.status === "ownership-lost") {
-          this.showCloudDraftOwnershipLost();
-          return;
-        }
-        if (cloudStart.status === "send-rejected") {
-          if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
-            return;
-          }
-          this.pendingCloud.messageId = cloudStart.messageId;
-          this.pendingCloud.retryAllowed = true;
-          this.error = cloudStart.error || t("newSession.createFailed");
           return;
         }
         if (requestId !== this.submitRequestToken) {
           return;
         }
+        context.cloudStartup.start({
+          recovery,
+          persistRecovery: this.pendingCloud.persistent,
+          recovering: pendingCloud,
+          createdAt: submittedAt,
+        });
+        if (
+          requestId !== this.submitRequestToken ||
+          !isSubmissionLifecycleCurrent() ||
+          !this.pendingCloud.owns(
+            submissionGatewayUrl,
+            submissionRecoveryScope,
+            recovery.sessionKey,
+          )
+        ) {
+          return;
+        }
+        // The coordinator captured durable attachment bytes and recovery identity.
+        // Release only this route's draft before navigation unmounts it.
+        this.pendingCloud.reset();
+        this.attachmentDraft.clearAfterSubmit(true);
+        selectApplicationSession({
+          selection: context.agentSelection,
+          gateway: context.gateway,
+          sessionKey: result.key,
+          agentId: submissionAgentId,
+        });
+        context.navigate(
+          "chat",
+          sessionNavigationTarget({
+            context,
+            face: "chat",
+            sessionKey: result.key,
+            agentId: this.agentId,
+          }).options,
+        );
+        return;
+      }
+      if (requestId !== this.submitRequestToken) {
+        return;
+      }
+      const handedOffAttachments =
+        result.initialRun.status === "rejected" &&
+        retainRejectedInitialTurn({
+          agentId: this.agentId,
+          attachments,
+          context,
+          error: result.initialRun.error,
+          message,
+          sessionKey: result.key,
+        });
+      if (result.initialRun.status === "started") {
         prepareInitialUserMessageHandoff(
           context.initialUserMessage,
           result.key,
           {
-            text: submissionCloudRecovery.message,
+            text: message,
             attachments,
             createdAt: submittedAt,
           },
           submissionClient,
-          { messageId: cloudStart.messageId, messageSeq: cloudStart.messageSeq },
+          {
+            messageId: result.initialRun.messageId,
+            messageSeq: result.initialRun.messageSeq,
+          },
         );
-        this.attachmentDraft.clearAfterSubmit(true);
-      } else {
-        if (requestId !== this.submitRequestToken) {
-          return;
-        }
-        const handedOffAttachments =
-          result.initialRun.status === "rejected" &&
-          retainRejectedInitialTurn({
-            agentId: this.agentId,
-            attachments,
-            context,
-            error: result.initialRun.error,
-            message,
-            sessionKey: result.key,
-          });
-        if (result.initialRun.status === "started") {
-          prepareInitialUserMessageHandoff(
-            context.initialUserMessage,
-            result.key,
-            {
-              text: message,
-              attachments,
-              createdAt: submittedAt,
-            },
-            submissionClient,
-            {
-              messageId: result.initialRun.messageId,
-              messageSeq: result.initialRun.messageSeq,
-            },
-          );
-        }
-        this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
       }
+      this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
       if (requestId !== this.submitRequestToken) {
         return;
       }

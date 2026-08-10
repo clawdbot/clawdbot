@@ -11,11 +11,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import type { WorkerPlacementDispatchContract } from "../worker-environments/service-contract.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import {
   isWorkerDispatchInputError,
   loadAccessorSessionEntryForGatewayTarget,
@@ -23,6 +26,13 @@ import {
 } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type InternalTransitionDispatchService = {
+  dispatch(
+    request: Parameters<WorkerPlacementDispatchContract["dispatch"]>[0],
+    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+  ): ReturnType<WorkerPlacementDispatchContract["dispatch"]>;
+};
 
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -203,12 +213,19 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       // Dispatch is session-id addressed after this point; reject a replacement before handing
       // the captured instance to the asynchronous worker service.
       sessionMutationAuthorization?.assertCurrent();
-      const placement = await dispatchService.dispatch({
-        sessionId,
-        sessionKey: target.canonicalKey,
-        agentId: target.target.agentId,
-        profileId: params.profileId,
-      });
+      const placement = await (dispatchService as InternalTransitionDispatchService).dispatch(
+        {
+          sessionId,
+          sessionKey: target.canonicalKey,
+          agentId: target.target.agentId,
+          profileId: params.profileId,
+        },
+        () =>
+          emitSessionsChanged(context, {
+            reason: "dispatch",
+            sessionKey: target.canonicalKey,
+          }),
+      );
       respondWorkerPlacement({ respond, key: target.canonicalKey, sessionId, placement });
     } catch (error) {
       respondWorkerDispatchError(error, respond);

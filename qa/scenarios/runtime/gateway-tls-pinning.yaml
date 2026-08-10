@@ -25,6 +25,7 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-tls-pinning.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-tls-pinning.ts
     summary: Starts a real TLS Gateway and exercises exact-pin, wrong-pin, and plaintext mismatch behavior through the public GatewayClient.
     args:

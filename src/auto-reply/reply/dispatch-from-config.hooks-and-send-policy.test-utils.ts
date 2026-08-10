@@ -2703,6 +2703,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           sourceReplyDeliveryMode: "message_tool_only",
           forceToolResultProgress: true,
           suppressDefaultToolProgressMessages: true,
+          suppressToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onToolResult,
         },

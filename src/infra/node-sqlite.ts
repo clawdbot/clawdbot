@@ -1,6 +1,7 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
@@ -27,6 +28,20 @@ export function resolveNodeSqliteLocation(location: string): string {
     return location;
   }
   return resolveSqliteFilesystemPath(location);
+}
+
+/** Build an immutable SQLite URI without losing the Windows long-path namespace. */
+export function resolveImmutableSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
+    // SQLite decodes path escapes after separating the query string, so the
+    // encoded \\?\ prefix reaches the Windows VFS without becoming URI syntax.
+    return `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`;
+  }
+  return `${pathToFileURL(path.resolve(pathname)).href}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {

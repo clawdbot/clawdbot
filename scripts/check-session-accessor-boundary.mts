@@ -101,7 +101,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/acp/control-plane/manager.background-task.ts",
   "src/acp/control-plane/manager.core.ts",
   "src/acp/runtime/session-meta.ts",
-  "src/agents/acp-spawn.ts",
+  "src/agents/subagents/spawn/acp-spawn.ts",
   "src/agents/auth-profiles/session-override.ts",
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",

@@ -26,7 +26,6 @@ import {
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
-  SessionTranscriptWriteScope,
   TranscriptEvent,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
@@ -35,7 +34,10 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import { assertOwnedSessionTranscriptWrite } from "./transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWriterFence,
+} from "./transcript-write-context.js";
 
 // Persisted transcripts have one SQLite owner. Async operations keep direct
 // exports; sync runtime writes use the ownership-fenced wrappers below.
@@ -59,37 +61,41 @@ export {
   withTranscriptWriteTransaction,
 };
 
-function assertOwnedTranscriptScope(scope: SessionTranscriptWriteScope): void {
-  assertOwnedSessionTranscriptWrite({
-    sessionFile: scope.sessionFile,
-    sessionKey: scope.sessionKey,
-    sessionTarget: scope,
-  });
-}
-
 export const appendTranscriptEventSync: typeof appendSqliteTranscriptEventSync = (
   scope,
   event,
   options,
 ) => {
-  assertOwnedTranscriptScope(scope);
-  return appendSqliteTranscriptEventSync(scope, event, options);
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const result = appendSqliteTranscriptEventSync(fencedScope, event, options);
+  if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
+  return result;
 };
 
 export const appendTranscriptMessageSync: typeof appendSqliteTranscriptMessageSync = (
   scope,
   options,
 ) => {
-  assertOwnedTranscriptScope(scope);
-  return appendSqliteTranscriptMessageSync(scope, options);
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const result = appendSqliteTranscriptMessageSync(fencedScope, options);
+  if (fencedScope.expectedWriterRunId !== undefined && result === undefined) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
+  return result;
 };
 
 export const replaceTranscriptEventsSync: typeof replaceSqliteTranscriptEventsSync = (
   scope,
   events,
 ) => {
-  assertOwnedTranscriptScope(scope);
-  return replaceSqliteTranscriptEventsSync(scope, events);
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const replaced = replaceSqliteTranscriptEventsSync(fencedScope, events);
+  if (fencedScope.expectedWriterRunId !== undefined && !replaced) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
+  return replaced;
 };
 
 /** Keeps transcript event delivery behind the transcript owner boundary. */

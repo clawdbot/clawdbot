@@ -2580,14 +2580,16 @@ NODE
       "checks-node-core-test-nondist-shard",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
+    const hostedRetryJobs = new Set(["checks-ui-e2e", "checks-ui-e2e-real-gateway"]);
     for (const { jobName, stepWith } of stickyConsumers) {
       const stickyCondition = stepWith["sticky-disk"];
       const cacheCondition = stepWith["use-actions-cache"];
-      if (jobName === "checks-ui-e2e") {
+      if (hostedRetryJobs.has(jobName)) {
         continue;
       }
       expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
@@ -3508,6 +3510,11 @@ NODE
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-sqlite-session-schema-baseline",
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
@@ -3796,6 +3803,25 @@ NODE
     );
   });
 
+  it("runs the export name collision ratchet as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-export-name-collisions",
+      group: "export-name-collisions",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("export-name-collisions)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions',
+    );
+  });
+
   it("runs the transcript reader ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -3891,72 +3917,111 @@ NODE
     ).toBe(true);
   });
 
-  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
-    "keeps Mantis reaction ownership stable in %s",
-    (workflowPath) => {
-      const source = readFileSync(workflowPath, "utf8");
-      const workflow = parse(source);
-      const resolveJob = workflow.jobs.resolve_request;
-      const resolveSteps = resolveJob.steps as WorkflowStep[];
-      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
-      const cleanupSteps = cleanupJob.steps as WorkflowStep[];
-      const findStep = (steps: WorkflowStep[], id: string) =>
-        expectDefined(
-          steps.find((step) => step.id === id),
-          `${workflowPath} ${id}`,
-        );
-      const createTokenStep = findStep(resolveSteps, "mantis_reaction_token");
-      const createStep = findStep(resolveSteps, "add_reaction");
-      const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token");
-      const deleteStep = expectDefined(
-        cleanupSteps.find((step) => step.env?.REACTION_ID),
-        `${workflowPath} reaction cleanup step`,
+  it("keeps shared Mantis reaction ownership stable", () => {
+    const resolveWorkflowPath = ".github/workflows/mantis-resolve-request.yml";
+    const cleanupWorkflowPath = ".github/workflows/mantis-clear-reaction.yml";
+    const resolveSource = readFileSync(resolveWorkflowPath, "utf8");
+    const cleanupSource = readFileSync(cleanupWorkflowPath, "utf8");
+    const resolveWorkflow = parse(resolveSource);
+    const cleanupWorkflow = parse(cleanupSource);
+    const expectedWorkflowCallSecrets = {
+      MANTIS_GITHUB_APP_ID: { required: true },
+      MANTIS_GITHUB_APP_PRIVATE_KEY: { required: true },
+    };
+    const resolveJob = resolveWorkflow.jobs.resolve;
+    const cleanupJob = cleanupWorkflow.jobs.clear;
+    const resolveSteps = resolveJob.steps as WorkflowStep[];
+    const cleanupSteps = cleanupJob.steps as WorkflowStep[];
+    const findStep = (steps: WorkflowStep[], id: string, workflowPath: string) =>
+      expectDefined(
+        steps.find((step) => step.id === id),
+        `${workflowPath} ${id}`,
       );
+    const createTokenStep = findStep(resolveSteps, "mantis_reaction_token", resolveWorkflowPath);
+    const createStep = findStep(resolveSteps, "add_reaction", resolveWorkflowPath);
+    const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token", cleanupWorkflowPath);
+    const deleteStep = expectDefined(
+      cleanupSteps.find((step) => step.env?.REACTION_ID),
+      `${cleanupWorkflowPath} reaction cleanup step`,
+    );
 
-      expect(resolveJob.outputs.reaction_id, workflowPath).toBe(
-        "${{ steps.add_reaction.outputs.reaction_id }}",
-      );
-      for (const [label, tokenStep] of [
-        ["creation", createTokenStep],
-        ["cleanup", cleanupTokenStep],
-      ] as const) {
-        expect(tokenStep, `${workflowPath} ${label} token`).toMatchObject({
-          uses: CREATE_GITHUB_APP_TOKEN_V3,
-          with: {
-            "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
-            "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
-          },
-        });
-        expect(
-          Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
-          `${workflowPath} ${label} permissions`,
-        ).toEqual([["permission-issues", "write"]]);
-      }
-      expect(createStep, workflowPath).toMatchObject({
-        if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
-        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    expect(resolveWorkflow.on.workflow_call.secrets, resolveWorkflowPath).toEqual(
+      expectedWorkflowCallSecrets,
+    );
+    expect(cleanupWorkflow.on.workflow_call.secrets, cleanupWorkflowPath).toEqual(
+      expectedWorkflowCallSecrets,
+    );
+    expect(resolveJob.outputs.reaction_id, resolveWorkflowPath).toBe(
+      "${{ steps.add_reaction.outputs.reaction_id }}",
+    );
+    for (const [label, tokenStep] of [
+      ["creation", createTokenStep],
+      ["cleanup", cleanupTokenStep],
+    ] as const) {
+      expect(tokenStep, `${label} token`).toMatchObject({
+        uses: CREATE_GITHUB_APP_TOKEN_V3,
+        with: {
+          "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+          "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+        },
       });
-      expect(createStep.with?.script, workflowPath).toContain("createForIssueComment");
-      expect(createStep.with?.script, workflowPath).toContain(
-        'core.setOutput("reaction_id", String(reaction.id))',
-      );
-      expect(source.match(/createForIssueComment/gu), workflowPath).toHaveLength(1);
+      expect(
+        Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
+        `${label} permissions`,
+      ).toEqual([["permission-issues", "write"]]);
+    }
+    expect(createStep, resolveWorkflowPath).toMatchObject({
+      if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    });
+    expect(createStep.with?.script, resolveWorkflowPath).toContain("createForIssueComment");
+    expect(createStep.with?.script, resolveWorkflowPath).toContain(
+      'core.setOutput("reaction_id", String(reaction.id))',
+    );
+    expect(resolveSource.match(/createForIssueComment/gu), resolveWorkflowPath).toHaveLength(1);
+    expect(cleanupJob.permissions, cleanupWorkflowPath).toEqual({});
+    expect(deleteStep, cleanupWorkflowPath).toMatchObject({
+      env: {
+        COMMENT_ID: "${{ inputs.comment-id }}",
+        REACTION_ID: "${{ inputs.reaction-id }}",
+      },
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    });
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain("deleteForIssueComment");
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain(
+      "Number(process.env.REACTION_ID)",
+    );
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain("reaction_id: reactionId");
+    expect(JSON.stringify(cleanupJob), cleanupWorkflowPath).not.toMatch(
+      /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
+    );
+  });
+
+  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
+    "routes Mantis reaction ownership through shared workflows in %s",
+    (workflowPath) => {
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const resolveJob = workflow.jobs.resolve_request;
+      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
+      const expectedSecrets = {
+        MANTIS_GITHUB_APP_ID: "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        MANTIS_GITHUB_APP_PRIVATE_KEY: "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      };
+
+      expect(resolveJob.uses, workflowPath).toBe("./.github/workflows/mantis-resolve-request.yml");
+      expect(resolveJob.secrets, workflowPath).toEqual(expectedSecrets);
+      expect(cleanupJob.uses, workflowPath).toBe("./.github/workflows/mantis-clear-reaction.yml");
       expect(cleanupJob.if, workflowPath).toContain(
         "needs.resolve_request.outputs.reaction_id != ''",
       );
       expect(cleanupJob.permissions, workflowPath).toEqual({});
-      expect(deleteStep, workflowPath).toMatchObject({
-        env: { REACTION_ID: "${{ needs.resolve_request.outputs.reaction_id }}" },
-        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+      expect(cleanupJob.with, workflowPath).toMatchObject({
+        "comment-id": "${{ format('{0}', github.event.comment.id) }}",
+        "reaction-id": "${{ needs.resolve_request.outputs.reaction_id }}",
       });
-      expect(deleteStep.with?.script, workflowPath).toContain("deleteForIssueComment");
-      expect(deleteStep.with?.script, workflowPath).toContain("Number(process.env.REACTION_ID)");
-      expect(deleteStep.with?.script, workflowPath).toContain("reaction_id: reactionId");
-      expect(JSON.stringify(cleanupJob), workflowPath).not.toMatch(
-        /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
-      );
+      expect(cleanupJob.secrets, workflowPath).toEqual(expectedSecrets);
     },
   );
 
@@ -5140,43 +5205,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
-  it("gates current Control UI changes on the full mocked Chromium E2E suite", () => {
+  it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
+    const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
 
     expect(uiE2e.permissions).toEqual({ contents: "read" });
     expect(uiE2e.needs).toEqual(["preflight"]);
     expect(uiE2e.if).toBe(
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
-    expect(uiE2e["runs-on"]).toBe(
-      "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
-    );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     // Each Chromium worker keeps serial file ownership while all four shards
     // together remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
+    expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy).toEqual({
       "fail-fast": false,
       "max-parallel": 4,
       matrix: { shard: [1, 2, 3, 4] },
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
+
+    expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
+    expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
+    expect(uiE2eRealGateway.if).toBe(uiE2e.if);
+    expect(uiE2eRealGateway["timeout-minutes"]).toBe(20);
+    expect(uiE2eRealGateway.env).toBeUndefined();
 
     const uiE2eSetup = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
       "Control UI E2E Node setup",
     );
     expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
-    expect(uiE2eSetup.with).toEqual({
+    const expectedUiE2eSetup = {
       "node-version": "24.x",
       "install-bun": "false",
       "sticky-disk":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
       "use-actions-cache":
         "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
-    });
+    } as const;
+    expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
+    const realGatewaySetup = expectDefined(
+      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "real-Gateway Control UI E2E Node setup",
+    );
+    expect(realGatewaySetup).toEqual(uiE2eSetup);
+
+    const routedUiE2eJobs = [
+      {
+        job: uiE2e,
+        name: "checks-ui-e2e",
+        setup: uiE2eSetup,
+        blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
+      },
+      {
+        job: uiE2eRealGateway,
+        name: "checks-ui-e2e-real-gateway",
+        setup: realGatewaySetup,
+        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+      },
+    ] as const;
     const routingScenarios = [
       {
         name: "same-repo pull request first attempt",
@@ -5186,11 +5278,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          stickyDisk: "true",
-          useActionsCache: "false",
-        },
+        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
       },
       {
         name: "same-repo pull request retry",
@@ -5200,11 +5288,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "fork pull request",
@@ -5214,11 +5298,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "workflow dispatch",
@@ -5227,11 +5307,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: {
-          runner: "ubuntu-24.04",
-          stickyDisk: "false",
-          useActionsCache: "true",
-        },
+        expected: { blacksmith: false, stickyDisk: "false", useActionsCache: "true" },
       },
       {
         name: "canonical push retry",
@@ -5240,22 +5316,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: {
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          stickyDisk: "true",
-          useActionsCache: "false",
-        },
+        expected: { blacksmith: true, stickyDisk: "true", useActionsCache: "false" },
       },
     ] as const;
-    for (const { context, expected, name } of routingScenarios) {
-      expect(evaluateWorkflowExpression(uiE2e["runs-on"], context), name).toBe(expected.runner);
-      expect(evaluateWorkflowExpression(uiE2eSetup.with?.["sticky-disk"], context), name).toBe(
-        expected.stickyDisk,
+    for (const { blacksmithRunner, job, name: jobName, setup } of routedUiE2eJobs) {
+      expect(job["runs-on"]).toBe(
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && '" +
+          blacksmithRunner +
+          "' || 'ubuntu-24.04') }}",
       );
-      expect(
-        evaluateWorkflowExpression(uiE2eSetup.with?.["use-actions-cache"], context),
-        name,
-      ).toBe(expected.useActionsCache);
+      for (const { context, expected, name: scenarioName } of routingScenarios) {
+        const assertionName = `${jobName}: ${scenarioName}`;
+        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
+        expect(evaluateWorkflowExpression(job["runs-on"], context), assertionName).toBe(
+          expectedRunner,
+        );
+        expect(
+          evaluateWorkflowExpression(setup.with?.["sticky-disk"], context),
+          assertionName,
+        ).toBe(expected.stickyDisk);
+        expect(
+          evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context),
+          assertionName,
+        ).toBe(expected.useActionsCache);
+      }
     }
 
     const chromiumInstall = expectDefined(
@@ -5263,6 +5347,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Control UI E2E Chromium installation",
     );
     expect(chromiumInstall.run).toBe("node --import tsx scripts/ensure-playwright-chromium.mts");
+    const realGatewayChromiumInstall = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Install Playwright Chromium",
+      ),
+      "real-Gateway Control UI E2E Chromium installation",
+    );
+    expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
 
     const scenario = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
@@ -5277,7 +5368,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(browserCopilot.if).toBe("matrix.shard == 1");
     expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
-    expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+    for (const { job } of routedUiE2eJobs) {
+      const jobContract = JSON.stringify(job);
+      expect(jobContract).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+      expect(jobContract).not.toContain("OPENCLAW_VITEST_NO_OUTPUT_RETRY");
+    }
+
+    const realGatewayRuns = uiE2eRealGateway.steps
+      .filter((step: WorkflowStep) => step.name?.includes("with a real Gateway"))
+      .map((step: WorkflowStep) => step.run);
+    expect(realGatewayRuns).toEqual([
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+    ]);
+    const realGatewayRunContract = realGatewayRuns.join("\n");
+    expect(realGatewayRunContract).not.toContain("--retry");
+    expect(realGatewayRunContract).not.toContain("--hookTimeout");
+    expect(realGatewayRunContract).not.toContain("--testTimeout");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {
@@ -5611,6 +5718,37 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("uses candidate-owned script interfaces for frozen target CI", () => {
+    const workflow = readCiWorkflow();
+    const buildChecks = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Run built artifact checks",
+    );
+    const qaBuild = workflow.jobs["qa-smoke-ci-profile"].steps.find(
+      (step: WorkflowStep) => step.name === "Build QA smoke runtime",
+    );
+    const additionalChecks = workflow.jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+
+    expect(buildChecks.run).toContain("pnpm test:gateway:watch-regression -- --skip-build");
+    expect(buildChecks.run).not.toContain("scripts/check-gateway-watch-regression.mts");
+    expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(2);
+    expect(qaBuild.run).toContain('package_script="scripts/package-openclaw-for-docker.mts"');
+    expect(qaBuild.run).toContain('package_script="scripts/package-openclaw-for-docker.mjs"');
+    expect(additionalChecks.run).toContain(
+      "boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)",
+    );
+    expect(additionalChecks.run).toContain(
+      "boundary_runner=(node scripts/run-additional-boundary-checks.mjs)",
+    );
+    expect(additionalChecks.run).not.toContain(
+      "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
+    );
+    expect(additionalChecks.run).not.toContain(
+      "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
+    );
+  });
+
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -5621,6 +5759,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "checks-fast-core",
       "qa-smoke-ci-profile",
@@ -6620,25 +6759,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    const publicRuntimeBuild = smokeBuildStep.run.indexOf(
-      "node --import tsx scripts/build-all.mts qaRuntime",
-    );
+    const publicRuntimeBuild = smokeBuildStep.run.indexOf("pnpm build qaRuntime");
     const uiBuild = smokeBuildStep.run.indexOf("pnpm ui:build");
     const packageBuild = smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs");
     const privateRuntimeBuild = smokeBuildStep.run.lastIndexOf(
-      "node --import tsx scripts/build-all.mts qaRuntime",
+      "OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime",
     );
-    expect(smokeBuildStep.run).toContain("node --import tsx scripts/build-all.mts qaRuntime");
+    expect(smokeBuildStep.run).toContain("pnpm build qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env).not.toHaveProperty("OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("unset OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("--skip-build");
-    expect(smokeBuildStep.run).toContain(
-      "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime",
-    );
-    expect(
-      smokeBuildStep.run.match(/node --import tsx scripts\/build-all\.mts qaRuntime/g),
-    ).toHaveLength(2);
+    expect(smokeBuildStep.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime");
+    expect(smokeBuildStep.run.match(/pnpm build qaRuntime/g)).toHaveLength(2);
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');

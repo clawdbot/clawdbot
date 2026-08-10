@@ -2,9 +2,6 @@ import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 // Slack tests cover interactions plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeSlackEnterpriseApprovalAction } from "../../approval-actions.js";
-
-const ENTERPRISE_APPROVAL_SIGNING_KEY = "xoxb-enterprise-test";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -74,7 +71,6 @@ const resolveQuestionOverGatewayMock = vi.hoisted(() =>
 );
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
-let registerSlackApprovalInteractionEvents: typeof import("./interactions.js").registerSlackApprovalInteractionEvents;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
@@ -217,27 +213,16 @@ vi.mock("../conversation.runtime.js", () => {
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
+  client?: TestSlackClient;
+  context?: TestBoltContext;
   body: {
-    api_app_id?: string;
     user: { id: string; team_id?: string };
-    team?: { id?: string } | null;
-    enterprise?: { id: string; name: string };
-    is_enterprise_install?: boolean;
+    team?: { id?: string };
     trigger_id?: string;
     response_url?: string;
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
     message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
-  };
-  context?: {
-    isEnterpriseInstall?: boolean;
-    enterpriseId?: string;
-    teamId?: string;
-  };
-  client?: {
-    chat: {
-      update: ReturnType<typeof vi.fn>;
-    };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
@@ -245,8 +230,10 @@ type RegisteredHandler = (args: {
 
 type RegisteredViewHandler = (args: {
   ack: () => Promise<void>;
+  client?: TestSlackClient;
+  context?: TestBoltContext;
   body: {
-    user?: { id?: string };
+    user?: { id?: string; team_id?: string };
     team?: { id?: string };
     trigger_id?: string;
     view?: {
@@ -257,6 +244,7 @@ type RegisteredViewHandler = (args: {
       previous_view_id?: string;
       external_id?: string;
       hash?: string;
+      app_installed_team_id?: string;
       state?: { values?: Record<string, Record<string, Record<string, unknown>>> };
     };
     is_cleared?: boolean;
@@ -264,8 +252,21 @@ type RegisteredViewHandler = (args: {
 }) => Promise<void>;
 
 type RegisteredShortcutHandler = (
-  args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body">,
+  args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body"> & {
+    client?: TestSlackClient;
+    context?: TestBoltContext;
+  },
 ) => Promise<void>;
+
+type TestBoltContext = {
+  teamId?: string;
+  isEnterpriseInstall?: boolean;
+  enterpriseId?: string;
+};
+
+type TestSlackClient = {
+  chat: { update: (...args: unknown[]) => unknown };
+};
 
 function createContext(overrides?: {
   dmEnabled?: boolean;
@@ -275,6 +276,9 @@ function createContext(overrides?: {
   useAccessGroups?: boolean;
   channelsConfig?: Record<string, { users?: string[] }>;
   cfg?: Record<string, unknown>;
+  installationIdentity?:
+    | { kind: "workspace"; teamId: string }
+    | { kind: "enterprise"; enterpriseId: string };
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   isChannelAllowed?: (params: {
     channelId?: string;
@@ -286,20 +290,51 @@ function createContext(overrides?: {
     name?: string;
     type?: "im" | "mpim" | "channel" | "group";
   }>;
-  installationIdentity?:
-    | { kind: "workspace"; teamId: string }
-    | { kind: "enterprise"; enterpriseId: string; apiAppId?: string };
 }) {
   let handler: RegisteredHandler | null = null;
   let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewHandler | null = null;
   let shortcutHandler: RegisteredShortcutHandler | null = null;
+  const installationIdentity = overrides?.installationIdentity ?? {
+    kind: "workspace" as const,
+    teamId: "T_TEST",
+  };
+  const listenerClient = {
+    chat: {
+      update: vi.fn().mockResolvedValue(undefined),
+    },
+  };
+  const withBoltScope = <
+    Args extends { body: unknown; context?: TestBoltContext; client?: TestSlackClient },
+  >(
+    args: Args,
+  ): Args & { context: TestBoltContext; client: TestSlackClient } => {
+    const body = args.body as {
+      team?: { id?: string };
+      user?: { team_id?: string };
+      view?: { app_installed_team_id?: string };
+    };
+    const context = args.context ?? {
+      teamId: body.view?.app_installed_team_id ?? body.team?.id ?? body.user?.team_id,
+    };
+    return {
+      ...args,
+      context:
+        installationIdentity.kind === "enterprise"
+          ? {
+              ...context,
+              isEnterpriseInstall: true,
+              enterpriseId: installationIdentity.enterpriseId,
+            }
+          : context,
+      client: args.client ?? listenerClient,
+    };
+  };
   const app = {
-    webClientOptions: {},
     action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
       actionMatcher = matcher;
-      handler = next;
+      handler = async (args) => await next(withBoltScope(args));
     }),
     view: vi.fn(
       (
@@ -307,20 +342,16 @@ function createContext(overrides?: {
         next: RegisteredViewHandler,
       ) => {
         if (matcher.type === "view_submission") {
-          viewHandler = next;
+          viewHandler = async (args) => await next(withBoltScope(args));
         } else {
-          viewClosedHandler = next;
+          viewClosedHandler = async (args) => await next(withBoltScope(args));
         }
       },
     ),
     shortcut: vi.fn((_matcher: RegExp, next: RegisteredShortcutHandler) => {
-      shortcutHandler = next;
+      shortcutHandler = async (args) => await next(withBoltScope(args));
     }),
-    client: {
-      chat: {
-        update: vi.fn().mockResolvedValue(undefined),
-      },
-    },
+    client: listenerClient,
   };
   const runtimeLog = vi.fn();
   const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:slack:channel:C1");
@@ -349,11 +380,7 @@ function createContext(overrides?: {
   const ctx = {
     app,
     accountId: "default",
-    botToken: ENTERPRISE_APPROVAL_SIGNING_KEY,
-    installationIdentity: overrides?.installationIdentity ?? {
-      kind: "workspace",
-      teamId: "T9",
-    },
+    installationIdentity,
     cfg: overrides?.cfg ?? {
       channels: {
         slack: {
@@ -418,87 +445,6 @@ function createContext(overrides?: {
         throw new Error("Expected Slack shortcut handler to be registered");
       }
       return shortcutHandler;
-    },
-  };
-}
-
-function createEnterpriseApprovalContext() {
-  const context = createContext({
-    installationIdentity: { kind: "enterprise", enterpriseId: "E123", apiAppId: "A123" },
-    cfg: {
-      channels: {
-        slack: {
-          enterpriseOrgInstall: true,
-          allowFrom: ["*"],
-          execApprovals: {
-            enabled: true,
-            approvers: ["team:T123:user:U123", "team:T999:user:U123"],
-            target: "both",
-          },
-        },
-      },
-    },
-  });
-  registerSlackApprovalInteractionEvents({ ctx: context.ctx as never });
-  return context;
-}
-
-function buildEnterpriseApprovalActionArgs(params: {
-  approvalKind: "exec" | "plugin";
-  teamId: string;
-  signedTeamId?: string;
-  unsigned?: boolean;
-  channelId?: string;
-  client: NonNullable<Parameters<RegisteredHandler>[0]["client"]>;
-  respond?: Parameters<RegisteredHandler>[0]["respond"];
-}): Parameters<RegisteredHandler>[0] {
-  const channelId = params.channelId ?? "C123";
-  const approvalId = params.approvalKind === "exec" ? "req-grid" : "plugin:req-grid";
-  const action = {
-    type: "approval" as const,
-    approvalId,
-    approvalKind: params.approvalKind,
-    decision: "allow-once" as const,
-  };
-  return {
-    ack: vi.fn().mockResolvedValue(undefined),
-    respond: params.respond,
-    body: {
-      api_app_id: "A123",
-      user: { id: "U123", team_id: params.teamId },
-      team: null,
-      enterprise: { id: "E123", name: "Example Enterprise" },
-      is_enterprise_install: true,
-      channel: { id: channelId },
-      container: { channel_id: channelId, message_ts: "100.200" },
-      message: {
-        ts: "100.200",
-        text: `${params.approvalKind === "exec" ? "Exec" : "Plugin"} approval required`,
-        blocks: [],
-      },
-    },
-    context: {
-      isEnterpriseInstall: true,
-      enterpriseId: "E123",
-      teamId: params.teamId,
-    },
-    client: params.client,
-    action: {
-      type: "button",
-      action_id: "openclaw:approval_button:1:1",
-      block_id: `${params.approvalKind}_actions`,
-      value: params.unsigned
-        ? `openclaw:approval:v1:${JSON.stringify({
-            approvalId,
-            approvalKind: params.approvalKind,
-            decision: "allow-once",
-          })}`
-        : encodeSlackEnterpriseApprovalAction({
-            action,
-            teamId: params.signedTeamId ?? params.teamId,
-            signingKey: ENTERPRISE_APPROVAL_SIGNING_KEY,
-          }),
-      text: { type: "plain_text", text: "Allow once" },
     },
   };
 }
@@ -615,8 +561,7 @@ function inputByActionId(
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    ({ registerSlackApprovalInteractionEvents, registerSlackInteractionEvents } =
-      await import("./interactions.js"));
+    ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
   beforeEach(() => {
@@ -668,13 +613,16 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("routes global shortcuts to the actor's direct session", async () => {
-    const { ctx, getShortcutHandler, resolveSessionKey } = createContext();
+    const { ctx, getShortcutHandler, resolveSessionKey } = createContext({
+      installationIdentity: { kind: "enterprise", enterpriseId: "E1" },
+    });
     const trackEvent = vi.fn();
     registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
 
     const ack = vi.fn().mockResolvedValue(undefined);
     await getShortcutHandler()({
       ack,
+      context: { teamId: "T9" },
       body: {
         type: "shortcut",
         callback_id: "capture-note",
@@ -693,6 +641,7 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "im",
       senderId: "U123",
       threadTs: undefined,
+      eventScope: expect.objectContaining({ teamId: "T9" }),
     });
     expect(slackInteractionPayload()).toMatchObject({
       interactionType: "global_shortcut",
@@ -708,7 +657,7 @@ describe("registerSlackInteractionEvents", () => {
       sessionKey: "agent:ops:slack:channel:C1",
       deliveryContext: {
         channel: "slack",
-        to: "user:U123",
+        to: "team:T9:user:U123",
         accountId: "default",
       },
     });
@@ -717,12 +666,14 @@ describe("registerSlackInteractionEvents", () => {
 
   it("routes message shortcuts with selected-message context", async () => {
     const { ctx, getShortcutHandler, resolveSessionKey } = createContext({
+      installationIdentity: { kind: "enterprise", enterpriseId: "E1" },
       resolveChannelName: async () => ({ name: "ops", type: "channel" }),
     });
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     await getShortcutHandler()({
       ack: vi.fn().mockResolvedValue(undefined),
+      context: { teamId: "T9" },
       body: {
         type: "message_action",
         callback_id: "summarize-message",
@@ -749,6 +700,7 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U123",
       threadTs: "200.100",
+      eventScope: expect.objectContaining({ teamId: "T9" }),
     });
     expect(slackInteractionPayload()).toMatchObject({
       interactionType: "message_shortcut",
@@ -767,7 +719,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
       deliveryContext: {
         channel: "slack",
-        to: "channel:C1",
+        to: "team:T9:channel:C1",
         accountId: "default",
         threadId: "200.100",
       },
@@ -827,7 +779,9 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("enqueues structured events and updates button rows", async () => {
-    const { ctx, app, getHandler, resolveSessionKey } = createContext();
+    const { ctx, app, getHandler, resolveSessionKey } = createContext({
+      installationIdentity: { kind: "enterprise", enterpriseId: "E1" },
+    });
     const trackEvent = vi.fn();
     registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
 
@@ -838,6 +792,7 @@ describe("registerSlackInteractionEvents", () => {
     await handler({
       ack,
       respond,
+      context: { teamId: "T9" },
       body: {
         user: { id: "U123" },
         team: { id: "T9" },
@@ -900,6 +855,10 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U123",
       threadTs: "100.100",
+      eventScope: expect.objectContaining({ teamId: "T9" }),
+    });
+    expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
+      deliveryContext: { to: "team:T9:channel:C1" },
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
@@ -1621,104 +1580,6 @@ describe("registerSlackInteractionEvents", () => {
       ],
     });
     expect(respond).not.toHaveBeenCalled();
-  });
-
-  it("resolves same-team Enterprise Grid exec approvals with the listener-owned client", async () => {
-    const { app, getActionMatcher, getHandler } = createEnterpriseApprovalContext();
-    const workspaceClient = {
-      chat: { update: vi.fn().mockResolvedValue(undefined) },
-    };
-
-    expect(getActionMatcher().test("openclaw:approval_button:1:1")).toBe(true);
-    expect(getActionMatcher().test("openclaw:reply_button")).toBe(false);
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "exec",
-        teamId: "T123",
-        client: workspaceClient,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "req-grid",
-        approvalKind: "exec",
-        decision: "allow-once",
-        senderId: "U123",
-      }),
-    );
-    expect(workspaceClient.chat.update).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "C123", ts: "100.200" }),
-    );
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-  });
-
-  it("rejects a T123-signed Enterprise approval replayed by an approver in T999", async () => {
-    const { getHandler } = createEnterpriseApprovalContext();
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const workspaceClient = { chat: { update: vi.fn().mockResolvedValue(undefined) } };
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "exec",
-        teamId: "T999",
-        signedTeamId: "T123",
-        channelId: "C999",
-        client: workspaceClient,
-        respond,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(workspaceClient.chat.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This approval action is invalid or expired.",
-      response_type: "ephemeral",
-    });
-  });
-
-  it("rejects unsigned model-authored Enterprise approval actions", async () => {
-    const { getHandler } = createEnterpriseApprovalContext();
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const workspaceClient = { chat: { update: vi.fn().mockResolvedValue(undefined) } };
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "exec",
-        teamId: "T123",
-        unsigned: true,
-        client: workspaceClient,
-        respond,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(workspaceClient.chat.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This approval action is invalid or expired.",
-      response_type: "ephemeral",
-    });
-  });
-
-  it("denies crafted Enterprise Grid plugin approval actions before Gateway resolution", async () => {
-    const { getHandler } = createEnterpriseApprovalContext();
-    const respond = vi.fn().mockResolvedValue(undefined);
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "plugin",
-        teamId: "T123",
-        client: { chat: { update: vi.fn().mockResolvedValue(undefined) } },
-        respond,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "Plugin approvals are not available for Enterprise Grid org installs.",
-      response_type: "ephemeral",
-    });
   });
 
   it("resolves typed question buttons without enqueueing an agent interaction", async () => {
@@ -3232,7 +3093,9 @@ describe("registerSlackInteractionEvents", () => {
 
   it("captures modal submissions and enqueues view submission event", async () => {
     enqueueSystemEventMock.mockClear();
-    const { ctx, getViewHandler, resolveSessionKey } = createContext();
+    const { ctx, getViewHandler, resolveSessionKey } = createContext({
+      installationIdentity: { kind: "enterprise", enterpriseId: "E1" },
+    });
     const trackEvent = vi.fn();
     registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
     const viewHandler = getViewHandler();
@@ -3240,6 +3103,7 @@ describe("registerSlackInteractionEvents", () => {
     const ack = vi.fn().mockResolvedValue(undefined);
     await viewHandler({
       ack,
+      context: { teamId: "T1" },
       body: {
         user: { id: "U777" },
         team: { id: "T1" },
@@ -3291,13 +3155,14 @@ describe("registerSlackInteractionEvents", () => {
       channelId: "D123",
       channelType: "im",
       senderId: "U777",
+      eventScope: expect.objectContaining({ teamId: "T1" }),
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
       sessionKey: "agent:ops:slack:channel:C1",
       deliveryContext: {
         channel: "slack",
-        to: "user:U777",
+        to: "team:T1:user:U777",
         accountId: "default",
       },
     });

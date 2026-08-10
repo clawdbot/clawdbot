@@ -85,7 +85,6 @@ function sessionMenuActionDisabledReasons(
     ...(patchReason
       ? {
           "toggle-pin": patchReason,
-          "set-icon": patchReason,
           rename: patchReason,
         }
       : {}),
@@ -260,7 +259,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       <openclaw-session-menu
         .session=${{
           label: session.label,
-          icon: session.icon,
           pinned: session.pinned,
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
@@ -281,7 +279,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
-        .canOpenChat=${true}
         .work=${batchRows ? null : controller.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => {
@@ -295,9 +292,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             return;
           }
           switch (action.kind) {
-            case "open-chat":
-              host.selectSession(session.key);
-              break;
             case "open-pr":
               openExternalUrlSafe(action.url);
               break;
@@ -306,9 +300,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
-              break;
-            case "set-icon":
-              void host.sessionOrganizer.patchSession(session, { icon: action.icon });
               break;
             case "toggle-unread":
               void host.sessionOrganizer.patchSession(session, { unread: !session.unread });

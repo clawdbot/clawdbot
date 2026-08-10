@@ -115,6 +115,56 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes web and Teams file URL handling to Windows", () => {
+    for (const fileUrlPath of [
+      "src/media/local-media-path.ts",
+      "src/media/local-media-path.windows.test.ts",
+      "src/media/local-roots.ts",
+      "src/media/local-roots.test.ts",
+      "src/media/web-media.ts",
+      "src/media/web-media.file-url.windows.test.ts",
+      "src/channels/inbound-event/media.ts",
+      "src/channels/inbound-event/media.test.ts",
+      "src/gateway/managed-image-attachments.ts",
+      "src/gateway/managed-image-attachments.test.ts",
+      "extensions/msteams/src/media-helpers.ts",
+      "extensions/msteams/src/media-helpers.test.ts",
+      "extensions/msteams/src/messenger.test.ts",
+    ]) {
+      expect(detectChangedScope([fileUrlPath]), fileUrlPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes usage footer template changes and native coverage to Windows", () => {
+    for (const templatePath of [
+      "src/auto-reply/usage-bar/template.ts",
+      "src/auto-reply/usage-bar/template.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([templatePath]), templatePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes media-understanding file URL changes and native coverage to Windows", () => {
+    for (const mediaPath of [
+      "src/media-understanding/attachments.cache.ts",
+      "src/media-understanding/attachments.cache.test.ts",
+      "src/media-understanding/attachments.normalize.ts",
+      "src/media-understanding/attachments.normalize.test.ts",
+      "src/media-understanding/attachments.file-url.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([mediaPath]), mediaPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes SecretRef path-security changes and native fixtures to Windows", () => {
     for (const secretRefPath of [
       "src/commands/doctor-gateway-auth-token.ts",

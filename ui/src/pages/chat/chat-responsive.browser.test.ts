@@ -1234,6 +1234,51 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps inline MCP App reloads transparent without changing dashboard surfaces", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
+      await page.addScriptTag({
+        type: "module",
+        url: new URL("src/components/mcp-app-view-registration.ts", realChatServer.baseUrl).href,
+      });
+      const backgrounds = await page.evaluate(async () => {
+        await customElements.whenDefined("mcp-app-view");
+        const readFrameBackground = async (boardSurface?: string) => {
+          const owner = document.createElement("div");
+          if (boardSurface) {
+            owner.style.setProperty("--board-surface", boardSurface);
+          }
+          const view = document.createElement("mcp-app-view") as HTMLElement & {
+            updateComplete: Promise<boolean>;
+          };
+          owner.append(view);
+          document.body.replaceChildren(owner);
+          await view.updateComplete;
+          const mount = view.shadowRoot?.querySelector(".mount");
+          if (!mount) {
+            throw new Error("MCP App mount is missing");
+          }
+          const frame = document.createElement("iframe");
+          mount.append(frame);
+          return getComputedStyle(frame).backgroundColor;
+        };
+        return {
+          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
+          inline: await readFrameBackground(),
+        };
+      });
+
+      expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
+      expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps wrapped message footers inside measured virtual rows", async () => {
     const page = await openBrowserPage(1366, 900);
     try {

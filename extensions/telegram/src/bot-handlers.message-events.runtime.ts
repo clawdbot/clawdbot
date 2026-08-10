@@ -144,12 +144,7 @@ export function registerTelegramMessageHandlers(
     if (!gate.allowed) {
       return;
     }
-    const { resolvedThreadId, dmThreadId } = gate.context;
-    await recordMessageForReplyChain(
-      normalizedMsg,
-      resolvedThreadId ?? dmThreadId,
-      params.botUserId,
-    );
+    await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, params.botUserId);
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
@@ -208,7 +203,7 @@ export function registerTelegramMessageHandlers(
         return;
       }
       dispatchDedupeClaims = dispatchDedupe.claims;
-      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId, event.botUserId);
+      await recordMessageForReplyChain(event.msg, gate.context.threadSpec, event.botUserId);
       await processInboundMessage({
         authorizationCfg: gate.context.cfg,
         ctx: event.ctx,

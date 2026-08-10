@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   GATEWAY_SERVER_CAPS,
+  type HelloOk,
   MIN_NODE_PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -86,24 +87,8 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(health.ok).toBe(true);
     }
 
-    function readHelloOkAuth(payload: unknown):
-      | {
-          role?: unknown;
-          scopes?: unknown;
-          deviceToken?: unknown;
-        }
-      | undefined {
-      return (
-        payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined
-      )?.auth;
+    function readHelloOkAuth(payload: unknown): HelloOk["auth"] | undefined {
+      return (payload as { auth?: HelloOk["auth"] } | undefined)?.auth;
     }
 
     test("closes silent handshakes after timeout", async () => {
@@ -326,7 +311,7 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
-    test("hello-ok reports persisted token scopes when reusing an existing device token", async () => {
+    test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
       const os = await import("node:os");
       const path = await import("node:path");
@@ -337,7 +322,6 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
-      let pairedDeviceScopes: unknown;
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -347,10 +331,15 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
-        expect(Array.isArray(auth?.scopes)).toBe(true);
+        expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
+          "deviceToken",
+          "issuedAtMs",
+          "role",
+          "scopes",
+        ]);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
-        pairedDeviceScopes = auth?.scopes;
       } finally {
         wsInitial.close();
       }
@@ -366,8 +355,16 @@ export function registerDefaultAuthTokenSuite(): void {
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
-        expect(auth?.scopes).toEqual(pairedDeviceScopes);
-        expect(auth?.scopes).not.toEqual(["operator.read"]);
+        expect(auth?.scopes).toEqual(["operator.read"]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
+          "deviceToken",
+          "issuedAtMs",
+          "role",
+          "scopes",
+        ]);
+        const admin = await rpcReq(wsReconnect, "config.schema");
+        expect(admin.ok).toBe(false);
+        expect(admin.error?.message).toBe("missing scope: operator.admin");
       } finally {
         wsReconnect.close();
       }

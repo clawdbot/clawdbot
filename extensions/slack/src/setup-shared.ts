@@ -100,9 +100,6 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "reaction_removed",
         ],
       },
-      interactivity: {
-        is_enabled: true,
-      },
     },
   };
   return JSON.stringify(manifest, null, 2);
@@ -114,8 +111,7 @@ export function buildSlackSetupLines(): string[] {
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",
     "4) Enable Event Subscriptions (socket) for message, App Home, and Agent View events",
-    "5) Enable Interactivity (Socket Mode does not need a public Request URL)",
-    "6) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
+    "5) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
     "Manifest JSON follows as plain text for copy/paste.",
     "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,

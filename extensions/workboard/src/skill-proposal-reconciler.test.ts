@@ -70,7 +70,7 @@ describe("Workboard Skill Workshop proposal reconciler", () => {
       store,
     });
 
-    service.start(serviceContext(logger));
+    void service.start(serviceContext(logger));
 
     await vi.waitFor(async () => {
       await expect(store.list()).resolves.toHaveLength(1);
@@ -104,7 +104,7 @@ describe("Workboard Skill Workshop proposal reconciler", () => {
       api: { runtime: { gateway: { request } } } as never,
       store,
     });
-    service.start(serviceContext(logger));
+    void service.start(serviceContext(logger));
     await vi.advanceTimersByTimeAsync(1);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -127,7 +127,7 @@ describe("Workboard Skill Workshop proposal reconciler", () => {
       api: { runtime: { gateway: { request } } } as never,
       store,
     });
-    service.start(serviceContext(logger));
+    void service.start(serviceContext(logger));
     await vi.advanceTimersByTimeAsync(1);
 
     const warning = String(logger.warn.mock.calls[0]?.[0] ?? "");

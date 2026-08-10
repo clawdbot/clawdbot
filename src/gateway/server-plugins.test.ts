@@ -66,10 +66,10 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/binding-registry.js")>(
-    "../channels/plugins/binding-registry.js",
-  );
+vi.mock("../channels/plugins/configured-binding-registry.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../channels/plugins/configured-binding-registry.js")
+  >("../channels/plugins/configured-binding-registry.js");
   return {
     ...actual,
     primeConfiguredBindingRegistry,

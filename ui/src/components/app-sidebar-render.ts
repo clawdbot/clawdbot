@@ -7,6 +7,7 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
+import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
@@ -84,6 +85,20 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const cardName =
     cardIdentity?.name?.trim() || (cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId);
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
+  const gateway = host.sessionDataContext?.gateway;
+  const avatarAuthToken = gateway
+    ? resolveControlUiAuthToken({
+        hello: gateway.snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      })
+    : null;
+  const avatarAuthReady = Boolean(
+    gateway &&
+    (gateway.snapshot.hello ||
+      gateway.connection.token.trim() ||
+      gateway.connection.password.trim()),
+  );
   const cardAvatarText =
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
     (deriveAvatarInitial(cardName || cardAgentId) || "?");
@@ -97,6 +112,8 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .avatarUrl=${cardAgent
           ? resolveAgentAvatarUrl(cardAgent, cardIdentity)
           : cardIdentity?.avatar}
+        .authToken=${avatarAuthToken}
+        .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .subtitle=${host.agentChipSubtitle(cardAgentId)}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}

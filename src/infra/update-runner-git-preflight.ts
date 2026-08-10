@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { trimLogTail } from "./restart-sentinel.js";
 import { DEV_BRANCH } from "./update-channels.js";
+import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   managerInstallArgs,
   managerInstallIgnoreScriptsArgs,
@@ -413,7 +414,7 @@ async function testPreflightCandidates(params: {
 
 export async function runGitDevPreflight(params: {
   gitRoot: string;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -421,7 +422,9 @@ export async function runGitDevPreflight(params: {
   steps: UpdateStepResult[];
   step: StepFactory;
 }): Promise<GitDevPreflightResult> {
-  const devTargetRef = normalizeDevTargetRef(params.devTargetRef);
+  const devTargetRef = params.devTarget
+    ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
+    : null;
   let preflightBaseSha: string;
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
@@ -433,6 +436,26 @@ export async function runGitDevPreflight(params: {
     }
     preflightBaseSha = targetSha;
     candidates = [targetSha];
+    if (params.devTarget?.mode === "tracked") {
+      const ancestryStep = await runStep(
+        params.step(
+          "tracked target ancestry",
+          [
+            "git",
+            "-C",
+            params.gitRoot,
+            "merge-base",
+            "--is-ancestor",
+            targetSha,
+            `${params.devTarget.upstreamRef}^{commit}`,
+          ],
+          params.gitRoot,
+        ),
+      );
+      if (ancestryStep.exitCode !== 0) {
+        return { status: "error", reason: "tracked-upstream-invalid" };
+      }
+    }
   } else {
     const upstream = await resolveUpstreamCandidates(params);
     if (upstream.status !== "ok") {

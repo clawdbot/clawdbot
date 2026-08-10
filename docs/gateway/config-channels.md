@@ -480,16 +480,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   `allowFrom: ["*"]`. Channel and user policies must use stable Slack IDs;
   mutable names and unsupported channel prefixes fail startup. V1 handles only
   direct Socket Mode or HTTP `message` and `app_mention` events with immediate
-  replies; relay, commands, general interactions, App Home, reaction event
-  listeners, pins, action tools, bindings, deferred delivery, and proactive
-  sends are unavailable. Slack-native exec approval buttons remain available
-  when `execApprovals.approvers` contains an explicit
-  `team:<team-id>:user:<user-id>` target for the originating workspace. Raw
-  approvers and `commands.ownerAllowFrom` fallback are ignored; native plugin
-  approvals remain unavailable. Listener-owned
-  acknowledgment, typing, and status reactions remain available with
-  `reactions:write`; inbound reaction notifications and reaction action tools
-  are unavailable. See
+  replies; relay, commands, interactions, App Home, reaction event listeners,
+  pins, action tools, native approvals, bindings, deferred delivery, and
+  proactive sends are unavailable. Listener-owned acknowledgment, typing, and
+  status reactions remain available with `reactions:write`; inbound reaction
+  notifications and reaction action tools are unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
@@ -513,7 +508,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Slack native streaming plus the Slack assistant-style "is typing..." thread status require a reply thread target. Top-level DMs stay off-thread by default, so they can still stream through Slack draft post-and-edit previews instead of showing the thread-style native stream/status preview.
 - `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Use a Slack emoji shortcode such as `"hourglass_flowing_sand"`.
-- `channels.slack.execApprovals`: Slack-native approval-client delivery and exec approver authorization: `enabled` (`true`/`false`/`"auto"`), `approvers`, `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`). Workspace installs accept Slack user IDs and can fall back to `commands.ownerAllowFrom`; plugin approvals use workspace Slack approvers from `allowFrom` and default routing, not exec approvers. Enterprise Grid accounts require explicit `team:<team-id>:user:<user-id>` exec approvers matching the originating team, ignore raw and owner-fallback approvers, and do not support native plugin approvals.
+- `channels.slack.execApprovals`: Slack-native approval-client delivery and exec approver authorization. Same schema as Discord: `enabled` (`true`/`false`/`"auto"`), `approvers` (Slack user IDs), `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`). Plugin approvals can use this native-client path for Slack-origin requests when Slack plugin approvers resolve; Slack-native plugin approval delivery can also be enabled through `approvals.plugin` for Slack-origin sessions or Slack targets. Plugin approvals use Slack plugin approvers from `allowFrom` and default routing, not exec approvers.
 
 | Action group | Default | Notes                  |
 | ------------ | ------- | ---------------------- |
@@ -841,7 +836,12 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
     },
   },
   agents: {
-    list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],
+    entries: {
+      main: {
+        default: true,
+        groupChat: { mentionPatterns: ["@openclaw", "openclaw"] },
+      },
+    },
   },
 }
 ```
@@ -884,12 +884,12 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
       },
-    ],
+    },
   },
 }
 ```
@@ -910,13 +910,10 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
     debug: false, // allow /debug
     restart: true, // allow /restart + external SIGUSR1 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
-    ownerDisplay: "raw", // raw | hash
-    ownerDisplaySecret: "${OWNER_ID_HASH_SECRET}",
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
     },
-    useAccessGroups: true,
   },
 }
 ```
@@ -939,9 +936,8 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `ownerDisplay: "hash"` hashes owner ids in the system prompt. Set `ownerDisplaySecret` to control hashing.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
-- `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)
   - channel-specific command surfaces: [Channels](/channels)

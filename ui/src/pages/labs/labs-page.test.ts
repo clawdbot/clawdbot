@@ -266,7 +266,7 @@ describe("LabsPage", () => {
     );
   });
 
-  it("shows default provenance and reset actions only for overrides", async () => {
+  it("shows default provenance without reset actions", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Enabled");
     expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Disabled");
@@ -284,7 +284,7 @@ describe("LabsPage", () => {
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Enabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Disabled");
     expect(overridden.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
-      2,
+      0,
     );
   });
 
@@ -343,9 +343,9 @@ describe("LabsPage", () => {
       },
     });
 
-    labRow(page, "Lean tools for local models")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
+    const toggle = labToggle(page, "Lean tools for local models");
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
@@ -354,36 +354,6 @@ describe("LabsPage", () => {
         wizard: { localModelLeanAutoModel: null },
       },
       note: "labs: update localModelLean",
-    });
-  });
-
-  it("restores an object gate without deleting sibling settings", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { loopDetection: { enabled: true, warningThreshold: 12 } },
-    });
-
-    labRow(page, "Tool-loop detection")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { loopDetection: { enabled: null } } },
-      note: "labs: update loopDetection",
-    });
-  });
-
-  it("restores a shorthand gate at its owning parent path", async () => {
-    const { page, runtimeConfig } = await mountPage({ tools: { codeMode: "auto" } });
-
-    labRow(page, "Code Mode")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: null } },
-      note: "labs: update codeMode",
     });
   });
 });
@@ -504,22 +474,6 @@ describe("LabsPage tool search enablement", () => {
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
-      note: "labs: update toolSearch",
-    });
-  });
-
-  it("resets an explicit enabled override as a Tool Search unit", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { toolSearch: { enabled: true } },
-    });
-
-    labRow(page, "Tool Search")
-      .querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")
-      ?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { toolSearch: null } },
       note: "labs: update toolSearch",
     });
   });
