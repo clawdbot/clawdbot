@@ -278,7 +278,10 @@ describe("external shared-state ownership", () => {
     }
     writer.exec("COMMIT;");
     const originalGet = Object.getOwnPropertyDescriptor(StatementSync.prototype, "get")?.value as
-      | ((this: import("node:sqlite").StatementSync, ...params: unknown[]) => unknown)
+      | ((
+          this: import("node:sqlite").StatementSync,
+          ...params: unknown[]
+        ) => Record<string, import("node:sqlite").SQLOutputValue> | undefined)
       | undefined;
     if (!originalGet) {
       throw new Error("StatementSync.get descriptor is unavailable");
