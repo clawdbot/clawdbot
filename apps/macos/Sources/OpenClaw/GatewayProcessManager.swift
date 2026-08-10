@@ -767,11 +767,17 @@ extension GatewayProcessManager {
         var latestRetryDisposition: GatewayProbeFailureDisposition?
         var readinessPID = context.readinessPID
         var freshInstallGraceAuthorized = false
+        var responsiveStartupProgressObserved = false
         readinessLoop: while true {
             guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return }
             while Date() >= deadline {
                 guard deadline < finalProbeDeadline else { break readinessLoop }
-                if freshInstallGraceAuthorized {
+                if responsiveStartupProgressObserved {
+                    guard !Task.isCancelled,
+                          self.isCurrentGatewayStart(startGeneration),
+                          self.launchAgentReadinessRevision == context.readinessRevision
+                    else { return }
+                } else if freshInstallGraceAuthorized {
                     // Repeating launchd status at every boundary would expand the wall-clock budget.
                     // Generation/revision guard intermediate windows; success and final repair re-check ownership.
                     guard self.isCurrentFreshInstallReadiness(
@@ -821,6 +827,9 @@ extension GatewayProcessManager {
                 case .retryWithoutRepair:
                     // A responsive transient invalidates older connection-failure evidence.
                     latestRetryDisposition = .retryWithoutRepair
+                    if self.probeFailureShowsStartupProgress(error) {
+                        responsiveStartupProgressObserved = true
+                    }
                 }
                 let retryDelay = min(0.4, max(0, deadline.timeIntervalSinceNow))
                 if retryDelay > 0 {
@@ -996,6 +1005,11 @@ extension GatewayProcessManager {
         default:
             return .fail
         }
+    }
+
+    private func probeFailureShowsStartupProgress(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.code.uppercased() == "UNAVAILABLE"
     }
 
     private func probeFailureIsCancellation(_ error: Error) -> Bool {

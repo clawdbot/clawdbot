@@ -259,18 +259,26 @@ public enum DeviceIdentityStore {
     #endif
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
-        guard let identity = loadOrCreatePersisted(profile: profile) else {
-            preconditionFailure("Could not persist the OpenClaw device identity")
+        do {
+            return try self.loadOrCreatePersistedOrThrow(profile: profile)
+        } catch {
+            preconditionFailure("Could not persist the OpenClaw device identity: \(error.localizedDescription)")
         }
-        return identity
     }
 
     /// Loads or creates an identity, returning nil unless its key material was durably persisted.
     public static func loadOrCreatePersisted(
         profile: GatewayDeviceIdentityProfile = .primary) -> DeviceIdentity?
     {
+        try? self.loadOrCreatePersistedOrThrow(profile: profile)
+    }
+
+    /// Loads or creates an identity and preserves the storage failure for callers that can report it.
+    static func loadOrCreatePersistedOrThrow(
+        profile: GatewayDeviceIdentityProfile = .primary) throws -> DeviceIdentity
+    {
         let stateDirURL = DeviceIdentityPaths.stateDirURL()
-        return try? DeviceIdentitySQLiteStore.loadOrCreate(
+        return try DeviceIdentitySQLiteStore.loadOrCreate(
             databaseURL: self.databaseURL(stateDirURL: stateDirURL),
             destinationStateDirURL: stateDirURL,
             profile: profile,

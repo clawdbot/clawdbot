@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **macOS device identity startup:** let the app adopt canonical CLI-written identities while the shared SQLite schema migration is still pending, preserve underlying identity-store errors, and keep onboarding Gateway readiness current through startup progress.
 - **Control UI browser annotations:** keep marked screenshots and generated page context together in structured composer cards, preserve user-written drafts when annotations are removed or replaced, retain complete unsent annotation packages across same-tab route and active split-pane remounts, and offer bounded Undo without restoring removed context into another session. Fixes #120744. Thanks @shakkernerd.
 - **Control UI profile avatar refreshes:** carry canonical content revisions through mutation responses and live presence so rapid replacements refresh every connected browser without stale cache rollback. Thanks @shakkernerd.
 - **Control UI appearance accessibility:** keep the unavailable custom-theme card announced as an Import command while preserving selected-state semantics for selectable themes and text sizes. Thanks @shakkernerd.
