@@ -161,20 +161,17 @@ function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  if (existsSync(`${resolvedPath}-journal`)) {
-    // Write admission owns recovery while the coordinator is held. Inspect the
-    // recovered committed view before any caller-specific mutation begins.
-    const database = openNodeSqliteDatabase(resolvedPath);
-    try {
-      database.exec(
-        `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF;`,
-      );
-      return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
-    } finally {
-      database.close();
-    }
+  // Write admission owns locking and recovery while the coordinator is held.
+  // Inspect the live committed view without cloning a potentially busy family.
+  const database = openNodeSqliteDatabase(resolvedPath);
+  try {
+    database.exec(
+      `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF;`,
+    );
+    return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+  } finally {
+    database.close();
   }
-  return inspectJournalAwarePublicOwnership(resolvedPath);
 }
 
 function resolveOpenClawStateOwnershipCoordinatorPath(databasePath: string): string {
