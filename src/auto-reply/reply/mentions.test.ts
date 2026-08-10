@@ -195,6 +195,36 @@ describe("derived mention matching with decorated identity names", () => {
     expect(matchesMentionPatterns("bot status", regexes)).toBe(false);
   });
 
+  it.each(["$", "%", "+", "="])("keeps %s literal when a variation selector follows it", (base) => {
+    // U+FE0F only requests emoji presentation on a character Unicode admits
+    // as an emoji base. After anything else it changes no presentation, so
+    // the character stays a required separator instead of gaining the name
+    // a new bare spelling.
+    const cfg = configForName(`foo${base}️bar`);
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns(`foo${base}️bar status`, regexes)).toBe(true);
+    expect(matchesMentionPatterns("foobar status", regexes)).toBe(false);
+    expect(matchesMentionPatterns("foo bar status", regexes)).toBe(false);
+    expect(stripMentions("foobar /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "foobar /status",
+    );
+    expect(stripMentions(`foo${base}️bar /status`, {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "/status",
+    );
+  });
+
+  it("keeps a trailing non-emoji variation sequence required", () => {
+    const cfg = configForName("Bot$️");
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns("bot$️ status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("bot status", regexes)).toBe(false);
+    expect(stripMentions("bot /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "bot /status",
+    );
+  });
+
   it("keeps a gap required when punctuation shares it with decoration", () => {
     const regexes = buildMentionRegexes(configForName("Clawd ・🦋 Bot"), "decorated-agent");
 
@@ -316,6 +346,7 @@ describe("derived mention matching with decorated identity names", () => {
   it.each([
     ["single code point", "🦋"],
     ["variation selector", "❤️"],
+    ["variation selector on emoji punctuation", "‼️"],
     ["enclosed letter", "🅰️"],
     ["keycap", "#️⃣"],
     ["joined sequence", "👩‍👧"],

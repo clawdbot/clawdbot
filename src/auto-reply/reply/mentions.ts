@@ -58,8 +58,12 @@ const DECORATION_CHAR = new RegExp(
 );
 // U+FE0F requests emoji presentation and U+20E3 encloses a keycap: a character
 // carrying either is typed as a pictograph even when, like the "#" in a
-// keycap, it is punctuation on its own.
+// keycap, it is punctuation on its own. Only a character Unicode admits at
+// the head of such a sequence reads that way; after anything else the mark
+// changes no presentation, and the character stays a literal separator --
+// excused anyway, "$\uFE0F" in a name would hand it a new bare trigger.
 const EMOJI_PRESENTATION_MARKS = new Set(["\uFE0F", "\u20E3"]);
+const EMOJI_PRESENTATION_BASE = /\p{Emoji}/u;
 
 type DerivedNameParts = {
   leading: string;
@@ -128,9 +132,10 @@ function parseNameUnits(name: string): NameUnit[] {
     }
     const marks: string[] = [];
     let decorative = true;
-    // A non-decoration character is decoration after all when the character
-    // following it requests emoji presentation, so its verdict stays pending
-    // until the next character either excuses it or confirms it.
+    // A non-decoration character that can head an emoji or keycap sequence is
+    // decoration after all when the character following it requests emoji
+    // presentation, so its verdict stays pending until the next character
+    // either excuses it or confirms it.
     let pending = false;
     for (const char of segment) {
       // Whitespace is spacing, and joiners do not survive normalization: what a
@@ -141,7 +146,16 @@ function parseNameUnits(name: string): NameUnit[] {
       if (pending && !EMOJI_PRESENTATION_MARKS.has(char)) {
         decorative = false;
       }
-      pending = !DECORATION_CHAR.test(char);
+      if (DECORATION_CHAR.test(char)) {
+        pending = false;
+      } else if (EMOJI_PRESENTATION_BASE.test(char)) {
+        pending = true;
+      } else {
+        // No presentation mark can excuse this character, so the verdict is
+        // final: the segment spells a separator.
+        decorative = false;
+        pending = false;
+      }
       marks.push(escapeRegExp(char));
     }
     units.push(
