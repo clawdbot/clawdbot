@@ -198,6 +198,25 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("File is empty (0 bytes).");
   });
 
+  it("reports the byte count when a BOM-only file decodes to empty text", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from([0xef, 0xbb, 0xbf]),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-bom-only",
+      { path: "bom.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("File contains no readable text (3 bytes).");
+  });
+
   it("describes newline-only files instead of returning blank content", async () => {
     const tempDir = tempDirs.make("openclaw-read-blank-line-");
     await fs.writeFile(path.join(tempDir, "blank.txt"), "\n");

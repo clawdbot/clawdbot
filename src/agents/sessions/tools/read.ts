@@ -547,7 +547,10 @@ export function createReadToolDefinition(
               const startLineDisplay = startLine + 1;
               let outputText: string;
               if (totalFileLines === 0) {
-                outputText = "File is empty (0 bytes).";
+                outputText =
+                  buffer.length === 0
+                    ? "File is empty (0 bytes)."
+                    : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
               } else {
