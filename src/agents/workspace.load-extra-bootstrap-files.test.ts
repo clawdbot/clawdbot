@@ -479,13 +479,14 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("keeps the literal fallback dormant when the bracket pattern is a live glob", async () => {
-    // Accepted edge case (i): a pattern simultaneously a live glob AND a literal
-    // path. Dirs `a`/`b` make `[ab]/AGENTS.md` a live glob, so the match set is
-    // non-empty and the fallback never fires — the literal `[ab]` directory's own
-    // file is intentionally NOT added. Extremely unlikely in practice; the glob
-    // interpretation wins.
-    const workspaceDir = await createWorkspaceDir("literal-fallback-dormant");
+  it("unions the literal bracket dir with live bracket-class glob matches", async () => {
+    // A pattern simultaneously a live glob AND a literal path. Dirs `a`/`b` make
+    // `[ab]/AGENTS.md` a live glob, and a real directory literally named `[ab]`
+    // is also present. `main` treated brackets as literal and always loaded the
+    // `[ab]` directory's file, so the additive-union fallback must load ALL
+    // three (`a`, `b`, and the literal `[ab]`) — preserving the old literal
+    // contract while keeping the new glob capability.
+    const workspaceDir = await createWorkspaceDir("literal-fallback-union");
     for (const name of ["a", "b", "[ab]"]) {
       const dir = path.join(workspaceDir, name);
       await fs.mkdir(dir, { recursive: true });
@@ -498,6 +499,31 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
       [
         path.join(workspaceDir, "a", "AGENTS.md"),
         path.join(workspaceDir, "b", "AGENTS.md"),
+        path.join(workspaceDir, "[ab]", "AGENTS.md"),
+      ].toSorted(),
+    );
+  });
+
+  it("loads the literal bracket dir alongside prefixed bracket-class glob matches", async () => {
+    // The named regression scenario: a pattern `pkg[ab]/AGENTS.md` where a real
+    // directory literally called `pkg[ab]` exists AND sibling dirs `pkga`/`pkgb`
+    // satisfy the bracket class. `main` loaded the literal `pkg[ab]` file
+    // unconditionally; the additive union must load all three so the shipped
+    // literal config is never silently dropped.
+    const workspaceDir = await createWorkspaceDir("literal-union-prefixed");
+    for (const name of ["pkga", "pkgb", "pkg[ab]"]) {
+      const dir = path.join(workspaceDir, name);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "AGENTS.md"), `${name} agents`, "utf-8");
+    }
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["pkg[ab]/AGENTS.md"]);
+
+    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [
+        path.join(workspaceDir, "pkga", "AGENTS.md"),
+        path.join(workspaceDir, "pkgb", "AGENTS.md"),
+        path.join(workspaceDir, "pkg[ab]", "AGENTS.md"),
       ].toSorted(),
     );
   });

@@ -73,6 +73,18 @@ async function containedLiteralPath(
   pattern: string,
 ): Promise<string | null> {
   const relative = normalizeWorkspacePatternPath(pattern);
+  // Reject any pattern with a `..` or globstar (`**`) segment. Those are the
+  // only forms `path.resolve` collapses lexically into a different existing
+  // path (e.g. `**/../AGENTS.md` cancels to `AGENTS.md`), which would wrongly
+  // match the literal fallback and double-add a path the glob already produced.
+  // A genuinely literal pattern (`pkg[ab]/AGENTS.md` naming a real bracket-named
+  // directory) has no `..`/`**` segment, so each segment resolves to itself and
+  // the fallback stays correct — bracket/extglob names are allowed here.
+  for (const segment of relative.split("/")) {
+    if (segment === ".." || segment.includes("**")) {
+      return null;
+    }
+  }
   const absolute = path.resolve(workspaceDir, relative);
   if (!isPathInside(workspaceDir, absolute)) {
     return null;
@@ -137,23 +149,22 @@ export async function resolveExtraBootstrapPatternPaths(
   // a real directory literally called `pkg[ab]` parses its `[ab]` as a character
   // class and matches nothing. When the contained set is empty, fall back to the
   // raw pattern read as a literal path, keeping it only if it exists inside the
-  // workspace. A live glob keeps a non-empty set, so the fallback never fires; a
-  // genuine no-match glob (`packages/*/AGENTS.md`) adds nothing because its raw
-  // form is not a real on-disk path (existence-gated), so no phantom "missing
-  // file" diagnostic appears.
+  // workspace. This union is unconditional (not gated on an empty glob set):
+  // `main` treated square brackets as literal and always loaded such a path, so
+  // a shipped config naming `pkg[ab]` must keep loading even when sibling dirs
+  // (`pkga`/`pkgb`) also satisfy the bracket class as a live glob — the result
+  // is the strict superset of the old literal contract and the new glob
+  // capability. A genuine no-match glob (`packages/*/AGENTS.md`) adds nothing
+  // because its raw form is not a real on-disk path (existence-gated), so no
+  // phantom "missing file" diagnostic appears; `matches` is a Set, so a literal
+  // that also happens to be a glob match is deduped rather than double-counted.
   //
-  // Two accepted edge cases the fallback intentionally does NOT cover, both
-  // extremely unlikely: (i) a pattern that is simultaneously a live glob AND a
-  // literal path (dirs `pkga`, `pkgb`, and `pkg[ab]` all present) — the glob
-  // matched, so the fallback stays dormant and the literal `pkg[ab]` file is not
-  // added; (ii) a literal-bracket parent with a live child glob
-  // (`pkg[ab]/**/AGENTS.md`) — the raw string is not itself a path, so the
-  // existence gate rejects it.
-  if (matches.size === 0) {
-    const literal = await containedLiteralPath(workspaceDir, workspaceRealpath, pattern);
-    if (literal) {
-      matches.add(literal);
-    }
+  // One edge case this intentionally does NOT cover: a literal-bracket parent
+  // with a live child glob (`pkg[ab]/**/AGENTS.md`) — the raw string is not
+  // itself an on-disk path, so the existence gate rejects it.
+  const literal = await containedLiteralPath(workspaceDir, workspaceRealpath, pattern);
+  if (literal) {
+    matches.add(literal);
   }
   return [...matches];
 }
