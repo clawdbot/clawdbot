@@ -21,8 +21,9 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { readRegularFile, wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { readA2UIJsonlFile } from "./a2ui-jsonl-file.js";
 import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
@@ -37,10 +38,8 @@ type CanvasImageSanitizationLimits = {
   maxDimensionPx?: number;
 };
 
-export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
-
 function readGatewayCallOptions(params: Record<string, unknown>) {
   return {
     gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
@@ -87,9 +86,7 @@ async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Prom
   if (!isPathInsideRoot(workspaceReal, resolvedReal)) {
     throw new Error("jsonlPath outside workspace");
   }
-  return (
-    await readRegularFile({ filePath: resolvedReal, maxBytes: CANVAS_JSONL_MAX_BYTES })
-  ).buffer.toString("utf8");
+  return await readA2UIJsonlFile(resolvedReal);
 }
 
 function resolveCanvasImageSanitizationLimits(

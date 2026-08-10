@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import {
@@ -396,6 +397,10 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
+const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+// The Gateway receiver accepts only 64 KiB before authentication; mirror the
+// server-side MAX_PREAUTH_PAYLOAD_BYTES contract for pre-auth connect frames.
+const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 function resolveLegacyNodePlatform(platform: string): string | undefined {
   switch (platform) {
@@ -436,6 +441,7 @@ export class GatewayClient {
   private pendingStop: PendingStop | null = null;
   private transportValidated = false;
   private suppressedTransientPreHelloCleanCloses = 0;
+  private maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
 
   constructor(opts: GatewayClientOptions) {
     // Defaults keep the package inert until device identity support is used.
@@ -465,6 +471,17 @@ export class GatewayClient {
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
+      validateRequestFrame: (frame, method) => {
+        const frameBytes = Buffer.byteLength(frame, "utf8");
+        const isConnect = method === "connect";
+        const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : this.maxPayloadBytes;
+        if (frameBytes > limit) {
+          throw new RangeError(
+            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+              `(${frameBytes} > ${limit} bytes)`,
+          );
+        }
+      },
       buildConnectPlan: ({ nonce, challengeTs }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
@@ -609,7 +626,7 @@ export class GatewayClient {
       configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
     });
     const wsOptions: FingerprintCheckingClientOptions = {
-      maxPayload: 25 * 1024 * 1024,
+      maxPayload: DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
       handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
@@ -1013,6 +1030,7 @@ export class GatewayClient {
   }
 
   private handleConnectHello(helloOk: HelloOk, assembled: AssembledConnect): void {
+    this.maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
     const reconnectWithCurrentNodeProtocol =
       this.useLegacyNodeProtocolEnvelope &&
       this.shouldNegotiateLegacyNodeProtocol() &&
@@ -1056,6 +1074,16 @@ export class GatewayClient {
       this.protocol.resetReconnectBackoff(250);
       this.protocol.closeSocket(1012, "gateway protocol upgraded");
       return;
+    }
+    // The Gateway installs this advertised limit on its WebSocket receiver after auth,
+    // so it bounds serialized client-to-Gateway request frames.
+    const advertisedMaxPayload = helloOk.policy?.maxPayload;
+    if (
+      typeof advertisedMaxPayload === "number" &&
+      Number.isFinite(advertisedMaxPayload) &&
+      advertisedMaxPayload > 0
+    ) {
+      this.maxPayloadBytes = advertisedMaxPayload;
     }
     this.lastTick = Date.now();
     this.startTickWatch();

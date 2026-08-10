@@ -203,6 +203,10 @@ const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_
 const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 const DEFAULT_GATEWAY_TICK_INTERVAL_MS = 30_000;
 const MIN_GATEWAY_TICK_WATCH_INTERVAL_MS = 1_000;
+const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
+// The Gateway receiver accepts only 64 KiB before authentication; mirror the
+// server-side MAX_PREAUTH_PAYLOAD_BYTES contract for pre-auth connect frames.
+const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
 function toGatewayErrorInfo(error: GatewayRequestError): GatewayErrorInfo {
   const { gatewayCode: code, message, details, retryable, retryAfterMs } = error;
   return { code, message, details, retryable, retryAfterMs };
@@ -317,11 +321,23 @@ export class GatewayBrowserClient {
   private recoveryScopeValue = "";
   private recoveryScopeResolved = false;
   private recoveryScopeGeneration = 0;
+  private maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => createBrowserGatewaySocket(this.opts.url, handlers),
       createRequestId: generateUUID,
+      validateRequestFrame: (frame, method) => {
+        const frameBytes = new TextEncoder().encode(frame).byteLength;
+        const isConnect = method === "connect";
+        const limit = isConnect ? DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES : this.maxPayloadBytes;
+        if (frameBytes > limit) {
+          throw new RangeError(
+            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+              `(${frameBytes} > ${limit} bytes)`,
+          );
+        }
+      },
       createRequestError: (error) =>
         new GatewayRequestError({
           code: error.code ?? "UNAVAILABLE",
@@ -516,7 +532,18 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    this.maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
     this.startTickWatch(hello);
+    // The Gateway installs this advertised limit on its WebSocket receiver after auth,
+    // so it bounds serialized client-to-Gateway request frames.
+    const advertisedMaxPayload = hello.policy?.maxPayload;
+    if (
+      typeof advertisedMaxPayload === "number" &&
+      Number.isFinite(advertisedMaxPayload) &&
+      advertisedMaxPayload > 0
+    ) {
+      this.maxPayloadBytes = advertisedMaxPayload;
+    }
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;

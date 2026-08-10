@@ -66,6 +66,7 @@ export type GatewayProtocolClientOptions<TPlan> = {
   createRequestError?: (error: Partial<ErrorShape>) => GatewayProtocolRequestError;
   createRequestTimeoutError?: (method: string, timeoutMs: number, requestSent: boolean) => Error;
   createRequestAbortError?: (method: string) => Error;
+  validateRequestFrame?: (frame: string, method: string) => void;
   buildConnectPlan: (params: {
     nonce: string | null;
     challengeTs: number | null | undefined;

@@ -23,6 +23,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readA2UIJsonlFile } from "./a2ui-jsonl-file.js";
 import { buildA2UITextJsonl, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
@@ -460,7 +461,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
 
           const jsonl = hasText
             ? buildA2UITextJsonl(opts.text ?? "")
-            : await fs.readFile(String(opts.jsonl), "utf8");
+            : await readA2UIJsonlFile(await fs.realpath(String(opts.jsonl)));
           const { messageCount } = validateSupportedA2UIJsonl(jsonl);
           const result = await invokeCanvas(deps, opts, "canvas.a2ui.pushJSONL", { jsonl });
           writeCanvasInvokeResult(
