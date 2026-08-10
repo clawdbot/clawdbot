@@ -118,13 +118,8 @@ vi.mock("./tools/subagents-tool.js", () => ({
 }));
 
 vi.mock("./tools/transcripts-tool.js", () => ({
-  createBoundTranscriptsTool: (
-    caller: { agentChannel?: string; gatewayCallerChannel?: string | null },
-    agentId: string,
-    config: OpenClawConfig,
-    callerAccountId: string,
-  ) => {
-    mocks.createTranscriptsToolOptions({ caller, agentId, config, callerAccountId });
+  createTranscriptsTool: (options: unknown) => {
+    mocks.createTranscriptsToolOptions(options);
     return mocks.stubTool("transcripts");
   },
 }));
@@ -301,11 +296,8 @@ describe("createOpenClawTools transcript ownership wiring", () => {
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentId: "main",
-        caller: expect.objectContaining({
-          agentChannel: "discord",
-          gatewayCallerChannel: "telegram",
-        }),
-        callerAccountId: "creator",
+        agentChannel: "telegram",
+        agentAccountId: "creator",
         config: injectedConfig,
       }),
     );
@@ -321,13 +313,13 @@ describe("createOpenClawTools transcript ownership wiring", () => {
 
     expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        caller: expect.objectContaining({ agentChannel: "discord" }),
-        callerAccountId: "delivery",
+        agentChannel: "discord",
+        agentAccountId: "delivery",
       }),
     );
   });
 
-  it("passes unavailable scheduled caller-channel provenance to the transcript owner", () => {
+  it("hides transcripts when scheduled caller-channel provenance is unavailable", () => {
     createOpenClawTools({
       agentChannel: "discord",
       agentAccountId: "delivery",
@@ -337,12 +329,7 @@ describe("createOpenClawTools transcript ownership wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        caller: expect.objectContaining({ gatewayCallerChannel: null }),
-        callerAccountId: "creator",
-      }),
-    );
+    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
   });
 
   it("hides transcripts when scheduled account authority has no channel", () => {

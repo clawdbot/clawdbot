@@ -437,27 +437,6 @@ export function createTranscriptsTool(options?: {
   };
 }
 
-/** Bind transcript ownership to trusted caller provenance without changing delivery routing. */
-export function createBoundTranscriptsTool(
-  caller: { agentChannel?: string; gatewayCallerChannel?: string | null } | undefined,
-  agentId: string,
-  config: OpenClawConfig | undefined,
-  callerAccountId: string | undefined,
-): AnyAgentTool | undefined {
-  if (
-    !resolveTranscriptsConfig(config?.transcripts).enabled ||
-    caller?.gatewayCallerChannel === null
-  ) {
-    return undefined;
-  }
-  return createTranscriptsTool({
-    config,
-    agentId,
-    agentChannel: caller?.gatewayCallerChannel ?? caller?.agentChannel,
-    agentAccountId: callerAccountId,
-  });
-}
-
 /** Create the process lifecycle service that starts configured transcript captures. */
 export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext): {
   start: () => void;

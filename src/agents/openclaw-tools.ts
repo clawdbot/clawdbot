@@ -89,7 +89,7 @@ import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-f
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
-import { createBoundTranscriptsTool } from "./tools/transcripts-tool.js";
+import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
@@ -544,7 +544,9 @@ export function createOpenClawTools(
       agentAccountId: options?.agentAccountId,
     }),
     ...collectPresentOpenClawTools([
-      createBoundTranscriptsTool(options, sessionAgentId, resolvedConfig, gatewayCallerAccountId),
+      // Keep the trusted caller fields explicit at this authorization boundary.
+      // prettier-ignore
+      options?.gatewayCallerChannel === null || resolvedConfig?.transcripts?.enabled === false ? undefined : createTranscriptsTool({ agentId: sessionAgentId, agentChannel: options?.gatewayCallerChannel ?? options?.agentChannel, agentAccountId: gatewayCallerAccountId, config: resolvedConfig }),
     ]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded

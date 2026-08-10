@@ -349,4 +349,24 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       },
     );
   });
+
+  it("does not route accountless lifecycle calls to an arbitrary voice manager", async () => {
+    const leave = vi.fn(async () => ({ ok: true, message: "stopped notes" }));
+    const status = vi.fn(() => [{ ok: true, message: "active", guildId: "g1" }]);
+    setDiscordTranscriptsVoiceManager({
+      accountId: "primary",
+      manager: { leave, status } as unknown as DiscordVoiceManager,
+    });
+    const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
+
+    await expect(
+      discordVoiceTranscriptsSourceProvider.stop?.({ sessionId: "legacy-notes", source }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Discord transcripts require accountId to stop a voice session.",
+    });
+    await expect(discordVoiceTranscriptsSourceProvider.status?.(source)).resolves.toEqual([]);
+    expect(leave).not.toHaveBeenCalled();
+    expect(status).not.toHaveBeenCalled();
+  });
 });
