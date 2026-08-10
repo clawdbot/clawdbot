@@ -176,6 +176,14 @@ describe("channel DM pairing gateway handlers", () => {
       channel: "whatsapp",
       id: "+15551234567",
     });
+    expect(mocks.notify).toHaveBeenCalledWith({
+      channelId: "whatsapp",
+      accountId: "personal",
+      id: "+15551234567",
+      cfg: expect.any(Object),
+      pairingAdapter: pairingPlugin.pairing,
+      meta: { accountId: "personal" },
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       {

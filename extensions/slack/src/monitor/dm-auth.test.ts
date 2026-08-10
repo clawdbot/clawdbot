@@ -1,7 +1,13 @@
 // Slack tests cover dm auth plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
+
+const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./conversation.runtime.js", () => ({
+  upsertChannelPairingRequest: upsertChannelPairingRequestMock,
+}));
 
 function makeCtx(dmPolicy: SlackMonitorContext["dmPolicy"]): SlackMonitorContext {
   return {
@@ -28,6 +34,13 @@ function makeParams(
 }
 
 describe("authorizeSlackDirectMessage", () => {
+  beforeEach(() => {
+    upsertChannelPairingRequestMock.mockReset().mockResolvedValue({
+      code: "ABCDEFGH",
+      created: true,
+    });
+  });
+
   it("allows open DM policy when effective allowFrom includes wildcard", async () => {
     const params = makeParams("open");
     params.allowFromLower = ["*"];
@@ -61,5 +74,20 @@ describe("authorizeSlackDirectMessage", () => {
       allowMatchMeta: "matchKey=none matchSource=none",
       senderName: "Alice",
     });
+  });
+
+  it("records the Enterprise workspace on pairing requests", async () => {
+    const params = makeParams("pairing");
+    params.eventScope = { teamId: "T_ENTERPRISE", client: {} as never };
+
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
+
+    expect(upsertChannelPairingRequestMock).toHaveBeenCalledWith({
+      channel: "slack",
+      id: "U123",
+      accountId: "workspace",
+      meta: { name: "Alice", teamId: "T_ENTERPRISE" },
+    });
+    expect(params.sendPairingReply).toHaveBeenCalledTimes(1);
   });
 });

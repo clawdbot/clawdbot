@@ -41,6 +41,7 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
     allowFrom,
     accountId: "main",
     dmPolicy: "pairing",
+    installationIdentity: { kind: "workspace", teamId: "T_MAIN" },
   } as unknown as SlackMonitorContext;
 }
 
@@ -167,6 +168,32 @@ describe("resolveSlackEffectiveAllowFrom", () => {
     if (expectedCalls !== undefined) {
       expect(readChannelIngressStoreAllowFromForDmPolicyMock).toHaveBeenCalledTimes(expectedCalls);
     }
+  });
+
+  it("reads only the current Enterprise workspace's pairing approvals", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue([
+      "ULEGACY123",
+      "team:T11111111:user:U11111111",
+      "team:T22222222:user:U22222222",
+    ]);
+    const ctx = makeSlackCtx(["UCONFIG123"]);
+    ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E11111111" };
+
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: true,
+        eventScope: { teamId: "T11111111", client: {} as never },
+      }),
+    ).resolves.toEqual(["uconfig123", "u11111111"]);
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: true,
+        eventScope: { teamId: "T22222222", client: {} as never },
+      }),
+    ).resolves.toEqual(["uconfig123", "u22222222"]);
+    await expect(
+      resolveSlackEffectiveAllowFrom(ctx, { includePairingStore: true }),
+    ).resolves.toEqual(["uconfig123"]);
   });
 });
 

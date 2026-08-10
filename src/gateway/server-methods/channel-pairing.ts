@@ -315,6 +315,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
               id: approved.id,
               cfg,
               pairingAdapter: account.plugin.pairing,
+              ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
             });
             notification = "sent";
           } catch (error) {

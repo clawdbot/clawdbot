@@ -926,23 +926,25 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
   },
   pairing: {
-    text: {
-      idLabel: "slackUserId",
-      message: PAIRING_APPROVED_MESSAGE,
-      normalizeAllowEntry: createPairingPrefixStripper(/^(slack|user):/i),
-      notify: async ({ cfg, id, message }) => {
-        const account = resolveSlackAccount({
-          cfg,
-          accountId: resolveDefaultSlackAccountId(cfg),
-        });
-        const { sendMessageSlack } = await loadSlackSendRuntime();
-        const token = resolveSlackOperationToken(account, "write");
-        await sendMessageSlack(`user:${id}`, message, {
-          cfg,
-          accountId: account.accountId,
-          ...(token ? { token } : {}),
-        });
-      },
+    idLabel: "slackUserId",
+    normalizeAllowEntry: createPairingPrefixStripper(/^(slack|user):/i),
+    resolveApprovalStoreEntry: ({ id, meta }) =>
+      meta?.teamId ? formatSlackTarget({ teamId: meta.teamId, kind: "user", id }) : id,
+    notifyApproval: async ({ cfg, id, accountId, meta }) => {
+      const account = resolveSlackAccount({
+        cfg,
+        accountId: accountId ?? resolveDefaultSlackAccountId(cfg),
+      });
+      const { sendMessageSlack } = await loadSlackSendRuntime();
+      const token = resolveSlackOperationToken(account, "write");
+      const target = meta?.teamId
+        ? formatSlackTarget({ teamId: meta.teamId, kind: "user", id })
+        : `user:${id}`;
+      await sendMessageSlack(target, PAIRING_APPROVED_MESSAGE, {
+        cfg,
+        accountId: account.accountId,
+        ...(token ? { token } : {}),
+      });
     },
   },
   security: slackSecurityAdapter,

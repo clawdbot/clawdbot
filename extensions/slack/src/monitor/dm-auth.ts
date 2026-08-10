@@ -5,11 +5,13 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSlackAllowListMatch } from "./allow-list.js";
 import type { SlackMonitorContext } from "./context.js";
 import { upsertChannelPairingRequest } from "./conversation.runtime.js";
+import type { SlackEventScope } from "./event-scope.js";
 
 export async function authorizeSlackDirectMessage(params: {
   ctx: SlackMonitorContext;
   accountId: string;
   senderId: string;
+  eventScope?: SlackEventScope;
   allowFromLower: string[];
   resolveSenderName: (senderId: string) => Promise<{ name?: string }>;
   sendPairingReply: (text: string) => Promise<void>;
@@ -53,7 +55,7 @@ export async function authorizeSlackDirectMessage(params: {
     })({
       senderId: params.senderId,
       senderIdLine: `Your Slack user id: ${params.senderId}`,
-      meta: { name: senderName },
+      meta: { name: senderName, teamId: params.eventScope?.teamId },
       sendPairingReply: params.sendPairingReply,
       onCreated: () => {
         params.log(

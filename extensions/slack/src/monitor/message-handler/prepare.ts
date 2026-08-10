@@ -648,6 +648,7 @@ async function authorizeSlackInboundMessage(params: {
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
+    eventScope: params.eventScope,
   });
 
   if (isDirectMessage) {
@@ -660,6 +661,7 @@ async function authorizeSlackInboundMessage(params: {
       ctx,
       accountId: account.accountId,
       senderId: directUserId,
+      eventScope: params.eventScope,
       allowFromLower,
       resolveSenderName: (userId) => ctx.resolveUserName(userId, params.eventScope),
       sendPairingReply: async (text) => {

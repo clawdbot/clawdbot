@@ -61,7 +61,6 @@ import {
 } from "./config.runtime.js";
 import { createSlackMonitorContext, type SlackMonitorContext } from "./context.js";
 import {
-  assertEnterpriseSlackDmPolicy,
   assertEnterpriseSlackPolicyConfig,
   assertNoEnterpriseSlackBindings,
   resolveSlackIdentityHealth,
@@ -139,11 +138,7 @@ function resolveSlackRuntimeIdentity(params: {
   identity: "bot" | "user";
   botUserId?: unknown;
   botId?: unknown;
-  isEnterpriseInstall?: unknown;
 }): SlackRuntimeIdentity | undefined {
-  if (params.isEnterpriseInstall === true) {
-    return undefined;
-  }
   // User identity has no bot_id; its human id is both the mention target and self-send dedupe
   // source. Bot identity stays bot_id-gated so token mismatches fail closed.
   const botUserId = normalizeOptionalString(params.botUserId);
@@ -169,41 +164,27 @@ function applySlackInstallationIdentity(
 function adoptSlackIdentity(params: {
   ctx: SlackMonitorContext;
   identity: "bot" | "user";
-  installationIdentity?: SlackInstallationIdentity;
+  installationIdentity: SlackInstallationIdentity;
   botUserId?: unknown;
   botId?: unknown;
-  isEnterpriseInstall?: unknown;
 }): boolean {
-  if (params.ctx.identityHealth.lifecycle !== "blocked") {
+  if (
+    params.ctx.identityHealth.lifecycle !== "blocked" ||
+    params.installationIdentity.kind === "degraded"
+  ) {
     return false;
-  }
-  if (params.installationIdentity?.kind === "enterprise") {
-    const botUserId = normalizeOptionalString(params.botUserId) ?? "";
-    const botId = normalizeOptionalString(params.botId);
-    applySlackInstallationIdentity(params.ctx, params.installationIdentity);
-    params.ctx.botUserId = botUserId;
-    params.ctx.botId = botId;
-    params.ctx.identityHealth = resolveSlackIdentityHealth({
-      installationIdentity: params.installationIdentity,
-      botUserId,
-    });
-    return true;
   }
   const resolved = resolveSlackRuntimeIdentity(params);
   if (!resolved) {
     return false;
   }
-  if (params.installationIdentity?.kind === "workspace") {
-    applySlackInstallationIdentity(params.ctx, params.installationIdentity);
-  }
+  applySlackInstallationIdentity(params.ctx, params.installationIdentity);
   params.ctx.botUserId = resolved.botUserId;
   params.ctx.botId = resolved.botId;
-  params.ctx.identityHealth = params.installationIdentity
-    ? resolveSlackIdentityHealth({
-        installationIdentity: params.ctx.installationIdentity,
-        botUserId: resolved.botUserId,
-      })
-    : { lifecycle: "ready", lastError: null };
+  params.ctx.identityHealth = resolveSlackIdentityHealth({
+    installationIdentity: params.installationIdentity,
+    botUserId: resolved.botUserId,
+  });
   return true;
 }
 
@@ -455,13 +436,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           : undefined;
       const adopted =
         current.identityHealth.lifecycle === "blocked" &&
+        contextInstallationIdentity !== undefined &&
         adoptSlackIdentity({
           ctx: current,
           identity: account.identity,
           installationIdentity: contextInstallationIdentity,
           botUserId: identity.botUserId,
           botId: identity.botId,
-          isEnterpriseInstall: identity.isEnterpriseInstall,
         });
       if (adopted && contextInstallationIdentity) {
         installationState.update(contextInstallationIdentity.kind);
@@ -531,7 +512,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       identity: account.identity,
       botUserId: authUserId,
       botId: (auth as { bot_id?: string }).bot_id,
-      isEnterpriseInstall: auth.is_enterprise_install,
     });
     botUserId = resolvedIdentity?.botUserId ?? "";
     botId = resolvedIdentity?.botId ?? "";
@@ -542,7 +522,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         accountId: account.accountId,
       });
     }
-    if (!authUserId && auth.is_enterprise_install !== true) {
+    if (!authUserId) {
       authTestError = "auth.test returned no user_id";
     }
   } catch (err) {
@@ -567,12 +547,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
     assertEnterpriseSlackPolicyConfig({ config: account.config, accountId: account.accountId });
     assertNoEnterpriseSlackBindings({ cfg, accountId: account.accountId });
-    assertEnterpriseSlackDmPolicy({
-      accountId: account.accountId,
-      dmEnabled,
-      dmPolicy,
-      allowFrom,
-    });
   };
   const installationIdentity = resolveSlackInstallationIdentity({
     auth: authTestError === undefined ? authTestIdentity : undefined,
@@ -925,7 +899,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           installationIdentity: recoveredInstallationIdentity,
           botUserId: auth.user_id,
           botId: (auth as { bot_id?: string }).bot_id,
-          isEnterpriseInstall: auth.is_enterprise_install,
         });
         if (!adopted) {
           return false;

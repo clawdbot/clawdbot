@@ -119,11 +119,6 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
-    values: config.allowFrom,
-    path: `channels.slack.accounts.${accountId}.allowFrom`,
-    predicate: isStableSlackAllowlistUserEntry,
-  });
-  assertStableEntries({
     values: config.dm?.groupChannels,
     path: `channels.slack.accounts.${accountId}.dm.groupChannels`,
     predicate: (value) => isStableSlackChannelEntry(value),
@@ -152,24 +147,6 @@ export function assertEnterpriseSlackPolicyConfig(params: {
       predicate: isStableSlackToolsBySenderEntry,
     });
   }
-}
-
-/** Prevent account-wide user authorization state from crossing workspace boundaries. */
-export function assertEnterpriseSlackDmPolicy(params: {
-  accountId: string;
-  dmEnabled: boolean;
-  dmPolicy: string;
-  allowFrom: readonly string[] | undefined;
-}) {
-  if (!params.dmEnabled || params.dmPolicy === "disabled") {
-    return;
-  }
-  if (params.dmPolicy === "open" && params.allowFrom?.includes("*")) {
-    return;
-  }
-  throw new Error(
-    `Slack Enterprise Grid org account "${params.accountId}" supports DMs only with dm.enabled=false, dmPolicy="disabled", or dmPolicy="open" with effective allowFrom containing "*"; dmPolicy=${JSON.stringify(params.dmPolicy)} and allowFrom=${JSON.stringify(params.allowFrom ?? [])} would share per-user authorization across workspaces`,
-  );
 }
 
 export function assertNoEnterpriseSlackBindings(params: {
@@ -245,13 +222,6 @@ export function resolveSlackIdentityHealth(params: {
   authTestError?: string;
   authIdentityWarning?: string;
 }): SlackIdentityHealth {
-  // Org-wide installs intentionally have no single workspace bot user. Their
-  // enterprise identity is sufficient; applying the workspace gate would
-  // report every healthy org install as degraded.
-  if (params.installationIdentity.kind === "enterprise") {
-    return { lifecycle: "ready", lastError: null };
-  }
-
   const lastError =
     normalizeOptionalString(params.authTestError) ??
     normalizeOptionalString(params.authIdentityWarning) ??

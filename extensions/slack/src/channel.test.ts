@@ -383,6 +383,44 @@ describe("slackPlugin actions", () => {
     });
   });
 
+  it("workspace-qualifies Enterprise pairing approvals and notifications", async () => {
+    const pairing = slackPlugin.pairing;
+    if (!pairing?.resolveApprovalStoreEntry || !pairing.notifyApproval) {
+      throw new Error("Slack pairing adapter unavailable");
+    }
+    expect(
+      pairing.resolveApprovalStoreEntry({
+        id: "U12345678",
+        meta: { teamId: "T12345678" },
+      }),
+    ).toBe("team:T12345678:user:U12345678");
+
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            org: { botToken: "xoxb-org" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await pairing.notifyApproval({
+      cfg,
+      id: "U12345678",
+      accountId: "org",
+      meta: { teamId: "T12345678" },
+    });
+
+    expect(requireMockCallArgValue(sendMessageSlackMock, 0, 0)).toBe(
+      "team:T12345678:user:U12345678",
+    );
+    expectRecordFields(requireMockCallArg(sendMessageSlackMock, 0, 2), "send options", {
+      accountId: "org",
+      cfg,
+      token: "xoxb-org",
+    });
+  });
+
   it("exposes Slack-native message id and file id schema hints", () => {
     const discovery = slackPlugin.actions?.describeMessageTool({
       cfg: {

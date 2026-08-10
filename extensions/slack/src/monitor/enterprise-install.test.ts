@@ -1,7 +1,6 @@
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
-  assertEnterpriseSlackDmPolicy,
   assertNoEnterpriseSlackBindings,
   assertEnterpriseSlackPolicyConfig,
   resolveSlackInstallationIdentity,
@@ -86,74 +85,6 @@ describe("resolveSlackInstallationIdentity", () => {
       }),
     ).toThrow(/token mismatch/);
   });
-});
-
-describe("assertEnterpriseSlackDmPolicy", () => {
-  it("allows disabled DMs or explicitly open DMs", () => {
-    expect(() =>
-      assertEnterpriseSlackDmPolicy({
-        accountId: "org",
-        dmEnabled: false,
-        dmPolicy: "pairing",
-        allowFrom: ["U123"],
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertEnterpriseSlackDmPolicy({
-        accountId: "org",
-        dmEnabled: true,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertEnterpriseSlackDmPolicy({
-        accountId: "org",
-        dmEnabled: true,
-        dmPolicy: "disabled",
-        allowFrom: ["U123"],
-      }),
-    ).not.toThrow();
-  });
-
-  it.each([undefined, [], ["U123"], ["slack:U123"]])(
-    "rejects open DMs without a literal wildcard in effective allowFrom: %j",
-    (allowFrom) => {
-      expect(() =>
-        assertEnterpriseSlackDmPolicy({
-          accountId: "org",
-          dmEnabled: true,
-          dmPolicy: "open",
-          allowFrom,
-        }),
-      ).toThrow(/effective allowFrom containing "\*"/);
-    },
-  );
-
-  it("accepts an inherited effective wildcard allowlist", () => {
-    expect(() =>
-      assertEnterpriseSlackDmPolicy({
-        accountId: "org",
-        dmEnabled: true,
-        dmPolicy: "open",
-        allowFrom: ["U123", "*"],
-      }),
-    ).not.toThrow();
-  });
-
-  it.each(["pairing", "allowlist", "future-per-user"])(
-    "rejects account-wide per-user DM authorization mode %s",
-    (dmPolicy) => {
-      expect(() =>
-        assertEnterpriseSlackDmPolicy({
-          accountId: "org",
-          dmEnabled: true,
-          dmPolicy,
-          allowFrom: ["*"],
-        }),
-      ).toThrow(/supports DMs only with dm\.enabled=false.*dmPolicy="open"/);
-    },
-  );
 });
 
 describe("assertEnterpriseSlackPolicyConfig", () => {
