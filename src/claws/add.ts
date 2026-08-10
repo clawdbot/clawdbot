@@ -47,6 +47,7 @@ export const CLAW_ADD_RESULT_SCHEMA_VERSION = "openclaw.clawAddResult.v1" as con
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   consentPlanIntegrity?: string;
+  resumeRecord?: PersistedClawInstall;
   commitConfig?: ConfigCommit;
   persistRecord?: typeof persistClawInstallRecord;
   deleteRecord?: typeof deleteClawInstallRecord;
@@ -230,7 +231,11 @@ export async function applyClawAddPlan(
   const persistRecord = options.persistRecord ?? persistClawInstallRecord;
   let installRecord: PersistedClawInstall;
   try {
-    installRecord = persistRecord(plan, { ...options, status: "pending" });
+    installRecord = persistRecord(plan, {
+      ...options,
+      status: "pending",
+      expectedExistingRecord: options.resumeRecord,
+    });
   } catch (error) {
     throw new ClawAddMutationError("provenance_failed", (error as Error).message);
   }

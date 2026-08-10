@@ -21,6 +21,10 @@ import {
   portableClawPathKey,
 } from "./schema-portability.js";
 import {
+  isConcreteBundleMcpToolName,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
+import {
   CLAW_BOOTSTRAP_FILE_NAMES,
   CLAW_SCHEMA_VERSION,
   type ClawDiagnostic,
@@ -170,7 +174,8 @@ const openClawProfileSchema = z
                   (grant) =>
                     !profileAllow.some((tool) =>
                       isToolAllowedByPolicyName(tool, { allow: [grant] }),
-                    ),
+                    ) &&
+                    !(profileAllow.includes("bundle-mcp") && isConcreteBundleMcpToolName(grant)),
                 )
               ) {
                 ctx.addIssue({
@@ -179,6 +184,17 @@ const openClawProfileSchema = z
                   message: "Every agent tools allow grant must overlap the selected profile.",
                 });
               }
+            }
+            if (
+              tools.profile &&
+              resolveClawToolProfileSnapshot(tools)?.allow.includes("bundle-mcp")
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["allow"],
+                message:
+                  "Profiles containing bundle-mcp require a bounded allowlist of concrete tool names.",
+              });
             }
             if (tools.alsoAllow && !tools.profile) {
               ctx.addIssue({

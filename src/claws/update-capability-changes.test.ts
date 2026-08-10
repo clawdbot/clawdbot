@@ -290,12 +290,12 @@ describe("pushResolvedAgentCapabilityChanges", () => {
 
   it("does not escalate the one-time migration from a profile to its frozen allowlist", () => {
     const desiredTools = materializeClawToolProfile({
-      tools: { profile: "coding", alsoAllow: ["cron"], deny: ["exec"] },
+      tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] },
     }).tools;
     const changes = collectChanges({
       currentAgent: {
         id: "worker",
-        tools: { profile: "coding", alsoAllow: ["cron"], deny: ["exec"] },
+        tools: { profile: "minimal", alsoAllow: ["cron"], deny: ["exec"] },
       },
       desiredAgent: {
         id: "worker",
@@ -308,12 +308,12 @@ describe("pushResolvedAgentCapabilityChanges", () => {
 
   it("reports authority removed by freezing an inherited global alsoAllow grant", () => {
     const desiredTools = materializeClawToolProfile({
-      tools: { profile: "coding" },
+      tools: { profile: "minimal" },
     }).tools;
     const changes = collectChanges({
       currentAgent: {
         id: "worker",
-        tools: { profile: "coding" },
+        tools: { profile: "minimal" },
       },
       desiredAgent: {
         id: "worker",

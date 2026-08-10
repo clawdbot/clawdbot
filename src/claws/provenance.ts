@@ -1,4 +1,5 @@
 // Persists the root ownership record for one Claw-created agent and workspace.
+
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -35,29 +36,6 @@ export type ClawInstallStatus =
   | "complete"
   | "partial";
 
-type ClawInstallRow = {
-  agent_id: string;
-  schema_version: string;
-  source_kind: "package" | "development";
-  claw_name: string;
-  claw_version: string;
-  package_root: string;
-  manifest_path: string;
-  integrity_kind: "artifact" | "development-snapshot";
-  integrity: string;
-  source_byte_length: number | bigint;
-  manifest_schema_version: number | bigint;
-  plan_integrity: string;
-  workspace: string;
-  agent_config_digest: string;
-  agent_owned_paths_json: string;
-  bootstrap_source_path: string | null;
-  bootstrap_content_digest: string | null;
-  status: ClawInstallStatus;
-  added_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
-
 export type PersistedClawInstall = {
   schemaVersion: ReturnType<typeof installRecordSchema.parseClawInstallRecordSchemaVersion>;
   claw: ClawAddPlan["claw"];
@@ -73,7 +51,7 @@ export type PersistedClawInstall = {
   updatedAtMs: number;
 };
 
-type InstallRow = {
+type ClawInstallRow = {
   schema_version: string;
   source_kind: "package" | "development";
   claw_name: string;
@@ -96,7 +74,7 @@ type InstallRow = {
   updated_at_ms: number | bigint;
 };
 
-function rowToInstall(row: InstallRow): PersistedClawInstall {
+function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
   return {
     schemaVersion: installRecordSchema.parseClawInstallRecordSchemaVersion(row.schema_version),
     claw: {
@@ -138,34 +116,6 @@ function bootstrapProvenance(plan: ClawAddPlan) {
   return action && typeof sourcePath === "string" && action.digest
     ? { sourcePath, contentDigest: action.digest }
     : undefined;
-}
-
-function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
-  return {
-    schemaVersion: installRecordSchema.parseClawInstallRecordSchemaVersion(row.schema_version),
-    claw: {
-      kind: row.source_kind,
-      name: row.claw_name,
-      version: row.claw_version,
-      packageRoot: row.package_root,
-      manifestPath: row.manifest_path,
-      integrityKind: row.integrity_kind,
-      integrity: row.integrity,
-      byteLength: Number(row.source_byte_length),
-    },
-    manifestSchemaVersion: Number(
-      row.manifest_schema_version,
-    ) as ClawAddPlan["manifestSchemaVersion"],
-    planIntegrity: row.plan_integrity,
-    agentId: row.agent_id,
-    workspace: row.workspace,
-    agentConfigDigest: row.agent_config_digest,
-    agentOwnedPaths: JSON.parse(row.agent_owned_paths_json) as string[],
-    ...clawBootstrapProvenanceFromRow(row),
-    status: row.status,
-    addedAtMs: Number(row.added_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
-  };
 }
 
 export function clawInstallRecordMatchesPlan(
@@ -223,13 +173,13 @@ export function readClawInstallRecord(
   return row ? rowToRecord(row) : undefined;
 }
 
-function isSameInstallAttempt(row: ClawInstallRow, plan: ClawAddPlan): boolean {
-  return clawInstallRecordMatchesPlan(rowToRecord(row), plan);
-}
-
 export function persistClawInstallRecord(
   plan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & { status?: ClawInstallStatus; nowMs?: number } = {},
+  options: OpenClawStateDatabaseOptions & {
+    status?: ClawInstallStatus;
+    nowMs?: number;
+    expectedExistingRecord?: PersistedClawInstall;
+  } = {},
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
@@ -239,10 +189,15 @@ export function persistClawInstallRecord(
   return runOpenClawStateWriteTransaction(({ db }) => {
     const existing = selectClawInstallRow(db, plan.agent.finalId);
     if (existing) {
-      if (existing.status !== "complete" && isSameInstallAttempt(existing, plan)) {
-        const record = rowToRecord(existing);
+      const record = rowToRecord(existing);
+      if (existing.status !== "complete" && clawInstallRecordMatchesPlan(record, plan)) {
         if (record.schemaVersion !== installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION) {
-          return installRecordSchema.upgradeClawInstallSchema(db, plan.agent.finalId, record);
+          return installRecordSchema.upgradeClawInstallSchema(
+            db,
+            plan.agent.finalId,
+            record,
+            options.expectedExistingRecord,
+          );
         }
         return record;
       }
@@ -375,8 +330,8 @@ export function readClawInstallRecords(
          FROM claw_installs
         ORDER BY agent_id`,
       )
-      .all() as InstallRow[];
-  return rows.map(rowToInstall);
+      .all() as ClawInstallRow[];
+  return rows.map(rowToRecord);
 }
 
 export function updateClawInstallRecord(

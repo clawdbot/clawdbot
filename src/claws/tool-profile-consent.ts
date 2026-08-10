@@ -4,6 +4,10 @@ import type { ClawOpenClawProfile } from "./types.js";
 
 type ClawToolSettings = NonNullable<ClawOpenClawProfile["agent"]["tools"]>;
 
+export function isConcreteBundleMcpToolName(name: string): boolean {
+  return name.length <= 64 && /^[A-Za-z][A-Za-z0-9_-]*__[A-Za-z][A-Za-z0-9_-]*$/u.test(name);
+}
+
 export function resolveClawToolProfileSnapshot(
   tools: Pick<ClawToolSettings, "profile" | "allow" | "alsoAllow" | "deny">,
 ): { allow: string[]; deny: string[] } | undefined {
@@ -18,7 +22,16 @@ export function resolveClawToolProfileSnapshot(
   const explicitAllow = tools.allow
     ? profileAllow.includes("*")
       ? expandToolGroups(tools.allow)
-      : profileAllow.filter((tool) => isToolAllowedByPolicyName(tool, { allow: tools.allow }))
+      : Array.from(
+          new Set([
+            ...profileAllow.filter((tool) =>
+              isToolAllowedByPolicyName(tool, { allow: tools.allow }),
+            ),
+            ...(profileAllow.includes("bundle-mcp")
+              ? tools.allow.filter(isConcreteBundleMcpToolName)
+              : []),
+          ]),
+        )
     : undefined;
   return {
     allow:
@@ -55,6 +68,11 @@ export function materializeClawToolProfile(
   }
   if (tools.allow && snapshot.allow.length === 0) {
     throw new Error("Claw tool allowlist does not overlap the selected profile.");
+  }
+  if (snapshot.allow.includes("bundle-mcp")) {
+    throw new Error(
+      "Claw tool profiles containing bundle-mcp require an explicit bounded allowlist of concrete tool names.",
+    );
   }
   return {
     ...settings,

@@ -70,7 +70,7 @@ describe("Claw tool policy consent provenance", () => {
       {
         openClawProfile: {
           schemaVersion: 1,
-          agent: { tools: { profile: "coding" } },
+          agent: { tools: { profile: "coding", allow: ["read"] } },
         },
       },
     );

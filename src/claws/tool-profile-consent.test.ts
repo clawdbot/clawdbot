@@ -11,9 +11,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Claw tool profile consent", () => {
   it("materializes a built-in profile into the consented agent config", async () => {
-    const coding = resolveToolProfilePolicy("coding");
-    if (!coding?.allow) {
-      throw new Error("expected coding profile allowlist");
+    const minimal = resolveToolProfilePolicy("minimal");
+    if (!minimal?.allow) {
+      throw new Error("expected minimal profile allowlist");
     }
     const packageRoot = tempDirs.make("openclaw-claw-tool-profile-");
     await mkdir(packageRoot, { recursive: true });
@@ -31,7 +31,7 @@ describe("Claw tool profile consent", () => {
         schemaVersion: 1,
         agent: {
           tools: {
-            profile: "coding",
+            profile: "minimal",
             alsoAllow: ["tts"],
             deny: ["exec"],
             fs: { workspaceOnly: true },
@@ -53,7 +53,7 @@ describe("Claw tool profile consent", () => {
 
     expect(plan.agent.config.tools).toEqual({
       profile: "full",
-      allow: [...coding.allow, "tts"],
+      allow: [...minimal.allow, "tts"],
       deny: ["exec"],
       fs: { workspaceOnly: true },
     });
@@ -61,7 +61,7 @@ describe("Claw tool profile consent", () => {
       expect.objectContaining({
         path: "agent",
         effect: expect.objectContaining({
-          tools: expect.objectContaining({ profile: "coding", alsoAllow: ["tts"] }),
+          tools: expect.objectContaining({ profile: "minimal", alsoAllow: ["tts"] }),
         }),
       }),
     );
@@ -71,13 +71,13 @@ describe("Claw tool profile consent", () => {
     const settings = materializeClawToolProfile({
       tools: {
         profile: "coding",
-        allow: ["read", "write"],
+        allow: ["read", "write", "github__list_issues"],
       },
     });
 
     expect(settings.tools).toEqual({
       profile: "full",
-      allow: ["read", "write", "apply_patch"],
+      allow: ["read", "write", "apply_patch", "github__list_issues"],
     });
   });
 
@@ -104,5 +104,15 @@ describe("Claw tool profile consent", () => {
         },
       }),
     ).toThrow("does not overlap");
+  });
+
+  it("rejects an unresolved Bundle MCP selector in a frozen profile", () => {
+    expect(() =>
+      materializeClawToolProfile({
+        tools: {
+          profile: "coding",
+        },
+      }),
+    ).toThrow("bundle-mcp");
   });
 });

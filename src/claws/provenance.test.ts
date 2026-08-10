@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
@@ -168,28 +165,6 @@ describe("Claw root install provenance", () => {
       status: "pending",
       addedAtMs: 1,
     });
-  });
-
-  it("upgrades matching incomplete v1 provenance while resuming it", async () => {
-    const { root, plan } = await makePlan();
-    const env = stateEnv(root);
-    persistClawInstallRecord(plan, { env, status: "pending", nowMs: 1 });
-    openOpenClawStateDatabase({ env })
-      .db /* sqlite-allow-raw: test-only downgrade simulates an incomplete pre-v2 add. */
-      .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
-      .run("openclaw.clawInstallRecord.v1", "worker");
-
-    const resumed = persistClawInstallRecord(plan, { env, status: "pending", nowMs: 2 });
-
-    expect(resumed).toMatchObject({
-      schemaVersion: "openclaw.clawInstallRecord.v2",
-      status: "pending",
-      addedAtMs: 1,
-      updatedAtMs: 1,
-    });
-    expect(readClawInstallRecord("worker", { env })?.schemaVersion).toBe(
-      "openclaw.clawInstallRecord.v2",
-    );
   });
 
   it("rejects a stale phase update after an install reaches complete", async () => {

@@ -118,7 +118,7 @@ async function installedFixture(
     schemaVersion: 1,
     agent: {
       tools: {
-        profile: "coding",
+        profile: "minimal",
         alsoAllow: ["cron"],
         deny: ["exec"],
         fs: { workspaceOnly: true },
@@ -225,7 +225,7 @@ describe("exportClawAgent", () => {
   it("freezes a legacy named profile before exporting it", async () => {
     const fixture = await installedFixture();
     fixture.config.agents!.entries!.worker!.tools = {
-      profile: "coding",
+      profile: "minimal",
       deny: ["exec"],
     };
     updateClawInstallRecord(
@@ -252,7 +252,7 @@ describe("exportClawAgent", () => {
 
     expect(result.openClawProfile?.agent.tools).toMatchObject({
       profile: "full",
-      allow: expect.arrayContaining(["read"]),
+      allow: expect.arrayContaining(["session_status"]),
       deny: ["exec"],
     });
     expect(result.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");

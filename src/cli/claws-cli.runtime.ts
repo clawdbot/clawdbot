@@ -38,6 +38,7 @@ import {
   clawInstallRecordMatchesPlan,
   readClawInstallRecord,
   readClawPackageRefs,
+  type PersistedClawInstall,
 } from "../claws/provenance.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import {
@@ -323,9 +324,11 @@ export async function runClawsAddCommand(
     diagnostics: result.diagnostics,
     context: basePlanContext,
   });
+  let resumableInstallRecord: PersistedClawInstall | undefined;
   const resumeState = await matchingResumeState(plan, opts);
   if (resumeState) {
     const { record: resumeRecord, packageRefs: resumePackageRefs } = resumeState;
+    resumableInstallRecord = resumeRecord;
     const packagePreflight = async (
       pkg: Parameters<typeof preflightClawPackage>[0],
       workspace: string,
@@ -431,6 +434,7 @@ export async function runClawsAddCommand(
   try {
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
+      resumeRecord: resumableInstallRecord,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
       cronGateway: {
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),

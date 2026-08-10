@@ -14,7 +14,7 @@ describe("OpenClaw profile schema", () => {
       agent: {
         tools: {
           profile: "coding",
-          alsoAllow: ["cron"],
+          allow: ["read", "github__list_issues"],
           deny: ["exec"],
           fs: { workspaceOnly: true },
         },
@@ -71,6 +71,9 @@ describe("OpenClaw profile schema", () => {
     for (const agent of [
       { tools: { profile: "future-profile" } },
       { tools: { profile: "full" } },
+      { tools: { profile: "coding" } },
+      { tools: { profile: "messaging" } },
+      { tools: { profile: "coding", allow: ["bundle-mcp"] } },
       { tools: { allow: ["*"] } },
       { tools: { profile: "coding", allow: ["tts"] } },
       { tools: { profile: "coding", allow: ["read", "tts"] } },
@@ -114,6 +117,7 @@ describe("OpenClaw profile reader", () => {
         "agent:",
         "  tools:",
         "    profile: coding",
+        "    allow: [read]",
         "    deny: [exec]",
         "    fs:",
         "      workspaceOnly: true",
@@ -127,7 +131,12 @@ describe("OpenClaw profile reader", () => {
       openClawProfile: {
         schemaVersion: 1,
         agent: {
-          tools: { profile: "coding", deny: ["exec"], fs: { workspaceOnly: true } },
+          tools: {
+            profile: "coding",
+            allow: ["read"],
+            deny: ["exec"],
+            fs: { workspaceOnly: true },
+          },
         },
       },
     });
@@ -137,7 +146,7 @@ describe("OpenClaw profile reader", () => {
 
     await writeFile(
       profilePath,
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: messaging\n",
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: messaging\n    allow: [message]\n",
       "utf8",
     );
     const second = await readClawManifestFile(root);
@@ -235,7 +244,7 @@ describe("OpenClaw profile reader", () => {
     );
     await writeFile(
       join(root, "profiles", "triage.openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
       "utf8",
     );
 
@@ -243,7 +252,10 @@ describe("OpenClaw profile reader", () => {
 
     expect(result).toMatchObject({
       ok: true,
-      openClawProfile: { schemaVersion: 1, agent: { tools: { profile: "coding" } } },
+      openClawProfile: {
+        schemaVersion: 1,
+        agent: { tools: { profile: "coding", allow: ["read"] } },
+      },
     });
     if (!result.ok) {
       throw new Error("expected the deprecated pointer to keep resolving");
@@ -273,7 +285,7 @@ describe("OpenClaw profile reader", () => {
     );
     await writeFile(
       join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
       "utf8",
     );
 
