@@ -178,6 +178,7 @@ function createTestContext(): {
       toolMetas: [],
       acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
+      liveEditDiffStateById: new Map(),
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
       itemCompletedCount: 0,

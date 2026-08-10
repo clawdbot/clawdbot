@@ -1087,7 +1087,7 @@ export function handleToolExecutionStart(
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolName(evt.toolName);
-  ctx.state.liveEditDiffStateById?.delete(evt.toolCallId);
+  ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
       ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
@@ -1491,7 +1491,7 @@ export async function handleToolExecutionEnd(
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
-  ctx.state.liveEditDiffStateById?.delete(toolCallId);
+  ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
