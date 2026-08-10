@@ -1,4 +1,4 @@
-import type { MemoryPluginCapability } from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryAuthorizationCapabilities } from "openclaw/plugin-sdk/memory-authorization";
 
 /** Keep the lazy plugin entrypoint from loading the conformance suite just to declare legacy mode. */
 export const MEMORY_CORE_AUTHORIZATION_CAPABILITIES = Object.freeze({
@@ -12,4 +12,4 @@ export const MEMORY_CORE_AUTHORIZATION_CAPABILITIES = Object.freeze({
   scopedStatus: false,
   exposureReceipts: false,
   egressReceipts: false,
-}) satisfies NonNullable<MemoryPluginCapability["authorization"]>;
+}) satisfies MemoryAuthorizationCapabilities;
