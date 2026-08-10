@@ -28,9 +28,9 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
   }
 }
 
-export function whenAdmittedWizardSessionSettled<T extends { whenSettled(): Promise<unknown> }>(
-  session: T,
-): Promise<unknown> {
+export function whenAdmittedWizardSessionSettled(session: {
+  whenSettled(): Promise<unknown>;
+}): Promise<unknown> {
   return wizardSessionAdmissionSettlements.get(session) ?? session.whenSettled();
 }
 
