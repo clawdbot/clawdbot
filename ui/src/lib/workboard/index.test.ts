@@ -316,6 +316,18 @@ describe("workboard controller", () => {
     ).toBe("claude-cli");
   });
 
+  it("preserves valid decomposition modes and drops unknown values", () => {
+    expect(
+      normalizeMetadata({ automation: { decompositionMode: "orchestration" } })?.automation,
+    ).toEqual({ decompositionMode: "orchestration" });
+    expect(normalizeMetadata({ automation: { decompositionMode: "hard" } })?.automation).toEqual({
+      decompositionMode: "hard",
+    });
+    expect(
+      normalizeMetadata({ automation: { decompositionMode: "orchestration-typo" } })?.automation,
+    ).toBeUndefined();
+  });
+
   describe("runtime ownership", () => {
     it("keeps state pristine when lifecycle teardown happens before first access", () => {
       const pristineHost = {};

@@ -3884,6 +3884,21 @@ describe("WorkboardStore", () => {
     );
   });
 
+  it("rejects an invalid supplied decomposition mode before creating children", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+
+    await expect(
+      store.decompose(parent.id, {
+        completeParent: false,
+        decompositionMode: "orchestration-typo",
+        children: [{ title: "Child" }],
+      }),
+    ).rejects.toThrow(/decomposition mode must be one of: orchestration, hard/);
+
+    expect(await store.list()).toEqual([parent]);
+  });
+
   it("retains hard dependency semantics when explicitly requested", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Parent", status: "running" });

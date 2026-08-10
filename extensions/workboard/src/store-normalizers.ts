@@ -287,9 +287,15 @@ export function normalizeDecompositionMode(
   value: unknown,
   fallback: WorkboardDecompositionMode = "hard",
 ): WorkboardDecompositionMode {
-  return WORKBOARD_DECOMPOSITION_MODES.includes(value as WorkboardDecompositionMode)
-    ? (value as WorkboardDecompositionMode)
-    : fallback;
+  if (value === undefined) {
+    return fallback;
+  }
+  if (WORKBOARD_DECOMPOSITION_MODES.includes(value as WorkboardDecompositionMode)) {
+    return value as WorkboardDecompositionMode;
+  }
+  throw new Error(
+    `decomposition mode must be one of: ${WORKBOARD_DECOMPOSITION_MODES.join(", ")}.`,
+  );
 }
 
 export function normalizePriority(value: unknown, fallback: WorkboardPriority): WorkboardPriority {
