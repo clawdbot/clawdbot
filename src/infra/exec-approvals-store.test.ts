@@ -309,21 +309,29 @@ describe("exec approvals SQLite store", () => {
     await deletion;
   });
 
-  it("restores only the removed agent when the surrounding commit fails", async () => {
+  it("removes and restores every policy alias when the surrounding commit fails", async () => {
     saveExecApprovals({
       version: 1,
-      agents: { removed: { security: "allowlist" }, kept: { security: "deny" } },
+      agents: {
+        "Agent A": { security: "allowlist" },
+        "agent-a": { security: "full" },
+        kept: { security: "deny" },
+      },
     });
-    seedAgentDeletionJournal("removed");
+    seedAgentDeletionJournal("agent-a");
+    let policiesDuringCommit: ReturnType<typeof loadExecApprovals>["agents"] = undefined;
 
     await expect(
-      withAgentExecApprovalsRemoved("removed", async () => {
+      withAgentExecApprovalsRemoved("Agent A", async () => {
+        policiesDuringCommit = loadExecApprovals().agents;
         throw new Error("roster commit failed");
       }),
     ).rejects.toThrow("roster commit failed");
 
-    expect(loadExecApprovals().agents).toMatchObject({
-      removed: { security: "allowlist" },
+    expect(policiesDuringCommit).toEqual({ kept: { security: "deny" } });
+    expect(loadExecApprovals().agents).toEqual({
+      "Agent A": { security: "allowlist" },
+      "agent-a": { security: "full" },
       kept: { security: "deny" },
     });
   });

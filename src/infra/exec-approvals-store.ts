@@ -183,7 +183,7 @@ export async function updateExecApprovals(
   return updateExecApprovalsInTransaction(params);
 }
 
-/** Remove one deleted agent's policy, restoring only that entry if commit fails. */
+/** Remove one deleted agent's policy aliases, restoring them if commit fails. */
 export async function withAgentExecApprovalsRemoved<T>(
   agentId: string,
   commit: () => Promise<T>,
@@ -194,14 +194,18 @@ export async function withAgentExecApprovalsRemoved<T>(
   if (!operationId) {
     throw new ExecApprovalsMutationFencedError();
   }
-  const removedPolicy = snapshot.file.agents?.[key];
-  if (removedPolicy !== undefined) {
+  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(
+    ([policyKey]) => normalizeAgentId(policyKey) === key,
+  );
+  if (removedPolicyEntries.length > 0) {
     const updated = updateExecApprovalsInTransaction({
       baseHash: snapshot.hash,
       authority: { action: "remove", agentId: key, operationId },
       update: (file) => {
         const agents = { ...file.agents };
-        delete agents[key];
+        for (const [policyKey] of removedPolicyEntries) {
+          delete agents[policyKey];
+        }
         return { ...file, agents };
       },
     });
@@ -223,13 +227,13 @@ export async function withAgentExecApprovalsRemoved<T>(
     if (error instanceof AgentDeletionCommitUncertainError) {
       throw error;
     }
-    if (removedPolicy !== undefined) {
+    if (removedPolicyEntries.length > 0) {
       try {
         updateExecApprovalsInTransaction({
           authority: { action: "restore", agentId: key, operationId },
           update: (file) => ({
             ...file,
-            agents: { ...file.agents, [key]: removedPolicy },
+            agents: { ...file.agents, ...Object.fromEntries(removedPolicyEntries) },
           }),
         });
       } catch (rollbackError) {
