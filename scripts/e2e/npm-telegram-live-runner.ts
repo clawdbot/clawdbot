@@ -269,13 +269,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 
 export const testing = {
-  parsePositiveIntegerEnv,
   resolvePackageTelegramOutputDir,
   resolveCredentialRole,
   resolveCredentialSource,
   createRoundTripProbe,
   prioritizeRoundTripProbeScenario,
-  projectExtendedStable2026_6_35QaConfig,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,
