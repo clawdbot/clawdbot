@@ -52,13 +52,6 @@
     ]
   },
   {
-    "name": "buildChannelAccountSnapshot",
-    "files": [
-      "src/channels/account-summary.ts",
-      "src/channels/plugins/status.ts"
-    ]
-  },
-  {
     "name": "buildPluginDiagnosticsReport",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -125,13 +118,6 @@
     "sdk": true
   },
   {
-    "name": "cancelDetachedTaskRunById",
-    "files": [
-      "src/tasks/task-executor-cancel.runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "classifySessionKind",
     "files": [
       "src/agents/tools/sessions-helpers.ts",
@@ -181,13 +167,6 @@
     "files": [
       "src/agents/embedded-agent-runner/compact.runtime.ts",
       "src/agents/embedded-agent-runner/compact.ts"
-    ]
-  },
-  {
-    "name": "completeTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
     ]
   },
   {
@@ -241,20 +220,6 @@
     ]
   },
   {
-    "name": "createQueuedTaskRun",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "createRunningTaskRun",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "createSessionId",
     "files": [
       "src/agents/sessions/session-manager-id.ts",
@@ -277,13 +242,6 @@
     "sdk": true
   },
   {
-    "name": "DEFAULT_TIMEOUT_MS",
-    "files": [
-      "src/infra/provider-usage.shared.ts",
-      "src/infra/update-runner-command.ts"
-    ]
-  },
-  {
     "name": "defaultRuntime",
     "files": [
       "src/cli/daemon-cli/test-helpers/lifecycle-core-harness.ts",
@@ -296,38 +254,6 @@
     "files": [
       "src/channels/turn/durable-delivery.ts",
       "src/plugin-sdk/channel-outbound.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImagesWithModel",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImagesWithModelPayloadTransform",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImageWithModel",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "describeImageWithModelPayloadTransform",
-    "files": [
-      "src/media-understanding/image-runtime.ts",
-      "src/media-understanding/image.ts"
     ],
     "sdk": true
   },
@@ -372,13 +298,6 @@
     "sdk": true
   },
   {
-    "name": "ensureConfigReady",
-    "files": [
-      "src/cli/program.test-mocks.ts",
-      "src/cli/program/config-guard.ts"
-    ]
-  },
-  {
     "name": "ensureConfiguredAcpBindingReady",
     "files": [
       "src/acp/persistent-bindings.lifecycle.ts",
@@ -416,13 +335,6 @@
     ]
   },
   {
-    "name": "failTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "fileExists",
     "files": [
       "src/infra/state-migrations.fs.ts",
@@ -430,13 +342,6 @@
       "src/plugin-sdk/security-runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "finalizeTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-registry-record-api.ts"
-    ]
   },
   {
     "name": "formatConfigPath",
@@ -506,13 +411,6 @@
       "src/plugin-sdk/core.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "getFreeGatewayPort",
-    "files": [
-      "src/gateway/gateway-cli-backend.live-helpers.ts",
-      "src/gateway/test-helpers.e2e.ts"
-    ]
   },
   {
     "name": "getFreePort",
@@ -857,14 +755,6 @@
     ]
   },
   {
-    "name": "normalizeChannelId",
-    "files": [
-      "src/channels/plugins/registry.ts",
-      "src/channels/registry.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "normalizeContainerPath",
     "files": [
       "src/agents/sandbox/path-utils.ts",
@@ -898,13 +788,6 @@
       "src/agents/tool-display-common.ts",
       "src/agents/tool-policy-shared.ts",
       "src/cron/run-diagnostics-normalize.ts"
-    ]
-  },
-  {
-    "name": "notifyGatewayPluginMetadataChanged",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/plugins-update-gateway-signal.ts"
     ]
   },
   {
@@ -1013,27 +896,6 @@
     ]
   },
   {
-    "name": "preserveConfigSnapshotAsClobbered",
-    "files": [
-      "src/config/io.observe-recovery.ts",
-      "src/config/io.runtime.ts"
-    ]
-  },
-  {
-    "name": "promoteConfigSnapshotToLastKnownGood",
-    "files": [
-      "src/config/io.observe-recovery.ts",
-      "src/config/io.runtime.ts"
-    ]
-  },
-  {
-    "name": "promptYesNo",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/prompt.ts"
-    ]
-  },
-  {
     "name": "readAmbientTranscriptWatermark",
     "files": [
       "src/config/sessions/ambient-transcript-watermark.ts",
@@ -1063,13 +925,6 @@
       "src/config/io.runtime.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "readLatestSessionUsageFromTranscriptAsync",
-    "files": [
-      "src/gateway/session-transcript-readers.ts",
-      "src/gateway/session-utils.fs.ts"
-    ]
   },
   {
     "name": "readPersistedInstalledPluginIndex",
@@ -1116,20 +971,6 @@
     ]
   },
   {
-    "name": "recordTaskRunProgressByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "recoverConfigFromLastKnownGood",
-    "files": [
-      "src/config/io.observe-recovery.ts",
-      "src/config/io.runtime.ts"
-    ]
-  },
-  {
     "name": "redactSecrets",
     "files": [
       "src/commands/status-all/format.ts",
@@ -1142,27 +983,6 @@
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/plugin-registry-snapshot.ts"
-    ]
-  },
-  {
-    "name": "registerPluginsCli",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/cli/plugins-cli.ts"
-    ]
-  },
-  {
-    "name": "registerSubCliByName",
-    "files": [
-      "src/cli/program/register.subclis-core.ts",
-      "src/cli/program/register.subclis.ts"
-    ]
-  },
-  {
-    "name": "registerSubCliCommands",
-    "files": [
-      "src/cli/program/register.subclis-core.ts",
-      "src/cli/program/register.subclis.ts"
     ]
   },
   {
@@ -1207,14 +1027,6 @@
     "files": [
       "src/acp/translator.bridge-test-helpers.ts",
       "src/gateway/test-helpers.assertions.ts"
-    ]
-  },
-  {
-    "name": "resetPreparedModelCatalogForTest",
-    "files": [
-      "src/gateway/server-model-catalog.ts",
-      "src/gateway/server-start.ts",
-      "src/gateway/server.ts"
     ]
   },
   {
@@ -1320,13 +1132,6 @@
     ]
   },
   {
-    "name": "resolveMissingPluginCommandMessage",
-    "files": [
-      "src/cli/run-main-policy.ts",
-      "src/cli/run-main.ts"
-    ]
-  },
-  {
     "name": "resolveNode",
     "files": [
       "src/agents/tools/nodes-utils.ts",
@@ -1360,14 +1165,6 @@
       "src/plugins/provider-runtime.ts",
       "src/plugins/provider-thinking.ts"
     ]
-  },
-  {
-    "name": "resolveProviderUsageDisplayName",
-    "files": [
-      "src/infra/provider-usage.admin.ts",
-      "src/infra/provider-usage.shared.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "resolveSecretInputString",
@@ -1416,13 +1213,6 @@
     "sdk": true
   },
   {
-    "name": "resolveThinkingDefaultForModel",
-    "files": [
-      "src/auto-reply/thinking.shared.ts",
-      "src/auto-reply/thinking.ts"
-    ]
-  },
-  {
     "name": "restorePersistedInstalledPluginIndexIfCurrent",
     "files": [
       "src/cli/plugins-cli-test-helpers.ts",
@@ -1460,13 +1250,6 @@
     ]
   },
   {
-    "name": "runtimeLogs",
-    "files": [
-      "src/cli/daemon-cli/test-helpers/lifecycle-core-harness.ts",
-      "src/cli/plugins-cli-test-helpers.ts"
-    ]
-  },
-  {
     "name": "runTui",
     "files": [
       "src/cli/program.test-mocks.ts",
@@ -1498,13 +1281,6 @@
     "sdk": true
   },
   {
-    "name": "setDetachedTaskDeliveryStatusByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
     "name": "setupCommand",
     "files": [
       "src/cli/program.test-mocks.ts",
@@ -1525,28 +1301,6 @@
       "src/logging/redact-identifier.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "startGatewayServer",
-    "files": [
-      "src/gateway/server-start.ts",
-      "src/gateway/server.ts",
-      "src/gateway/test-helpers.server.ts"
-    ]
-  },
-  {
-    "name": "startTaskRunByRunId",
-    "files": [
-      "src/tasks/detached-task-runtime.ts",
-      "src/tasks/task-executor.ts"
-    ]
-  },
-  {
-    "name": "stopWithText",
-    "files": [
-      "src/auto-reply/reply/commands-acp/shared.ts",
-      "src/auto-reply/reply/commands-subagents/shared.ts"
-    ]
   },
   {
     "name": "stripTargetKindPrefix",
@@ -1608,13 +1362,6 @@
       "src/agents/tools/web-fetch-utils.ts"
     ],
     "sdk": true
-  },
-  {
-    "name": "tryDispatchAcpReply",
-    "files": [
-      "src/auto-reply/reply/dispatch-acp.runtime.ts",
-      "src/auto-reply/reply/dispatch-acp.ts"
-    ]
   },
   {
     "name": "updateNpmInstalledHookPacks",
