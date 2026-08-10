@@ -194,18 +194,21 @@
   margin-top: 0;
 }
 
+/* Code surfaces must lift off the host bubble in every theme. --secondary equals
+   --card on every dark palette, so chips painted with it vanished inside user
+   bubbles; --bg-muted/--border-strong separate in both modes without an override. */
 .chat-text :where(:not(pre) > code) {
-  background: var(--secondary);
+  background: var(--bg-muted);
   padding: 0.15em 0.35em;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .chat-text :where(pre) {
-  background: var(--secondary);
-  border: 1px solid var(--border);
+  background: var(--bg-muted);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   margin-top: 0.75em;
   padding: 10px 12px;
@@ -268,16 +271,6 @@
 
 :root[data-theme-mode="light"] .chat-text :where(blockquote blockquote blockquote) {
   background: rgba(0, 0, 0, 0.04);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(:not(pre) > code) {
-  background: var(--bg-muted);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(pre) {
-  background: var(--bg-muted);
-  border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .chat-text :where(hr) {
