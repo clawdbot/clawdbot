@@ -1846,15 +1846,17 @@ export class AcpxRuntime implements AcpRuntime {
       const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
       let closeSucceeded;
       try {
+        // Reap while the lease-bearing wrapper still anchors its descendants.
+        // delegate.close() may let that root exit and erase the ownership tree.
+        await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
+        cleanupSucceeded = true;
+      } finally {
         await delegate.close({
           handle: input.handle,
           reason: input.reason,
           discardPersistentState: input.discardPersistentState,
         });
         closeSucceeded = true;
-      } finally {
-        await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
-        cleanupSucceeded = true;
       }
       if (closeSucceeded) {
         this.releaseManagedToolsDelegateForSession(input.handle.sessionKey);

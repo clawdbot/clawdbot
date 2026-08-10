@@ -1990,6 +1990,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const lifecycle: string[] = [];
     const { runtime, delegate } = makeRuntime(
       baseStore,
       {
@@ -2011,13 +2012,16 @@ describe("AcpxRuntime fresh reset wrapper", () => {
             },
           ]),
           killProcess: vi.fn((pid, signal) => {
+            lifecycle.push(`kill:${String(pid)}:${signal}`);
             killed.push({ pid, signal });
           }),
           sleep: vi.fn(async () => {}),
         },
       },
     );
-    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+    vi.spyOn(delegate, "close").mockImplementation(async () => {
+      lifecycle.push("delegate-close");
+    });
 
     await runtime.close({
       handle: {
@@ -2032,6 +2036,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       { pid: 901, signal: "SIGTERM" },
       { pid: 900, signal: "SIGTERM" },
     ]);
+    expect(lifecycle.at(-1)).toBe("delegate-close");
   });
 
   it("persists ACPX process lease identity for later wrapper reconnects", async () => {
