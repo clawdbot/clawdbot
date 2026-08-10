@@ -6,6 +6,11 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createEmptyPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
@@ -14,11 +19,6 @@ import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
 type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
-type GetPluginCommandSpecsFn =
-  typeof import("./bot-native-commands.runtime.js").getPluginCommandSpecs;
-type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
-type ExecutePluginCommandFn =
-  typeof import("./bot-native-commands.runtime.js").executePluginCommand;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -42,17 +42,6 @@ type NativeCommandHarness = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
   readChannelAllowFromStore: AnyAsyncMock;
 };
-
-const pluginCommandMocks = vi.hoisted(() => ({
-  getPluginCommandSpecs: vi.fn<GetPluginCommandSpecsFn>(() => []),
-  matchPluginCommand: vi.fn<MatchPluginCommandFn>(() => null),
-  executePluginCommand: vi.fn<ExecutePluginCommandFn>(async () => ({ text: "ok" })),
-}));
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
-  getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
-  matchPluginCommand: pluginCommandMocks.matchPluginCommand,
-  executePluginCommand: pluginCommandMocks.executePluginCommand,
-}));
 
 const replyPipelineMocks = vi.hoisted(() => {
   const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
@@ -88,6 +77,9 @@ const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
 
+resetPluginRuntimeStateForTest();
+setActivePluginRegistry(createEmptyPluginRegistry());
+
 const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChannelInboundTurn"] =
   async (plan) => {
     const dispatchResult = await replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher({
@@ -113,9 +105,6 @@ const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChan
   };
 
 vi.mock("./bot-native-commands.runtime.js", () => ({
-  getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
-  matchPluginCommand: pluginCommandMocks.matchPluginCommand,
-  executePluginCommand: pluginCommandMocks.executePluginCommand,
   finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
   resolveChunkMode: replyPipelineMocks.resolveChunkMode,
   ensureConfiguredBindingRouteReady: replyPipelineMocks.ensureConfiguredBindingRouteReady,
@@ -184,7 +173,6 @@ export function createNativeCommandsHarness(params?: {
     readChannelAllowFromStore:
       readChannelAllowFromStore as TelegramNativeCommandDeps["readChannelAllowFromStore"],
     dispatchChannelInboundTurn: dispatchChannelInboundTurnForTest,
-    getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
     sendMessageTelegram: vi.fn(async (_to, text) => {

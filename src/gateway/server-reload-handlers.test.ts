@@ -31,6 +31,8 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
+import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
+import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
@@ -68,6 +70,7 @@ import {
 import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
+import { listRunningCommandCatalogChannelIds } from "./plugin-channel-reload-targets.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
@@ -5005,6 +5008,94 @@ describe("gateway plugin hot reload handlers", () => {
 
     expect(events).toEqual(["reload:start", "stop:discord", "runtime:publish", "registry:replace"]);
     expect(handlers.setState).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts a running command-catalog channel around an unrelated plugin generation", async () => {
+    const oldRegistry = createTestRegistry();
+    const nextRegistry = createTestRegistry();
+    const oldHandler = vi.fn(async () => ({ text: "old" }));
+    const nextHandler = vi.fn(async () => ({ text: "next" }));
+    for (const [registry, handler] of [
+      [oldRegistry, oldHandler],
+      [nextRegistry, nextHandler],
+    ] as const) {
+      expect(
+        registerPluginCommandInRegistry(registry, "command-owner", {
+          name: "refresh",
+          description: "Refresh",
+          channels: ["discord"],
+          handler,
+        }),
+      ).toEqual({ ok: true });
+    }
+    setActivePluginRegistry(oldRegistry);
+    const staleDispatch = createPluginCommandRuntime()
+      .listNativeCandidates("discord")[0]!
+      .prepareDispatch();
+    expect(staleDispatch.kind).toBe("plugin");
+
+    const events: string[] = [];
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      {
+        stop: vi.fn(async (channel) => {
+          events.push(`stop:${channel}`);
+        }),
+        start: vi.fn(async (channel) => {
+          events.push(`start:${channel}`);
+        }),
+      },
+      vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
+        const retainedChannels = listRunningCommandCatalogChannelIds(
+          [{ id: "discord", commands: { nativeCommandsAutoEnabled: true } }],
+          {
+            channels: {},
+            channelAccounts: {
+              discord: { default: { accountId: "default", running: true } },
+            },
+          },
+        );
+        await params.beforeReplace(retainedChannels);
+        await params.commitRuntime();
+        setActivePluginRegistry(nextRegistry);
+        events.push("registry:next");
+        return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
+      }),
+    );
+
+    await handlers.applyHotReload(
+      createPluginReloadPlan(),
+      { plugins: { enabled: true } },
+      { publish: async (commit) => await commit(), isCurrent: () => true },
+    );
+
+    expect(events).toEqual(["stop:discord", "registry:next", "start:discord"]);
+    if (staleDispatch.kind === "plugin") {
+      await expect(
+        staleDispatch.execute({
+          channel: "discord",
+          isAuthorizedSender: true,
+          commandBody: "/refresh",
+          config: {},
+        }),
+      ).resolves.toMatchObject({ text: expect.stringContaining("registry changed") });
+    }
+    const nextDispatch = createPluginCommandRuntime()
+      .listNativeCandidates("discord")[0]!
+      .prepareDispatch();
+    expect(nextDispatch.kind).toBe("plugin");
+    if (nextDispatch.kind === "plugin") {
+      await expect(
+        nextDispatch.execute({
+          channel: "discord",
+          isAuthorizedSender: true,
+          commandBody: "/refresh",
+          config: {},
+        }),
+      ).resolves.toEqual({ text: "next" });
+    }
+    expect(oldHandler).not.toHaveBeenCalled();
+    expect(nextHandler).toHaveBeenCalledOnce();
   });
 
   it("keeps a committed plugin generation when a later channel restart fails", async () => {

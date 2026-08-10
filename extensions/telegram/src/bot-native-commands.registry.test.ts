@@ -1,10 +1,13 @@
 // Telegram tests cover bot native commands.registry plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").setActivePluginRegistry;
+let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").createEmptyPluginRegistry;
+let getActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").getActivePluginRegistry;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
 let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
@@ -14,61 +17,38 @@ let resetNativeCommandMenuMocks: typeof import("./bot-native-commands.menu-test-
 let waitForRegisteredCommands: typeof import("./bot-native-commands.menu-test-support.js").waitForRegisteredCommands;
 
 function createTelegramPluginRegistry() {
-  return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    channels: [
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          id: "telegram",
-          meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
-            blurb: "test stub.",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => ["default"],
-            resolveAccount: () => ({}),
-          },
-          commands: {
-            nativeCommandsAutoEnabled: true,
-          },
-        },
+  const registry = createEmptyPluginRegistry();
+  registry.channels.push({
+    pluginId: "telegram",
+    source: "test",
+    plugin: {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "test stub.",
       },
-    ],
-    channelSetups: [
-      {
-        pluginId: "telegram",
-        source: "test",
-        enabled: true,
-        plugin: {
-          id: "telegram",
-        },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({}),
       },
-    ],
-    providers: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    gatewayHandlers: {},
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
-  };
+      commands: {
+        nativeCommandsAutoEnabled: true,
+      },
+    },
+  } as never);
+  registry.channelSetups.push({
+    pluginId: "telegram",
+    source: "test",
+    enabled: true,
+    plugin: {
+      id: "telegram",
+    },
+  } as never);
+  return registry;
 }
 
 function registerPairPluginCommand(params?: {
@@ -150,7 +130,8 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index: number): unknow
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
-    ({ setActivePluginRegistry } = await import("openclaw/plugin-sdk/plugin-test-runtime"));
+    ({ setActivePluginRegistry, createEmptyPluginRegistry, getActivePluginRegistry } =
+      await import("openclaw/plugin-sdk/plugin-test-runtime"));
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     ({
       createCommandBot,
@@ -267,6 +248,95 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     expectLastDeliveredReplyText("paired:now");
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it.each([
+    ["transformed-first", ["foo-bar", "foo_bar"]],
+    ["exact-first", ["foo_bar", "foo-bar"]],
+  ] as const)("executes the exact normalized winner with %s discovery", async (_label, names) => {
+    const handlers = new Map<string, ReturnType<typeof vi.fn>>();
+    for (const name of names) {
+      const handler = vi.fn(async () => ({ text: name }));
+      handlers.set(name, handler);
+      expect(
+        registerPluginCommand(`plugin-${name}`, {
+          name,
+          description: name,
+          channels: ["telegram"],
+          requireAuth: false,
+          handler,
+        }),
+      ).toEqual({ ok: true });
+    }
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+    registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
+    const registered = await waitForRegisteredCommands(setMyCommands);
+    expect(registered.filter((command) => command.command === "foo_bar")).toEqual([
+      { command: "foo_bar", description: "foo_bar" },
+    ]);
+
+    await requireCommandHandler(commandHandlers, "foo_bar")(createPrivateCommandContext());
+
+    expectLastDeliveredReplyText("foo_bar");
+    expect(handlers.get("foo_bar")).toHaveBeenCalledOnce();
+    expect(handlers.get("foo-bar")).not.toHaveBeenCalled();
+  });
+
+  it("carries a built-in catalog winner through the handler", async () => {
+    const pluginHandler = vi.fn(async () => ({ text: "wrong plugin" }));
+    getActivePluginRegistry()!.commands.push({
+      pluginId: "shadow-plugin",
+      source: "test",
+      command: {
+        name: "help",
+        description: "Shadow help",
+        channels: ["telegram"],
+        requireAuth: false,
+        handler: pluginHandler,
+      },
+    });
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      channels: { telegram: { dmPolicy: "open" } },
+    };
+    const { bot, commandHandlers } = createCommandBot();
+    const params = createNativeCommandTestParams(cfg, { bot });
+    registerTelegramNativeCommands(params);
+
+    await requireCommandHandler(commandHandlers, "help")(createPrivateCommandContext());
+
+    expect(pluginHandler).not.toHaveBeenCalled();
+    const turnPlan = vi.mocked(params.telegramDeps.dispatchChannelInboundTurn!).mock.calls[0]?.[0];
+    expect(turnPlan?.replyOptions?.[PLUGIN_COMMAND_DISPATCH]).toEqual({ kind: "non-plugin" });
+  });
+
+  it.each([
+    ["telegram-first", ["foo-bar", "foo_bar"]],
+    ["discord-first", ["foo_bar", "foo-bar"]],
+  ] as const)("ignores a cross-channel exact shadow with %s discovery", async (_label, names) => {
+    const telegramHandler = vi.fn(async () => ({ text: "telegram-owner" }));
+    const discordHandler = vi.fn(async () => ({ text: "discord-owner" }));
+    for (const name of names) {
+      const telegram = name === "foo-bar";
+      expect(
+        registerPluginCommand(telegram ? "telegram-owner" : "discord-owner", {
+          name,
+          description: name,
+          channels: [telegram ? "telegram" : "discord"],
+          requireAuth: false,
+          handler: telegram ? telegramHandler : discordHandler,
+        }),
+      ).toEqual({ ok: true });
+    }
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+    registerTelegramNativeCommands({ ...createNativeCommandTestParams({}), bot });
+    await waitForRegisteredCommands(setMyCommands);
+
+    await requireCommandHandler(commandHandlers, "foo_bar")(createPrivateCommandContext());
+
+    expectLastDeliveredReplyText("telegram-owner");
+    expect(telegramHandler).toHaveBeenCalledOnce();
+    expect(discordHandler).not.toHaveBeenCalled();
   });
 
   it("keeps real plugin command handlers available when native menu registration is disabled", () => {

@@ -734,6 +734,10 @@
     "./plugin-sdk/tts-runtime": {
       "default": "./dist/plugin-sdk/tts-runtime.js"
     },
+    "./plugin-sdk/plugin-command-runtime": {
+      "types": "./dist/plugin-sdk/plugin-command-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-command-runtime.js"
+    },
     "./plugin-sdk/plugin-runtime": {
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"

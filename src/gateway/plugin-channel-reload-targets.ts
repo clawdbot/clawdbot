@@ -2,6 +2,7 @@
 // Maps channel/plugin ids and aliases to config path prefixes for hot reload.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/index.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 
 type ChannelPluginReloadTarget = {
   channelId: ChannelId;
@@ -40,5 +41,23 @@ export function pluginConfigTargetsChanged(
   ]).flat();
   return changedPaths.some((path) =>
     prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}.`)),
+  );
+}
+
+/** Lists running channels whose native command catalog retains registry-bound handlers. */
+export function listRunningCommandCatalogChannelIds(
+  plugins: readonly { id: ChannelId; commands?: object }[],
+  snapshot: ChannelRuntimeSnapshot,
+): Set<ChannelId> {
+  return new Set(
+    plugins
+      .filter(
+        (plugin) =>
+          plugin.commands !== undefined &&
+          Object.values(snapshot.channelAccounts[plugin.id] ?? {}).some(
+            (account) => account.running === true,
+          ),
+      )
+      .map((plugin) => plugin.id),
   );
 }

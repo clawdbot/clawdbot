@@ -24,6 +24,7 @@ import { isLoopbackHost } from "./net.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import {
   listChannelPluginConfigTargetIds,
+  listRunningCommandCatalogChannelIds,
   pluginConfigTargetsChanged,
 } from "./plugin-channel-reload-targets.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
@@ -37,6 +38,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type GatewayStartupChannelPlugin = {
   id: ChannelId;
   meta: { aliases?: readonly string[] };
+  commands?: object;
 };
 
 function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
@@ -413,6 +415,11 @@ export async function startGatewayCoreRuntime(input: {
   }): Promise<GatewayPluginReloadResult> => {
     const beforeChannelTargets = listAttachedChannelConfigTargets();
     const beforeChannelIds = new Set(beforeChannelTargets.keys());
+    const beforeRuntimeSnapshot = channelManager.getRuntimeSnapshot();
+    const runningCommandCatalogChannels = listRunningCommandCatalogChannelIds(
+      listGatewayStartupChannelPlugins(),
+      beforeRuntimeSnapshot,
+    );
     const [
       { loadPluginLookUpTable },
       { listAmbientOnlyConfiguredChannelIds },
@@ -474,6 +481,9 @@ export async function startGatewayCoreRuntime(input: {
       ) {
         channelsToStopBeforeReplace.add(channelId);
       }
+    }
+    for (const channelId of runningCommandCatalogChannels) {
+      channelsToStopBeforeReplace.add(channelId);
     }
     await params.beforeReplace(channelsToStopBeforeReplace);
     // If an in-process restart signalled abort during beforeReplace,

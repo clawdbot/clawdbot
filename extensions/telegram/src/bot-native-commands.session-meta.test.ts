@@ -42,7 +42,6 @@ type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
 type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loadModelCatalog;
 type ResolveDefaultModelForAgentFn =
   typeof import("openclaw/plugin-sdk/agent-runtime").resolveDefaultModelForAgent;
-type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
   queuedFinal: false,
@@ -80,8 +79,7 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   resolveDefaultModelForAgent: vi.fn<ResolveDefaultModelForAgentFn>(),
 }));
 const pluginRuntimeMocks = vi.hoisted(() => ({
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
-  matchPluginCommand: vi.fn<MatchPluginCommandFn>(() => null),
+  executePluginCommand: vi.fn(async (_params?: unknown) => ({ text: "ok" })),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -258,12 +256,9 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
 vi.mock("./bot-native-commands.runtime.js", () => {
   return {
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
-    executePluginCommand: pluginRuntimeMocks.executePluginCommand,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     getAgentScopedMediaLocalRoots,
-    getPluginCommandSpecs: vi.fn(() => []),
     getSessionEntry: sessionMocks.getSessionEntry,
-    matchPluginCommand: pluginRuntimeMocks.matchPluginCommand,
     recordInboundSessionMetaSafe: vi.fn(
       async (params: {
         cfg: OpenClawConfig;
@@ -293,17 +288,6 @@ vi.mock("./bot-native-commands.runtime.js", () => {
     >,
   };
 });
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-    "openclaw/plugin-sdk/plugin-runtime",
-  );
-  return {
-    ...actual,
-    getPluginCommandSpecs: vi.fn(() => []),
-    matchPluginCommand: pluginRuntimeMocks.matchPluginCommand,
-    executePluginCommand: pluginRuntimeMocks.executePluginCommand,
-  };
-});
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
@@ -312,11 +296,17 @@ vi.mock("./bot/delivery.replies.js", () => ({
 }));
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
+let clearPluginCommands: typeof import("openclaw/plugin-sdk/plugin-runtime").clearPluginCommands;
+let registerPluginCommand: typeof import("openclaw/plugin-sdk/plugin-runtime").registerPluginCommand;
+let createEmptyPluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").createEmptyPluginRegistry;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/plugin-test-runtime").setActivePluginRegistry;
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
-type TelegramPluginCommandSpecs = ReturnType<
-  NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]>
->;
+type TelegramPluginCommandSpecs = Array<{
+  name: string;
+  description: string;
+  acceptsArgs?: boolean;
+}>;
 type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
 
 function registerAndResolveStatusHandler(params: {
@@ -389,7 +379,6 @@ function registerAndResolveCommandHandlerBase(params: {
     dispatchChannelInboundTurn: dispatchChannelInboundTurnMock as unknown as NonNullable<
       TelegramNativeCommandDeps["dispatchChannelInboundTurn"]
     >,
-    getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
     sendMessageTelegram: vi.fn(async (_to, text) => {
@@ -398,6 +387,15 @@ function registerAndResolveCommandHandlerBase(params: {
     }),
     ...(runModelsAuthLoginFlow ? { runModelsAuthLoginFlow } : {}),
   };
+  for (const spec of pluginCommandSpecs ?? []) {
+    expect(
+      registerPluginCommand(`test-${spec.name}`, {
+        ...spec,
+        requireAuth: true,
+        handler: pluginRuntimeMocks.executePluginCommand,
+      }),
+    ).toEqual({ ok: true });
+  }
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
       bot: {
@@ -696,7 +694,8 @@ function resetSessionMetaMocks() {
   sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
   sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
   pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
-  pluginRuntimeMocks.matchPluginCommand.mockClear().mockReturnValue(null);
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  clearPluginCommands();
   replyMocks.dispatchReplyWithBufferedBlockDispatcher
     .mockClear()
     .mockResolvedValue(dispatchReplyResult);
@@ -708,6 +707,10 @@ function resetSessionMetaMocks() {
 
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
+    ({ clearPluginCommands, registerPluginCommand } =
+      await import("openclaw/plugin-sdk/plugin-runtime"));
+    ({ createEmptyPluginRegistry, setActivePluginRegistry } =
+      await import("openclaw/plugin-sdk/plugin-test-runtime"));
     const commandModule = await import("./bot-native-commands.js");
     registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
     await import("./bot-native-commands.runtime.js");
@@ -1955,29 +1958,17 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
 
     const { handler } = registerAndResolveCommandHandler({
-      commandName: "codex",
+      commandName: "plugin_meta",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
       groupAllowFrom: ["-1001234567890"],
       pluginCommandSpecs: [
         {
-          name: "codex",
+          name: "plugin_meta",
           description: "Codex",
           acceptsArgs: true,
         },
       ] as TelegramPluginCommandSpecs,
     });
-    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
-      command: {
-        name: "codex",
-        description: "Codex",
-        handler: vi.fn(),
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex",
-        requireAuth: true,
-      },
-      args: "bind --cwd /tmp/work",
-    });
-
     await handler(
       createTelegramTopicCommandContext({ match: "bind --cwd /tmp/work", threadId: 42 }),
     );
@@ -2356,28 +2347,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
 
     const { handler } = registerAndResolveCommandHandler({
-      commandName: "codex",
+      commandName: "plugin_meta",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
       pluginCommandSpecs: [
         {
-          name: "codex",
+          name: "plugin_meta",
           description: "Codex",
           acceptsArgs: true,
         },
       ] as TelegramPluginCommandSpecs,
     });
-    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
-      command: {
-        name: "codex",
-        description: "Codex",
-        handler: vi.fn(),
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex",
-        requireAuth: true,
-      },
-      args: "status",
-    });
-
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     expectRecordFields(
@@ -2402,28 +2381,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
 
     const { handler } = registerAndResolveCommandHandler({
-      commandName: "codex",
+      commandName: "plugin_meta",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
       pluginCommandSpecs: [
         {
-          name: "codex",
+          name: "plugin_meta",
           description: "Codex",
           acceptsArgs: true,
         },
       ] as TelegramPluginCommandSpecs,
     });
-    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
-      command: {
-        name: "codex",
-        description: "Codex",
-        handler: vi.fn(),
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex",
-        requireAuth: true,
-      },
-      args: "status",
-    });
-
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     expectRecordFields(
@@ -2448,28 +2415,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
 
     const { handler } = registerAndResolveCommandHandler({
-      commandName: "codex",
+      commandName: "plugin_meta",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
       pluginCommandSpecs: [
         {
-          name: "codex",
+          name: "plugin_meta",
           description: "Codex",
           acceptsArgs: true,
         },
       ] as TelegramPluginCommandSpecs,
     });
-    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
-      command: {
-        name: "codex",
-        description: "Codex",
-        handler: vi.fn(),
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex",
-        requireAuth: true,
-      },
-      args: "status",
-    });
-
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     expectRecordFields(
@@ -2487,28 +2442,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     pluginRuntimeMocks.executePluginCommand.mockResolvedValue(undefined as never);
 
     const { handler } = registerAndResolveCommandHandler({
-      commandName: "codex",
+      commandName: "plugin_meta",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
       pluginCommandSpecs: [
         {
-          name: "codex",
+          name: "plugin_meta",
           description: "Codex",
           acceptsArgs: true,
         },
       ] as TelegramPluginCommandSpecs,
     });
-    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
-      command: {
-        name: "codex",
-        description: "Codex",
-        handler: vi.fn(),
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex",
-        requireAuth: true,
-      },
-      args: "status",
-    });
-
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     const deliveryCall = requireValue(
