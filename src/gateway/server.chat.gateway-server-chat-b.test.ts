@@ -5140,8 +5140,15 @@ describe("gateway server chat", () => {
       const historyMessages = await fetchHistoryMessages(ws);
       const tool = createSessionsHistoryTool({
         config: {},
-        callGateway: async <T = Record<string, unknown>>(request) => {
-          const response = await rpcReq<T>(ws, request.method, request.params);
+        callGateway: async <T = Record<string, unknown>>(request: {
+          method: string;
+          params?: unknown;
+        }) => {
+          const response = await rpcReq<T & Record<string, unknown>>(
+            ws,
+            request.method,
+            request.params,
+          );
           expect(response.ok).toBe(true);
           return expectDefined(response.payload, `${request.method} payload`);
         },
