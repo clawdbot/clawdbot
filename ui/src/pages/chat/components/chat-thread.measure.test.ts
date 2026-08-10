@@ -533,6 +533,10 @@ describe("chat transcript row measurement", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    // The transcript renders the bounded thumbnail variant, so the resource is
+    // cached under the thumbnail URL even when the message carries the full one.
+    // Full-size bytes are fetched only by the image actions, on demand.
+    const thumbnailSource = source.replace(/\/full$/u, "/thumbnail");
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const client = {
@@ -573,7 +577,7 @@ describe("chat transcript row measurement", () => {
 
     const previousResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::old-token::`,
+      `${thumbnailSource}::old-token::`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(previousResource.subscribers.size).toBe(1);
@@ -593,7 +597,7 @@ describe("chat transcript row measurement", () => {
 
     const nextResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::next-token::`,
+      `${thumbnailSource}::next-token::`,
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(

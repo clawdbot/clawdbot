@@ -655,10 +655,13 @@ suite.define(() => {
       expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
+      // The transcript renders the bounded thumbnail variant, so the request it
+      // replays after eviction is the thumbnail path, not the full-size URL the
+      // message carries.
       const evictedPath = new URL(
         expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
-      ).pathname;
+      ).pathname.replace(/\/full$/u, "/thumbnail");
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;

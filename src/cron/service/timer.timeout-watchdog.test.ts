@@ -781,10 +781,21 @@ describe("cron service timer regressions", () => {
       expect(job.state.lastError).toContain("runtime-plugins");
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+      // The runtime detail stays on the job record (asserted above); the chat
+      // alert names the automation and points at history instead of leaking it.
       expect(sendCronFailureAlert).toHaveBeenCalledWith(
         expect.objectContaining({
           channel: "telegram",
           to: "12345",
+          payload: expect.objectContaining({
+            text: expect.stringMatching(
+              /^Automation "before agent reply unhandled regression" failed \d+ times/u,
+            ),
+          }),
+        }),
+      );
+      expect(sendCronFailureAlert).not.toHaveBeenCalledWith(
+        expect.objectContaining({
           payload: expect.objectContaining({ text: expect.stringContaining("runtime-plugins") }),
         }),
       );

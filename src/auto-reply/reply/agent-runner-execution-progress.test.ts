@@ -135,6 +135,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
       name: "read",
       phase: "start",
       status: "running",
+      commandBearing: false,
     });
   });
 
@@ -226,6 +227,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
       name: "bash",
       phase: "start",
       status: "running",
+      commandBearing: false,
     });
   });
 

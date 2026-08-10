@@ -1908,6 +1908,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-release-pretag-pack-check.test.ts",
       ],
       "scripts/plan-release-workflow-matrix.mjs": [
+        "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/release-workflow-matrix-plan.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
       ],
