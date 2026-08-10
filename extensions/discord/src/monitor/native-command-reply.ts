@@ -17,7 +17,14 @@ import type {
   TopLevelComponents,
 } from "../internal/discord.js";
 
-export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
+export function formatDiscordNativeCommandReplyWarning(params: {
+  commandName: string;
+  outcome: "delivery_failed" | "no_visible_reply";
+}): string {
+  return params.outcome === "delivery_failed"
+    ? `⚠️ Reply delivery failed for /${params.commandName}.`
+    : `⚠️ No visible reply was recorded for /${params.commandName}.`;
+}
 
 function isDiscordUnknownInteraction(error: unknown): boolean {
   if (!error || typeof error !== "object") {

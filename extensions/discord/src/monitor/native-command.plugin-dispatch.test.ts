@@ -297,6 +297,11 @@ function expectNoFollowUpContent(interaction: MockCommandInteraction, content: s
   expect(matched).toBe(false);
 }
 
+function expectNoNativeCommandWarning(interaction: MockCommandInteraction, commandName: string) {
+  expectNoFollowUpContent(interaction, `⚠️ No visible reply was recorded for /${commandName}.`);
+  expectNoFollowUpContent(interaction, `⚠️ Reply delivery failed for /${commandName}.`);
+}
+
 async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
   return createDiscordNativeCommand({
     command: {
@@ -1011,7 +1016,7 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expectFollowUpFields(interaction, {
-      content: "⚠️ Command produced no visible reply.",
+      content: "⚠️ No visible reply was recorded for /new.",
       ephemeral: true,
     });
     expect(interaction.reply).not.toHaveBeenCalled();
@@ -1100,7 +1105,7 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expectFollowUpFields(interaction, {
-      content: "⚠️ Command produced no visible reply.",
+      content: "⚠️ No visible reply was recorded for /new.",
       ephemeral: true,
     });
     expect(interaction.reply).not.toHaveBeenCalled();
@@ -1141,7 +1146,7 @@ describe("Discord native plugin command dispatch", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expectNoNativeCommandWarning(interaction, "new");
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
@@ -1292,7 +1297,7 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(interaction.followUp).toHaveBeenCalledTimes(2);
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expectNoNativeCommandWarning(interaction, "new");
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
@@ -1374,7 +1379,7 @@ describe("Discord native plugin command dispatch", () => {
       (interaction.followUp as unknown as MockCalls).mock.calls[1]?.[0],
       "empty fallback",
     );
-    expect(fallback.content).toBe("⚠️ Command produced no visible reply.");
+    expect(fallback.content).toBe("⚠️ Reply delivery failed for /new.");
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
@@ -1443,7 +1448,7 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({ content: "accepted final" }),
     );
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expectNoNativeCommandWarning(interaction, "new");
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
@@ -1484,7 +1489,7 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(interaction.followUp).toHaveBeenCalledTimes(2);
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expectNoNativeCommandWarning(interaction, "new");
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
@@ -1504,7 +1509,7 @@ describe("Discord native plugin command dispatch", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expectNoNativeCommandWarning(interaction, "new");
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
@@ -1537,8 +1542,47 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expectFollowUpFields(interaction, { content: "⚠️ Command produced no visible reply." });
+    expectFollowUpFields(interaction, {
+      content: "⚠️ No visible reply was recorded for /cron_jobs.",
+    });
     expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a direct plugin delivery failure with an empty-reply warning", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    const deliveryError = new Error("Discord delivery failed");
+    interaction.followUp.mockRejectedValue(deliveryError);
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "direct plugin output" }),
+      },
+      args: undefined,
+    } as never);
+    runtimeModuleMocks.executePluginCommand.mockResolvedValue({ text: "direct plugin output" });
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
+      {} as never,
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await expect(
+      (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown),
+    ).rejects.toBe(deliveryError);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectFollowUpFields(interaction, { content: "direct plugin output" });
+    expectNoNativeCommandWarning(interaction, "cron_jobs");
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
   it("suppresses the warning when a direct plugin command suppresses replies", async () => {
@@ -1570,7 +1614,7 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expectNoNativeCommandWarning(interaction, "cron_jobs");
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });

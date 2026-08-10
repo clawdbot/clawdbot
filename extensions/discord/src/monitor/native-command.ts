@@ -55,8 +55,8 @@ import {
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
-  DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
+  formatDiscordNativeCommandReplyWarning,
   hasRenderableReplyPayload,
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
@@ -590,7 +590,12 @@ async function dispatchDiscordCommandInteraction(params: {
       return { accepted: true, effectiveRoute };
     }
     if (!hasRenderableReplyPayload(pluginReply)) {
-      await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
+      await respond(
+        formatDiscordNativeCommandReplyWarning({
+          commandName,
+          outcome: "no_visible_reply",
+        }),
+      );
       return { accepted: true, effectiveRoute };
     }
     await deliverDiscordInteractionReply({
@@ -707,6 +712,7 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
     discordConfig,
     accountId,
+    commandName,
     interaction,
     ctxPayload,
     effectiveRoute,

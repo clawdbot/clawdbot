@@ -20,8 +20,8 @@ import type {
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
-  DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
+  formatDiscordNativeCommandReplyWarning,
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
@@ -43,6 +43,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
+  commandName: string;
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   ctxPayload: ReturnType<typeof buildDiscordNativeCommandContext>;
   effectiveRoute: NativeCommandEffectiveRoute;
@@ -166,7 +167,10 @@ export async function dispatchDiscordNativeAgentReply(params: {
 
   await safeDiscordInteractionCall("interaction empty fallback", async () => {
     const payload = {
-      content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
+      content: formatDiscordNativeCommandReplyWarning({
+        commandName: params.commandName,
+        outcome: finalReplyOutcome === "failed" ? "delivery_failed" : "no_visible_reply",
+      }),
       ephemeral: true,
     };
     if (params.preferFollowUp) {
