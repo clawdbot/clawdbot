@@ -16,6 +16,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
+import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
 type AgentHarnessIsolatedCompletionParams = Parameters<
@@ -60,7 +61,10 @@ vi.mock("./src/runtime.js", () => ({
 }));
 
 function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptParams {
-  return value as unknown as AgentHarnessAttemptParams;
+  return {
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    ...value,
+  } as unknown as AgentHarnessAttemptParams;
 }
 
 function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {

@@ -22,6 +22,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 
@@ -467,6 +468,7 @@ function makeParams(
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
     disableTools: true,
+    hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
     messages: [{ content: "hello", role: "user", timestamp: 1 }],
     model: {

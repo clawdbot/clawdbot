@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
 
 type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridgeImpl>[0];
@@ -26,17 +27,7 @@ type CopilotToolBridgeTestInput = Omit<CopilotToolBridgeInput, "attemptParams"> 
   attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
     Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
 };
-const testHostCapabilities = {
-  kind: "agent-harness-host-capability" as const,
-  version: 1 as const,
-  bindToolSurface: <T>(tools: T) => tools,
-  runBeforeToolCall: async ({ params }: { params: Record<string, unknown> }) => ({
-    blocked: false as const,
-    params,
-  }),
-  requestApproval: async () => undefined,
-  waitForApproval: async () => undefined,
-} as NonNullable<NonNullable<CopilotToolBridgeInput["attemptParams"]>["hostCapabilities"]>;
+const testHostCapabilities = createCopilotTestHostCapabilities();
 
 function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
   const { attemptParams, ...baseInput } = input;

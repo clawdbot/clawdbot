@@ -8,6 +8,7 @@ import type { AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams } from "o
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
 
 const liveToolState = vi.hoisted(() => ({
@@ -179,6 +180,7 @@ function createAttemptParams(params: {
     authProfileId: profileId,
     copilotHome: params.copilotHome,
     cwd: process.cwd(),
+    hostCapabilities: createCopilotTestHostCapabilities(),
     messages: [{ content: params.prompt, role: "user", timestamp: now }],
     model: {
       api: "openai-responses",
