@@ -3893,72 +3893,111 @@ NODE
     ).toBe(true);
   });
 
-  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
-    "keeps Mantis reaction ownership stable in %s",
-    (workflowPath) => {
-      const source = readFileSync(workflowPath, "utf8");
-      const workflow = parse(source);
-      const resolveJob = workflow.jobs.resolve_request;
-      const resolveSteps = resolveJob.steps as WorkflowStep[];
-      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
-      const cleanupSteps = cleanupJob.steps as WorkflowStep[];
-      const findStep = (steps: WorkflowStep[], id: string) =>
-        expectDefined(
-          steps.find((step) => step.id === id),
-          `${workflowPath} ${id}`,
-        );
-      const createTokenStep = findStep(resolveSteps, "mantis_reaction_token");
-      const createStep = findStep(resolveSteps, "add_reaction");
-      const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token");
-      const deleteStep = expectDefined(
-        cleanupSteps.find((step) => step.env?.REACTION_ID),
-        `${workflowPath} reaction cleanup step`,
+  it("keeps shared Mantis reaction ownership stable", () => {
+    const resolveWorkflowPath = ".github/workflows/mantis-resolve-request.yml";
+    const cleanupWorkflowPath = ".github/workflows/mantis-clear-reaction.yml";
+    const resolveSource = readFileSync(resolveWorkflowPath, "utf8");
+    const cleanupSource = readFileSync(cleanupWorkflowPath, "utf8");
+    const resolveWorkflow = parse(resolveSource);
+    const cleanupWorkflow = parse(cleanupSource);
+    const expectedWorkflowCallSecrets = {
+      MANTIS_GITHUB_APP_ID: { required: true },
+      MANTIS_GITHUB_APP_PRIVATE_KEY: { required: true },
+    };
+    const resolveJob = resolveWorkflow.jobs.resolve;
+    const cleanupJob = cleanupWorkflow.jobs.clear;
+    const resolveSteps = resolveJob.steps as WorkflowStep[];
+    const cleanupSteps = cleanupJob.steps as WorkflowStep[];
+    const findStep = (steps: WorkflowStep[], id: string, workflowPath: string) =>
+      expectDefined(
+        steps.find((step) => step.id === id),
+        `${workflowPath} ${id}`,
       );
+    const createTokenStep = findStep(resolveSteps, "mantis_reaction_token", resolveWorkflowPath);
+    const createStep = findStep(resolveSteps, "add_reaction", resolveWorkflowPath);
+    const cleanupTokenStep = findStep(cleanupSteps, "mantis_reaction_token", cleanupWorkflowPath);
+    const deleteStep = expectDefined(
+      cleanupSteps.find((step) => step.env?.REACTION_ID),
+      `${cleanupWorkflowPath} reaction cleanup step`,
+    );
 
-      expect(resolveJob.outputs.reaction_id, workflowPath).toBe(
-        "${{ steps.add_reaction.outputs.reaction_id }}",
-      );
-      for (const [label, tokenStep] of [
-        ["creation", createTokenStep],
-        ["cleanup", cleanupTokenStep],
-      ] as const) {
-        expect(tokenStep, `${workflowPath} ${label} token`).toMatchObject({
-          uses: CREATE_GITHUB_APP_TOKEN_V3,
-          with: {
-            "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
-            "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
-          },
-        });
-        expect(
-          Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
-          `${workflowPath} ${label} permissions`,
-        ).toEqual([["permission-issues", "write"]]);
-      }
-      expect(createStep, workflowPath).toMatchObject({
-        if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
-        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    expect(resolveWorkflow.on.workflow_call.secrets, resolveWorkflowPath).toEqual(
+      expectedWorkflowCallSecrets,
+    );
+    expect(cleanupWorkflow.on.workflow_call.secrets, cleanupWorkflowPath).toEqual(
+      expectedWorkflowCallSecrets,
+    );
+    expect(resolveJob.outputs.reaction_id, resolveWorkflowPath).toBe(
+      "${{ steps.add_reaction.outputs.reaction_id }}",
+    );
+    for (const [label, tokenStep] of [
+      ["creation", createTokenStep],
+      ["cleanup", cleanupTokenStep],
+    ] as const) {
+      expect(tokenStep, `${label} token`).toMatchObject({
+        uses: CREATE_GITHUB_APP_TOKEN_V3,
+        with: {
+          "app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+          "private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+        },
       });
-      expect(createStep.with?.script, workflowPath).toContain("createForIssueComment");
-      expect(createStep.with?.script, workflowPath).toContain(
-        'core.setOutput("reaction_id", String(reaction.id))',
-      );
-      expect(source.match(/createForIssueComment/gu), workflowPath).toHaveLength(1);
+      expect(
+        Object.entries(tokenStep.with ?? {}).filter(([key]) => key.startsWith("permission-")),
+        `${label} permissions`,
+      ).toEqual([["permission-issues", "write"]]);
+    }
+    expect(createStep, resolveWorkflowPath).toMatchObject({
+      if: "${{ steps.resolve.outputs.request_source == 'issue_comment' && steps.mantis_reaction_token.outcome == 'success' }}",
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    });
+    expect(createStep.with?.script, resolveWorkflowPath).toContain("createForIssueComment");
+    expect(createStep.with?.script, resolveWorkflowPath).toContain(
+      'core.setOutput("reaction_id", String(reaction.id))',
+    );
+    expect(resolveSource.match(/createForIssueComment/gu), resolveWorkflowPath).toHaveLength(1);
+    expect(cleanupJob.permissions, cleanupWorkflowPath).toEqual({});
+    expect(deleteStep, cleanupWorkflowPath).toMatchObject({
+      env: {
+        COMMENT_ID: "${{ inputs.comment-id }}",
+        REACTION_ID: "${{ inputs.reaction-id }}",
+      },
+      uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+      with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+    });
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain("deleteForIssueComment");
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain(
+      "Number(process.env.REACTION_ID)",
+    );
+    expect(deleteStep.with?.script, cleanupWorkflowPath).toContain("reaction_id: reactionId");
+    expect(JSON.stringify(cleanupJob), cleanupWorkflowPath).not.toMatch(
+      /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
+    );
+  });
+
+  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
+    "routes Mantis reaction ownership through shared workflows in %s",
+    (workflowPath) => {
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const resolveJob = workflow.jobs.resolve_request;
+      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
+      const expectedSecrets = {
+        MANTIS_GITHUB_APP_ID: "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        MANTIS_GITHUB_APP_PRIVATE_KEY: "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      };
+
+      expect(resolveJob.uses, workflowPath).toBe("./.github/workflows/mantis-resolve-request.yml");
+      expect(resolveJob.secrets, workflowPath).toEqual(expectedSecrets);
+      expect(cleanupJob.uses, workflowPath).toBe("./.github/workflows/mantis-clear-reaction.yml");
       expect(cleanupJob.if, workflowPath).toContain(
         "needs.resolve_request.outputs.reaction_id != ''",
       );
       expect(cleanupJob.permissions, workflowPath).toEqual({});
-      expect(deleteStep, workflowPath).toMatchObject({
-        env: { REACTION_ID: "${{ needs.resolve_request.outputs.reaction_id }}" },
-        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-        with: { "github-token": "${{ steps.mantis_reaction_token.outputs.token }}" },
+      expect(cleanupJob.with, workflowPath).toMatchObject({
+        "comment-id": "${{ format('{0}', github.event.comment.id) }}",
+        "reaction-id": "${{ needs.resolve_request.outputs.reaction_id }}",
       });
-      expect(deleteStep.with?.script, workflowPath).toContain("deleteForIssueComment");
-      expect(deleteStep.with?.script, workflowPath).toContain("Number(process.env.REACTION_ID)");
-      expect(deleteStep.with?.script, workflowPath).toContain("reaction_id: reactionId");
-      expect(JSON.stringify(cleanupJob), workflowPath).not.toMatch(
-        /listForIssueComment|\.filter\(|github-actions\[bot\]/u,
-      );
+      expect(cleanupJob.secrets, workflowPath).toEqual(expectedSecrets);
     },
   );
 
