@@ -346,11 +346,6 @@
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
   },
   {
-    "name": "resolveSessionTranscriptActiveLeafEntryId",
-    "wrapped": "src/config/sessions/session-accessor.sqlite-message-cut.ts",
-    "wrapper": "src/config/sessions/session-accessor.message-cut.ts"
-  },
-  {
     "name": "resolveStorePath",
     "wrapped": "src/config/sessions/paths.ts",
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
