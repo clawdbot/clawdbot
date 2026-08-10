@@ -3332,6 +3332,48 @@ describe("workboard controller", () => {
     expect(client.request.mock.calls[3]?.[1]).toHaveProperty("patch.execution", null);
   });
 
+  it("includes bounded chronological operator notes in the task prompt", async () => {
+    const comments = Array.from({ length: 13 }, (_, index) => ({
+      id: `comment-${index + 1}`,
+      body:
+        index === 1
+          ? `${"x".repeat(398)}🚀tail`
+          : index === 0
+            ? "Oldest omitted note"
+            : `Note ${index + 1}`,
+      createdAt: index + 1,
+    }));
+    const card = createWorkboardCard({
+      notes: "Original card instructions.",
+      metadata: { comments },
+    });
+    const running = createLinkedCard({ notes: card.notes, metadata: card.metadata });
+    const client = createClient({
+      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
+      "tasks.list": { tasks: [sampleTask] },
+      "workboard.cards.update": { card: running },
+    });
+
+    await startCard(client, { card });
+
+    const expectedMessage = [
+      "Work on this OpenClaw Workboard card: Build board",
+      "",
+      "Original card instructions.",
+      "",
+      "## Operator Notes",
+      `- ${"x".repeat(398)}…`,
+      ...Array.from({ length: 11 }, (_, index) => `- Note ${index + 3}`),
+      "",
+      "When done, summarize what changed and what remains.",
+    ].join("\n");
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({ message: expectedMessage }),
+    );
+  });
+
   it("keeps bounded task session labels on a UTF-16 boundary", async () => {
     const title = `${"a".repeat(499)}🚀tail`;
     const client = createClient({

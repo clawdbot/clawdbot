@@ -39,6 +39,10 @@ const WORKBOARD_ENGINE_MODELS = {
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
+// Match the dispatcher's 12 × 400 context budget so Start and Dispatch give
+// agents the same bounded operator instructions.
+const WORKBOARD_PROMPT_OPERATOR_NOTE_MAX_COUNT = 12;
+const WORKBOARD_PROMPT_OPERATOR_NOTE_MAX_CHARS = 400;
 
 function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
   return engine === "codex"
@@ -48,10 +52,25 @@ function engineModel(engine: WorkboardExecutionEngine | null | undefined): strin
       : undefined;
 }
 
+function capOperatorNote(body: string): string {
+  return body.length <= WORKBOARD_PROMPT_OPERATOR_NOTE_MAX_CHARS
+    ? body
+    : `${truncateUtf16Safe(body, WORKBOARD_PROMPT_OPERATOR_NOTE_MAX_CHARS - 1)}…`;
+}
+
 function buildCardPrompt(card: WorkboardCard): string {
   const lines = [`Work on this OpenClaw Workboard card: ${card.title}`];
   if (card.notes?.trim()) {
     lines.push("", card.notes.trim());
+  }
+  const operatorNotes =
+    card.metadata?.comments?.slice(-WORKBOARD_PROMPT_OPERATOR_NOTE_MAX_COUNT) ?? [];
+  if (operatorNotes.length > 0) {
+    lines.push(
+      "",
+      "## Operator Notes",
+      ...operatorNotes.map((note) => `- ${capOperatorNote(note.body)}`),
+    );
   }
   if (card.labels.length > 0) {
     lines.push("", `Labels: ${card.labels.join(", ")}`);
