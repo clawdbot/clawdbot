@@ -650,6 +650,42 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     presenceMonitor.start();
     presenceMonitorStarted = true;
   };
+  const installSlackPresenceRuntime = (identity: SlackInstallationIdentity) => {
+    if (
+      !presenceEventsEnabled ||
+      presenceMonitor ||
+      identity.kind === "degraded" ||
+      opts.abortSignal?.aborted
+    ) {
+      return;
+    }
+    presenceRequestAbort = new AbortController();
+    const options = resolveSlackLookupClientOptions(
+      { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
+      slackDispatcher,
+    );
+    options.fetch = withSlackPresenceLifecycleSignal(
+      options.fetch ?? globalThis.fetch,
+      presenceRequestAbort.signal,
+    );
+    const resolveClient = createSlackWorkspaceClientResolver({
+      appClient: new WebClient(token, options),
+      token,
+      clientOptions: options,
+      installationIdentity: identity,
+    });
+    presenceMonitor = createSlackPresenceMonitor({
+      accountId: account.accountId,
+      accountConfig: slackCfg.presenceEvents,
+      resolveClient: (teamId) => resolveClient(teamId).users,
+      cooldownStore: openSlackPresenceCooldownStore(),
+      log: runtime.log,
+      error: runtime.error,
+    });
+    if (runtimeStarted) {
+      startPresenceMonitor();
+    }
+  };
   const handleSlackMessage = createSlackMessageHandler({
     ctx,
     account,
@@ -790,25 +826,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       return await workspaceRuntimePromise;
     }
     workspaceRuntimePromise = (async () => {
-      if (presenceEventsEnabled) {
-        presenceRequestAbort = new AbortController();
-        const options = resolveSlackLookupClientOptions(
-          { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
-          slackDispatcher,
-        );
-        options.fetch = withSlackPresenceLifecycleSignal(
-          options.fetch ?? globalThis.fetch,
-          presenceRequestAbort.signal,
-        );
-        presenceMonitor = createSlackPresenceMonitor({
-          accountId: account.accountId,
-          accountConfig: slackCfg.presenceEvents,
-          client: new WebClient(token, options).users,
-          cooldownStore: openSlackPresenceCooldownStore(),
-          log: runtime.log,
-          error: runtime.error,
-        });
-      }
       registerSlackWorkspaceEvents({
         ctx,
         appHomeSlashCommandName,
@@ -831,7 +848,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ) {
       return;
     }
-    const resolveClient = createSlackApprovalClientResolver({
+    const resolveClient = createSlackWorkspaceClientResolver({
       appClient: app.client,
       token,
       clientOptions,
@@ -860,20 +877,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     approvalRuntimeInstalled = true;
   }
 
-  let enterprisePresenceWarningShown = false;
   async function installSlackRuntimeForIdentity(identity: SlackInstallationIdentity) {
     installSlackApprovalRuntime(identity);
+    installSlackPresenceRuntime(identity);
     if (identity.kind === "workspace") {
       await installSlackWorkspaceRuntime();
-      return;
-    }
-    if (
-      identity.kind === "enterprise" &&
-      presenceEventsEnabled &&
-      !enterprisePresenceWarningShown
-    ) {
-      enterprisePresenceWarningShown = true;
-      runtime.log?.(warn("slack presence events are unavailable for Enterprise Grid org installs"));
     }
   }
 
@@ -1090,7 +1098,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-function createSlackApprovalClientResolver(params: {
+function createSlackWorkspaceClientResolver(params: {
   appClient: WebClient;
   token: string;
   clientOptions: WebClientOptions;
@@ -1101,9 +1109,9 @@ function createSlackApprovalClientResolver(params: {
   }
   const clients = new Map<string, WebClient>();
   return (rawTeamId?: string) => {
-    const teamId = rawTeamId?.trim().toUpperCase();
+    const teamId = rawTeamId;
     if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
-      throw new Error("Slack Enterprise Grid approval delivery requires a valid teamId");
+      throw new Error("Slack Enterprise Grid workspace client requires a valid teamId");
     }
     const cached = clients.get(teamId);
     if (cached) {

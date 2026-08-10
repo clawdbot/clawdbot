@@ -395,6 +395,40 @@ describe("auth.test boot call", () => {
 });
 
 describe("presence polling transport", () => {
+  it("starts workspace-scoped presence polling for an Enterprise Grid org install", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          groupPolicy: "open",
+          presenceEvents: { mode: "on" },
+        },
+      },
+    });
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      user_id: "UENTERPRISE",
+      bot_id: "BENTERPRISE",
+      enterprise_id: "E1",
+      is_enterprise_install: true,
+    });
+    getSlackRuntime().state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStoreForTests<T>("slack", {
+        ...options,
+        env: options.env ?? process.env,
+      });
+    const runtimeLog = vi.fn();
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+    });
+    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+
+    expect(runtimeLog).toHaveBeenCalledWith("slack presence polling enabled for account default");
+    expect(runtimeLog).not.toHaveBeenCalledWith(
+      expect.stringContaining("presence events are unavailable"),
+    );
+    await stopSlackMonitor(monitor);
+  });
+
   it("aborts a stalled presence request when the provider stops", async () => {
     const events: string[] = [];
     for (const key of PROXY_ENV_KEYS) {

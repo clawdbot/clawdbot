@@ -288,7 +288,7 @@ installation's `auth.test` `user_id` and `bot_id` for that check.
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
 membership, reaction, pin, channel-created, channel-renamed, Block Kit action,
 modal, and configured shortcut and slash-command payloads plus
-workspace-qualified outbound messages. Add any shortcuts to the app manifest's
+workspace-qualified outbound messages and presence polling. Add any shortcuts to the app manifest's
 `features.shortcuts` list; OpenClaw accepts their callback IDs through the same
 interaction path. The manifest examples register the single `/openclaw`
 command; native command mode still requires the administrator-managed command
@@ -1901,9 +1901,9 @@ Slack does not send presence changes through the Events API or Socket Mode. Open
 - `auto`: monitor DMs, MPIMs, and Slack threads active in the last 24 hours with at most 8 observed human participants. Top-level channel sessions are excluded.
 - `on`: monitor the same conversations without the participant cap and include top-level channel sessions. Use a per-channel override to force or suppress one channel.
 
-OpenClaw polls at most 45 unique users per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
+OpenClaw polls at most 45 unique workspace-user pairs per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account, workspace, and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
 
-The bot token needs `users:read`, which is already included in the recommended manifest. Presence events are unavailable for Enterprise Grid org-wide installs.
+The bot token needs `users:read`, which is already included in the recommended manifest. Enterprise Grid org-wide installs create a workspace-scoped polling client only after an authorized event identifies that workspace; presence state, cooldowns, and delivery targets remain partitioned by workspace.
 
 ## Configuration reference
 
