@@ -8,14 +8,19 @@ read_when:
 title: "Session synchronization and attachment"
 ---
 
-OpenClaw keeps session state on the Gateway. The Control UI, TUI, CLI commands,
-mobile clients, and ACP all project that Gateway-owned state instead of keeping
-independent session copies. This lets you open one session in several clients
-without exporting or copying its transcript.
+OpenClaw keeps shared session state on the Gateway. The Control UI, mobile
+clients, ACP, `openclaw tui <target>`, and `openclaw attach <target>` project
+that Gateway-owned state instead of keeping independent session copies. This
+lets you open one session in several clients without exporting or copying its
+transcript.
 
 Use `openclaw tui` when you want to continue the conversation in a terminal.
 Use `openclaw attach` when you want a coding harness beside the session with a
 temporary, session-scoped MCP grant.
+
+Embedded local mode is separate: `openclaw tui --local`, `openclaw chat`, and
+`openclaw terminal` use the local agent runtime and cannot accept a session
+target. See the [TUI CLI reference](/cli/tui#notes) for local-mode behavior.
 
 ## One Gateway, many clients
 
@@ -94,7 +99,7 @@ separately when first pairing with a Gateway origin.
 
 ### Continue in the terminal
 
-Pass the URL or reference to `openclaw tui`:
+For Gateway-backed continuation, pass the URL or reference to `openclaw tui`:
 
 ```bash
 openclaw tui https://claw.example.com/dashboard/main/deploy-monitor-6db92d48
