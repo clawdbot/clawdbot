@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
@@ -17,8 +16,8 @@ function ownerInstallIsNewerThanRef(
   installedAt: string | undefined,
   ref: PersistedClawPackageRef,
 ): boolean {
-  const timestamp = parseDateTimestampMs(installedAt);
-  return timestamp !== undefined && timestamp > ref.updatedAtMs;
+  const timestamp = Date.parse(installedAt ?? "");
+  return Number.isFinite(timestamp) && timestamp > ref.updatedAtMs;
 }
 
 function persistedExtensionMatchesPreflight(

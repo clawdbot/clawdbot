@@ -11,7 +11,6 @@ import { stableStringify } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
-  parseDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -204,7 +203,10 @@ async function appendGooglePromptCacheEntry(
 }
 
 function parseExpireTimeMs(expireTime: string | undefined): number | null {
-  return parseDateTimestampMs(expireTime) ?? null;
+  if (!expireTime) {
+    return null;
+  }
+  return asDateTimestampMs(Date.parse(expireTime)) ?? null;
 }
 
 function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {

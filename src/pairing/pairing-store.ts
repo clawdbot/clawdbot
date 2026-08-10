@@ -1,6 +1,5 @@
 // Persists pairing challenges and approved channel account bindings in shared SQLite state.
 import crypto from "node:crypto";
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -49,7 +48,11 @@ export function resolveChannelPairingRequestId(
 }
 
 function parseTimestamp(value: string | undefined): number | null {
-  return parseDateTimestampMs(value) ?? null;
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isExpired(entry: PairingRequest, nowMs: number): boolean {

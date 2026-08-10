@@ -1,4 +1,3 @@
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
@@ -629,7 +628,15 @@ function readEventTimestamp(event: unknown): number | undefined {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
     return undefined;
   }
-  return parseDateTimestampMs((event as { timestamp?: unknown }).timestamp);
+  const value = (event as { timestamp?: unknown }).timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export function redactTranscriptMessageForStorage<TMessage>(

@@ -1,4 +1,3 @@
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
@@ -134,8 +133,8 @@ function ownerInstallIsNewer(
   installedAt: string | number | undefined,
   packageRef: PersistedClawPackageRef,
 ): boolean {
-  const timestamp = parseDateTimestampMs(installedAt);
-  return timestamp !== undefined && timestamp > packageRef.updatedAtMs;
+  const timestamp = typeof installedAt === "number" ? installedAt : Date.parse(installedAt ?? "");
+  return Number.isFinite(timestamp) && timestamp > packageRef.updatedAtMs;
 }
 
 function pluginIntegrityMatches(actual: string | undefined, expected: string): boolean {

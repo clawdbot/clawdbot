@@ -1,7 +1,6 @@
 /**
  * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
  */
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
@@ -170,6 +169,19 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   return findLatestCurrentAttemptUsageSnapshot(params);
 }
 
+function parsePromptCacheTouchTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 /**
  * Resolves the effective prompt-cache touch timestamp for the current assistant
  * turn. Cache-read/write usage is required before an assistant timestamp can
@@ -186,7 +198,11 @@ export function resolvePromptCacheTouchTimestamp(params: {
   if (!hasCacheUsage) {
     return params.fallbackLastCacheTouchAt ?? null;
   }
-  return parseDateTimestampMs(params.assistantTimestamp) ?? params.fallbackLastCacheTouchAt ?? null;
+  return (
+    parsePromptCacheTouchTimestamp(params.assistantTimestamp) ??
+    params.fallbackLastCacheTouchAt ??
+    null
+  );
 }
 
 /**

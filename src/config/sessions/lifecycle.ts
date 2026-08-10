@@ -1,8 +1,5 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
-import {
-  asDateTimestampMs,
-  parseDateTimestampMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
@@ -94,7 +91,13 @@ function resolvePositiveTimestamp(value: number | undefined): number | undefined
 }
 
 function parseTimestampMs(value: unknown): number | undefined {
-  return resolveTimestamp(parseDateTimestampMs(value));
+  if (typeof value === "number") {
+    return resolveTimestamp(value);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  return resolveTimestamp(Date.parse(value));
 }
 
 function readSessionHeaderStartedAtMs(params: {

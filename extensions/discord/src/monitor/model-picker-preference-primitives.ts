@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/model-ref-parse";
-import { parseDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 
 export function normalizeModelRef(raw?: string): string | null {
   const value = raw?.trim();
@@ -45,5 +44,6 @@ export function buildPreferenceModelKey(scopeKey: string, modelRef: string): str
 }
 
 export function preferenceTimestampMs(value: unknown): number {
-  return typeof value === "string" ? (parseDateTimestampMs(value) ?? 0) : 0;
+  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
 }

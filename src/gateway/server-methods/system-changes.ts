@@ -1,5 +1,4 @@
 // Reads the bounded system/config journals as one admin-facing change history.
-import { parseDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   ErrorCodes,
   errorShape,
@@ -118,7 +117,8 @@ function transitionKey(before: string | null | undefined, after: string | null |
 }
 
 function recordTime(value: string, fallback: number): number {
-  return parseDateTimestampMs(value) ?? fallback;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : fallback;
 }
 
 function classifyConfigWriteSource(record: Extract<ConfigAuditRecord, { event: "config.write" }>) {
