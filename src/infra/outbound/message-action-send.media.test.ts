@@ -283,74 +283,211 @@ describe("runMessageAction media behavior", () => {
     vi.mocked(loadWebMedia).mockReset();
     vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
   });
-  it("rejects plugin-declined attachment actions before loading media", async () => {
-    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
-    const textOnlyPlugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({
-        id: "textonly",
-        label: "TextOnly",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true }),
-          isConfigured: () => true,
-        },
-      }),
-      outbound: {
-        deliveryMode: "direct",
-        resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
-        sendText: async () => ({ channel: "textonly", messageId: "msg-test" }),
-        sendMedia: async () => ({ channel: "textonly", messageId: "msg-test" }),
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        supportsAction: ({ action }) => action === "send",
-        handleAction,
-      },
-    };
-    setTestPlugin(textOnlyPlugin, "textonly");
-    vi.mocked(loadWebMedia).mockResolvedValue({
-      buffer: Buffer.from("should not load"),
-      contentType: "image/png",
-      kind: "image",
-      fileName: "pic.png",
-    });
-
-    await expect(
-      runMessageAction({
-        cfg: { channels: { textonly: { enabled: true } } } as OpenClawConfig,
-        action: "upload-file",
-        params: {
-          channel: "textonly",
-          target: "room-1",
-          media: "https://example.com/pic.png",
-        },
-      }),
-    ).rejects.toThrow("Message action upload-file not supported for channel textonly.");
-
-    expect(loadWebMedia).not.toHaveBeenCalled();
-    expect(handleAction).not.toHaveBeenCalled();
-  });
-
-  it("does not stage buffer-only send attachments before target validation passes", async () => {
+  it("forwards asVoice from send actions into core delivery", async () => {
     setTestPlugin(workspacePlugin, "workspace");
 
-    await withTempOpenClawStateDir(async (stateDir) => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "voice note",
+        media: "https://example.com/voice.ogg",
+        asVoice: true,
+      },
+    });
+
+    expect(result.kind).toBe("send");
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.asVoice).toBe(true);
+  });
+
+  it("copies the normalized idempotency key into send execution context", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+        idempotencyKey: " run-1:message-tool:send-1:fingerprint ",
+      },
+    });
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
+      "run-1:message-tool:send-1:fingerprint",
+    );
+    expect(requireRecord(sendArgs.ctx).plugin).toBe(workspacePlugin);
+    expect(channelResolutionMocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it("materializes buffer-only send attachments into outbound media paths", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await withTempOpenClawStateDir(async () => {
+      const result = await runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "12345678",
+          buffer: Buffer.from("artifact bytes").toString("base64"),
+          filename: "artifact.txt",
+          contentType: "text/plain",
+        },
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBeTypeOf("string");
+      await expect(fs.readFile(String(result.sendResult?.mediaUrl), "utf8")).resolves.toBe(
+        "artifact bytes",
+      );
+
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      expect(sendParams.buffer).toBeUndefined();
+      expect(sendArgs.mediaUrl).toBe(result.sendResult?.mediaUrl);
+      expect(sendArgs.mediaUrls).toEqual([result.sendResult?.mediaUrl]);
+    });
+  });
+
+  it("rejects oversized buffer-only send attachments before channel dispatch", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await withTempOpenClawStateDir(async () => {
       await expect(
         runMessageAction({
           cfg: workspaceConfig,
           action: "send",
           params: {
             channel: "workspace",
-            target: "",
-            buffer: Buffer.from("orphan bytes").toString("base64"),
-            filename: "orphan.txt",
-            contentType: "text/plain",
+            target: "12345678",
+            message: "too large",
+            buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+            contentType: "application/octet-stream",
           },
         }),
-      ).rejects.toThrow(/target/i);
+      ).rejects.toThrow(/too large|limit/i);
 
       expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
+    });
+  });
+
+  it("previews dry-run buffer-only sends without writing outbound media files", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          buffer: Buffer.from("preview bytes").toString("base64"),
+          filename: "preview.txt",
+          contentType: "text/plain",
+        },
+      });
+
+      expect(result.kind).toBe("send");
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      expect(sendParams.buffer).toBeUndefined();
+      expect(sendArgs.mediaUrl).toBe("buffer://message-send/attachment");
+      expect(sendArgs.mediaUrls).toEqual(["buffer://message-send/attachment"]);
       await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
+  });
+
+  it("treats top-level image param as a send media source", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "1/7",
+          image: "/workspace/photo.jpg",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "photo.jpg"));
+      expect(result.sendResult?.mediaUrls).toEqual([path.join(sandboxDir, "photo.jpg")]);
+    });
+  });
+
+  it("sends structured attachments as media urls", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "track ready",
+          attachments: [{ path: "./song.mp3" }, { filePath: "/workspace/cover.png" }],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "song.mp3"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "song.mp3"),
+        path.join(sandboxDir, "cover.png"),
+      ]);
+    });
+  });
+
+  it("sends structured mediaUrls arrays", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          mediaUrls: ["./one.png", "/workspace/two.png"],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "one.png"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
+      expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
+      expect(sendParams.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
     });
   });
 });
