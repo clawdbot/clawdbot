@@ -6,7 +6,6 @@ import {
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
-  dependencyGuardCommentHeadSha,
   dependencyGuardTrustedActorCandidates,
   dependencyFieldChanges,
   dependencyOverrideExpectedSha,
@@ -330,7 +329,6 @@ describe("dependency guard script", () => {
       }),
     };
 
-    expect(dependencyGuardCommentHeadSha(blockedComment)).toBe(headSha);
     expect(dependencyOverrideExpectedSha(blockedComment, headSha)).toBe(headSha);
     expect(dependencyOverrideExpectedSha(staleBlockedComment, headSha)).toBeNull();
   });
@@ -344,10 +342,26 @@ describe("dependency guard script", () => {
       }),
     };
 
-    expect(dependencyGuardCommentHeadSha(authorizedComment)).toBe(headSha);
     expect(isDependencyGuardAuthorizedForHead(authorizedComment, headSha)).toBe(true);
     expect(isDependencyGuardAuthorizedForHead(authorizedComment, staleSha)).toBe(false);
     expect(dependencyOverrideExpectedSha(authorizedComment, headSha)).toBeNull();
+  });
+
+  it("does not infer guard state from rendered dependency paths", () => {
+    const body = renderBlockedDependencyComment({
+      baseBranch: "main",
+      headSha,
+      lockfileChanges: [
+        `xApproved SHA: \`${staleSha}\`pnpm-lock.yaml`,
+        "x### Dependency graph change authorizedpnpm-lock.yaml",
+        "x### Dependency graph changes notedpnpm-lock.yaml",
+      ],
+      dependencyManifestChanges: [],
+    });
+
+    expect(dependencyOverrideExpectedSha({ body }, headSha)).toBe(headSha);
+    expect(isDependencyGuardAuthorizedForHead({ body }, headSha)).toBe(false);
+    expect(isDependencyGuardTrustedForHead({ body }, headSha)).toBe(false);
   });
 
   it("trusts only configured dependency guard marker comment authors", () => {
