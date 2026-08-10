@@ -87,6 +87,40 @@ describe("skill_workshop tool", () => {
     );
   });
 
+  it("reads a full skill above the ordinary 40KB Workshop limit", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-full-read-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "large", description: "Large procedure", body: "x".repeat(40_001) },
+    ]);
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      env: testState.env,
+      collectionReconcile: { approvedSkillNames: new Set(["large"]) },
+    });
+
+    const read = await tool.execute("read", { action: "read", skill_name: "large" });
+    expect(read.details).toMatchObject({ skillKey: "large", truncated: false });
+    await expect(
+      tool.execute("reconcile", {
+        action: "reconcile",
+        collection: [{ action: "keep", name: "large" }],
+      }),
+    ).resolves.toMatchObject({ details: { kept: ["large"] } });
+  });
+
+  it("keeps reconcile unavailable to ordinary off and propose sessions", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-policy-");
+    for (const mode of ["off", "propose"] as const) {
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { workshop: { autonomous: { mode } } } },
+      });
+      await expect(
+        tool.execute("reconcile", { action: "reconcile", collection: [] }),
+      ).rejects.toThrow("only an isolated collection review");
+    }
+  });
+
   it("describes action selection and pending-proposal discovery in its schema", () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);

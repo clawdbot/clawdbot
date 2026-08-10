@@ -81,7 +81,6 @@ const SKILL_WORKSHOP_ACTIONS = [
   "apply",
   "reject",
   "quarantine",
-  "reconcile",
   "restore_collection",
 ] as const;
 function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
@@ -133,7 +132,7 @@ function buildSkillWorkshopToolSchema(
             ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (required before patch or update); update = full-body rewrite of an existing live skill after reading it;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
             : collectionOnly
               ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; reconcile = atomically clean the writable skill collection; restore_collection = restore the collection backup retained by the last reconcile; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+              : "create = new skill; read = existing live skill; patch = targeted find-and-replace after reading; update = full-body rewrite; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
         },
       ),
       proposal_id: Type.Optional(
@@ -331,7 +330,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           throw new ToolInputError(`skill is outside this collection review: ${skill.skillKey}`);
         }
         const readMaxChars = options.collectionReconcile
-          ? workshopConfig.maxSkillBytes
+          ? MAX_RECONCILED_SKILL_BYTES
           : SKILL_WORKSHOP_READ_MAX_CHARS;
         const truncated = skill.content.length > readMaxChars;
         if (options.collectionReconcile) {
@@ -367,6 +366,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "reconcile") {
+        if (!options.collectionReconcile) {
+          throw new ToolInputError("only an isolated collection review can reconcile skills");
+        }
         return await executeSkillCollectionReconcile({
           toolParams: params,
           workspaceDir: options.workspaceDir,

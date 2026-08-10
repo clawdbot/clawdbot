@@ -134,6 +134,33 @@ export async function reconcileSkillCollection(params: {
       }
       const plan = validatePlan(params.plan, current, params.readSkillHashes);
       await assertReadsAreCurrent(current, params.readSkillHashes);
+      if (plan.every((entry) => entry.action === "keep")) {
+        clearCuratedSkillLifecycle(
+          current.map((skill) => skill.filePath),
+          params.env ? { env: params.env } : {},
+        );
+        const backupRoot = collectionBackupRoot(workspaceDir, params.env);
+        let backupId = await latestCommittedBackupId(backupRoot);
+        if (!backupId) {
+          const backup = await createCollectionBackup({
+            workspaceDir,
+            current,
+            plan,
+            env: params.env,
+          });
+          await commitCollectionBackup(workspaceDir, backup);
+          backupId = backup.manifest.id;
+        }
+        return {
+          result: {
+            backupId,
+            kept: plan.map((entry) => entry.name),
+            written: [],
+            dropped: [],
+          },
+          changes: [],
+        };
+      }
       const prepared = await prepareWrites({
         workspaceDir,
         current,
@@ -141,7 +168,6 @@ export async function reconcileSkillCollection(params: {
         config: params.config,
       });
       const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
-      await pruneOlderBackups(backup.backupRoot, backup.manifest.id);
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
       if (shouldDispatch) {
@@ -175,15 +201,7 @@ export async function reconcileSkillCollection(params: {
           current.map((skill) => skill.filePath),
           params.env ? { env: params.env } : {},
         );
-        for (const relativeDir of backup.manifest.resultSkillDirs) {
-          backup.manifest.resultSkillHashes[relativeDir] = await readSkillProposalTargetTreeSha256(
-            path.join(workspaceDir, relativeDir),
-          );
-        }
-        await fs.writeFile(
-          path.join(backup.backupDir, "manifest.json"),
-          JSON.stringify(backup.manifest, null, 2),
-        );
+        await commitCollectionBackup(workspaceDir, backup);
       } catch (error) {
         try {
           await restoreCollectionBackup({
@@ -197,8 +215,17 @@ export async function reconcileSkillCollection(params: {
             { cause: restoreError },
           );
         }
+        if (await pathExists(backup.backupDir)) {
+          await removePathWithinRoot({
+            rootDir: backup.backupRoot,
+            relativePath: path.basename(backup.backupDir),
+            recursive: true,
+            force: true,
+          });
+        }
         throw error;
       }
+      await pruneOlderBackups(backup.backupRoot, backup.manifest.id);
       bumpSkillsSnapshotVersion({ reason: "workshop" });
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
@@ -261,11 +288,7 @@ export async function restoreLatestSkillCollectionBackup(params: {
       if (!(await pathExists(backupRoot))) {
         throw new Error("No skill collection backup is available.");
       }
-      const backupId = (await fs.readdir(backupRoot, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .toSorted()
-        .at(-1);
+      const backupId = await latestCommittedBackupId(backupRoot);
       if (!backupId) {
         throw new Error("No skill collection backup is available.");
       }
@@ -472,12 +495,14 @@ async function createCollectionBackup(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{
   backupDir: string;
+  committedBackupDir: string;
   backupRoot: string;
   manifest: CollectionBackupManifest;
 }> {
   const backupRoot = collectionBackupRoot(params.workspaceDir, params.env);
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
-  const backupDir = path.join(backupRoot, id);
+  const backupDir = path.join(backupRoot, `.pending-${id}`);
+  const committedBackupDir = path.join(backupRoot, id);
   const skillDirs = [
     ...new Set(params.current.map((skill) => path.relative(params.workspaceDir, skill.baseDir))),
   ].toSorted();
@@ -513,7 +538,23 @@ async function createCollectionBackup(params: {
     );
   }
   await fs.writeFile(path.join(backupDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-  return { backupDir, backupRoot, manifest };
+  return { backupDir, committedBackupDir, backupRoot, manifest };
+}
+
+async function commitCollectionBackup(
+  workspaceDir: string,
+  backup: Awaited<ReturnType<typeof createCollectionBackup>>,
+): Promise<void> {
+  for (const relativeDir of backup.manifest.resultSkillDirs) {
+    backup.manifest.resultSkillHashes[relativeDir] = await readSkillProposalTargetTreeSha256(
+      path.join(workspaceDir, relativeDir),
+    );
+  }
+  await fs.writeFile(
+    path.join(backup.backupDir, "manifest.json"),
+    JSON.stringify(backup.manifest, null, 2),
+  );
+  await fs.rename(backup.backupDir, backup.committedBackupDir);
 }
 
 async function restoreCollectionBackup(params: {
@@ -639,6 +680,17 @@ function collectionBackupRoot(workspaceDir: string, env?: NodeJS.ProcessEnv): st
     BACKUP_REL_DIR,
     sha256Hex(path.resolve(workspaceDir)).slice(0, 16),
   );
+}
+
+async function latestCommittedBackupId(backupRoot: string): Promise<string | undefined> {
+  if (!(await pathExists(backupRoot))) {
+    return undefined;
+  }
+  return (await fs.readdir(backupRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".pending-"))
+    .map((entry) => entry.name)
+    .toSorted()
+    .at(-1);
 }
 
 async function pruneOlderBackups(backupRoot: string, keepId: string): Promise<void> {
