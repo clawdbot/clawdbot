@@ -107,7 +107,11 @@ const toolCall = output.content.find((block) => block.type === "toolCall") as
   | { type: "toolCall"; name: string; arguments: Record<string, unknown> }
   | undefined;
 
-const body = String(toolcallEndArgs?.body ?? toolCall?.arguments?.body ?? "");
+function asStringArg(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+const body = asStringArg(toolcallEndArgs?.body ?? toolCall?.arguments?.body);
 const proof = {
   proof: "streamSimpleBedrock live large toolcall_end",
   modelId: MODEL_ID,
@@ -120,8 +124,8 @@ const proof = {
   toolcallEndArgKeys: toolcallEndArgs ? Object.keys(toolcallEndArgs) : [],
   lastPartialBodyLength: lastPartialBodyLen,
   finalized: body ? redactBody(body) : null,
-  matchesToolCallBlock: body === String(toolCall?.arguments?.body ?? ""),
-  ok: Boolean(body.length >= TARGET_BODY_CHARS && toolCall?.name === "write_document"),
+  matchesToolCallBlock: body === asStringArg(toolCall?.arguments?.body),
+  ok: body.length >= TARGET_BODY_CHARS && toolCall?.name === "write_document",
 };
 
 console.log(JSON.stringify(proof, null, 2));
