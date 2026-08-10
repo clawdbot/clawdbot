@@ -52,12 +52,12 @@ export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse
   destroyed: boolean;
   emit: (eventName: string) => boolean;
 } {
+  let headersSent = false;
   const res = Object.assign(new EventEmitter(), {
     status: 0,
     body: "" as string | Buffer,
     headers: {} as Record<string, string>,
     destroyed: false,
-    headersSent: false,
     setHeader(name: string, value: string) {
       res.headers[name.toLowerCase()] = value;
     },
@@ -66,7 +66,7 @@ export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse
     },
     end(body?: string | Buffer) {
       res.body = body ?? "";
-      res.headersSent = true;
+      headersSent = true;
       if (options.finishOnEnd !== false) {
         queueMicrotask(() => res.emit("finish"));
       }
@@ -92,6 +92,11 @@ export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse
     set(value: number) {
       res.status = value;
     },
+  });
+  Object.defineProperty(res, "headersSent", {
+    configurable: true,
+    enumerable: true,
+    get: () => headersSent,
   });
   return res;
 }
