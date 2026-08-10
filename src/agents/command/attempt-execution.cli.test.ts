@@ -730,7 +730,6 @@ describe("CLI attempt execution", () => {
             DELETE FROM auth_profile_store;
             DELETE FROM auth_profile_state;
             DELETE FROM cache_entries;
-            DELETE FROM state_leases;
           `);
         },
         database,
