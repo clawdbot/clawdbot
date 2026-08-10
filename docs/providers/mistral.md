@@ -99,9 +99,9 @@ Use Voxtral for batch audio transcription through the media understanding pipeli
 {
   tools: {
     media: {
+      models: [{ provider: "mistral", model: "voxtral-mini-latest", capabilities: ["audio"] }],
       audio: {
         enabled: true,
-        models: [{ provider: "mistral", model: "voxtral-mini-latest" }],
       },
     },
   },
