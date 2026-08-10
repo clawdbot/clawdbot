@@ -1,22 +1,22 @@
 // Proves the bundled Workboard closeout adapter reaches the real in-process Gateway router
 // without opening a socket or sending a live transport message.
 import { describe, expect, it, vi } from "vitest";
-import { createRuntimeConversationSend } from "../extensions/workboard/src/closeout-tool.js";
+import { createRuntimeConversationSend } from "./closeout-tool.js";
 import {
   createCloseoutTracker,
   type CloseoutRecord,
   type CloseoutTrackerStore,
-} from "../extensions/workboard/src/closeout-tracker.js";
-import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+} from "./closeout-tracker.js";
+import type { GatewayRequestContext } from "../../../src/gateway/server-methods/types.js";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
-} from "../src/plugins/runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "../src/plugins/runtime/index.js";
+} from "../../../src/plugins/runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "../../../src/plugins/runtime/index.js";
 
 const runGatewayConversationSend = vi.hoisted(() => vi.fn());
 
-vi.mock("../src/gateway/conversation-send.js", () => ({ runGatewayConversationSend }));
+vi.mock("../../../src/gateway/conversation-send.js", () => ({ runGatewayConversationSend }));
 
 function gatewayContext(): GatewayRequestContext {
   return {
