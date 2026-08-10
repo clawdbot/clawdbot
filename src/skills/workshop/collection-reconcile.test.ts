@@ -404,6 +404,54 @@ describe("skill collection reconciliation", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
   });
 
+  it("rolls back a failed restore so the backup remains retryable", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "procedure", description: "Original procedure", body: "# Original\n" },
+    ]);
+    await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [
+        {
+          action: "write",
+          name: "procedure",
+          description: "Clean procedure",
+          content: "# Clean\n",
+        },
+      ],
+    });
+    const skillDir = path.join(workspaceDir, "skills", "procedure");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const backupRoot = path.join(testState.stateDir, "skill-workshop", "collection-backups");
+    const originalCopy = fs.cp.bind(fs);
+    let failed = false;
+    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      if (
+        !failed &&
+        String(source).startsWith(backupRoot) &&
+        !String(source).includes(`${path.sep}.restore-`) &&
+        path.resolve(String(destination)) === path.resolve(skillDir)
+      ) {
+        failed = true;
+        throw new Error("forced restore copy failure");
+      }
+      await originalCopy(source, destination, options);
+    });
+
+    try {
+      await expect(
+        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+      ).rejects.toThrow("forced restore copy failure");
+    } finally {
+      copySpy.mockRestore();
+    }
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Clean");
+
+    await restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
+  });
+
   it("restores project-agent skills from their writable root", async () => {
     const skillDir = path.join(workspaceDir, ".agents", "skills", "project-procedure");
     await writeSkill({

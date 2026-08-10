@@ -30,7 +30,11 @@ import {
 } from "./collection-paths.js";
 import { validateSkillCollectionPlan } from "./collection-plan.js";
 import { recordSkillCollectionReviewSuccess } from "./collection-review-state.js";
-import { rollbackSkillCollectionMutation } from "./collection-rollback.js";
+import {
+  removeSkillCollectionDirectory,
+  restoreSkillCollectionBackupTransaction,
+  rollbackSkillCollectionMutation,
+} from "./collection-rollback.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
@@ -242,7 +246,7 @@ export async function reconcileSkillCollection(params: {
             continue;
           }
           const skill = currentByName.get(entry.name)!;
-          await removeSkillDirectory(workspaceDir, skill.baseDir);
+          await removeSkillCollectionDirectory(workspaceDir, skill.baseDir);
           droppedSkills.push(skill);
         }
         await commitCollectionBackup(workspaceDir, backup);
@@ -366,7 +370,12 @@ export async function restoreLatestSkillCollectionBackup(params: {
           );
         }
       }
-      await restoreCollectionBackup({ workspaceDir, backupDir, manifest });
+      await restoreSkillCollectionBackupTransaction({
+        workspaceDir,
+        backupDir,
+        skillDirs: manifest.skillDirs,
+        resultSkillDirs: manifest.resultSkillDirs,
+      });
       bumpSkillsSnapshotVersion({ reason: "workshop" });
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
@@ -559,32 +568,6 @@ async function discardPendingCollectionBackup(
   });
 }
 
-async function restoreCollectionBackup(params: {
-  workspaceDir: string;
-  backupDir: string;
-  manifest: CollectionBackupManifest;
-}): Promise<void> {
-  const removeDirs = new Set([
-    ...params.manifest.skillDirs.map((relativeDir) => path.join(params.workspaceDir, relativeDir)),
-    ...params.manifest.resultSkillDirs.map((relativeDir) =>
-      path.join(params.workspaceDir, relativeDir),
-    ),
-  ]);
-  for (const skillDir of [...removeDirs].toSorted((left, right) => right.length - left.length)) {
-    if (await pathExists(skillDir)) {
-      await removeSkillDirectory(params.workspaceDir, skillDir);
-    }
-  }
-  for (const relativeDir of params.manifest.skillDirs) {
-    await fs.mkdir(path.dirname(path.join(params.workspaceDir, relativeDir)), { recursive: true });
-    await fs.cp(
-      path.join(params.backupDir, "workspace", relativeDir),
-      path.join(params.workspaceDir, relativeDir),
-      { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true },
-    );
-  }
-}
-
 async function readCollectionBackupManifest(params: {
   backupDir: string;
   backupId: string;
@@ -692,17 +675,4 @@ async function latestCommittedBackupId(backupRoot: string): Promise<string | und
     .map((entry) => entry.name)
     .toSorted()
     .at(-1);
-}
-
-async function removeSkillDirectory(workspaceDir: string, skillDir: string): Promise<void> {
-  const relativePath = path.relative(workspaceDir, skillDir);
-  if (!relativePath || path.isAbsolute(relativePath) || relativePath.startsWith(`..${path.sep}`)) {
-    throw new Error(`Skill directory must be inside the workspace: ${skillDir}`);
-  }
-  await removePathWithinRoot({
-    rootDir: workspaceDir,
-    relativePath,
-    recursive: true,
-    force: false,
-  });
 }
