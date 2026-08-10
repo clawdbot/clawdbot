@@ -116,6 +116,34 @@ export function readSessionTranscriptActiveLeafEvents(
   });
 }
 
+/** Classifies one entry against the authoritative active path and leaf. */
+export function readSessionTranscriptActivePathEntryRelation(
+  scope: SessionTranscriptReadScope,
+  entryId: string | null,
+): "exact" | "ancestor" | "off-path" {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    if (projection.state.leafEventId === entryId || entryId === null) {
+      return projection.state.leafEventId === entryId ? "exact" : "off-path";
+    }
+    const db = getActiveTranscriptKysely(projection.database);
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .select("identity.seq")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_id", "=", entryId)
+        .limit(1),
+    );
+    return row ? "ancestor" : "off-path";
+  });
+}
+
 /** Reads a bounded tail from the materialized active path, including control events. */
 export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,
