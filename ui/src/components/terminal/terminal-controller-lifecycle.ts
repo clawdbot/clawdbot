@@ -58,6 +58,7 @@ export async function replaceTerminalControllerForReplay(params: {
   // hidden so Ghostty fits the authoritative replay to the real terminal grid.
   replacementHost.style.display = "block";
   replacementHost.style.visibility = "hidden";
+  replacementHost.inert = true;
   previousHost.before(replacementHost);
 
   let replacement: GhosttyTerminalController | undefined;
@@ -108,6 +109,7 @@ export async function replaceTerminalControllerForReplay(params: {
   const shouldFocusReplacement =
     previousTerminalOwnsCurrentFocus || (previousTerminalOwnedFocus && replacementOwnsCurrentFocus);
   const shouldRestorePreviousFocus = !previousTerminalOwnedFocus && replacementOwnsCurrentFocus;
+  replacementHost.inert = false;
   replacement.setReadOnly(previousController.readOnly);
   replacementHost.style.display = previousHost.style.display;
   replacementHost.style.visibility = previousHost.style.visibility;

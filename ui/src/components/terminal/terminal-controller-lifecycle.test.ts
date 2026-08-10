@@ -29,6 +29,7 @@ describe("replaceTerminalControllerForReplay", () => {
         expect(options).toEqual({ readOnly: true });
         expect(parent.style.display).toBe("block");
         expect(parent.style.visibility).toBe("hidden");
+        expect(parent.inert).toBe(true);
         parent.tabIndex = 0;
         parent.focus();
         previousHost.remove();

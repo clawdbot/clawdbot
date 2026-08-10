@@ -273,6 +273,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(controllers[2].setReadOnly).toHaveBeenCalledWith(false);
     expect(panel.shadowRoot?.activeElement).toBe(newerExternalInput);
     expect(controllerParents[2]?.style.display).toBe("none");
+    expect(controllerParents[2]?.inert).toBe(false);
 
     listener?.({
       event: "terminal.data",
@@ -314,6 +315,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(panel.shadowRoot?.activeElement).toBe(controllerParents[3]);
     expect(controllers[3].terminal.focus).not.toHaveBeenCalled();
     expect(controllerParents[3]?.style.display).toBe("block");
+    expect(controllerParents[3]?.inert).toBe(false);
     expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(3);
   });
 });
