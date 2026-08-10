@@ -829,47 +829,6 @@ function runConcurrentSchemaProbe(params: {
 }): string[] {
   const workerSource = `
     import fs from "node:fs";
-    import { DatabaseSync } from "node:sqlite";
-
-    const pageBarrierDir = process.env.OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR;
-    if (pageBarrierDir) {
-      const pageReadyPath = process.env.OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH;
-      const workerCount = Number(process.env.OPENCLAW_SCHEMA_TEST_WORKER_COUNT);
-      const originalPrepare = DatabaseSync.prototype.prepare;
-      const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
-      DatabaseSync.prototype.prepare = function (sql) {
-        const statement = originalPrepare.call(this, sql);
-        if (sql !== "PRAGMA page_count") {
-          return statement;
-        }
-        return new Proxy(statement, {
-          get(target, property) {
-            if (property === "get") {
-              return (...args) => {
-                const row = target.get(...args);
-                if (row?.page_count !== 0) {
-                  throw new Error("fresh database acquired pages before the initialization barrier");
-                }
-                fs.writeFileSync(pageReadyPath, "ready");
-                const deadline = Date.now() + 15_000;
-                while (
-                  fs.readdirSync(pageBarrierDir).filter((name) => name.startsWith("page-ready-"))
-                    .length < workerCount
-                ) {
-                  if (Date.now() >= deadline) {
-                    throw new Error("timed out waiting for fresh database page-count barrier");
-                  }
-                  Atomics.wait(sleepBuffer, 0, 0, 2);
-                }
-                return row;
-              };
-            }
-            const value = Reflect.get(target, property, target);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        });
-      };
-    }
 
     const {
       closeOpenClawStateDatabaseForTest,
@@ -906,7 +865,7 @@ function runConcurrentSchemaProbe(params: {
     const rootDir = ${JSON.stringify(params.rootDir)};
     const mode = ${JSON.stringify(params.mode)};
     const workerSource = ${JSON.stringify(workerSource)};
-    // The barriers deterministically overlap both openers. Two contenders prove
+    // The common start barrier overlaps both openers. Two contenders prove
     // serialization without repeating the same child-process stress.
     const workerCount = 2;
     const roundCount = 1;
@@ -992,7 +951,6 @@ function runConcurrentSchemaProbe(params: {
       const startPath = path.join(barrierDir, "start");
       const workers = Array.from({ length: workerCount }, (_, index) => {
         const readyPath = path.join(barrierDir, \`ready-\${index}\`);
-        const pageReadyPath = path.join(barrierDir, \`page-ready-\${index}\`);
         return spawn(
           process.execPath,
           ["--import", "tsx", "--input-type=module", "-e", workerSource],
@@ -1003,13 +961,6 @@ function runConcurrentSchemaProbe(params: {
               OPENCLAW_SCHEMA_TEST_MODULE_URL: moduleUrl,
               OPENCLAW_SCHEMA_TEST_READY_PATH: readyPath,
               OPENCLAW_SCHEMA_TEST_START_PATH: startPath,
-              ...(mode === "fresh"
-                ? {
-                    OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR: barrierDir,
-                    OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH: pageReadyPath,
-                    OPENCLAW_SCHEMA_TEST_WORKER_COUNT: String(workerCount),
-                  }
-                : {}),
             },
             stdio: ["ignore", "pipe", "pipe"],
           },

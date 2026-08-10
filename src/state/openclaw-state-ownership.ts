@@ -2,9 +2,21 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
-import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveImmutableSqliteFileUri,
+  tryAcquireExclusiveSqliteCoordinator,
+} from "../infra/node-sqlite.js";
+import {
+  ensurePrivateSqliteCoordinatorDirectory,
+  runWithSqliteCoordinator,
+  SqliteCoordinatorError,
+} from "../infra/sqlite-coordinator.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
@@ -115,8 +127,7 @@ export function inspectOpenClawStateOwnershipFromDatabase(
   return parseExternalOwnership(row.value_json, databasePath);
 }
 
-/** Inspect one resolved state database path without joining the writable lifecycle. */
-export function inspectOpenClawStateOwnershipAtPath(
+function inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(
   databasePath: string,
 ): OpenClawExternalStateOwnership | null {
   const resolvedPath = path.resolve(databasePath);
@@ -155,6 +166,106 @@ export function inspectOpenClawStateOwnershipAtPath(
   }
 }
 
+function resolveOpenClawStateOwnershipCoordinatorPath(databasePath: string): string {
+  const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
+  return path.join(
+    resolvePreferredOpenClawTmpDir(),
+    `state-ownership.${sha256HexPrefix(canonicalDatabasePath, 8)}.lock.sqlite`,
+  );
+}
+
+function acquireOpenClawStateOwnershipCoordinator(databasePath: string): {
+  release: () => void;
+} {
+  const coordinatorPath = resolveOpenClawStateOwnershipCoordinatorPath(databasePath);
+  ensurePrivateSqliteCoordinatorDirectory(
+    path.dirname(coordinatorPath),
+    "state ownership coordinator",
+  );
+  const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
+    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  });
+  if (!coordinator) {
+    throw new SqliteCoordinatorError("another OpenClaw process is changing shared state ownership");
+  }
+  return coordinator;
+}
+
+export function runWithOpenClawStateOwnershipCoordinator<T>(
+  databasePath: string,
+  operationLabel: string,
+  operation: () => T,
+): T {
+  return runWithSqliteCoordinator(
+    acquireOpenClawStateOwnershipCoordinator(databasePath),
+    operationLabel,
+    operation,
+  );
+}
+
+/** Inspect one resolved state database path at one ownership-transition point. */
+export function inspectOpenClawStateOwnershipAtPath(
+  databasePath: string,
+): OpenClawExternalStateOwnership | null {
+  const resolvedPath = path.resolve(databasePath);
+  if (!existsSync(resolvedPath)) {
+    return null;
+  }
+  return runWithOpenClawStateOwnershipCoordinator(resolvedPath, "state ownership inspection", () =>
+    inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(resolvedPath),
+  );
+}
+
+function assertOwnershipAllowsWrite(
+  status: OpenClawExternalStateOwnership | null,
+  databasePath: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  if (status && !isGatewayExternallySupervised(env)) {
+    throw new OpenClawStateExternalOwnershipError(databasePath, status.managerId);
+  }
+}
+
+/** Fence and hold one path-based mutation until its main-file preamble is complete. */
+function acquireOpenClawStateWriteAccess(options: {
+  databasePath: string;
+  env?: NodeJS.ProcessEnv;
+}): { release: () => void } {
+  const resolvedPath = path.resolve(options.databasePath);
+  const access = acquireOpenClawStateOwnershipCoordinator(resolvedPath);
+  try {
+    assertOwnershipAllowsWrite(
+      inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(resolvedPath),
+      resolvedPath,
+      options.env ?? process.env,
+    );
+    return access;
+  } catch (operationError) {
+    try {
+      access.release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [operationError, releaseError],
+        "state ownership inspection and coordinator release both failed",
+        { cause: operationError },
+      );
+    }
+    throw operationError;
+  }
+}
+
+export function runWithOpenClawStateWriteAccess<T>(
+  options: { databasePath: string; env?: NodeJS.ProcessEnv },
+  operationLabel: string,
+  operation: () => T,
+): T {
+  return runWithSqliteCoordinator(
+    acquireOpenClawStateWriteAccess(options),
+    operationLabel,
+    operation,
+  );
+}
+
 /** Fence shared-state writes once an external manager has claimed ownership. */
 export function assertOpenClawStateWriteAllowed(options: {
   database?: DatabaseSync;
@@ -165,7 +276,5 @@ export function assertOpenClawStateWriteAllowed(options: {
   const status = options.database
     ? inspectOpenClawStateOwnershipFromDatabase(options.database, resolvedPath)
     : inspectOpenClawStateOwnershipAtPath(resolvedPath);
-  if (status && !isGatewayExternallySupervised(options.env ?? process.env)) {
-    throw new OpenClawStateExternalOwnershipError(resolvedPath, status.managerId);
-  }
+  assertOwnershipAllowsWrite(status, resolvedPath, options.env ?? process.env);
 }

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   generateStoredDeviceIdentity,
@@ -45,16 +46,11 @@ function pathMayExist(filePath: string): boolean {
   }
 }
 
-function resolveDeviceIdentityStateDir(databasePath: string): string {
-  const databaseDir = path.dirname(databasePath);
-  return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
-}
-
 /** Exact retired file owned by Doctor migration code. */
 function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
   const { databasePath } = resolveDeviceIdentityStore(options);
   return path.join(
-    resolveDeviceIdentityStateDir(databasePath),
+    resolveOpenClawStateDirForDatabasePath(databasePath),
     LEGACY_DEVICE_IDENTITY_RELATIVE_PATH,
   );
 }
@@ -92,7 +88,7 @@ function withDeviceIdentityCoordinator<T>(
   };
   const coordinator = acquireDeviceIdentityCoordinator({
     databasePath: resolved.databasePath,
-    stateDir: resolveDeviceIdentityStateDir(resolved.databasePath),
+    stateDir: resolveOpenClawStateDirForDatabasePath(resolved.databasePath),
   });
   let result: T;
   try {
@@ -101,12 +97,11 @@ function withDeviceIdentityCoordinator<T>(
     try {
       coordinator.release();
     } catch (releaseError) {
-      const aggregateError = new AggregateError(
+      throw new AggregateError(
         [operationError, releaseError],
         "device identity operation and coordinator release both failed",
         { cause: releaseError },
       );
-      throw aggregateError;
     }
     throw operationError;
   }
