@@ -2113,6 +2113,128 @@ test("sessions.create accepts a signed agent-runtime visible-spawn policy", asyn
   });
 });
 
+test("sessions.create commits no session after delegated authority closes", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:authority-race";
+  let validations = 0;
+
+  const created = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key: sessionKey },
+    {
+      context: {
+        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+      },
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok).toBe(false);
+  expect(created.error?.message).toContain("agent runtime authority is no longer active");
+  expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[sessionKey]).toBeUndefined();
+});
+
+test("sessions.create starts no initial turn when authority closes after session commit", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:authority-post-commit";
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "must-not-start", status: "started" });
+  });
+  let validations = 0;
+
+  try {
+    const created = await directSessionReq<{ runStarted?: boolean }>(
+      "sessions.create",
+      { agentId: "main", key: sessionKey, message: "do not launch after closure" },
+      {
+        context: {
+          // Four validations cover handler admission and both SQLite commit boundaries.
+          // The fifth is the post-commit follow-on-work fence.
+          validateAgentRuntimeApprovalAuthority: () => ++validations < 5,
+        },
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            agentRuntimeIdentity: {
+              kind: "agentRuntime",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.runStarted).toBe(false);
+    expect(chatSend).not.toHaveBeenCalled();
+    expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[sessionKey]).toBeDefined();
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
+test("sessions.create removes a provisioned worktree when authority closes before session commit", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-session-authority-worktree-",
+  });
+  const workspace = await initializeGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let validations = 0;
+
+  try {
+    const created = await directSessionReq(
+      "sessions.create",
+      {
+        agentId: "main",
+        worktree: true,
+        worktreeName: "authority-cleanup",
+      },
+      {
+        context: {
+          // Admission plus both worktree allocation guards succeed; session admission loses.
+          validateAgentRuntimeApprovalAuthority: () => ++validations < 4,
+        },
+        client: {
+          connect: { scopes: ["operator.admin"] },
+          internal: {
+            agentRuntimeIdentity: {
+              kind: "agentRuntime",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(created.ok).toBe(false);
+    expect(created.error?.message).toContain("agent runtime authority is no longer active");
+    expect(
+      listRegistryWorktrees(process.env).filter(
+        (record) => record.ownerKind === "session" && record.removedAt === undefined,
+      ),
+    ).toEqual([]);
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.create rejects a trusted spawn whose parent differs from its agent caller", async () => {
   await createSessionStoreDir();
 

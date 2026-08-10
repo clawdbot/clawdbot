@@ -537,6 +537,27 @@ describe("ManagedWorktreeService", () => {
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
   });
 
+  it("removes an allocated worktree when its commit guard closes during setup", async () => {
+    let checks = 0;
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "closed-authority",
+        baseRef: "HEAD",
+        commitGuard: () => {
+          checks += 1;
+          if (checks === 2) {
+            throw new TypeError("authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("authority closed");
+
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("closed-authority");
+    expect(await git(repo, "branch", "--list", "openclaw/closed-authority")).toBe("");
+    expect(listRegistryWorktrees(env)).toEqual([]);
+  });
+
   it("restores tracked, untracked, and provisioned ignored files from the snapshot", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "ignored.txt\nprovisioned.env\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "provisioned.env\n");

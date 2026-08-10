@@ -167,13 +167,32 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
           return await update(id, patch);
         },
       ),
-      remove: vi.fn(async () => ({ ok: true, removed: true })),
-      enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
+      remove: vi.fn(async (_id: string, opts?: { commitGuard?: () => void }) => {
+        opts?.commitGuard?.();
+        return { ok: true, removed: true };
+      }),
+      enqueueRun: vi.fn(
+        async (_id: string, _mode?: string, opts?: { commitGuard?: () => void }) => {
+          opts?.commitGuard?.();
+          return { ok: true, enqueued: true, runId: "run-1" };
+        },
+      ),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
+      readScratch: vi.fn(async () => ({ content: null, revision: 0 })),
+      writeScratch: vi.fn(
+        async (_id: string, params: { content: string | null; commitGuard?: () => void }) => {
+          params.commitGuard?.();
+          return {
+            ok: true as const,
+            scratch: { content: params.content, revision: 1 },
+            currentRevision: 1,
+          };
+        },
+      ),
       list: vi.fn(async () => jobs),
       listPage: vi.fn(async (opts?: { agentId?: string; limit?: number; offset?: number }) => {
         const requestedAgentId = opts?.agentId?.trim().toLowerCase();
@@ -1364,6 +1383,49 @@ describe("cron method validation", () => {
     });
     expect(context.committedAdds).toHaveLength(0);
   });
+
+  it.each([
+    ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
+    ["cron.remove", { id: "cron-1" }, "remove"],
+    ["cron.run", { id: "cron-1", mode: "force" }, "enqueueRun"],
+  ] as const)(
+    "revalidates delegated authority at the %s commit owner",
+    async (method, params, owner) => {
+      const context = createCronContext(createCronJob({ agentId: "ops" }));
+      let authorityActive = true;
+      context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+      if (owner === "writeScratch") {
+        context.cron.writeScratch.mockImplementationOnce(async (_id, write) => {
+          authorityActive = false;
+          write.commitGuard?.();
+          throw new Error("unreachable");
+        });
+      } else if (owner === "remove") {
+        context.cron.remove.mockImplementationOnce(async (_id, options) => {
+          authorityActive = false;
+          options?.commitGuard?.();
+          throw new Error("unreachable");
+        });
+      } else {
+        context.cron.enqueueRun.mockImplementationOnce(async (_id, _mode, options) => {
+          authorityActive = false;
+          options?.commitGuard?.();
+          throw new Error("unreachable");
+        });
+      }
+
+      const { respond } = await invokeCron(method, params, {
+        context,
+        client: callerClient("ops"),
+      });
+
+      expect(context.cron[owner]).toHaveBeenCalledOnce();
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "agent runtime authority is no longer active",
+      });
+    },
+  );
 
   it("keeps cron.update mutation at zero after resolution outlives its run", async () => {
     const scope = createCronCreatorAuthorityRunScope("run-update-revoked");

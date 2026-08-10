@@ -151,4 +151,45 @@ describe("gateway caller context wrapper", () => {
       turnSourceChannel: "telegram",
     });
   });
+
+  it("starts a new authority root for a nested admitted run", async () => {
+    const outerRun = { instanceId: "outer-instance", runId: "outer-run" };
+    const childRun = { instanceId: "child-instance", runId: "child-run" };
+    const childToken = createExecutionIdentityAdmissionToken("child-run");
+    let nestedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "outer",
+        sessionKey: "agent:outer:session",
+        operationalRunInstance: outerRun,
+        executionIdentityToken: createExecutionIdentityAdmissionToken("outer-run"),
+        cronSelfManagementJobId: "outer-job",
+        turnSourceChannel: "telegram",
+      },
+      async () => {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "child",
+            sessionKey: "agent:child:session",
+            operationalRunInstance: childRun,
+            executionIdentityToken: childToken,
+            turnSourceChannel: "discord",
+          },
+          () => {
+            nestedIdentity = getGatewayToolCallerIdentity();
+          },
+        );
+      },
+    );
+
+    expect(nestedIdentity).toMatchObject({
+      agentId: "child",
+      sessionKey: "agent:child:session",
+      operationalRunInstance: childRun,
+      executionIdentityToken: childToken,
+      turnSourceChannel: "discord",
+    });
+    expect(nestedIdentity?.cronSelfManagementJobId).toBeUndefined();
+  });
 });

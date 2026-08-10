@@ -87,33 +87,43 @@ export async function withGatewayToolCallerIdentity<T>(
     return await run();
   }
   const inherited = gatewayToolCallerStorage.getStore();
-  // The admitted outer host owns execution authority. Nested tool wrappers may
-  // narrow approval/cron scope, but cannot replace the run or its provenance.
+  const suppliedRun = identity.operationalRunInstance;
+  const inheritedRun = inherited?.operationalRunInstance;
+  // Wrappers without a run inherit the admitted owner. A distinct admitted run
+  // starts a new root; retaining the outer run would let child work outlive its owner.
+  const inheritedOwner =
+    !suppliedRun ||
+    (inheritedRun?.instanceId === suppliedRun.instanceId &&
+      inheritedRun.runId === suppliedRun.runId)
+      ? inherited
+      : undefined;
   const operationalRunInstance =
-    inherited?.operationalRunInstance ?? identity.operationalRunInstance;
+    inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
   const signedAgentRuntimeIdentityToken =
-    inherited?.signedAgentRuntimeIdentityToken ?? identity.signedAgentRuntimeIdentityToken?.trim();
+    inheritedOwner?.signedAgentRuntimeIdentityToken ??
+    identity.signedAgentRuntimeIdentityToken?.trim();
   const executionIdentityToken =
-    inherited?.executionIdentityToken ?? identity.executionIdentityToken;
+    inheritedOwner?.executionIdentityToken ?? identity.executionIdentityToken;
   const cronSelfManagementJobId =
-    identity.cronSelfManagementJobId?.trim() ?? inherited?.cronSelfManagementJobId;
-  const cronToolsAllowCapture = identity.cronToolsAllowCapture ?? inherited?.cronToolsAllowCapture;
+    identity.cronSelfManagementJobId?.trim() ?? inheritedOwner?.cronSelfManagementJobId;
+  const cronToolsAllowCapture =
+    identity.cronToolsAllowCapture ?? inheritedOwner?.cronToolsAllowCapture;
   const cronCreatorAuthorityGrant =
-    identity.cronCreatorAuthorityGrant ?? inherited?.cronCreatorAuthorityGrant;
-  const turnSourceChannel = inherited?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
-  const turnSourceTo = inherited?.turnSourceTo ?? identity.turnSourceTo?.trim();
+    identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant;
+  const turnSourceChannel = inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
+  const turnSourceTo = inheritedOwner?.turnSourceTo ?? identity.turnSourceTo?.trim();
   const turnSourceAccountId =
-    inherited?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
-  const turnSourceThreadId = inherited?.turnSourceThreadId ?? identity.turnSourceThreadId;
+    inheritedOwner?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
+  const turnSourceThreadId = inheritedOwner?.turnSourceThreadId ?? identity.turnSourceThreadId;
   return await gatewayToolCallerStorage.run(
     {
-      agentId: inherited?.agentId ?? identity.agentId.trim(),
-      sessionKey: inherited?.sessionKey ?? identity.sessionKey.trim(),
+      agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
+      sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(identity.approvalOwnerPluginId?.trim()
         ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
-        : inherited?.approvalOwnerPluginId
-          ? { approvalOwnerPluginId: inherited.approvalOwnerPluginId }
+        : inheritedOwner?.approvalOwnerPluginId
+          ? { approvalOwnerPluginId: inheritedOwner.approvalOwnerPluginId }
           : {}),
       ...(signedAgentRuntimeIdentityToken ? { signedAgentRuntimeIdentityToken } : {}),
       ...(cronSelfManagementJobId ? { cronSelfManagementJobId } : {}),

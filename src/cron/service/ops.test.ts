@@ -26,7 +26,7 @@ import {
   update,
   updateWithPrecondition,
 } from "./ops-mutations.js";
-import { list } from "./ops-read.js";
+import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
@@ -38,6 +38,33 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("scheduled tool policy provenance", () => {
+  it("guards scratch and removal at their locked mutation owners", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const job = await add(state, {
+      name: "guarded",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    const commitGuard = vi.fn(() => {
+      throw new TypeError("authority closed");
+    });
+
+    await expect(writeScratch(state, job.id, { content: "notes", commitGuard })).rejects.toThrow(
+      "authority closed",
+    );
+    expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
+    await expect(remove(state, job.id, { commitGuard })).rejects.toThrow("authority closed");
+    expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
+    expect(commitGuard).toHaveBeenCalledTimes(2);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("consumes add authority only after candidate validation and immediately before mutation", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });

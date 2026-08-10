@@ -51,6 +51,56 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
+  it("rejects queued manual reservation after caller authority closes", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+    const job = createDueIsolatedJob({
+      id: "revoked-queued-run",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
+      blockerStarted.resolve();
+      return await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+    let authorityActive = true;
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    expectQueuedRunAck(
+      await enqueueRun(state, job.id, "force", {
+        commitGuard: () => {
+          if (!authorityActive) {
+            throw new TypeError("authority closed");
+          }
+        },
+      }),
+    );
+    authorityActive = false;
+    releaseBlocker.resolve();
+    await blocker;
+    await waitForActiveTasks(5_000);
+
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+    clearCommandLane(CommandLane.Cron);
+  });
+
   it("rechecks a queued manual run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);

@@ -38,7 +38,10 @@ import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
-import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
+import {
+  assertActiveAgentRuntimeAuthority,
+  hasActiveAgentRuntimeAuthority,
+} from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -80,6 +83,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
+    const commitGuard =
+      client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
+        ? () => assertActiveAgentRuntimeAuthority(client, context)
+        : undefined;
     const catalogId = normalizeOptionalString(p.catalogId);
     if (catalogId && p.model) {
       respond(
@@ -452,6 +459,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
               // admin-only so this write-scoped path cannot execute gated repo scripts.
               runSetupScript: scopes.includes(ADMIN_SCOPE),
+              ...(commitGuard ? { commitGuard } : {}),
             });
             provisioned = true;
           }
@@ -490,6 +498,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               : {}),
           });
         } catch (error) {
+          if (error instanceof TypeError && !hasActiveAgentRuntimeAuthority(client, context)) {
+            throw error;
+          }
           if (error instanceof WorktreeRepositoryError) {
             return err(
               errorShape(ErrorCodes.INVALID_REQUEST, "agent workspace is not a git checkout"),
@@ -599,9 +610,18 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
+      ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
+        // Session persistence already committed under the guard. Closure after
+        // that point may suppress follow-on work, but cannot roll back the session.
+        if (!hasActiveAgentRuntimeAuthority(client, context)) {
+          return;
+        }
         await captureCreatedSessionBaseline({ key, agentId, entry, storePath });
         if (hasInitialTurn) {
+          if (!hasActiveAgentRuntimeAuthority(client, context)) {
+            return;
+          }
           messageSeq =
             (await readSessionMessageCountAsync({
               agentId,
@@ -636,7 +656,22 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           });
         }
       },
+    }).catch((error: unknown) => {
+      const authorityClosed =
+        error instanceof TypeError && !hasActiveAgentRuntimeAuthority(client, context);
+      if (authorityClosed) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
+        );
+        return undefined;
+      }
+      throw error;
     });
+    if (!created) {
+      return;
+    }
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;

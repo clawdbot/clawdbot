@@ -660,9 +660,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       ) {
         return;
       }
+      const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
       const result = await context.cron.writeScratch(jobId, {
         content: p.content,
         expectedRevision: p.expectedRevision,
+        ...(commitGuard ? { commitGuard } : {}),
       });
       if (!result.ok) {
         respond(true, result, undefined);
@@ -1088,7 +1090,19 @@ export const cronHandlers: GatewayRequestHandlers = {
     if (!ensureActiveAgentRuntimeAuthority({ client, context, method: "cron.remove", respond })) {
       return;
     }
-    const result = await context.cron.remove(jobId);
+    let result: Awaited<ReturnType<typeof context.cron.remove>>;
+    try {
+      const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+      result = commitGuard
+        ? await context.cron.remove(jobId, { commitGuard })
+        : await context.cron.remove(jobId);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        respondInvalidCronParams(respond, "cron.remove", formatErrorMessage(error));
+        return;
+      }
+      throw error;
+    }
     if (!result.removed) {
       respond(
         false,
@@ -1138,8 +1152,15 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
     try {
-      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+      const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+      result = commitGuard
+        ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })
+        : await context.cron.enqueueRun(jobId, p.mode ?? "force");
     } catch (error) {
+      if (error instanceof TypeError) {
+        respondInvalidCronParams(respond, "cron.run", formatErrorMessage(error));
+        return;
+      }
       if (isInvalidCronSessionTargetIdError(error)) {
         respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);
         return;

@@ -85,11 +85,17 @@ export async function readScratch(state: CronServiceState, id: string) {
 export async function writeScratch(
   state: CronServiceState,
   id: string,
-  params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+  params: {
+    content: string | null;
+    expectedRevision?: number;
+    sourceSha256?: string;
+    commitGuard?: () => void;
+  },
 ) {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     findJobOrThrow(state, id);
+    params.commitGuard?.();
     return writeCronJobScratch({
       storePath: state.deps.storePath,
       jobId: id,
