@@ -1247,6 +1247,54 @@ describe("subagent registry seam flow", () => {
     ]);
   });
 
+  it("retries registry restore after a transient partial-merge failure", () => {
+    const runId = "run-restore-retry";
+    const restored = createSubagentRunRecord({
+      runId,
+      task: "retry registry restore",
+      cleanup: "keep",
+      pauseReason: "sessions_yield",
+      createdAt: Date.now(),
+    });
+    mocks.restoreSubagentRunsFromDisk
+      .mockImplementationOnce(((params: { runs: Map<string, SubagentRunRecord> }) => {
+        params.runs.set(runId, restored);
+        throw new Error("transient sqlite read failure");
+      }) as never)
+      .mockReturnValue(0);
+
+    mod.initSubagentRegistry();
+    expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
+    expect(mocks.onAgentEvent).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1_000);
+
+    expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
+    expect(mod.getSubagentRunByRunId(runId)?.runId).toBe(runId);
+    expect(mocks.onAgentEvent).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("latches registry restore only after success", () => {
+    mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
+
+    mod.initSubagentRegistry();
+    mod.initSubagentRegistry();
+
+    expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
+  });
+
+  it("does not double-run reentrant registry restore calls", () => {
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(() => {
+      mod.initSubagentRegistry();
+      return 0;
+    });
+
+    mod.initSubagentRegistry();
+
+    expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
+  });
+
   it("replays a past-due requester-settle obligation during registry restore", async () => {
     const endedAt = Date.now() - 1_000;
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
