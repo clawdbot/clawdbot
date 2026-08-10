@@ -5,7 +5,7 @@
  */
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readTrimmedStringAlias } from "../utils/string-readers.js";
+import { readTrimmedStringAlias } from "../../../utils/string-readers.js";
 
 function readToolName(value: unknown): string | undefined {
   const record = asOptionalRecord(value);

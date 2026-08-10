@@ -4,16 +4,19 @@
  * Lifecycle owns the persisted outbox state on retained subagent run rows;
  * this module selects a drained wave and delivers its synthesized wake.
  */
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { logWarn } from "../logger.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { logWarn } from "../../../logger.js";
+import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
+} from "../../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "../../subagent-registry.types.js";
+import { hasSubagentRunEnded } from "../../subagent-run-liveness.js";
+import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -25,12 +28,9 @@ import {
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-registry-runtime.js"),
+  () => import("../../subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {

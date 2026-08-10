@@ -21,11 +21,11 @@ import {
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 type SubagentAnnounceModule = Pick<
-  typeof import("./subagent-announce.js"),
+  typeof import("./subagents/announce/subagent-announce.js"),
   "captureSubagentCompletionReply" | "runSubagentAnnounceFlow"
 >;
 type RequesterSettleWakeModule = Pick<
-  typeof import("./subagent-announce.requester-settle-wake.js"),
+  typeof import("./subagents/announce/subagent-announce.requester-settle-wake.js"),
   "maybeWakeRequesterAfterAllChildrenSettled"
 >;
 type BrowserCleanupModule = Pick<
@@ -62,7 +62,7 @@ export type SubagentRegistryDeps = {
 };
 
 const subagentAnnounceLoader = createLazyImportLoader<SubagentAnnounceModule>(
-  () => import("./subagent-announce.js"),
+  () => import("./subagents/announce/subagent-announce.js"),
 );
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../browser-lifecycle-cleanup.js"),
@@ -98,7 +98,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
   maybeWakeRequesterAfterAllChildrenSettled: async (params) =>
     (
-      await import("./subagent-announce.requester-settle-wake.js")
+      await import("./subagents/announce/subagent-announce.requester-settle-wake.js")
     ).maybeWakeRequesterAfterAllChildrenSettled(params),
 };
 

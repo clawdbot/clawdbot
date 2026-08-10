@@ -7,9 +7,9 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { privateFileStore } from "../infra/private-file-store.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { privateFileStore } from "../../../infra/private-file-store.js";
+import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 
 function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;

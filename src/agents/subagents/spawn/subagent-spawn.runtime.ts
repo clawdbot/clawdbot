@@ -32,7 +32,7 @@ export { resolveAgentConfig } from "../../agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 export { loadPreparedModelCatalog } from "../../prepared-model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
-export { buildSubagentSystemPrompt } from "../../subagent-system-prompt.js";
+export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export {
   resolveInternalSessionKey,
   resolveMainSessionAlias,

@@ -11,22 +11,29 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
   stripSilentToken,
-} from "../auto-reply/tokens.js";
-import { logWarn } from "../logger.js";
-import { defaultRuntime } from "../runtime.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+} from "../../../auto-reply/tokens.js";
+import { logWarn } from "../../../logger.js";
+import { defaultRuntime } from "../../../runtime.js";
+import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+} from "../../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
-} from "./announce-idempotency.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+} from "../../announce-idempotency.js";
+import {
+  formatAgentInternalEventsForPrompt,
+  type AgentInternalEvent,
+} from "../../internal-events.js";
+import { deleteSubagentSessionForCleanup } from "../../subagent-session-cleanup.js";
+import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -57,10 +64,6 @@ import {
   getRuntimeConfig,
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
-import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
@@ -79,14 +82,14 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-registry-runtime.js"),
+  () => import("../../subagent-registry-runtime.js"),
 );
 
 function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimeLoader.load();
 }
 
-export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
+export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 

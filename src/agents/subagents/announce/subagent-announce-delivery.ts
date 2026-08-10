@@ -6,34 +6,34 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
-import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isFastTestRuntimeEnv } from "../infra/env.js";
-import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
-import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
-import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
+import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { isOutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
+import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
-} from "../infra/session-delivery-queue.js";
-import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import { defaultRuntime } from "../runtime.js";
+} from "../../../infra/session-delivery-queue.js";
+import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { defaultRuntime } from "../../../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
-} from "../sessions/input-provenance.js";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
-import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
-import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
+} from "../../../sessions/input-provenance.js";
+import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../../../sessions/session-key-utils.js";
+import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
   normalizeMessageChannel,
-} from "../utils/message-channel.js";
-import { sanitizeAgentRunTerminalReplyText } from "./agent-run-terminal-reply.js";
-import { resolveDefaultAgentId } from "./agent-scope-config.js";
+} from "../../../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
+import { resolveDefaultAgentId } from "../../agent-scope-config.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
@@ -43,20 +43,25 @@ import {
   hasPayloadOutcomeSendEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
-} from "./embedded-agent-runner/delivery-evidence.js";
+} from "../../embedded-agent-runner/delivery-evidence.js";
 import {
   hasIntentionalSilentAgentPayload,
   hasVisibleAgentPayload,
-} from "./embedded-agent-runner/message-visibility.js";
-import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
-import { isFailoverError } from "./failover-error.js";
-import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+} from "../../embedded-agent-runner/message-visibility.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
+import { isFailoverError } from "../../failover-error.js";
+import { mediaUrlsFromGeneratedAttachments } from "../../generated-attachments.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   hasGeneratedMediaCompletionEvent,
-} from "./internal-event-contract.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+} from "../../internal-event-contract.js";
+import {
+  formatAgentInternalEventsForPrompt,
+  type AgentInternalEvent,
+} from "../../internal-events.js";
+import { admitCorrelatedSubagentSessionDelivery } from "../../subagent-completion-delivery.js";
+import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -84,8 +89,6 @@ import {
   resolveGeneratedMediaSessionDeliveryRoute,
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
-import { admitCorrelatedSubagentSessionDelivery } from "./subagent-completion-delivery.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;

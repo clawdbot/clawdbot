@@ -1,15 +1,15 @@
 // Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
 // lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
-import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
-import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import * as announceRead from "./subagent-registry-announce-read.js";
+import * as mod from "./subagent-registry.test-helpers.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagents/announce/subagent-announce-delivery.test-support.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagents/announce/subagent-announce-output.test-support.js";
+import { testing as subagentAnnounceTesting } from "./subagents/announce/subagent-announce.js";
 import {
   maybeWakeRequesterAfterAllChildrenSettled,
   testing as settleWakeTesting,
-} from "./subagent-announce.requester-settle-wake.js";
-import * as announceRead from "./subagent-registry-announce-read.js";
-import * as mod from "./subagent-registry.test-helpers.js";
+} from "./subagents/announce/subagent-announce.requester-settle-wake.js";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -123,7 +123,7 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
-vi.mock("./subagent-depth.js", () => ({
+vi.mock("./subagents/spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
 

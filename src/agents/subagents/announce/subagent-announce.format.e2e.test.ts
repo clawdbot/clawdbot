@@ -1,31 +1,34 @@
 // Subagent announce format e2e tests exercise the full announce flow with
 // channel fixtures, session stores, hooks, and gateway calls wired together.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-} from "../config/config.js";
-import * as configSessions from "../config/sessions.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import * as gatewayCall from "../gateway/call.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+} from "../../../config/config.js";
+import * as configSessions from "../../../config/sessions.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import * as gatewayCall from "../../../gateway/call.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
-} from "../infra/outbound/session-binding-service.js";
-import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
-import type { HookRunner } from "../plugins/hooks.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+} from "../../../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
+import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../../plugins/hooks.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
-} from "./announce-idempotency.js";
-import * as embeddedRuns from "./embedded-agent-runner/runs.js";
-import { FailoverError } from "./failover-error.js";
+} from "../../announce-idempotency.js";
+import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
+import { FailoverError } from "../../failover-error.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
@@ -332,8 +335,8 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
-vi.mock("./subagent-registry.js", () => subagentRegistryMock);
-vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
+vi.mock("../../subagent-registry.js", () => subagentRegistryMock);
+vi.mock("../../subagent-registry-runtime.js", () => subagentRegistryMock);
 
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;

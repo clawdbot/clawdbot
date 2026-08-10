@@ -4,12 +4,12 @@
  * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
-import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { parseStrictNonNegativeInteger } from "../../../infra/parse-finite-number.js";
+import { getSubagentDepth, parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
+import { resolveDefaultAgentId } from "../../agent-scope.js";
 
 type SessionDepthEntry = {
   sessionId?: unknown;

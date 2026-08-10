@@ -44,7 +44,7 @@ import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
 }));
-vi.mock("./subagent-announce.js", () => ({
+vi.mock("./subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
 

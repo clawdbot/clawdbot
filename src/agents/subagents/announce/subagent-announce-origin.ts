@@ -7,40 +7,43 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
-import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registry-loaded.js";
+import type { ChannelId } from "../../../channels/plugins/types.public.js";
+import {
+  routeFromConversationRef,
+  routeToDeliveryFields,
+} from "../../../channels/route-projection.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   stripTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
-} from "../infra/outbound/channel-target-prefix.js";
-import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.js";
-import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import { normalizeAccountId } from "../routing/session-key.js";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+} from "../../../infra/outbound/channel-target-prefix.js";
+import type { ConversationRef } from "../../../infra/outbound/session-binding-service.js";
+import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue.js";
+import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { normalizeAccountId } from "../../../routing/session-key.js";
+import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
+} from "../../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   isInternalMessageChannel,
   normalizeMessageChannel,
-} from "../utils/message-channel.js";
+} from "../../../utils/message-channel.js";
+import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import {
   createBoundDeliveryRouter,
   getGlobalHookRunner,
   resolveConversationIdFromTargets,
 } from "./subagent-announce-delivery.runtime.js";
-import type { SpawnSubagentMode } from "./subagents/spawn/subagent-spawn.types.js";
-export type { DeliveryContext } from "../utils/delivery-context.types.js";
+export type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 
 function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
   const rawTo = normalizeOptionalString(context?.to);

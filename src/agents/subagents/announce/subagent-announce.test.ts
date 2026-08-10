@@ -1,8 +1,8 @@
 // Subagent announce flow tests cover the seam-level orchestration between wait
 // outcomes, requester lookup, delivery, and cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
+import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -39,7 +39,7 @@ const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn(
 const waitForEmbeddedAgentRunEndMock = vi.fn(
   async (_sessionId: string, _timeoutMs?: number) => true,
 );
-let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
+let mockConfig: ReturnType<(typeof import("../../../config/config.js"))["getRuntimeConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -214,8 +214,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
-import { defaultRuntime } from "../runtime.js";
+vi.mock("../../subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
+import { defaultRuntime } from "../../../runtime.js";
 import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 

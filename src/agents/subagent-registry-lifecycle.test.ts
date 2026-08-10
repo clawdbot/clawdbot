@@ -21,7 +21,6 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -31,6 +30,7 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagents/announce/subagent-announce-dispatch.js";
 import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 
 type LifecycleControllerParams = Parameters<typeof createSubagentRegistryLifecycleController>[0];
@@ -167,7 +167,7 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
 }));
 
-vi.mock("./subagent-announce.js", () => ({
+vi.mock("./subagents/announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn(async () => false),
 }));

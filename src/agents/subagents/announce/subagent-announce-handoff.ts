@@ -1,6 +1,6 @@
-import type { InputProvenance } from "../sessions/input-provenance.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "./internal-event-contract.js";
-import type { AgentInternalEvent } from "./internal-events.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 
 export type TrustedSubagentCompletionHandoff = {
   kind: "subagent-completion";

@@ -1,9 +1,10 @@
 // Descendant-settle wake replaces an ended nested orchestrator run while
 // preserving lifecycle ownership.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
@@ -14,13 +15,12 @@ import type {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
 } from "./subagent-announce.runtime.js";
-import { terminateAcceptedCollectorRun } from "./subagents/spawn/subagent-spawn-cleanup.js";
 
 type DescendantWakeDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
-  replaceSubagentRunAfterSteer: typeof import("./subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
+  replaceSubagentRunAfterSteer: typeof import("../../subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
 };
 
 type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;

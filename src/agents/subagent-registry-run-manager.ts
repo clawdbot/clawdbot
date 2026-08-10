@@ -30,7 +30,6 @@ import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -69,6 +68,10 @@ import {
   getSubagentSessionStartedAt,
 } from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
+import {
+  type SubagentRunOutcome,
+  withSubagentOutcomeTiming,
+} from "./subagents/announce/subagent-announce-output.js";
 import { updateSwarmCollectorCompletion } from "./subagents/swarm/swarm-collector.js";
 import { isSwarmRunQueued, removeQueuedSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 

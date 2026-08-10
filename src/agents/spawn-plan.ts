@@ -21,9 +21,9 @@ import type { getSessionBindingService } from "../infra/outbound/session-binding
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession } from "./subagent-registry.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
+import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
+import { resolveSubagentTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
 
 type SpawnMode = "run" | "session";
 type SpawnBackendKind = "subagent" | "acp";

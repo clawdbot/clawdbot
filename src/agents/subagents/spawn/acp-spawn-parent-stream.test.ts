@@ -22,10 +22,10 @@ vi.mock("../../../infra/heartbeat-wake.js", async () => {
   );
 });
 
-vi.mock("../../acp-parent-stream-store.sqlite.js", async () => {
+vi.mock("./acp-parent-stream-store.sqlite.js", async () => {
   return await mergeMockedModule(
-    await vi.importActual<typeof import("../../acp-parent-stream-store.sqlite.js")>(
-      "../../acp-parent-stream-store.sqlite.js",
+    await vi.importActual<typeof import("./acp-parent-stream-store.sqlite.js")>(
+      "./acp-parent-stream-store.sqlite.js",
     ),
     () => ({
       recordAcpParentStreamEvents: (...args: unknown[]) => recordAcpParentStreamEventsMock(...args),

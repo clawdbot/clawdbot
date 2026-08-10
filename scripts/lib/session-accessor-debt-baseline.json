@@ -2,8 +2,8 @@
   "embeddedAgentSessionTarget": {},
   "memoryHostSessionCorpus": {},
   "sessionAccessorRead": {
-    "src/agents/subagent-announce-output.ts": 3,
-    "src/agents/subagent-announce.test-support.ts": 2,
+    "src/agents/subagents/announce/subagent-announce-output.ts": 3,
+    "src/agents/subagents/announce/subagent-announce.test-support.ts": 2,
     "src/agents/tools/transcripts-tool.ts": 2,
     "src/auto-reply/reply/commands-session-store.ts": 2,
     "src/config/sessions/session-accessor.entry.ts": 2

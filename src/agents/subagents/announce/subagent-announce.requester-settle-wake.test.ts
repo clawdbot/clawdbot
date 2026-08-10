@@ -2,7 +2,7 @@
 // drain gating, batch idempotency, and the guards that keep the wake out of
 // nested/cron/single-delivered paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 
 const deliverSpy = vi.fn(
   async (
@@ -30,7 +30,7 @@ const { registryRuntimeMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => registryRuntimeMock);
+vi.mock("../../subagent-registry-runtime.js", () => registryRuntimeMock);
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: vi.fn(async () => ({})),
@@ -59,7 +59,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     params.requesterOrigin,
 }));
 
-vi.mock("./subagent-depth.js", () => ({
+vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
     sessionKey.split(":subagent:").length - 1,
 }));

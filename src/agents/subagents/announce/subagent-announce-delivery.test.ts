@@ -1,24 +1,36 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
-import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
+import type { SessionEntry } from "../../../config/sessions.js";
+import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
-} from "../infra/outbound/session-binding-service.js";
-import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+} from "../../../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import type {
   EmbeddedAgentQueueMessageOptions,
   EmbeddedAgentQueueMessageOutcome,
-} from "./embedded-agent-runner/runs.js";
-import type { AgentInternalEvent } from "./internal-events.js";
+} from "../../embedded-agent-runner/runs.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-} from "./internal-runtime-context.js";
+} from "../../internal-runtime-context.js";
+import {
+  createTaskCompletionEvent,
+  expectDeliveryPath,
+  expectRecordFields,
+  imageCompletionEvents,
+  mockCallArg,
+  musicCompletionEvents,
+  taskCompletionEvents,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import {
   callGateway as runtimeCallGateway,
   dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
@@ -29,15 +41,6 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-origin.js";
-import {
-  createTaskCompletionEvent,
-  expectDeliveryPath,
-  expectRecordFields,
-  imageCompletionEvents,
-  mockCallArg,
-  musicCompletionEvents,
-  taskCompletionEvents,
-} from "./subagent-test-fixtures.test-helpers.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn((_payload: unknown, _leaseMs: number) => ({
@@ -49,20 +52,20 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
 
-vi.mock("./subagent-completion-delivery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-completion-delivery.js")>()),
+vi.mock("../../subagent-completion-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../subagent-completion-delivery.js")>()),
   admitCorrelatedSubagentSessionDelivery: (params: { payload: Record<string, unknown> }) =>
     sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery(params.payload, 125_000),
 }));
 
-vi.mock("../infra/session-delivery-queue.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/session-delivery-queue.js")>()),
+vi.mock("../../../infra/session-delivery-queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/session-delivery-queue.js")>()),
   enqueueClaimedSessionDelivery: sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim: sessionDeliveryQueueMocks.releaseSessionDeliveryClaim,
 }));
 
-vi.mock("../infra/session-delivery-queue-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/session-delivery-queue-runtime.js")>()),
+vi.mock("../../../infra/session-delivery-queue-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/session-delivery-queue-runtime.js")>()),
   scheduleSessionDelivery: sessionDeliveryQueueMocks.scheduleSessionDelivery,
 }));
 

@@ -31,7 +31,8 @@ import type { createSubagentRegistryLifecycleDelivery } from "./subagent-registr
 import type { createSubagentRegistryLifecycleRequesterWake } from "./subagent-registry-lifecycle-requester-wake.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
-type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+type RunSubagentAnnounceFlow =
+  (typeof import("./subagents/announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 

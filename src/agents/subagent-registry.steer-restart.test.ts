@@ -148,7 +148,7 @@ const noopContextEngine = {
   assemble: async () => ({ messages: [], estimatedTokens: 0 }),
   compact: async () => ({ ok: true, compacted: false }),
 } satisfies ContextEngine;
-vi.mock("./subagent-announce.js", () => ({
+vi.mock("./subagents/announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
 }));

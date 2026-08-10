@@ -32,7 +32,7 @@ const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
-vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,

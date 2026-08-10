@@ -9,7 +9,7 @@ import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-reg
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 type RequesterSettleWakeBatchState =
-  import("./subagent-announce.requester-settle-wake.js").RequesterSettleWakeBatchState;
+  import("./subagents/announce/subagent-announce.requester-settle-wake.js").RequesterSettleWakeBatchState;
 
 export function createSubagentRegistryLifecycleRequesterWake(
   params: SubagentRegistryLifecycleParams,

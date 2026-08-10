@@ -8,7 +8,6 @@ import {
   GatewayDrainingError,
 } from "../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
   reconcileOrphanedRestoredRuns,
@@ -21,6 +20,7 @@ import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
+import { applySubagentLaunchAuthorization } from "./subagents/spawn/subagent-launch-authorization.js";
 import { retrySubagentCleanup } from "./subagents/spawn/subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "./subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";

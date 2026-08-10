@@ -10,7 +10,6 @@ import {
   type DetachedTaskTerminalState,
 } from "../tasks/detached-task-runtime-contract.js";
 import { resolveRequiredCompletionTerminalResult } from "../tasks/task-completion-contract.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 import {
   SUBAGENT_ENDED_REASON_KILLED,
@@ -22,6 +21,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunOutcome } from "./subagents/announce/subagent-announce-output.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 

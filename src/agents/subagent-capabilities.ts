@@ -27,7 +27,7 @@ import {
   findSubagentSessionEntryById,
   getSubagentDepthFromSessionStore,
   readSubagentSessionStore,
-} from "./subagent-depth.js";
+} from "./subagents/spawn/subagent-depth.js";
 
 /** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";

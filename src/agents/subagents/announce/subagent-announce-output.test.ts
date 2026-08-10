@@ -10,7 +10,7 @@ import {
   readSubagentOutput,
 } from "./subagent-announce-output.test-support.js";
 
-type CallGateway = typeof import("../gateway/call.js").callGateway;
+type CallGateway = typeof import("../../../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
 type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSessionEntry;
 type ReadSessionMessagesAsync =

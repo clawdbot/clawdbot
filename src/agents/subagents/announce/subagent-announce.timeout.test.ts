@@ -19,7 +19,7 @@ let callGatewayImpl: (request: GatewayCall) => Promise<unknown> = async (request
   return {};
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
-let configOverride: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
+let configOverride: ReturnType<(typeof import("../../../config/config.js"))["getRuntimeConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -75,8 +75,8 @@ function createTimeoutHistoryWithNoReply() {
   ];
 }
 
-vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
+vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("../spawn/subagent-depth.js", createSubagentDepthModuleMock);
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
   createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: async (request: unknown) => {
@@ -196,7 +196,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
-vi.mock("./subagent-registry-runtime.js", () => ({
+vi.mock("../../subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
   countPendingDescendantRunsExcludingRun: () => 0,

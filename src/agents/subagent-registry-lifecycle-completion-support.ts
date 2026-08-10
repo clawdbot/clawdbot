@@ -1,11 +1,11 @@
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
+import type { SubagentRunOutcome } from "./subagents/announce/subagent-announce-output.js";
 
 type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),

@@ -14,7 +14,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import {
   resolveExactSubagentCompletionEvent,
   type TrustedSubagentCompletionHandoff,
-} from "../../agents/subagent-announce-handoff.js";
+} from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";

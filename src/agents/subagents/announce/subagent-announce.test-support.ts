@@ -2,11 +2,11 @@
  * Test runtime factory for subagent announce delivery. It wires gateway,
  * session-store, queue, and hook behavior to caller-provided mocks.
  */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { callGateway } from "../gateway/call.js";
-import type { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
-import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { callGateway } from "../../../gateway/call.js";
+import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;

@@ -46,7 +46,7 @@ type RegistryDeps = {
   getGatewayRecoveryRuntime: () =>
     | import("../gateway/server-instance-runtime.types.js").GatewayRecoveryRuntime
     | undefined;
-  captureSubagentCompletionReply: typeof import("./subagent-announce.js").captureSubagentCompletionReply;
+  captureSubagentCompletionReply: typeof import("./subagents/announce/subagent-announce.js").captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd: typeof import("../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof import("./subagent-registry-state.js").getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof import("../config/config.js").getRuntimeConfig;
@@ -55,8 +55,8 @@ type RegistryDeps = {
   persistSubagentRunsToDiskOrThrow: typeof import("./subagent-registry-state.js").persistSubagentRunsToDiskOrThrow;
   resolveAgentTimeoutMs: typeof import("./timeout.js").resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof import("./subagent-registry-state.js").restoreSubagentRunsFromDisk;
-  runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
-  maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
+  runSubagentAnnounceFlow: typeof import("./subagents/announce/subagent-announce.js").runSubagentAnnounceFlow;
+  maybeWakeRequesterAfterAllChildrenSettled: typeof import("./subagents/announce/subagent-announce.requester-settle-wake.js").maybeWakeRequesterAfterAllChildrenSettled;
   ensureContextEnginesInitialized?: () => void;
   loadAgentRuntimePluginRegistryHandle?: import("./subagent-registry-deps.js").SubagentRegistryDeps["loadAgentRuntimePluginRegistryHandle"];
   resolveContextEngine?: typeof import("../context-engine/registry.js").resolveContextEngine;

@@ -105,9 +105,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
-      "subagent-announce-delivery",
-    ]);
+    expect(
+      describeSeamKinds("src/agents/subagents/announce/subagent-announce-origin.ts", source),
+    ).toEqual(["subagent-announce-delivery"]);
   });
 
   it("detects parent-stream seams for ACP spawn relays", () => {

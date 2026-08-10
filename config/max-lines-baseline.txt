@@ -441,9 +441,9 @@ src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
 src/agents/sessions/settings-manager.ts
-src/agents/subagent-announce-delivery.test.ts
-src/agents/subagent-announce-delivery.ts
-src/agents/subagent-announce.format.e2e.test.ts
+src/agents/subagents/announce/subagent-announce-delivery.test.ts
+src/agents/subagents/announce/subagent-announce-delivery.ts
+src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagent-control.test.ts
 src/agents/subagent-control.ts
 src/agents/subagent-registry-lifecycle.test.ts

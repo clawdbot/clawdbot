@@ -25,7 +25,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 const loadSessionEntryByKeyMock = vi.fn();
-vi.mock("./subagent-announce-delivery.js", () => ({
+vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
 }));
 

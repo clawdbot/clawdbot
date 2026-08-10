@@ -1,9 +1,9 @@
 export * from "./subagent-announce-delivery.js";
 
 type QueueMessageOptions =
-  import("./embedded-agent-runner/runs.js").EmbeddedAgentQueueMessageOptions;
+  import("../../embedded-agent-runner/runs.js").EmbeddedAgentQueueMessageOptions;
 type QueueMessageOutcome =
-  import("./embedded-agent-runner/runs.js").EmbeddedAgentQueueMessageOutcome;
+  import("../../embedded-agent-runner/runs.js").EmbeddedAgentQueueMessageOutcome;
 type DeliveryDeps = {
   callGateway: typeof import("./subagent-announce-delivery.runtime.js").callGateway;
   dispatchGatewayMethodInProcess: typeof import("./subagent-announce-delivery.runtime.js").dispatchGatewayMethodInProcess;

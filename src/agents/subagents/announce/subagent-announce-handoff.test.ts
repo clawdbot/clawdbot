@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "./internal-event-contract.js";
-import type { AgentInternalEvent } from "./internal-events.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,

@@ -694,7 +694,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
 
 async function runDedupeSample(childCount: number): Promise<Sample> {
   const { dedupeLatestChildCompletionRows } =
-    await import("../src/agents/subagent-announce-output.js");
+    await import("../src/agents/subagents/announce/subagent-announce-output.js");
   const rowsForOrder = (generations: number[]) =>
     Array.from({ length: childCount }, (_, child) =>
       generations.map((generation) => ({

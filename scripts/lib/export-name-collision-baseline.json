@@ -1088,7 +1088,7 @@
   {
     "name": "readSessionEntry",
     "files": [
-      "src/agents/subagent-announce.runtime.ts",
+      "src/agents/subagents/announce/subagent-announce.runtime.ts",
       "src/cron/isolated-agent.turn-test-helpers.ts"
     ]
   },

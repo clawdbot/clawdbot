@@ -383,7 +383,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     ...createDefaultSessionHelperMocks(),
   }));
 
-  vi.doMock("../../subagent-depth.js", () => ({
+  vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 

@@ -6,10 +6,11 @@ import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.j
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type CaptureSubagentCompletionReply =
-  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
-type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+  (typeof import("./subagents/announce/subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow =
+  (typeof import("./subagents/announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
 type MaybeWakeRequesterAfterAllChildrenSettled =
-  (typeof import("./subagent-announce.requester-settle-wake.js"))["maybeWakeRequesterAfterAllChildrenSettled"];
+  (typeof import("./subagents/announce/subagent-announce.requester-settle-wake.js"))["maybeWakeRequesterAfterAllChildrenSettled"];
 export type SubagentRegistryLifecycleParams = {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
