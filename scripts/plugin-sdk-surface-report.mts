@@ -195,7 +195,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (realtime-voice-activation is private-local and not counted here).
       // +1: registry-bound plugin command planning and exact selected execution.
       // +1: canonical Computer Use wire contract and node-host provider seam.
-      145,
+      // +1: documented transcript provider contract for account-bound capture plugins.
+      146,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -285,7 +286,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -1: remove the orphan diagnostic traceparent propagation export.
-      4329,
+      // +18: documented transcript provider lifecycle, locator, and result contracts.
+      4347,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -359,7 +361,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -1: remove the orphan diagnostic traceparent propagation export.
-      2576,
+      // +5: documented transcript provider lookup, normalization, config, and factory helpers.
+      2581,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

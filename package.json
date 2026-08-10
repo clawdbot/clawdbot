@@ -236,7 +236,6 @@
     "!dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
     "!dist/plugin-sdk/time-runtime.d.ts",
     "!dist/plugin-sdk/tool-payload.d.ts",
-    "!dist/plugin-sdk/transcripts.d.ts",
     "!dist/plugin-sdk/transport-ready-runtime.d.ts",
     "!dist/plugin-sdk/tts-runtime.d.ts",
     "!dist/plugin-sdk/types.d.ts",
@@ -1170,6 +1169,7 @@
       "default": "./dist/plugin-sdk/meeting-runtime.js"
     },
     "./plugin-sdk/transcripts": {
+      "types": "./dist/plugin-sdk/transcripts.d.ts",
       "default": "./dist/plugin-sdk/transcripts.js"
     },
     "./plugin-sdk/media-understanding": {
