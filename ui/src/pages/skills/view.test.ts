@@ -97,7 +97,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubSearchLoading: false,
     clawhubSearchError: null,
     clawhubDetail: null,
-    clawhubDetailSlug: null,
+    clawhubDetailRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -746,11 +746,11 @@ describe("renderSkills", () => {
     expect(resultItem).toBeInstanceOf(HTMLElement);
     expect(installButton).toBeInstanceOf(HTMLButtonElement);
     expect(detailButton).toBeInstanceOf(HTMLButtonElement);
-    expect(detailButton?.getAttribute("aria-label")).toBe("Open GitHub details");
+    expect(detailButton?.getAttribute("aria-label")).toBe("Open github details");
     expect(detailButton?.contains(installButton)).toBe(false);
     expect(resultItem?.querySelector(".settings-row__title")?.textContent?.trim()).toBe("GitHub");
     expect(resultItem?.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
-      "GitHub integration for OpenClaw",
+      "GitHub integration for OpenClaw · github",
     );
     expect(resultItem?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("v1.2.3");
     expect(resultItem?.querySelector<HTMLImageElement>(".clawhub-skill-icon")?.src).toBe(
@@ -773,7 +773,7 @@ describe("renderSkills", () => {
         createProps({
           clawhubSearchError: "rate limited",
           clawhubInstallMessage: { kind: "success", text: "Installed github" },
-          clawhubDetailSlug: "github",
+          clawhubDetailRef: "github",
           clawhubDetail: {
             skill: {
               slug: "github",
@@ -825,6 +825,59 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
 
+  it("routes each same-slug search result to its own publisher", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubDetailOpen = vi.fn();
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "imap-smtp-email",
+          clawhubResults: ["gzlicanyi", "wangchenyu8"].map((ownerHandle) => ({
+            score: 1,
+            slug: "imap-smtp-email",
+            ownerHandle,
+            installRef: `@${ownerHandle}/imap-smtp-email`,
+            displayName: "imap-smtp-email",
+          })),
+          onClawHubDetailOpen,
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = [...container.querySelectorAll<HTMLElement>(".clawhub-skill-result__button")].map(
+      (button) => button.closest<HTMLElement>(".plugins-item")!,
+    );
+    expect(rows).toHaveLength(2);
+    // Rows are otherwise identical, so the reference is what the operator reads and what the
+    // row actions must send; a bare slug here is the reported 409 AMBIGUOUS_SKILL_SLUG bug.
+    expect(
+      rows.map((row) => row.querySelector(".settings-row__desc")?.textContent?.trim()),
+    ).toEqual(["@gzlicanyi/imap-smtp-email", "@wangchenyu8/imap-smtp-email"]);
+
+    for (const row of rows) {
+      row.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+      row
+        .querySelector<HTMLButtonElement>(".btn.btn--sm")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+
+    expect(onClawHubDetailOpen.mock.calls.flat()).toEqual([
+      "@gzlicanyi/imap-smtp-email",
+      "@wangchenyu8/imap-smtp-email",
+    ]);
+    expect(onClawHubInstall.mock.calls.flat()).toEqual([
+      "@gzlicanyi/imap-smtp-email",
+      "@wangchenyu8/imap-smtp-email",
+    ]);
+  });
+
   it("renders ClawHub acknowledgement retry actions", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -837,7 +890,7 @@ describe("renderSkills", () => {
           clawhubInstallMessage: {
             kind: "error",
             text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeSlug: "github",
+            acknowledgeRef: "github",
             acknowledgeVersion: "1.2.3",
           },
           onClawHubInstall,

@@ -84,6 +84,38 @@ describe("clawhub skills", () => {
     ).resolves.toMatchObject([{ icon: undefined }, { icon: undefined }]);
   });
 
+  it("gives every search result the reference detail and install must send back", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          results: [
+            { score: 2, slug: "email", ownerHandle: "alice", displayName: "Email" },
+            { score: 1, slug: "email", ownerHandle: "bob", displayName: "Email" },
+            { score: 1, slug: "orphan", displayName: "Orphan" },
+            {
+              score: 1,
+              slug: "weather",
+              installRef: "skills-sh:openclaw/skills/weather",
+              trustState: "not-scanned-by-clawhub",
+              displayName: "Weather",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+
+    await expect(
+      searchClawHubSkills({ query: "email", baseUrl: "https://registry.example", fetchImpl }).then(
+        (results) => results.map((entry) => entry.installRef),
+      ),
+    ).resolves.toEqual([
+      "@alice/email",
+      "@bob/email",
+      undefined,
+      "skills-sh:openclaw/skills/weather",
+    ]);
+  });
+
   it("preserves the legacy telemetry opt-out when the primary env is blank", async () => {
     process.env.CLAWHUB_DISABLE_TELEMETRY = "   ";
     process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";

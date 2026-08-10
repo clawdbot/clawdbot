@@ -34,6 +34,7 @@ import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   installSkillFromClawHub,
   readLocalSkillCardContentSync,
@@ -298,8 +299,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      // Same reference grammar as skills.install, so a client cannot review one publisher's
+      // card and then install another's.
+      const requested = parseRequestedClawHubSkillRef((params as { slug: string }).slug);
       const detail = await fetchClawHubSkillDetail({
-        slug: (params as { slug: string }).slug,
+        slug: requested.slug,
+        ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
       });
       respond(true, detail, undefined);
     } catch (err) {
