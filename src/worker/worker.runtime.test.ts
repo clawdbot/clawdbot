@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -49,8 +50,7 @@ const browserRuntimeMocks = vi.hoisted(() => ({
   dispose: vi.fn(),
 }));
 
-vi.mock("./browser-runtime.js", async () => {
-  const { Type } = await import("typebox");
+vi.mock("./browser-runtime.js", () => {
   browserRuntimeMocks.createWorkerBrowserToolRuntime.mockImplementation(async () => ({
     tool: {
       name: "browser",
