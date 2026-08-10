@@ -321,8 +321,10 @@ describe("openclaw attach (action)", () => {
       // Child survives SIGINT — timer should escalate to SIGKILL
       vi.advanceTimersByTime(5_000);
       expect(spawnedChild.kill).toHaveBeenCalledWith("SIGKILL");
-      // The SIGKILL triggers child exit → revoke + finish
-      spawnedChild.emit("exit", null, "SIGKILL");
+      // finish() must report SIGKILL's exit code (128+9) even before
+      // the child exit event fires — the force-kill path records
+      // childExitSignal = "SIGKILL" synchronously so callers never see
+      // a misleading success (0) after forced termination.
       await vi.runAllTimersAsync();
       expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
       expect(exitCode).toBe(128 + 9); // SIGKILL

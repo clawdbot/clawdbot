@@ -222,8 +222,12 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           forceKillTimer = setTimeout(() => {
             forceKillTimer = undefined;
             child.kill("SIGKILL");
-            // Forced cleanup was attempted; revoke and finish even if the
-            // child has not reported exit yet.
+            // Record the forced signal so finish() returns SIGKILL's
+            // exit code (128+9) even when the child exit event has not
+            // fired yet. Without this, finish() falls back to 0 and
+            // shell callers see successful completion after forced
+            // termination.
+            childExitSignal = "SIGKILL";
             void (async () => {
               await revokeOnce();
               finish();
