@@ -49,6 +49,13 @@ export type {
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
 
+export function isOwnerInRefreshScope(
+  agentId: string | undefined,
+  agentIds?: ReadonlySet<string>,
+): boolean {
+  return !agentIds || !agentId || agentIds.has(agentId);
+}
+
 export function createPreparedModelRuntimeOwner(
   input: PreparedModelRuntimeInput,
   provenance: PreparedModelRuntimeOwner["provenance"],

@@ -51,6 +51,7 @@ export type {
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.owner.js";
+import { isOwnerInRefreshScope } from "./prepared-model-runtime.owner.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 // This bound only detects hung builds; overlap safety comes from the completion
@@ -488,9 +489,8 @@ export function markPreparedModelRuntimeSnapshotsStale(
   }
   refreshRequestEpoch += 1;
   const staleError = new Error(reason);
-  const scoped = options.agentIds;
   for (const [key, owner] of owners) {
-    if (scoped && owner.input.agentId && !scoped.has(owner.input.agentId)) {
+    if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
       continue;
     }
     // Standalone owners have no publication controller to rebuild them. Retire them so the next
@@ -536,11 +536,10 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   retainedGatewayRunOwners.clear(owners);
   const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
   const catalogMode = options.catalogMode ?? "live";
-  const scoped = options.agentIds;
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
   for (const owner of owners.values()) {
-    if (scoped && owner.input.agentId && !scoped.has(owner.input.agentId)) {
+    if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
       continue;
     }
     // Invalidate every prior generation before starting any replacement. A failed reload must
@@ -554,10 +553,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const knownKeys = new Set<string>();
   for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
     let input = normalizePreparedModelRuntimeInput(rawInput);
-    if (scoped && input.agentId && !scoped.has(input.agentId)) {
-      // A scoped refresh leaves configured owners outside the set completely untouched: they
-      // keep their committed snapshot, are never rebuilt, and are never retired (retirement only
-      // runs for a full refresh).
+    if (!isOwnerInRefreshScope(input.agentId, options.agentIds)) {
       continue;
     }
     const preservedOwner = [...owners.values()].find(
@@ -585,10 +581,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   }
   for (const [key, owner] of owners) {
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
-      if (scoped && !(owner.input.agentId && scoped.has(owner.input.agentId))) {
-        // A scoped refresh did not enumerate out-of-scope owners, so their keys are never in
-        // knownKeys. Retire only owners whose agent is in scope (e.g. the prior key of an agent
-        // whose model changed); never retire the untouched out-of-scope owners.
+      if (!isOwnerInRefreshScope(owner.input.agentId, options.agentIds)) {
         continue;
       }
       owners.delete(key);
