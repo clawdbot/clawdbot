@@ -11,14 +11,16 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
-  forkSessionAtMessage,
   listSessionBranches,
-  rewindSessionToMessage,
-  switchSessionBranch,
   type SessionBranchListResult,
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import {
+  forkSqliteSessionAtMessage as forkSessionAtMessage,
+  rewindSqliteSessionToMessage as rewindSessionToMessage,
+  switchSqliteSessionBranch as switchSessionBranch,
+} from "../../config/sessions/session-accessor.sqlite.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {
   isCompetingSessionWorkAdmissionActive,
@@ -44,6 +46,10 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
+type MessageCutMutationResult =
+  | SessionMessageCutMutationResult
+  | SessionBranchSwitchMutationResult
+  | { status: "conflict" };
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
@@ -344,6 +350,10 @@ async function mutateSessionAtMessage(
       }
       const targetKey =
         action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
+      const expectedState = {
+        sessionId: current.entry.sessionId,
+        lifecycleRevision: current.entry.lifecycleRevision,
+      };
       const upstreamForkHarness = upstreamLink
         ? resolveUpstreamForkHarness(upstreamLink)
         : undefined;
@@ -411,33 +421,42 @@ async function mutateSessionAtMessage(
         });
         return;
       }
-      let result: SessionMessageCutMutationResult | SessionBranchSwitchMutationResult;
+      let result: MessageCutMutationResult;
       try {
         result = await (action === "fork"
-          ? forkSessionAtMessage({
-              agentId: current.target.agentId,
-              entryId,
-              sessionKey: current.canonicalKey,
-              sessionStoreKey: current.sessionStoreKey,
-              storePath: current.storePath,
-              targetKey,
-              creation: resolveOperatorSessionCreation(client),
-            })
-          : action === "rewind"
-            ? rewindSessionToMessage({
+          ? forkSessionAtMessage(
+              {
                 agentId: current.target.agentId,
                 entryId,
                 sessionKey: current.canonicalKey,
                 sessionStoreKey: current.sessionStoreKey,
                 storePath: current.storePath,
-              })
-            : switchSessionBranch({
-                agentId: current.target.agentId,
-                leafEntryId: entryId,
-                sessionKey: current.canonicalKey,
-                sessionStoreKey: current.sessionStoreKey,
-                storePath: current.storePath,
-              }));
+                targetKey,
+                creation: resolveOperatorSessionCreation(client),
+              },
+              expectedState,
+            )
+          : action === "rewind"
+            ? rewindSessionToMessage(
+                {
+                  agentId: current.target.agentId,
+                  entryId,
+                  sessionKey: current.canonicalKey,
+                  sessionStoreKey: current.sessionStoreKey,
+                  storePath: current.storePath,
+                },
+                expectedState,
+              )
+            : switchSessionBranch(
+                {
+                  agentId: current.target.agentId,
+                  leafEntryId: entryId,
+                  sessionKey: current.canonicalKey,
+                  sessionStoreKey: current.sessionStoreKey,
+                  storePath: current.storePath,
+                },
+                expectedState,
+              ));
       } catch {
         respond(
           false,
@@ -501,31 +520,30 @@ async function mutateSessionAtMessage(
 }
 
 function respondMessageCutError(
-  result: Exclude<
-    SessionMessageCutMutationResult | SessionBranchSwitchMutationResult,
-    { status: "created" }
-  >,
+  result: Exclude<MessageCutMutationResult, { status: "created" }>,
   action: MessageCutAction,
   entryId: string,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
   const actionLabel = action === "switch" ? "branch switch" : action;
   const message =
-    result.status === "missing-session"
-      ? "session not found"
-      : result.status === "missing-entry"
-        ? `${action === "switch" ? "branch" : "message"} entry not found: ${entryId}`
-        : result.status === "not-branch-tip"
-          ? `entry is not a branch tip: ${entryId}`
-          : result.status === "already-active"
-            ? `branch is already active: ${entryId}`
-            : result.status === "not-user-message"
-              ? `entry is not a user message: ${entryId}`
-              : result.status === "off-active-path"
-                ? `message entry is not on the active path: ${entryId}`
-                : result.status === "unsupported-storage"
-                  ? `session transcript storage does not support ${actionLabel}`
-                  : `failed to ${actionLabel} session`;
+    result.status === "conflict"
+      ? `Session changed; retry ${action}.`
+      : result.status === "missing-session"
+        ? "session not found"
+        : result.status === "missing-entry"
+          ? `${action === "switch" ? "branch" : "message"} entry not found: ${entryId}`
+          : result.status === "not-branch-tip"
+            ? `entry is not a branch tip: ${entryId}`
+            : result.status === "already-active"
+              ? `branch is already active: ${entryId}`
+              : result.status === "not-user-message"
+                ? `entry is not a user message: ${entryId}`
+                : result.status === "off-active-path"
+                  ? `message entry is not on the active path: ${entryId}`
+                  : result.status === "unsupported-storage"
+                    ? `session transcript storage does not support ${actionLabel}`
+                    : `failed to ${actionLabel} session`;
   respond(
     false,
     undefined,

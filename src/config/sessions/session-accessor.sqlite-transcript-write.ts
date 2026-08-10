@@ -153,14 +153,21 @@ export async function rewriteSqliteTranscriptEventRowsExact(
 
 /** Fully replaces rows for one transcript synchronously for sync session runtimes. */
 export function replaceSqliteTranscriptEventsSync(
-  scope: SessionTranscriptAccessScope,
+  scope: SessionTranscriptWriteScope,
   events: TranscriptEvent[],
 ): boolean {
   const resolved = resolveSqliteTranscriptScope(scope);
   let replaced = false;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
-    if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
+    if (
+      !fresh ||
+      fresh.entry.sessionId !== resolved.sessionId ||
+      (scope.expectedLifecycleRevision !== undefined &&
+        fresh.entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
+      (scope.expectedWriterRunId !== undefined &&
+        (fresh.entry as InternalSessionEntry).activeWriterRunId !== scope.expectedWriterRunId)
+    ) {
       return;
     }
     replaceSqliteTranscriptEventsInTransaction(database, resolved, events);

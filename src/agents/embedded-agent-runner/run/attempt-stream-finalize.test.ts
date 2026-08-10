@@ -43,13 +43,7 @@ function createFixture(overrides?: Partial<FinalizeInput>) {
     sessionManager: {
       buildSessionContext: () => ({ messages: repairedMessages }),
     },
-    sessionLockController: {
-      releaseForPrompt: vi.fn(async () => {
-        order.push("release-prompt-lock");
-      }),
-      isPromptSubmissionBlockedError: vi.fn(() => false),
-    },
-    withOwnedSessionWriteLock: vi.fn(async (operation) => await operation()),
+    withOwnedTranscriptWrite: vi.fn(async (operation) => await operation()),
     waitForPendingEvents: vi.fn(async () => {
       order.push("pending-events");
     }),
@@ -278,13 +272,7 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     });
 
     expect(fixture.activeSession.agent.state.messages).toBe(fixture.repairedMessages);
-    expect(fixture.order).toEqual([
-      "pending-events",
-      "release-prompt-lock",
-      "settle",
-      "settled-published",
-      "after-turn",
-    ]);
+    expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
     expect(mocks.settleStream).toHaveBeenCalledWith(
       expect.objectContaining({
         runAbortDeadlineAtMs: 123,
@@ -387,17 +375,9 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     expect(mocks.settleStream).toHaveBeenCalledOnce();
   });
 
-  it("settles an aborted run when prompt release returns its recorded cancellation reason", async () => {
+  it("settles an aborted run with its recorded cancellation reason", async () => {
     const cancellationReason = new Error("cancelled by operator");
-    const fixture = createFixture({
-      sessionLockController: {
-        releaseForPrompt: vi.fn(async () => {
-          throw cancellationReason;
-        }),
-        isPromptSubmissionBlockedError: (error: unknown) => error === cancellationReason,
-      } as never,
-      repairedRejectedThinkingReplay: false,
-    });
+    const fixture = createFixture({ repairedRejectedThinkingReplay: false });
     fixture.input.settle.readLifecycleState = () => ({
       aborted: true,
       timedOut: false,
@@ -451,50 +431,6 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
         promptErrorSource: "compaction",
       }),
     );
-    expect(fixture.input.onSettled).not.toHaveBeenCalled();
-    expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
-  });
-
-  it("restores the rewound in-memory branch when prompt lock release fails", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
-    const rejectedId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Rejected first answer" }],
-      stopReason: "stop",
-      timestamp: 2,
-    } as never);
-    const originalMessages = sessionManager.buildSessionContext().messages;
-    const activeSession = { agent: { state: { messages: originalMessages } } };
-    const releaseError = new Error("prompt lock release failed");
-    const fixture = createFixture({
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      sessionLockController: {
-        releaseForPrompt: vi.fn(async () => {
-          throw releaseError;
-        }),
-        isPromptSubmissionBlockedError: () => false,
-      } as never,
-      repairedRejectedThinkingReplay: false,
-      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
-    });
-
-    await expect(finalizeEmbeddedAttemptStreamPhase(fixture.input)).rejects.toBe(releaseError);
-
-    expect(sessionManager.getLeafId()).toBe(promptId);
-    expect(activeSession.agent.state.messages).toEqual(
-      sessionManager.buildSessionContext().messages,
-    );
-    expect(JSON.stringify(activeSession.agent.state.messages)).not.toContain(
-      "Rejected first answer",
-    );
-    expect(mocks.settleStream).not.toHaveBeenCalled();
-    expect(fixture.input.onSettleErrorState).not.toHaveBeenCalled();
     expect(fixture.input.onSettled).not.toHaveBeenCalled();
     expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
   });

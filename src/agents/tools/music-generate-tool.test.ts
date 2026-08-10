@@ -9,8 +9,8 @@ import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as musicGenerateBackground from "./media-generate-background.js";
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
-import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
 
 function createMusicGenerateTool(
@@ -167,7 +167,7 @@ vi.mock("../../utils/fetch-timeout.js", async () => {
     buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
   };
 });
-vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
+vi.mock("./media-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 

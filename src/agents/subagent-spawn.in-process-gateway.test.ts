@@ -7,8 +7,8 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../config/config.js";
+import { prepareAgentRequestPreflight } from "../gateway/agent-turn/agent-request-preflight.js";
 import { createAgentTurnIo } from "../gateway/agent-turn/io.js";
-import { prepareAgentRequestPreflight } from "../gateway/server-methods/agent-request-preflight.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -33,7 +33,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
-import { testing as swarmSchedulerTesting } from "./swarm-scheduler.test-support.js";
+import { testing as swarmSchedulerTesting } from "./subagents/swarm/swarm-scheduler.test-support.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";

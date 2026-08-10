@@ -65,7 +65,7 @@ openclaw-new-session-page {
   color: var(--muted);
   font: inherit;
   font-size: 11px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__visibility:hover:not(:disabled),
@@ -156,7 +156,7 @@ openclaw-new-session-page {
   font-size: 12px;
   color: var(--muted);
   list-style: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   user-select: none;
   border: 0;
   border-radius: 999px;
@@ -426,7 +426,7 @@ wa-dropdown.new-session-page__start-menu {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-nav:hover:not(:disabled) {
@@ -492,7 +492,7 @@ wa-dropdown.new-session-page__start-menu {
   color: var(--text);
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-entry:hover {
@@ -582,7 +582,7 @@ wa-dropdown.new-session-page__start-menu {
   color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .new-session-page__browser-use:disabled {

@@ -24,13 +24,13 @@ export function registerSlackMonitorEvents(params: {
     ctx: params.ctx,
     handleSlackMessage: params.handleSlackMessage,
   });
+  registerSlackReactionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
+  registerSlackPinEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
+  registerSlackMemberEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
   if (params.ctx.installationIdentity.kind === "enterprise") {
     return;
   }
-  registerSlackReactionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
-  registerSlackMemberEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
   registerSlackChannelEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
-  registerSlackPinEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
   registerSlackHomeEvents({
     ctx: params.ctx,
     slashCommandName: params.appHomeSlashCommandName,

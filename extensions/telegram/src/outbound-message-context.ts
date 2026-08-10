@@ -9,7 +9,7 @@ import { buildTelegramSelfSenderName } from "./group-history-window.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
 import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
-import { resolveTelegramProviderObservedThreadId } from "./provider-thread-proof.js";
+import { resolveTelegramProviderObservedThreadSpec } from "./provider-thread-proof.js";
 
 type TelegramOutboundPromptContextUser = {
   id?: number;
@@ -30,6 +30,7 @@ export type TelegramOutboundPromptContextMessage = {
   text?: string;
   caption?: string;
   message_thread_id?: number;
+  direct_messages_topic?: { topic_id?: number };
 };
 
 type TelegramOutboundPromptContextAccount = {
@@ -142,11 +143,11 @@ export async function recordOutboundMessageForPromptContext(params: {
   recordGroupHistory?: boolean;
 }): Promise<boolean> {
   try {
-    const providerObservedThreadId = resolveTelegramProviderObservedThreadId({
+    const providerObservedThread = resolveTelegramProviderObservedThreadSpec({
       message: params.message,
       successfulSendThread: params.successfulSendThread,
     });
-    const messageThreadId = params.messageThreadId ?? providerObservedThreadId;
+    const messageThreadId = providerObservedThread?.id ?? params.messageThreadId;
     const cacheMessage = buildOutboundCacheMessage({
       ...params,
       ...(messageThreadId !== undefined ? { messageThreadId } : {}),
@@ -166,7 +167,7 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(params.promptContextProjection
         ? { promptContextProjection: params.promptContextProjection }
         : {}),
-      ...(providerObservedThreadId !== undefined ? { providerObservedThreadId } : {}),
+      ...(providerObservedThread ? { providerObservedThread } : {}),
       ...(messageThreadId !== undefined ? { threadId: messageThreadId } : {}),
     });
     if (params.recordGroupHistory !== false) {

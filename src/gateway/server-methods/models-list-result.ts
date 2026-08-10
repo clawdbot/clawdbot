@@ -8,6 +8,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -283,6 +284,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   preparedAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -338,6 +340,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     metadataSnapshot,
     ...(params.preparedAuthStore ? { preparedAuthStore: params.preparedAuthStore } : {}),
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
     workspaceDir,
     routeResolverFactory: params.routeResolverFactory,
   });

@@ -3,27 +3,13 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateAgentParams } from "../../../packages/gateway-protocol/src/index.js";
+import { prepareAgentRequestPreflight } from "../agent-turn/agent-request-preflight.js";
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
-import type { AgentTurnPrincipal } from "../agent-turn/types.js";
-import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
+import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function captureAgentTurnPrincipal(client: GatewayClient | null): AgentTurnPrincipal | null {
-  if (!client) {
-    return null;
-  }
-  return {
-    authenticatedUserId: client.authenticatedUserId,
-    authenticatedUserProfile: client.authenticatedUserProfile,
-    connId: client.connId,
-    connect: client.connect,
-    internal: client.internal,
-    isDeviceTokenAuth: client.isDeviceTokenAuth,
-  };
-}
 
 export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   params,

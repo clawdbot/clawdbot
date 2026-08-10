@@ -9,19 +9,19 @@ import { SessionManager } from "../../sessions/index.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
+import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import {
   runAttemptContextEngineBootstrap,
   type AttemptContextEngine,
 } from "./attempt.context-engine-helpers.js";
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
-import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 export async function prepareEmbeddedAttemptSessionManager(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngine?: AttemptContextEngine;
@@ -32,8 +32,8 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   sessionAgentId: string;
-  sessionLockController: EmbeddedAttemptSessionLockController;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }) {
   const { attempt } = input;
   const transcriptState = await resolveExistingAttemptTranscriptState({
@@ -95,9 +95,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         attempt.suppressTranscriptOnlyAssistantPersistence,
       suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
       skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
-      onMessagePersisted: () => {
-        input.sessionLockController.refreshAfterOwnedSessionWrite();
-      },
       onUserMessagePreparingForPersistence: (_message, recorder) => {
         latestPersistedUserMessage = undefined;
         latestUserTurnTranscriptRecorder = recorder;
@@ -131,7 +128,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   // even when a context-engine or transcript preparation step fails.
   input.onSessionManagerCreated(sessionManager);
 
-  await input.withOwnedSessionWriteLock(async () => {
+  await input.withOwnedTranscriptWrite(async () => {
     await runAttemptContextEngineBootstrap({
       hadSessionFile: transcriptState.hasBootstrapTranscriptState,
       contextEngine: input.activeContextEngine,

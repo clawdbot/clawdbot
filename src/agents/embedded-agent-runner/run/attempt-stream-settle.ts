@@ -33,7 +33,6 @@ import {
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt.context-engine-helpers.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
 import {
   hasActiveCompactionRetryWork,
@@ -43,14 +42,11 @@ import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
 type ToolSearchTargetTranscriptProjections = Parameters<
   typeof projectToolSearchTargetTranscriptMessages
 >[1];
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type StreamSettleResult = {
   promptError: unknown;
@@ -72,8 +68,7 @@ export async function settleEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: AgentSession;
   sessionManager: SessionManager;
-  sessionLockController: AttemptSessionLockController;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
@@ -253,7 +248,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
-  await input.withOwnedSessionWriteLock(async () => {
+  await input.withOwnedTranscriptWrite(async () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
     compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
     appendAttemptCacheTtlIfNeeded({

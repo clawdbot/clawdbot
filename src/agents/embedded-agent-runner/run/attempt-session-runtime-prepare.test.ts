@@ -171,8 +171,8 @@ function createFixture() {
       replayAllowedToolNames: new Set(["read"]),
       resolveActiveContextEnginePluginId: vi.fn(),
       sessionAgentId: "main",
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      transcriptLifecycle: {},
+      withOwnedTranscriptWrite: vi.fn(),
     },
     agentSession: {
       agentCoreThinkingLevel: "medium",

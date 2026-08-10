@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -1054,10 +1055,39 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: sourceSessionKey,
       BodyForAgent: "continue",
     });
+    const preparedLookup = vi.fn(async ({ agentId }: { agentId: string }) => {
+      if (agentId !== "main") {
+        throw new Error(`unexpected prepared reply dispatch owner ${agentId}`);
+      }
+      return Object.freeze({
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/main-workspace",
+        config: cfg,
+        modelCatalog: { entries: [], routeVariants: [] },
+        inboundPluginRegistry: createTestRegistry([]),
+      });
+    });
+    const runtimeLoaders = await import("./dispatch-from-config.runtime-loaders.js");
+    const preparedLoader = vi.spyOn(runtimeLoaders, "loadPreparedModelRuntime").mockResolvedValue({
+      loadPublishedGatewayReplyDispatchRuntime: preparedLookup,
+    } as never);
 
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    let result: Awaited<ReturnType<typeof dispatchReplyFromConfig>>;
+    try {
+      result = await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLoader.mockRestore();
+    }
 
     expect(result.queuedFinal).toBe(true);
+    expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
       channel: "discord",
       accountId: "default",

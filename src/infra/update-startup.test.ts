@@ -309,10 +309,10 @@ describe("update-startup", () => {
     mockNpmChannelTag(tag, version);
   }
 
-  function mockPackageInstallStatus() {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+  function mockPackageInstallStatus(root = "/opt/openclaw") {
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
+      root,
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
@@ -1220,6 +1220,7 @@ describe("update-startup", () => {
         ts: installedAtMs,
         stats: {
           mode: "git",
+          root: "/opt/openclaw",
           after: { sha: "current-sha", version: "1.0.0" },
         },
       });
@@ -1238,6 +1239,35 @@ describe("update-startup", () => {
       currentSha: "current-sha",
       commitAtMs,
       installedAtMs,
+    });
+  });
+
+  it("does not inherit install time from a same-SHA receipt for another checkout", async () => {
+    const installedAtMs = Date.now() - 60 * 60 * 1000;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      writeUpdateInstallReceiptRowSync(db, {
+        kind: "update",
+        status: "ok",
+        ts: installedAtMs,
+        stats: {
+          mode: "git",
+          root: "/opt/other-openclaw",
+          after: { sha: "current-sha", version: "1.0.0" },
+        },
+      });
+    });
+    mockDevGitStatus({ behind: 0 });
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(getUpdateSchedule()?.install?.git).toEqual({
+      status: "current",
+      currentSha: "current-sha",
     });
   });
 
@@ -1573,7 +1603,11 @@ describe("update-startup", () => {
   });
 
   it("hands supervised auto-updates to a detached service handoff before restarting", async () => {
-    mockPackageInstallStatus();
+    const installRoot = path.join(tempDir, "pnpm-store-target");
+    const installOwner = path.join(tempDir, "pnpm-linked-owner");
+    await fs.mkdir(installRoot);
+    await fs.symlink(installRoot, installOwner, "dir");
+    mockPackageInstallStatus(installOwner);
     mockNpmChannelTag("beta", "2.0.0-beta.1");
     detectRespawnSupervisorMock.mockReturnValue("launchd");
     startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
@@ -1596,7 +1630,7 @@ describe("update-startup", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/opt/openclaw",
+        root: installOwner,
         timeoutMs: 45 * 60 * 1000,
         restartDrainTimeoutMs: 300_000,
         channel: "beta",

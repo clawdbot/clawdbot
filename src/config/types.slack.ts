@@ -1,11 +1,8 @@
 // Defines Slack channel configuration types.
 import type {
-  ChannelStreamingBlockConfig,
+  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
-  ChannelStreamingPreviewConfig,
   ReplyToMode,
-  StreamingMode,
-  TextChunkMode,
 } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
@@ -71,14 +68,7 @@ export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   /** Opt in to Slack-native task cards for progress mode. Default: false. */
   nativeTaskCards?: boolean;
 };
-export type SlackChannelStreamingConfig = {
-  mode?: StreamingMode;
-  chunkMode?: TextChunkMode;
-  nativeTransport?: boolean;
-  preview?: ChannelStreamingPreviewConfig;
-  progress?: SlackStreamingProgressConfig;
-  block?: ChannelStreamingBlockConfig;
-};
+export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;
 export type SlackExecApprovalTarget = ChannelExecApprovalTarget;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;
 export type SlackCapabilitiesConfig = string[];

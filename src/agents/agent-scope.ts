@@ -573,36 +573,23 @@ function normalizePathForComparison(input: string): string {
   return normalized;
 }
 
-export function resolveAgentIdsByWorkspacePath(
-  cfg: OpenClawConfig,
-  workspacePath: string,
-): string[] {
-  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
-  const ids = listAgentIds(cfg);
-  const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
-
-  for (const [index, id] of ids.entries()) {
-    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
-    if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
-      continue;
-    }
-    matches.push({ id, workspaceDir, order: index });
-  }
-
-  matches.sort((left, right) => {
-    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
-    if (workspaceLengthDelta !== 0) {
-      return workspaceLengthDelta;
-    }
-    return left.order - right.order;
-  });
-
-  return matches.map((entry) => entry.id);
-}
-
 export function resolveAgentIdByWorkspacePath(
   cfg: OpenClawConfig,
   workspacePath: string,
 ): string | undefined {
-  return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
+  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  let matchedAgentId: string | undefined;
+  let matchedWorkspaceLength = -1;
+
+  for (const id of listAgentIds(cfg)) {
+    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
+      continue;
+    }
+    if (workspaceDir.length > matchedWorkspaceLength) {
+      matchedAgentId = id;
+      matchedWorkspaceLength = workspaceDir.length;
+    }
+  }
+  return matchedAgentId;
 }

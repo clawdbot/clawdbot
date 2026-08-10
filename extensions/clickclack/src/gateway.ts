@@ -6,6 +6,7 @@ import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -53,22 +54,9 @@ async function resolveEventMessage(params: {
   }
 }
 
-function decodeSocketMessage(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return Buffer.concat(data).toString("utf8");
-}
-
 function parseSocketEvent(data: RawData): ClickClackEvent | null {
   try {
-    return JSON.parse(decodeSocketMessage(data)) as ClickClackEvent;
+    return JSON.parse(rawDataToString(data)) as ClickClackEvent;
   } catch {
     return null;
   }

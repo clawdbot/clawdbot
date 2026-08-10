@@ -34,6 +34,7 @@ import {
   resolveGlobalInstallTarget,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -139,6 +140,16 @@ async function updateCommandInternal(
     defaultRuntime.exit(1);
     return;
   }
+  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
+  const discoveredRoot = await resolveUpdateRoot();
+  const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
+  if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
+    defaultRuntime.error(
+      `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
   if (opts.dryRun !== true) {
     try {
       assertConfigWriteAllowedInCurrentMode();
@@ -152,7 +163,7 @@ async function updateCommandInternal(
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let root = await resolveUpdateRoot();
+  let root = discoveredRoot;
   if (postCoreUpdateResume) {
     await resumePostCoreUpdate({
       root,
@@ -163,7 +174,6 @@ async function updateCommandInternal(
     return;
   }
 
-  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,

@@ -63,7 +63,7 @@ import {
   emitSessionLifecycleEvent,
   mergeDeliveryContext,
 } from "./subagent-spawn.runtime.js";
-import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
+import { activateSwarmRun, removeQueuedSwarmRun } from "./subagents/swarm/swarm-scheduler.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 

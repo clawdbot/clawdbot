@@ -15,6 +15,11 @@ import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackEventScope } from "../event-scope.js";
+import {
+  qualifySlackConversationId,
+  qualifySlackRoutePeerId,
+  resolveSlackEnterpriseMainDmSessionKey,
+} from "../workspace-routing.js";
 
 type SlackRoutingContextDeps = {
   cfg: OpenClawConfig;
@@ -130,18 +135,7 @@ function resolveSlackBaseConversationId(params: {
   const raw = params.isDirectMessage
     ? `user:${params.message.user ?? "unknown"}`
     : params.message.channel;
-  return params.eventScope ? `team:${encodeURIComponent(params.eventScope.teamId)}:${raw}` : raw;
-}
-
-function qualifySlackPeerId(params: {
-  id: string;
-  kind: "user" | "channel";
-  eventScope?: SlackEventScope;
-}): string {
-  if (!params.eventScope) {
-    return params.id;
-  }
-  return `team:${encodeURIComponent(params.eventScope.teamId)}:${params.kind}:${encodeURIComponent(params.id)}`;
+  return qualifySlackConversationId(raw, params.eventScope);
 }
 
 function resolveSlackInitialAgentRoute(params: {
@@ -159,7 +153,7 @@ function resolveSlackInitialAgentRoute(params: {
     teamId: params.eventScope?.teamId || params.ctx.teamId || undefined,
     peer: {
       kind: params.isDirectMessage ? "direct" : params.isRoom ? "channel" : "group",
-      id: qualifySlackPeerId({
+      id: qualifySlackRoutePeerId({
         id: params.isDirectMessage ? (params.message.user ?? "unknown") : params.message.channel,
         kind: params.isDirectMessage ? "user" : "channel",
         eventScope: params.eventScope,
@@ -169,8 +163,11 @@ function resolveSlackInitialAgentRoute(params: {
   if (!params.eventScope || !params.isDirectMessage || route.dmScope !== "main") {
     return route;
   }
-  const partition = `account:${encodeURIComponent(params.account.accountId).toLowerCase()}:team:${encodeURIComponent(params.eventScope.teamId).toLowerCase()}`;
-  const sessionKey = `${route.sessionKey}:${partition}`;
+  const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
+    baseSessionKey: route.sessionKey,
+    accountId: params.account.accountId,
+    eventScope: params.eventScope,
+  });
   return { ...route, sessionKey, mainSessionKey: sessionKey };
 }
 

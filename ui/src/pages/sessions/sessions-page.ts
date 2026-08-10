@@ -18,6 +18,7 @@ import {
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type {
   SessionMenuAction,
@@ -1078,11 +1079,11 @@ class SessionsPage extends OpenClawLightDomElement {
     }
   }
 
-  private renameSession(row: GatewaySessionRow) {
-    const value = window.prompt(
-      t("sessionsView.renameSessionPrompt"),
-      normalizeOptionalString(row.label) ?? "",
-    );
+  private async renameSession(row: GatewaySessionRow) {
+    const value = await showInputDialog({
+      title: t("sessionsView.renameSessionPrompt"),
+      defaultValue: normalizeOptionalString(row.label) ?? "",
+    });
     if (value === null) {
       return;
     }
@@ -1472,7 +1473,7 @@ class SessionsPage extends OpenClawLightDomElement {
               void this.patchSession(row.key, { unread: row.unread !== true });
               break;
             case "rename":
-              this.renameSession(row);
+              void this.renameSession(row);
               break;
             case "fork":
               void this.forkSession(row.key);

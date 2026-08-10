@@ -14,7 +14,11 @@ import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/s
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
+import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -28,7 +32,6 @@ import {
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -91,6 +94,8 @@ const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
 const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
+  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
+  agentId?: string;
   backend?: TuiBackend;
   submitBurstWindowMs?: number;
   ctrlCExitWindowMs?: number;
@@ -167,12 +172,10 @@ export function resolveTuiSessionKey(params: {
 }) {
   const trimmed = (params.raw ?? "").trim();
   if (!trimmed) {
-    if (params.sessionScope === "global") {
-      return "global";
-    }
-    return buildAgentMainSessionKey({
+    return resolveCanonicalMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
+      sessionScope: params.sessionScope,
     });
   }
   const parsed = parseAgentSessionKey(trimmed);
@@ -195,11 +198,12 @@ export function resolveInitialTuiAgentId(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
   initialSessionInput?: string;
+  agentId?: string;
   cwd?: string;
 }) {
-  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
+  const explicitAgentId = resolveExplicitInitialTuiAgentId(params);
+  if (explicitAgentId) {
+    return explicitAgentId;
   }
 
   const cwd = params.cwd ?? tryProcessCwd();
@@ -209,6 +213,15 @@ export function resolveInitialTuiAgentId(params: {
   }
 
   return normalizeAgentId(params.fallbackAgentId);
+}
+
+function resolveExplicitInitialTuiAgentId(params: {
+  initialSessionInput?: string;
+  agentId?: string;
+}): string | null {
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  const explicitAgentId = parsed?.agentId ?? params.agentId?.trim();
+  return explicitAgentId ? normalizeAgentId(explicitAgentId) : null;
 }
 
 export function resolveGatewayDisconnectState(
@@ -588,7 +601,43 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
   };
 }
 
+function formatActiveGatewayTuiRefusal(identity: GatewayLockIdentity): string {
+  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
+}
+
+/** Hold canonical state ownership for the complete lifetime of a local TUI. */
+export async function withEmbeddedTuiStateLock<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  deps: {
+    gatewayLockOptions?: GatewayLockOptions;
+    process?: EmbeddedStateSignalProcess;
+  } = {},
+): Promise<T> {
+  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+    await import("../infra/embedded-state-lock.js");
+  const signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+  let stateLock: Awaited<ReturnType<typeof acquireEmbeddedStateLock>> | undefined;
+  try {
+    stateLock = await acquireEmbeddedStateLock({
+      options: deps.gatewayLockOptions,
+      signal: signalBridge.signal,
+      formatActiveGatewayRefusal: formatActiveGatewayTuiRefusal,
+    });
+    return await run(signalBridge.signal);
+  } finally {
+    await stateLock?.release();
+    signalBridge.dispose();
+  }
+}
+
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  if (opts.local === true && opts.backend === undefined) {
+    return await withEmbeddedTuiStateLock(async () => await runTuiUnlocked(opts));
+  }
+  return await runTuiUnlocked(opts);
+}
+
+async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);
@@ -598,10 +647,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const sessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   const sessionMainKey = normalizeMainKey(config.session?.mainKey);
   const agentDefaultId = resolveDefaultAgentId(config);
+  const initialSessionAgentId = resolveExplicitInitialTuiAgentId({
+    initialSessionInput,
+    agentId: opts.agentId,
+  });
   let currentAgentId = resolveInitialTuiAgentId({
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
+    agentId: opts.agentId,
   });
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -1247,14 +1301,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       chatLog.dismissBtw();
     },
   };
-
-  const initialSessionAgentId = (() => {
-    if (!initialSessionInput) {
-      return null;
-    }
-    const parsed = parseAgentSessionKey(initialSessionInput);
-    return parsed ? normalizeAgentId(parsed.agentId) : null;
-  })();
 
   const sessionActions = createSessionActions({
     client,
