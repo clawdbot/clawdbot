@@ -7,6 +7,12 @@ type GatewayRequestOptions = {
   timeoutMs?: number;
 };
 
+type GatewayReconnectPausedInfo = {
+  code: number;
+  detailCode?: string;
+  reason: string;
+};
+
 const gatewayRpcMock = vi.hoisted(() => {
   const request = vi.fn(
     async (_method: string, _params: unknown, _options: GatewayRequestOptions) => ({ ok: true }),
@@ -56,6 +62,14 @@ function gatewayClientCallback(name: "onClose" | "onHelloOk") {
     throw new Error(`expected Gateway client ${name} callback`);
   }
   return callback as () => void;
+}
+
+function pauseGatewayReconnect(info: GatewayReconnectPausedInfo) {
+  const callback = gatewayRpcMock.clients[0]?.options.onReconnectPaused;
+  if (typeof callback !== "function") {
+    throw new Error("expected Gateway client onReconnectPaused callback");
+  }
+  (callback as (info: GatewayReconnectPausedInfo) => void)(info);
 }
 
 describe("startQaGatewayRpcClient", () => {
@@ -201,6 +215,26 @@ describe("startQaGatewayRpcClient", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     await rejection;
+    expect(gatewayRpcMock.request).not.toHaveBeenCalled();
+  });
+
+  it("preserves a terminal reconnect failure through the following close", async () => {
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    pauseGatewayReconnect({
+      code: 1008,
+      detailCode: "AUTH_FAILED",
+      reason: "authentication failed",
+    });
+    gatewayClientCallback("onClose")();
+
+    await expect(client.request("status")).rejects.toThrow(
+      "gateway reconnect paused (1008): authentication failed [AUTH_FAILED]",
+    );
     expect(gatewayRpcMock.request).not.toHaveBeenCalled();
   });
 

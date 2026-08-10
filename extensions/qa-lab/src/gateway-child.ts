@@ -672,8 +672,14 @@ async function callQaGatewayWithRetry<T>(params: {
   throw new Error(`${lastDetails}${formatQaGatewayLogsForError(params.logs())}`);
 }
 
+type QaGatewayChildLogSource = "internal" | "stderr" | "stdout";
+
 function createQaGatewayChildLogCollector() {
-  const decoder = new StringDecoder("utf8");
+  const decoders: Record<QaGatewayChildLogSource, StringDecoder> = {
+    internal: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+    stdout: new StringDecoder("utf8"),
+  };
   let recent = "";
   let end = 0;
   let dropped = false;
@@ -685,8 +691,8 @@ function createQaGatewayChildLogCollector() {
     return `${wasTruncated ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${text}`;
   };
   return {
-    push(chunk: Buffer) {
-      const text = decoder.write(chunk);
+    push(source: QaGatewayChildLogSource, chunk: Buffer) {
+      const text = decoders[source].write(chunk);
       end += text.length;
       recent += text;
       if (recent.length > QA_GATEWAY_CHILD_RECENT_LOG_CHARS) {
@@ -727,7 +733,10 @@ function throwQaGatewayChildFailure(
   );
 }
 
-function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk: Buffer): void }) {
+function monitorQaGatewayChildFailure(
+  child: ChildProcess,
+  output: { push(source: QaGatewayChildLogSource, chunk: Buffer): void },
+) {
   let childFailure: QaChildFailure | null = null;
   monitorQaChildFailure(child, (failure) => {
     childFailure = failure;
@@ -735,7 +744,7 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
       failure.source === "process"
         ? `gateway child process error: ${formatErrorMessage(failure.error)}`
         : formatQaGatewayChildFailure(failure);
-    output.push(Buffer.from(`[qa-lab] ${description}\n`));
+    output.push("internal", Buffer.from(`[qa-lab] ${description}\n`));
     if (failure.source !== "process" && !hasChildExited(child)) {
       // A broken parent-side pipe means QA can no longer observe the Gateway.
       // Stop the detached process tree so the existing lifecycle reports the failure.
@@ -1428,12 +1437,12 @@ export async function startQaGatewayChild(params: {
       });
       spawnedChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
-        output.push(buffer);
+        output.push("stdout", buffer);
         stdoutLog.write(buffer);
       });
       spawnedChild.stderr.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
-        output.push(buffer);
+        output.push("stderr", buffer);
         stderrLog.write(buffer);
       });
       const getSpawnedChildFailure = monitorQaGatewayChildFailure(spawnedChild, output);
@@ -1718,7 +1727,7 @@ export async function startQaGatewayChild(params: {
             ? `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} completed plugin migration convergence; restarting once with the same state, config, and port ${gatewayPort}\n`
             : `[qa-lab] gateway child startup attempt ${attempt}/${QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS} hit a transient startup race on port ${gatewayPort}; retrying with a new port\n`;
         const retryBuffer = Buffer.from(retryMessage);
-        output.push(retryBuffer);
+        output.push("internal", retryBuffer);
         stdoutLog.write(retryBuffer);
       }
     }

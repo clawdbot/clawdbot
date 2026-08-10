@@ -117,11 +117,13 @@ export async function startQaGatewayRpcClient(params: {
       }
     },
     onReconnectPaused: (info) => {
-      connection.reject(
-        new Error(
-          `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,
-        ),
+      const error = new Error(
+        `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,
       );
+      if (connection.state === "connected") {
+        connection = createQaGatewayConnectionGate();
+      }
+      connection.reject(error);
     },
   });
 

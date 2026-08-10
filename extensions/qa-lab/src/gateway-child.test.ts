@@ -1007,8 +1007,8 @@ describe("buildQaRuntimeEnv", () => {
 
   it("keeps restart offsets stable after stderr output", async () => {
     const output = testing.createQaGatewayChildLogCollector();
-    output.push(Buffer.from("gateway ready\n"));
-    output.push(Buffer.from("stderr warning\n"));
+    output.push("stdout", Buffer.from("gateway ready\n"));
+    output.push("stderr", Buffer.from("stderr warning\n"));
     const mark = output.mark();
     const wait = testing.waitForQaGatewayRestartBoundary({
       readLogsSince: (since) => output.readSince(since),
@@ -1017,16 +1017,19 @@ describe("buildQaRuntimeEnv", () => {
       timeoutMs: 100,
     });
 
-    output.push(Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"));
+    output.push(
+      "stdout",
+      Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"),
+    );
 
     await expect(wait).resolves.toBeUndefined();
   });
 
   it("bounds diagnostics while monotonic marks retain fresh output semantics", () => {
     const output = testing.createQaGatewayChildLogCollector();
-    output.push(Buffer.from(`old😀${"x".repeat(70_000)}`));
+    output.push("stdout", Buffer.from(`old😀${"x".repeat(70_000)}`));
     const mark = output.mark();
-    output.push(Buffer.from("fresh restart mode: in-process restart\n"));
+    output.push("stdout", Buffer.from("fresh restart mode: in-process restart\n"));
 
     expect(output.text()).toContain("[qa-lab] older gateway logs truncated");
     expect(output.text().length).toBeLessThan(66_000);
@@ -1034,6 +1037,18 @@ describe("buildQaRuntimeEnv", () => {
     expect(output.text()).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
     );
+  });
+
+  it("decodes interleaved stdout and stderr independently", () => {
+    const output = testing.createQaGatewayChildLogCollector();
+    const stdout = Buffer.from("before 😀 after\n");
+
+    output.push("stdout", stdout.subarray(0, 9));
+    output.push("stderr", Buffer.from("warning ⚠️\n"));
+    output.push("stdout", stdout.subarray(9));
+
+    expect(output.text()).toBe("before warning ⚠️\n😀 after");
+    expect(output.text()).not.toContain("�");
   });
 
   it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
