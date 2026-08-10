@@ -70,6 +70,33 @@ describe("Claw tool policy consent provenance", () => {
     expect(readFileSync(databasePath)).toEqual(before);
   });
 
+  it("fails closed after the prepared state database closes", async () => {
+    const root = tempDirs.make("openclaw-closed-claw-tool-consent-");
+    const env = stateEnv(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(plan, { env });
+    const config = { agents: { list: [plan.agent.config] } };
+    setRuntimeConfigSnapshot(config);
+    closeOpenClawStateDatabase();
+
+    expect(() =>
+      resolveConversationCapabilityProfile({
+        agentId: "worker",
+        config,
+      }),
+    ).toThrow("Cannot verify the installed tool authority");
+  });
+
   it("fails closed after a host upgrade leaves legacy profile provenance", async () => {
     const root = tempDirs.make("openclaw-claw-tool-consent-");
     const env = stateEnv(root);

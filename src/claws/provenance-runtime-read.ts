@@ -65,7 +65,10 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
   } else if (event.kind === "open-error") {
     snapshotsByPath.set(event.path, { kind: "state-error", error: event.error });
   } else {
-    snapshotsByPath.delete(event.path);
+    snapshotsByPath.set(event.path, {
+      kind: "state-error",
+      error: new Error("OpenClaw state database closed before consent provenance verification."),
+    });
   }
   notifySnapshotListeners();
 });
