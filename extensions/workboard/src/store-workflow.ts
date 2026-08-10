@@ -146,21 +146,32 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
-      const card = await this.updateCard(id, {
-        ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
-          ? { workspaceAccess: options.adoptWorkspaceAccess }
-          : {}),
-        ...(callerSessionKey && !boundSessionKey ? { sessionKey: callerSessionKey } : {}),
-        status:
-          guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
-            ? "running"
-            : guarded.status,
-        agentId: guarded.agentId ?? ownerId,
-        metadata: {
-          ...metadata,
-          claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+      const card = await this.updateCard(
+        id,
+        {
+          ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+            ? { workspaceAccess: options.adoptWorkspaceAccess }
+            : {}),
+          ...(callerSessionKey && !boundSessionKey ? { sessionKey: callerSessionKey } : {}),
+          status:
+            guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+              ? "running"
+              : guarded.status,
+          agentId: guarded.agentId ?? ownerId,
+          metadata: {
+            ...metadata,
+            claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+          },
         },
-      });
+        {
+          // Persist the binding decision against the row it was derived from so an intervening bind
+          // cannot be overwritten after updateCard reloads the card.
+          registrationExpectation: {
+            updatedAt: existing.updatedAt,
+            claimToken: existing.metadata?.claim?.token,
+          },
+        },
+      );
       return { card, token };
     });
   }

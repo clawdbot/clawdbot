@@ -505,6 +505,7 @@ export class WorkboardCoreStore {
       allowMetadataDependencyLinks?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
+      registrationExpectation?: WorkboardCardRegistrationExpectation;
     } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
@@ -661,10 +662,14 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    await this.registerCard(next, undefined, {
-      updatedAt: existing.updatedAt,
-      claimToken: existing.metadata?.claim?.token,
-    });
+    await this.registerCard(
+      next,
+      undefined,
+      options.registrationExpectation ?? {
+        updatedAt: existing.updatedAt,
+        claimToken: existing.metadata?.claim?.token,
+      },
+    );
     await this.deleteDetachedAttachments(existing, next);
     return next;
   }

@@ -1070,6 +1070,59 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("rejects a claim whose initial unbound-card decision is stale after a concurrent bind", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-bind-claim-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const claimStores = createWorkboardSqliteStores({ dbPath });
+    const bindStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const setupStore = new WorkboardStore(claimStores.cards);
+      const bindStore = new WorkboardStore(bindStores.cards);
+      const card = await setupStore.create({ title: "Bind then claim", status: "ready" });
+      const originalLookup = claimStores.cards.lookup.bind(claimStores.cards);
+      let markClaimRead!: () => void;
+      let releaseClaimRead!: () => void;
+      const claimRead = new Promise<void>((resolve) => {
+        markClaimRead = resolve;
+      });
+      const claimReadReleased = new Promise<void>((resolve) => {
+        releaseClaimRead = resolve;
+      });
+      let pauseNextLookup = true;
+      claimStores.cards.lookup = async (key) => {
+        const value = await originalLookup(key);
+        if (pauseNextLookup) {
+          pauseNextLookup = false;
+          markClaimRead();
+          await claimReadReleased;
+        }
+        return value;
+      };
+      const claimStore = new WorkboardStore(claimStores.cards);
+
+      const claiming = claimStore.claim(card.id, {
+        ownerId: "claiming-agent",
+        sessionKey: "agent:main:claiming",
+      });
+      await claimRead;
+      const bound = await bindStore.bindSession(card.id, {
+        sessionKey: "agent:main:operator",
+      });
+      releaseClaimRead();
+
+      await expect(claiming).rejects.toThrow("changed before persistence");
+      await expect(bindStore.get(card.id)).resolves.toMatchObject({
+        status: "ready",
+        sessionKey: bound.sessionKey,
+      });
+      expect((await bindStore.get(card.id))?.metadata?.claim).toBeUndefined();
+    } finally {
+      bindStores.close();
+      claimStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:execution-only";
