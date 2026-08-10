@@ -39,23 +39,20 @@ function readSchemaVersions(db: DatabaseSync): ClawInstallSchemaVersionSnapshot 
     const rows = db /* sqlite-allow-raw: lifecycle-owned state cache initialization. */
       .prepare("SELECT agent_id, schema_version FROM claw_installs")
       .all() as Array<{ agent_id: string; schema_version: string }>;
+    const schemaVersions = new Map<string, ClawInstallSchemaVersionRead>();
+    for (const row of rows) {
+      try {
+        schemaVersions.set(row.agent_id, {
+          kind: "ok",
+          schemaVersion: parseClawInstallRecordSchemaVersion(row.schema_version),
+        });
+      } catch (error) {
+        schemaVersions.set(row.agent_id, { kind: "error", error });
+      }
+    }
     return {
       kind: "ready",
-      schemaVersions: new Map(
-        rows.map((row) => {
-          try {
-            return [
-              row.agent_id,
-              {
-                kind: "ok",
-                schemaVersion: parseClawInstallRecordSchemaVersion(row.schema_version),
-              },
-            ] as const;
-          } catch (error) {
-            return [row.agent_id, { kind: "error", error }] as const;
-          }
-        }),
-      ),
+      schemaVersions,
     };
   } catch (error) {
     return { kind: "state-error", error };

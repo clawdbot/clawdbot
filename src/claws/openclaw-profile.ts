@@ -1,5 +1,6 @@
 // Safe loader for the conventional package-local OpenClaw profile.
 import { isScalar, parseDocument, visit } from "yaml";
+import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
@@ -89,20 +90,26 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function isToolProfileId(value: string): value is ToolProfileId {
+  return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
+}
+
 function migrateLegacyDynamicToolProfile(value: unknown): unknown {
   const profile = record(value);
   const agent = record(profile?.agent);
   const tools = record(agent?.tools);
+  const toolProfile = tools?.profile;
   if (
     !profile ||
     !agent ||
     !tools ||
-    typeof tools.profile !== "string" ||
+    typeof toolProfile !== "string" ||
+    !isToolProfileId(toolProfile) ||
     tools.allow !== undefined
   ) {
     return value;
   }
-  if (!resolveClawToolProfileSnapshot({ profile: tools.profile })?.allow.includes("bundle-mcp")) {
+  if (!resolveClawToolProfileSnapshot({ profile: toolProfile })?.allow.includes("bundle-mcp")) {
     return value;
   }
   const validationProbe = parseClawOpenClawProfile({
@@ -124,7 +131,7 @@ function migrateLegacyDynamicToolProfile(value: unknown): unknown {
   }
   const selection = {
     ...validatedTools,
-    profile: tools.profile,
+    profile: toolProfile,
   };
   const migrated = materializeClawToolProfile(
     { tools: selection },
