@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -79,17 +78,6 @@ import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-function cloudWorkerPlacementRunError(
-  placement: GatewaySessionRow["placement"],
-): { summary: string } | null {
-  const terminalReason =
-    placement && "terminalReason" in placement ? placement.terminalReason : undefined;
-  if (!terminalReason) {
-    return null;
-  }
-  return { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) };
-}
-
 export class ChatPane extends ChatPaneBrowserAnnotationRender {
   override render() {
     const state = this.state;
@@ -116,7 +104,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
-    const placementRunError = cloudWorkerPlacementRunError(selectedSession?.placement);
+    const placement = selectedSession?.placement;
+    const terminalReason =
+      placement && "terminalReason" in placement ? placement.terminalReason : undefined;
+    const placementRunError = terminalReason
+      ? { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) }
+      : null;
     const visibleWorkspaceConflict =
       workspaceConflict &&
       this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
