@@ -49,7 +49,11 @@ import {
   resolveBareResetBootstrapFileAccess,
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
-import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
+import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
+import {
+  isExplicitSourceReplyCommand,
+  isSyntheticSourceReplyTurn,
+} from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -107,8 +111,29 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const inboundEventKind = promptSessionCtx.InboundEventKind;
-  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode } =
+  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode: injectedStableMode } =
     resolvePromptSourceReplyMode({ promptSessionCtx, opts });
+  // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
+  // stable-mode injection; resolve the same session-stable fact here so their
+  // binding facts and messageToolPolicyHash match dispatched chat turns —
+  // otherwise chat<->heartbeat transitions ping-pong the CLI session (#121485).
+  const sessionPromptSourceReplyDeliveryMode =
+    injectedStableMode ??
+    (sessionEntry &&
+    isSyntheticSourceReplyTurn({
+      inputProvenance: promptSessionCtx.InputProvenance,
+      isHeartbeat,
+    })
+      ? resolveSessionStableReplyMode({
+          cfg,
+          sessionEntry,
+          sessionAgentId: agentId,
+          sessionKey,
+          defaultProvider: provider,
+          defaultModel: model,
+          inputProvenance: promptSessionCtx.InputProvenance,
+        })
+      : undefined);
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
