@@ -1905,6 +1905,51 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("pins the vendor-maintained Telnyx provider to the reviewed npm artifact", () => {
+    const entry = expectCatalogEntry("telnyx");
+
+    expect(entry).toMatchObject({
+      name: "@telnyx/openclaw-provider",
+      source: "external",
+      kind: "provider",
+      openclaw: {
+        plugin: { id: "telnyx", label: "Telnyx" },
+        providers: [
+          {
+            id: "telnyx",
+            name: "Telnyx",
+            docs: "/providers/telnyx",
+            envVars: ["TELNYX_API_KEY"],
+            authChoices: [
+              {
+                method: "api-key",
+                choiceId: "telnyx-api-key",
+                choiceLabel: "Telnyx API key",
+                choiceHint: "OpenAI-compatible Telnyx AI inference endpoint",
+                groupId: "telnyx",
+                groupLabel: "Telnyx",
+                groupHint: "OpenAI-compatible Telnyx AI inference endpoint",
+                optionKey: "telnyxApiKey",
+                cliFlag: "--telnyx-api-key",
+                cliOption: "--telnyx-api-key <key>",
+                cliDescription: "Telnyx API key",
+                onboardingScopes: ["text-inference"],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+      clawhubSpec: "clawhub:@team-telnyx/openclaw-provider@0.1.0",
+      npmSpec: "@telnyx/openclaw-provider@0.1.0",
+      defaultChoice: "npm",
+      expectedIntegrity:
+        "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+      minHostVersion: ">=2026.7.2-beta.7",
+    });
+  });
+
   it("advertises StepFun with its ClawHub package and plugin API floor", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("stepfun"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/stepfun-provider",

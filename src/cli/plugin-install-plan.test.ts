@@ -96,6 +96,17 @@ describe("plugin install plan helpers", () => {
     });
   });
 
+  it("resolves the Telnyx catalog id to its reviewed npm artifact", () => {
+    const result = resolveCatalogOfficialExternalInstallPlan("telnyx");
+
+    expect(result).toEqual({
+      pluginId: "telnyx",
+      npmSpec: "@telnyx/openclaw-provider@0.1.0",
+      expectedIntegrity:
+        "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+    });
+  });
+
   it("skips official external plan for explicit npm selectors", () => {
     expect(resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin@beta")).toBeNull();
     expect(

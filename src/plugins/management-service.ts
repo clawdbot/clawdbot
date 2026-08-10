@@ -1344,7 +1344,9 @@ function resolveManagedClawHubInstallRequest(params: {
     params.request.version ?? (requestMatchesHostedCandidate ? hostedClawHub?.version : undefined);
   const expectedIntegrity =
     params.expectedIntegrity ??
-    (requestMatchesHostedCandidate ? hostedInstall?.expectedIntegrity : undefined);
+    (requestMatchesHostedCandidate && (hostedOfficial?.install?.candidates?.length ?? 0) > 0
+      ? hostedInstall?.expectedIntegrity
+      : undefined);
   return {
     source: "clawhub",
     spec: buildClawHubSpec(packageName, version),
@@ -1371,6 +1373,23 @@ function resolveManagedOfficialInstallRequest(params: {
       `official plugin catalog entry is not installable: ${params.request.pluginId}`,
     );
   }
+  const npmRequest = (): Extract<ManagedPluginSourceInstallRequest, { source: "official" }> => {
+    if (!install.npmSpec) {
+      throw new ManagedPluginLifecycleError(
+        `official plugin catalog entry has no npm install source: ${params.request.pluginId}`,
+      );
+    }
+    return {
+      source: "official",
+      spec: install.npmSpec,
+      pluginId,
+      mode: "install",
+      ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+    };
+  };
+  if (install.defaultChoice === "npm" && install.npmSpec) {
+    return npmRequest();
+  }
   const clawhub = install.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
   if (clawhub) {
     return resolveManagedClawHubInstallRequest({
@@ -1380,21 +1399,14 @@ function resolveManagedOfficialInstallRequest(params: {
         ...(clawhub.version ? { version: clawhub.version } : {}),
       },
       officialEntries: params.officialEntries,
-      ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
     });
   }
-  if (!install.npmSpec) {
-    throw new ManagedPluginLifecycleError(
-      `official plugin catalog entry has no supported install source: ${params.request.pluginId}`,
-    );
+  if (install.npmSpec) {
+    return npmRequest();
   }
-  return {
-    source: "official",
-    spec: install.npmSpec,
-    pluginId,
-    mode: "install",
-    ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
-  };
+  throw new ManagedPluginLifecycleError(
+    `official plugin catalog entry has no supported install source: ${params.request.pluginId}`,
+  );
 }
 
 /** Install a ClawHub or curated official plugin through the canonical install pipeline. */

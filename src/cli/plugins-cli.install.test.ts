@@ -1894,6 +1894,22 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
+  it("installs Telnyx through its reviewed catalog artifact", async () => {
+    primeSuccessfulPluginPersistence("telnyx");
+    findBundledPluginSourceMock.mockReturnValue(undefined);
+    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("telnyx"));
+
+    await runPluginsCommand(["plugins", "install", "telnyx"]);
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(npmInstallCall().spec).toBe("@telnyx/openclaw-provider@0.1.0");
+    expect(npmInstallCall().expectedPluginId).toBe("telnyx");
+    expect(npmInstallCall().expectedIntegrity).toBe(
+      "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+    );
+    expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+  });
+
   it.each(OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY)(
     "keeps official external npm installs trusted without integrity for $pluginId",
     async ({ pluginId, npmSpec }) => {

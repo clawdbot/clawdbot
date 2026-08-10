@@ -45,6 +45,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [Runway](/providers/runway)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
+- [Telnyx (AI inference)](/providers/telnyx)
 - [Venice (Venice AI)](/providers/venice)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [xAI](/providers/xai)

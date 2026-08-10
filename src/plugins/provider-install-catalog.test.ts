@@ -616,6 +616,98 @@ describe("provider install catalog", () => {
     });
   });
 
+  it("surfaces the pinned Telnyx auth choice before the plugin is installed", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@telnyx/openclaw-provider",
+        source: "external",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "telnyx", label: "Telnyx" },
+          providers: [
+            {
+              id: "telnyx",
+              name: "Telnyx",
+              docs: "/providers/telnyx",
+              envVars: ["TELNYX_API_KEY"],
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "telnyx-api-key",
+                  choiceLabel: "Telnyx API key",
+                  choiceHint: "OpenAI-compatible Telnyx AI inference endpoint",
+                  groupId: "telnyx",
+                  groupLabel: "Telnyx",
+                  groupHint: "OpenAI-compatible Telnyx AI inference endpoint",
+                  optionKey: "telnyxApiKey",
+                  cliFlag: "--telnyx-api-key",
+                  cliOption: "--telnyx-api-key <key>",
+                  cliDescription: "Telnyx API key",
+                  onboardingScopes: ["text-inference"],
+                },
+              ],
+            },
+          ],
+          install: {
+            clawhubSpec: "clawhub:@team-telnyx/openclaw-provider@0.1.0",
+            npmSpec: "@telnyx/openclaw-provider@0.1.0",
+            defaultChoice: "npm",
+            expectedIntegrity:
+              "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+            minHostVersion: ">=2026.7.2-beta.7",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("telnyx-api-key")).toEqual({
+      pluginId: "telnyx",
+      providerId: "telnyx",
+      methodId: "api-key",
+      choiceId: "telnyx-api-key",
+      choiceLabel: "Telnyx API key",
+      choiceHint: "OpenAI-compatible Telnyx AI inference endpoint",
+      groupId: "telnyx",
+      groupLabel: "Telnyx",
+      groupHint: "OpenAI-compatible Telnyx AI inference endpoint",
+      optionKey: "telnyxApiKey",
+      cliFlag: "--telnyx-api-key",
+      cliOption: "--telnyx-api-key <key>",
+      cliDescription: "Telnyx API key",
+      onboardingScopes: ["text-inference"],
+      label: "Telnyx",
+      origin: "bundled",
+      install: {
+        clawhubSpec: "clawhub:@team-telnyx/openclaw-provider@0.1.0",
+        npmSpec: "@telnyx/openclaw-provider@0.1.0",
+        defaultChoice: "npm",
+        expectedIntegrity:
+          "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+        minHostVersion: ">=2026.7.2-beta.7",
+      },
+      installSource: {
+        defaultChoice: "npm",
+        clawhub: {
+          spec: "clawhub:@team-telnyx/openclaw-provider@0.1.0",
+          packageName: "@team-telnyx/openclaw-provider",
+          version: "0.1.0",
+          exactVersion: true,
+        },
+        npm: {
+          spec: "@telnyx/openclaw-provider@0.1.0",
+          packageName: "@telnyx/openclaw-provider",
+          selector: "0.1.0",
+          selectorKind: "exact-version",
+          exactVersion: true,
+          expectedIntegrity:
+            "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+          pinState: "exact-with-integrity",
+        },
+        warnings: [],
+      },
+    });
+  });
+
   it("preserves official external provider aliases for configured-plugin repair", () => {
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {

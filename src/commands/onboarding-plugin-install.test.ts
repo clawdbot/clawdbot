@@ -183,6 +183,7 @@ type NpmSpecInstallCall = {
 type ClawHubInstallCall = {
   config?: OpenClawConfig;
   expectedPluginId?: string;
+  expectedIntegrity?: string;
   logger?: {
     info?: (message: string) => void;
     warn?: (message: string) => void;
@@ -547,6 +548,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           clawhubSpec: "clawhub:demo-plugin@2026.5.2",
           npmSpec: "@openclaw/demo-plugin@2026.5.2",
           defaultChoice: "clawhub",
+          expectedIntegrity: "sha512-ZGVtby1ucG0=",
         },
       },
       prompter: {
@@ -563,6 +565,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(clawHubCall.spec).toBe("clawhub:demo-plugin@2026.5.2");
     expect(clawHubCall.config).toBe(cfg);
     expect(clawHubCall.expectedPluginId).toBe("demo-plugin");
+    expect(clawHubCall.expectedIntegrity).toBeUndefined();
     expect(clawHubCall.mode).toBe("install");
     expect(clawHubCall.timeoutMs).toBe(300_000);
     expect(typeof clawHubCall.onClawHubRisk).toBe("function");
