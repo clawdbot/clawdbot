@@ -38,14 +38,14 @@ vi.mock("../../media-generation-task-status.js", () => ({
 }));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
-import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import {
   forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldInjectHeartbeatPrompt,
-} from "./attempt.prompt-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 
 function hasLoneSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

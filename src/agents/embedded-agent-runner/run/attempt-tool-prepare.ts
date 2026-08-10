@@ -31,15 +31,15 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
+import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
+import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
-import { resolveAttemptToolPolicyMessageProvider } from "./attempt.run-decisions.js";
-import { resolveAttemptSpawnWorkspaceDir } from "./attempt.thread-helpers.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
-import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt.tool-search-run-plan.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
+import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt-tool-search-run-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;

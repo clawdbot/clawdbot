@@ -10,8 +10,8 @@ import {
   assembleAttemptContextEngine,
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
-} from "./attempt.context-engine-helpers.js";
-import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-context-engine-helpers.js";
+import { resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
 
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip" | "never";

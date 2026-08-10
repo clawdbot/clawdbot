@@ -11,8 +11,8 @@ import { log } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-finalize.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Tracks native prompt and abort settlement through attempt cleanup. */

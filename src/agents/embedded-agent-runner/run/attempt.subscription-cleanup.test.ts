@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
-import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 
 describe("cleanupEmbeddedAttemptResources", () => {
   afterEach(() => {
