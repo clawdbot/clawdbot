@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
@@ -99,6 +100,18 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 // One poisoned SSH attempt must not hold every later dispatch on the same owner epoch forever.
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
+
+function requireProviderProvisionTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
+    throw new WorkerProviderError(
+      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+    );
+  }
+  return timeoutMs;
+}
 
 function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
   return createHash("sha256").update(idempotencyKey).digest("hex");
@@ -384,7 +397,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const withLock = <T>(environmentId: string, task: () => Promise<T>) =>
     trackOperation(operations.enqueue(environmentId, task));
 
-  const callProvider = async <T>(environmentId: string, run: () => Promise<T>): Promise<T> => {
+  const callProvider = async <T>(
+    environmentId: string,
+    run: () => Promise<T>,
+    timeoutMs?: number,
+  ): Promise<T> => {
     let signalStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       signalStarted = resolve;
@@ -399,7 +416,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     // Timeout completion must not release provider ownership or permit replay/destroy overlap.
     return await withTimeout(
       operation,
-      options.providerCallTimeoutMs ?? 300_000,
+      options.providerCallTimeoutMs ?? timeoutMs ?? 300_000,
       "Worker provider operation",
     );
   };
@@ -631,9 +648,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     let lease: WorkerLease;
     try {
       const profile = requireWorkerProfile(record.profileSnapshot.settings);
+      const providerTimeoutMs =
+        options.providerCallTimeoutMs === undefined
+          ? requireProviderProvisionTimeoutMs(provider.resolveProvisionTimeoutMs?.(profile))
+          : undefined;
       lease = requireWorkerLease(
-        await callProvider(record.environmentId, () =>
-          provider.provision(profile, record.provisionOperationId),
+        await callProvider(
+          record.environmentId,
+          () => provider.provision(profile, record.provisionOperationId),
+          providerTimeoutMs,
         ),
       );
     } catch (error) {

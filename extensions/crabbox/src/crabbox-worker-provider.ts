@@ -63,6 +63,22 @@ const LEGACY_PROVISION_OPERATION_ID_PATTERN = /^provision:[a-f0-9]{64}$/u;
 type CrabboxCommandRunner = typeof runCommandWithTimeout;
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
+function provisionBaseTimeoutMs(profile: CrabboxProfile): number {
+  return profile.desktop ? DESKTOP_PROVISION_TIMEOUT_MS : PROVISION_TIMEOUT_MS;
+}
+
+function provisionSetupCount(profile: CrabboxProfile): number {
+  return Number(Boolean(profile.desktop)) + Number(Boolean(profile.setup));
+}
+
+function provisionCallTimeoutMs(profile: CrabboxProfile): number {
+  return (
+    provisionBaseTimeoutMs(profile) +
+    provisionSetupCount(profile) * SETUP_TIMEOUT_MS +
+    LIFECYCLE_TIMEOUT_MS
+  );
+}
+
 type LeaseCommandContext = { binary: string; id: string; provider: string };
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   deadline: number;
@@ -609,14 +625,14 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    resolveProvisionTimeoutMs(profile) {
+      return provisionCallTimeoutMs(parseCrabboxProfile(profile));
+    },
     async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
       const parsed = parseCrabboxProfile(profile);
-      const provisionTimeoutMs = parsed.desktop
-        ? DESKTOP_PROVISION_TIMEOUT_MS
-        : PROVISION_TIMEOUT_MS;
       const warmupTimeoutMs = parsed.desktop ? DESKTOP_WARMUP_TIMEOUT_MS : WARMUP_TIMEOUT_MS;
-      const deadline = Date.now() + provisionTimeoutMs;
-      const setupCount = Number(Boolean(parsed.desktop)) + Number(Boolean(parsed.setup));
+      const deadline = Date.now() + provisionBaseTimeoutMs(parsed);
+      const setupCount = provisionSetupCount(parsed);
       const setupDeadline = deadline + setupCount * SETUP_TIMEOUT_MS;
       if (!operationId.trim()) {
         throw new Error("Crabbox provision requires an operation id");

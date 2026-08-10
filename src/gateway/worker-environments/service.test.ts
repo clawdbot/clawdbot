@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
@@ -188,9 +189,7 @@ describe("worker environment service", () => {
     return service;
   }
 
-  function createProvider(
-    overrides: Partial<Pick<WorkerProvider, "provision" | "inspect" | "destroy">> = {},
-  ): WorkerProvider {
+  function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
     return {
       id: "fake",
       provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
@@ -1597,6 +1596,44 @@ describe("worker environment service", () => {
     });
   });
 
+  it("does not resolve a provider provision timeout when the service override is set", async () => {
+    const resolveProvisionTimeoutMs = vi.fn(() => {
+      throw new Error("provider timeout hook must not run");
+    });
+    const workerService = createService(createProvider({ resolveProvisionTimeoutMs }), {
+      providerCallTimeoutMs: 1_000,
+    });
+
+    await expect(
+      workerService.create("development", "request-provider-timeout-override"),
+    ).resolves.toMatchObject({ state: "ready" });
+    expect(resolveProvisionTimeoutMs).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["non-finite", Number.NaN],
+    ["timer overflow", MAX_TIMER_TIMEOUT_MS + 1],
+  ])("rejects a %s provider provision timeout before allocation", async (_label, timeoutMs) => {
+    const provision = vi.fn(async () => ({ leaseId: "lease-invalid-timeout", ssh: SSH_ENDPOINT }));
+    const workerService = createService(
+      createProvider({
+        provision,
+        resolveProvisionTimeoutMs: () => timeoutMs,
+      }),
+    );
+
+    await expect(
+      workerService.create("development", `request-invalid-provider-timeout-${String(timeoutMs)}`),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: expect.stringContaining("Worker provider provision timeout must be an integer"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(provision).not.toHaveBeenCalled();
+  });
+
   it("serializes destroy and provision replay behind a timed-out provider operation", async () => {
     const events: string[] = [];
     const operationIds: string[] = [];
@@ -1630,8 +1667,9 @@ describe("worker environment service", () => {
         return { leaseId: "lease-timeout-replay", ssh: SSH_ENDPOINT };
       },
       destroy,
+      resolveProvisionTimeoutMs: () => 20,
     });
-    const workerService = createService(provider, { providerCallTimeoutMs: 20 });
+    const workerService = createService(provider);
     const creation = workerService.create("development", "request-provider-timeout-race");
     const creationResult = expect(creation).rejects.toMatchObject({
       code: "provider_failure",

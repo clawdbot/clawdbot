@@ -136,6 +136,8 @@ export type WorkerProvider = {
    * Repeating the same operation id must be idempotent across gateway restarts.
    */
   provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
+  /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
+  resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
   /**

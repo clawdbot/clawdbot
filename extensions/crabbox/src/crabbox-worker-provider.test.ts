@@ -949,9 +949,12 @@ describe("Crabbox worker provider", () => {
         : commandResult();
     });
 
-    await expect(
-      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID),
-    ).resolves.toMatchObject({ leaseId: LEASE_ID });
+    const desktopProfile = { ...PROFILE, desktop: true };
+    expect(provider.resolveProvisionTimeoutMs?.(PROFILE)).toBe(350_000);
+    expect(provider.resolveProvisionTimeoutMs?.(desktopProfile)).toBe(57 * 60_000);
+    await expect(provider.provision(desktopProfile, OPERATION_ID)).resolves.toMatchObject({
+      leaseId: LEASE_ID,
+    });
     expect(calls.find((call) => call.argv[1] === "warmup")?.options).toEqual({
       timeoutMs: 50 * 60_000,
       maxOutputBytes: 65_536,
