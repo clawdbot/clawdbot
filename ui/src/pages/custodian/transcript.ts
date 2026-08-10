@@ -203,7 +203,7 @@ export function renderCustodianTranscriptEntry(params: {
                 >
                   ${t("custodian.cancel")}
                 </button>`
-              : nothing,
+              : undefined,
             onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
           })}
         </section>`
