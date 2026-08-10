@@ -489,11 +489,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     if (
       creationKey?.id &&
       remoteJid &&
-      resolvePollStore(params.store).wasOwnPollCreation(
-        params.accountId,
-        remoteJid,
-        creationKey.id,
-      )
+      resolvePollStore(params.store).wasOwnPollCreation(params.accountId, remoteJid, creationKey.id)
     ) {
       getChildLogger({ module: "whatsapp-poll-votes" }).warn(
         {
