@@ -1013,7 +1013,6 @@ describe("release validation no-push transport", () => {
     expect(dockerRelease.on?.workflow_call?.secrets).toEqual({
       DOCKERHUB_USERNAME: { required: true },
       DOCKERHUB_TOKEN: { required: true },
-      VERCEL_TOKEN: { required: true },
     });
 
     const callers = readdirSync(".github/workflows")
@@ -1040,7 +1039,6 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.secrets).toEqual({
       DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",
       DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}",
-      VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
     });
     expect(
       step(
