@@ -6,7 +6,7 @@ import type { PreparedWorkspaceSkillMutation } from "../lifecycle/workspace-skil
 import type {
   SkillCollectionPlanEntry,
   WritableSkillCollectionEntry,
-} from "./collection-reconcile.js";
+} from "./collection-contracts.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 
 export async function assertCollectionReadsCurrent(

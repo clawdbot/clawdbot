@@ -20,12 +20,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
-  listWritableSkillCollection,
   MAX_RECONCILED_SKILLS,
   MAX_RECONCILED_SKILL_BYTES,
   type SkillCollectionReconcileContext,
   type SkillCollectionReconcileResult,
-} from "./collection-reconcile.js";
+} from "./collection-contracts.js";
+import { listWritableSkillCollection } from "./collection-reconcile.js";
 import {
   isSkillCollectionReviewDue,
   withSkillCollectionReviewClaim,

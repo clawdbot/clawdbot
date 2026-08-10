@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSkillProposalEvaluationOutcome } from "../../plugins/hook-types.js";
 import type { SkillScanFinding } from "../security/scanner.js";
-import type { SkillCollectionReconcileContext } from "./collection-reconcile.js";
+import type { SkillCollectionReconcileContext } from "./collection-contracts.js";
 
 /** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;

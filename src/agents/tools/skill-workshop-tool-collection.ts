@@ -6,11 +6,13 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   MAX_RECONCILED_SKILLS,
   MAX_RECONCILED_SKILL_BYTES,
-  reconcileSkillCollection,
-  restoreLatestSkillCollectionBackup,
   type SkillCollectionPlanEntry,
   type SkillCollectionReconcileContext,
   type SkillCollectionReconcileResult,
+} from "../../skills/workshop/collection-contracts.js";
+import {
+  reconcileSkillCollection,
+  restoreLatestSkillCollectionBackup,
 } from "../../skills/workshop/collection-reconcile.js";
 import { readSkillProposalTargetTreeSha256 } from "../../skills/workshop/proposal-bundle.js";
 import { stringEnum } from "../schema/typebox.js";

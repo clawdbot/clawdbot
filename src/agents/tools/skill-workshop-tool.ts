@@ -11,7 +11,7 @@ import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
   MAX_RECONCILED_SKILL_BYTES,
   type SkillCollectionReconcileContext,
-} from "../../skills/workshop/collection-reconcile.js";
+} from "../../skills/workshop/collection-contracts.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import {
