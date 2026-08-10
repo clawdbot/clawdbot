@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   defineLegacyConfigMigration,
   type LegacyConfigMigrationSpec,
@@ -9,7 +10,10 @@ import {
   TASK_SUGGESTION_TOOL_NAME,
 } from "./legacy-tool-name-migration.js";
 
-const TOOL_POLICY_ROOTS = ["tools", "agents", "channels", "gateway", "plugins"] as const;
+// Core-owned config roots only. plugins.entries.*.config is opaque plugin-owned
+// data; rewriting tool names there belongs to the owning plugin's doctor
+// contract (legacyConfigRules), never to this core migration.
+const TOOL_POLICY_ROOTS = ["tools", "agents", "channels", "gateway"] as const;
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
@@ -21,7 +25,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES: LegacyConfigMigrationS
       match: (value) => findLegacyTaskSuggestionToolPaths(value, [root]).length > 0,
     })),
     apply: (raw, changes) => {
-      const paths = migrateLegacyTaskSuggestionToolPolicies(raw);
+      if (!isRecord(raw)) {
+        return;
+      }
+      const paths = TOOL_POLICY_ROOTS.flatMap((root) =>
+        migrateLegacyTaskSuggestionToolPolicies(raw[root], [root]),
+      );
       if (paths.length === 0) {
         return;
       }

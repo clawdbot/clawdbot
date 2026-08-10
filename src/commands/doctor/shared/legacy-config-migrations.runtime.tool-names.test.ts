@@ -32,7 +32,11 @@ describe("legacy task-suggestion tool name config migration", () => {
     expect(raw.tools.sandbox.tools.alsoAllow).toEqual(["suggest_task"]);
     expect(raw.agents.entries.main.tools.allow).toEqual(["suggest_task"]);
     expect(raw.gateway.tools.deny).toEqual(["suggest_task"]);
-    expect(raw.plugins.entries.example.config.toolsAllow).toEqual(["suggest_task"]);
+    // Plugin config is opaque plugin-owned data; the core migration must not
+    // reach into it even when the key shape matches a tool policy.
+    expect(raw.plugins.entries.example.config.toolsAllow).toEqual([
+      LEGACY_TASK_SUGGESTION_TOOL_NAME,
+    ]);
     expect(raw.tools.agentToAgent.allow).toEqual([LEGACY_TASK_SUGGESTION_TOOL_NAME]);
     expect(changes).toHaveLength(1);
   });
