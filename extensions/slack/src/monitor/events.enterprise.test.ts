@@ -8,6 +8,7 @@ const registrations = vi.hoisted(() => ({
   agent: vi.fn(),
   assistant: vi.fn(),
   channel: vi.fn(),
+  channelIdChanged: vi.fn(),
   home: vi.fn(),
   interaction: vi.fn(),
   member: vi.fn(),
@@ -20,7 +21,10 @@ vi.mock("./events/agent.js", () => ({ registerSlackAgentEvents: registrations.ag
 vi.mock("./events/assistant.js", () => ({
   registerSlackAssistantEvents: registrations.assistant,
 }));
-vi.mock("./events/channels.js", () => ({ registerSlackChannelEvents: registrations.channel }));
+vi.mock("./events/channels.js", () => ({
+  registerSlackChannelEvents: registrations.channel,
+  registerSlackChannelIdChangedEvent: registrations.channelIdChanged,
+}));
 vi.mock("./events/home.js", () => ({ registerSlackHomeEvents: registrations.home }));
 vi.mock("./events/interactions.js", () => ({
   registerSlackInteractionEvents: registrations.interaction,
@@ -57,17 +61,18 @@ describe("registerSlackMonitorEvents", () => {
     }
   });
 
-  it("registers messages, reactions, pins, and member events for enterprise installs", () => {
+  it("registers workspace-safe events for enterprise installs", () => {
     registerForInstallation("enterprise");
 
     expect(registrations.message).toHaveBeenCalledOnce();
     expect(registrations.reaction).toHaveBeenCalledOnce();
     expect(registrations.pin).toHaveBeenCalledOnce();
     expect(registrations.member).toHaveBeenCalledOnce();
-    expect(registrations.channel).not.toHaveBeenCalled();
+    expect(registrations.channel).toHaveBeenCalledOnce();
+    expect(registrations.channelIdChanged).not.toHaveBeenCalled();
     expect(registrations.home).not.toHaveBeenCalled();
     expect(registrations.agent).not.toHaveBeenCalled();
-    expect(registrations.interaction).not.toHaveBeenCalled();
+    expect(registrations.interaction).toHaveBeenCalledOnce();
     expect(registrations.assistant).not.toHaveBeenCalled();
   });
 
