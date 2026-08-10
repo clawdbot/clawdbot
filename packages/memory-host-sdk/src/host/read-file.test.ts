@@ -47,10 +47,7 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: nonDirectoryParentPath,
         }),
-      ).resolves.toEqual({
-        text: "",
-        path: path.relative(workspaceDir, nonDirectoryParentPath).replace(/\\/g, "/"),
-      });
+      ).rejects.toThrow("path required");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
