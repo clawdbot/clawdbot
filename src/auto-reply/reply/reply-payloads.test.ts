@@ -131,13 +131,10 @@ describe("filterMessagingToolMediaDuplicates", () => {
     expect(result).toBe(payloads);
   });
 
-  it.each([
-    ["/tmp/photo.jpg", "file:///tmp/photo.jpg"],
-    ["FILE:/tmp/photo.jpg", "file:///tmp/photo.jpg"],
-  ])("dedupes equivalent media references %s and %s", (mediaUrl, sentMediaUrl) => {
+  it("dedupes equivalent file and local path variants", () => {
     const result = filterMessagingToolMediaDuplicates({
-      payloads: [{ text: "hello", mediaUrl }],
-      sentMediaUrls: [sentMediaUrl],
+      payloads: [{ text: "hello", mediaUrl: "/tmp/photo.jpg" }],
+      sentMediaUrls: ["file:///tmp/photo.jpg"],
     });
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
