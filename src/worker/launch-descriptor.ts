@@ -29,6 +29,11 @@ import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
 const LAUNCH_VERSION = 2;
 
+export type WorkerBrowserLaunchDescriptor = {
+  cdpUrl: string;
+  launcherPath: string;
+};
+
 type WorkerLaunchAssignment = {
   runId: string;
   turnId: string;
@@ -48,6 +53,7 @@ type WorkerLaunchAssignment = {
     nextSeq: number;
   };
   toolAuthority: WorkerToolAuthority;
+  browser?: WorkerBrowserLaunchDescriptor;
 };
 
 type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
@@ -98,6 +104,44 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   return { allowedToolNames: [...value.allowedToolNames] };
 }
 
+function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescriptor | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["cdpUrl", "launcherPath"]) ||
+    typeof value.cdpUrl !== "string" ||
+    typeof value.launcherPath !== "string" ||
+    !path.isAbsolute(value.launcherPath)
+  ) {
+    return undefined;
+  }
+  let cdpUrl: URL;
+  try {
+    cdpUrl = new URL(value.cdpUrl);
+  } catch {
+    return undefined;
+  }
+  const port = Number(cdpUrl.port);
+  if (
+    cdpUrl.protocol !== "http:" ||
+    cdpUrl.hostname !== "127.0.0.1" ||
+    cdpUrl.username !== "" ||
+    cdpUrl.password !== "" ||
+    cdpUrl.port === "" ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65_535 ||
+    cdpUrl.pathname !== "/" ||
+    cdpUrl.search !== "" ||
+    cdpUrl.hash !== ""
+  ) {
+    return undefined;
+  }
+  return {
+    cdpUrl: value.cdpUrl,
+    launcherPath: value.launcherPath,
+  };
+}
+
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
@@ -116,7 +160,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt"],
+      ["systemPrompt", "browser"],
     )
   ) {
     return undefined;
@@ -137,6 +181,11 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   const toolAuthority = parseToolAuthority(value.toolAuthority);
   if (!toolAuthority) {
+    return undefined;
+  }
+  const browser =
+    value.browser === undefined ? undefined : parseBrowserLaunchDescriptor(value.browser);
+  if (value.browser !== undefined && !browser) {
     return undefined;
   }
   if (
@@ -162,7 +211,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   ) {
     return undefined;
   }
-  return { ...value, toolAuthority } as WorkerLaunchAssignment;
+  return { ...value, toolAuthority, ...(browser ? { browser } : {}) } as WorkerLaunchAssignment;
 }
 
 export function buildWorkerConnectParams(

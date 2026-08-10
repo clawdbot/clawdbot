@@ -274,6 +274,7 @@ describe("worker turn launcher", () => {
       state: "attached",
       desktop: null,
       desktopAvailable: false,
+      desktopApps: [],
       leaseId: "lease-worker-turn",
       sshEndpoint: {
         host: "worker.example.test",
@@ -282,6 +283,25 @@ describe("worker turn launcher", () => {
         hostKey: HOST_KEY,
         keyRef: { source: "file", provider: "worker-keys", id: "/worker/key" },
       },
+    };
+  }
+
+  function browserEnvironment(): WorkerTurnEnvironmentRecord {
+    return {
+      ...attachedEnvironment(),
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        apps: [
+          {
+            id: "browser",
+            executablePath: "/usr/local/bin/openclaw-worker-browser",
+            cdpPort: 9222,
+          },
+        ],
+      },
+      desktopAvailable: true,
+      desktopApps: ["browser"],
     };
   }
 
@@ -700,7 +720,7 @@ describe("worker turn launcher", () => {
       stop: vi.fn(async () => {}),
     };
     const environments: WorkerTurnEnvironmentService = {
-      get: vi.fn(() => attachedEnvironment()),
+      get: vi.fn(() => browserEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery,
       startTunnel: vi.fn(async () => tunnel),
@@ -727,6 +747,7 @@ describe("worker turn launcher", () => {
       },
       {
         ...turn(),
+        toolsAllow: ["browser"],
         workspaceDir: path.join(root, "stale-caller-workspace"),
         transcriptPrompt: "Canonical transcript request",
         onAgentEvent,
@@ -769,14 +790,11 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.version).toBe(2);
-    expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-    ]);
+    expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual(["browser"]);
+    expect(descriptor?.assignment.browser).toEqual({
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    });
     expect(descriptor?.assignment.initialMessages).toEqual([
       {
         role: "user",
@@ -917,7 +935,7 @@ describe("worker turn launcher", () => {
       stop: vi.fn(async () => {}),
     };
     const environments: WorkerTurnEnvironmentService = {
-      get: vi.fn(() => attachedEnvironment()),
+      get: vi.fn(() => browserEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(() => true),
       startTunnel: vi.fn(async () => tunnel),
@@ -935,12 +953,19 @@ describe("worker turn launcher", () => {
       },
       {
         ...turn("run-persisted-user"),
+        config: {
+          ...turn("run-persisted-user").config,
+          plugins: { entries: { browser: { enabled: false } } },
+        },
+        toolsAllow: ["browser"],
         suppressNextUserMessagePersistence: true,
       },
       async () => ({ meta: { durationMs: 1 } }),
     );
 
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
+    expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual([]);
+    expect(descriptor?.assignment.browser).toBeUndefined();
     expect(descriptor?.assignment.initialMessages).toMatchObject([
       { role: "user" },
       { role: "assistant", content: [{ id: "shared-call" }] },

@@ -118,6 +118,7 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     sshEndpoint,
     desktop: null,
     desktopAvailable: false,
+    desktopApps: [],
   };
   const ready = {
     ...environmentBase,

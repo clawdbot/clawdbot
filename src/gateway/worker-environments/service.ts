@@ -60,7 +60,7 @@ import {
   type WorkerInferenceSink,
 } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
-import type { WorkerDesktopObserveResult } from "./service-contract.js";
+import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import { requireWorkerLeaseStatus, requireWorkerLease } from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
@@ -79,6 +79,9 @@ type WorkerEnvironmentServiceErrorCode =
   | "environment_not_found"
   | "invalid_profile"
   | "invalid_state"
+  | "desktop_app_not_found"
+  | "unsupported_platform"
+  | "launcher_failure"
   | "provider_failure"
   | "bootstrap_failure";
 
@@ -325,14 +328,21 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         (request.event.payload.aborted === true ||
           request.event.payload.fallbackExhaustedFailure === true)));
 
-  const project = (record: WorkerEnvironmentRecord) => ({
-    ...record,
-    ...((record.state === "failed" || record.state === "orphaned") && record.lastError
-      ? { error: boundedError(record.lastError) }
-      : {}),
-    desktopAvailable: inState(record, "ready", "idle", "attached") && record.desktop !== null,
-    tunnelStatus: tunnels?.status(record.environmentId) ?? ("stopped" as const),
-  });
+  const project = (record: WorkerEnvironmentRecord) => {
+    const desktopAvailable =
+      inState(record, "ready", "idle", "attached") && record.desktop !== null;
+    return {
+      ...record,
+      ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+        ? { error: boundedError(record.lastError) }
+        : {}),
+      desktopAvailable,
+      desktopApps: desktopAvailable
+        ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
+        : [],
+      tunnelStatus: tunnels?.status(record.environmentId) ?? ("stopped" as const),
+    };
+  };
 
   const move = (
     r: WorkerEnvironmentRecord,
@@ -1248,6 +1258,108 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     };
   };
 
+  const launchDesktopApp = async (request: {
+    environmentId: string;
+    app: "browser" | "terminal";
+  }): Promise<WorkerDesktopLaunchResult> => {
+    if (options.getConfig().cloudWorkers?.desktop !== true) {
+      throw serviceError(
+        "invalid_state",
+        "worker desktop launch is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)",
+      );
+    }
+    if (stopping) {
+      throw serviceError("invalid_state", "Worker environment service is stopping");
+    }
+    if (!tunnels) {
+      throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
+    }
+    const requireLaunchable = () => {
+      if (stopping) {
+        throw serviceError("invalid_state", "Worker environment service is stopping");
+      }
+      const record = store.get(request.environmentId);
+      if (!record) {
+        throw serviceError(
+          "environment_not_found",
+          `Unknown worker environment: ${request.environmentId}`,
+        );
+      }
+      if (
+        !inState(record, "ready", "idle", "attached") ||
+        record.destroyRequestedAtMs !== null ||
+        !record.leaseId ||
+        !record.sshEndpoint ||
+        !record.desktop
+      ) {
+        throw serviceError(
+          "invalid_state",
+          "environment has no desktop; desktop is a warm-time capability of the profile",
+        );
+      }
+      const app = record.desktop.apps?.find((candidate) => candidate.id === request.app);
+      if (!app) {
+        throw serviceError(
+          "desktop_app_not_found",
+          `environment does not advertise desktop app: ${request.app}`,
+        );
+      }
+      return { app, record };
+    };
+
+    let startup: Promise<void> | undefined;
+    let launchEpoch: number | undefined;
+    await withLock(request.environmentId, async () => {
+      const { app, record } = requireLaunchable();
+      const provider = providerFor(record.providerId);
+      launchEpoch = record.ownerEpoch;
+      startup = tunnels.desktop.launchApp({
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+        ssh: record.sshEndpoint,
+        app,
+        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+      });
+    });
+    if (!startup || launchEpoch === undefined) {
+      throw serviceError("launcher_failure", "Worker desktop app launcher failed to start");
+    }
+    try {
+      await startup;
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "unsupported_platform"
+      ) {
+        throw serviceError(
+          "unsupported_platform",
+          "desktop app launch is not supported on Windows gateway hosts",
+        );
+      }
+      // A teardown aborts the SSH child before mutating the durable row. Wait for the
+      // environment lock, then report the authoritative lifecycle state instead of a launch error.
+      await withLock(request.environmentId, async () => {
+        const { record } = requireLaunchable();
+        if (record.ownerEpoch !== launchEpoch) {
+          throw serviceError("invalid_state", "Worker desktop app launch owner changed");
+        }
+      });
+      throw serviceError(
+        "launcher_failure",
+        `worker desktop ${request.app} launcher failed; verify the app is installed and retry`,
+      );
+    }
+    await withLock(request.environmentId, async () => {
+      const { record } = requireLaunchable();
+      if (record.ownerEpoch !== launchEpoch) {
+        throw serviceError("invalid_state", "Worker desktop app launch owner changed");
+      }
+    });
+    return { app: request.app, status: "ready" };
+  };
+
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
     await withLock(environmentId, async () => {
       await tunnels?.stop(environmentId, ownerEpoch);
@@ -1608,6 +1720,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     destroyUnattached: async (environmentId: string) =>
       project(await destroy(environmentId, { requireUnattached: true })),
     observeDesktop,
+    launchDesktopApp,
     admitWorker: async (admission: WorkerConnectParams["admission"]) => {
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;

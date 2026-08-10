@@ -852,6 +852,45 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
   });
 
+  it("materializes exactly the Browser tool for a browser-only assignment", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+    launch.assignment.browser = {
+      cdpUrl: "http://127.0.0.1:9222",
+      launcherPath: "/usr/local/bin/openclaw-worker-browser",
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+      "browser",
+    ]);
+  });
+
+  it.each([
+    { authority: ["browser"] as const, browser: undefined },
+    {
+      authority: ["read"] as const,
+      browser: {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      },
+    },
+  ])("fails before inference when Browser authority and descriptor disagree", async (testCase) => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = [...testCase.authority];
+    if (testCase.browser) {
+      launch.assignment.browser = testCase.browser;
+    } else {
+      delete launch.assignment.browser;
+    }
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+      "Worker Browser authority and launch descriptor must be provided together",
+    );
+    expect(gateway.inferenceRequests).toHaveLength(0);
+  });
+
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
     const { gateway, launch } = await setup({ transcriptFailureAtRequest: 2 });
 

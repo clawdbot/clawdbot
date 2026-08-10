@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import * as workerDesktop from "./crabbox-worker-desktop-setup.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
   buildCrabboxWarmupArgs,
@@ -332,12 +333,6 @@ const isTerminalState = (state: string) => DESTROYED_STATES.has(state.toLowerCas
 const isUnusableProvisionState = (state: string) =>
   UNUSABLE_PROVISION_STATES.has(state.toLowerCase());
 
-function statusFromInspect(inspect: ParsedInspect): WorkerLeaseStatus {
-  // `ready` is a short SSH probe, not lease existence. A recognized nonterminal lease remains
-  // active while it is provisioning or temporarily unreachable, even when ready is false.
-  return { status: isTerminalState(inspect.state) ? "destroyed" : "active" };
-}
-
 function leaseFromInspect(inspect: ParsedInspect, profile: CrabboxProfile): WorkerLease {
   if (isTerminalState(inspect.state)) {
     throw new WorkerProviderError("Crabbox operation lease is no longer active");
@@ -372,13 +367,7 @@ function leaseFromInspect(inspect: ParsedInspect, profile: CrabboxProfile): Work
     // Crabbox's Linux desktop contract is TigerVNC on worker loopback with a per-lease
     // password file. This warm-time capability cannot be retrofitted onto an existing lease.
     ...(profile.desktop
-      ? {
-          desktop: {
-            protocol: "rfb" as const,
-            port: 5900,
-            passwordFilePath: "/var/lib/crabbox/vnc.password",
-          },
-        }
+      ? { desktop: workerDesktop.createCrabboxWorkerDesktopEndpoint(inspect.sshUser) }
       : {}),
   };
 }
@@ -618,7 +607,8 @@ export function createCrabboxWorkerProvider(
     async provision(profile: WorkerProfile, operationId: string): Promise<WorkerLease> {
       const parsed = parseCrabboxProfile(profile);
       const deadline = Date.now() + PROVISION_TIMEOUT_MS;
-      const setupDeadline = deadline + (parsed.setup ? SETUP_TIMEOUT_MS : 0);
+      const setupCount = Number(Boolean(parsed.desktop)) + Number(Boolean(parsed.setup));
+      const setupDeadline = deadline + setupCount * SETUP_TIMEOUT_MS;
       if (!operationId.trim()) {
         throw new Error("Crabbox provision requires an operation id");
       }
@@ -692,8 +682,20 @@ export function createCrabboxWorkerProvider(
         throw new WorkerProviderError("Crabbox warmup lease entered a terminal state");
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
+      inspectedParams.deadline = setupDeadline;
+      inspectedParams.inspect = await workerDesktop.provisionCrabboxWorkerDesktop(
+        parsed.desktop === true,
+        inspectedParams.inspect.sshUser ?? "",
+        inspectedParams.inspect,
+        () => stopProvisionInspect(inspectedParams),
+        (setup) =>
+          runProvisionSetupAndWaitReady({
+            ...inspectedParams,
+            setup,
+            sleep,
+          }),
+      );
       if (parsed.setup) {
-        inspectedParams.deadline = setupDeadline;
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
           setup: parsed.setup,
@@ -713,7 +715,8 @@ export function createCrabboxWorkerProvider(
       if (inspected.status === "unknown") {
         return { status: "unknown" };
       }
-      return statusFromInspect(inspected.inspect);
+      // `ready` is an SSH probe; every recognized nonterminal lease remains active.
+      return { status: isTerminalState(inspected.inspect.state) ? "destroyed" : "active" };
     },
     async resolveSshIdentity(request) {
       const context = resolveLeaseContext(request);
