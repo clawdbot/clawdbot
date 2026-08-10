@@ -713,6 +713,13 @@ openclaw-app {
   }
 }
 
+/* Native app hosts are installed desktop windows too, but they embed a plain
+   web view that reports `display-mode: browser`; they announce themselves with
+   these `<html>` markers instead (all three, as layout.css already matches). */
+html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) {
+  --cursor-action: default;
+}
+
 /* Generic actionable controls, at element/attribute specificity only so the
    component rules that own semantic cursors (not-allowed, disabled, grab,
    resize, deliberate `default` on non-actionable elements) still win. */

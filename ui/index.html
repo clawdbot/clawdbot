@@ -221,6 +221,11 @@
         }
       }
 
+      html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+        .mount-fallback__button {
+        cursor: default;
+      }
+
       .mount-fallback__button--primary {
         border-color: #66c2ff;
         color: #061019;

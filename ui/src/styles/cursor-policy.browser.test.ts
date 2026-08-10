@@ -15,8 +15,14 @@ const describeCursorPolicy = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
+// What `DashboardWindowController.installNativeChromeScript` stamps on <html>.
+const NATIVE_HOST_MARKERS = ["openclaw-native-macos", "openclaw-native-web-chrome"] as const;
+
 type CursorCase = {
-  /** Expected cursor in an installed/app window (`display-mode: standalone`). */
+  /**
+   * Expected cursor in an installed/app window: a `display-mode: standalone`
+   * window, or a native app host that stamps `NATIVE_HOST_MARKERS` instead.
+   */
   readonly appWindow: string;
   /** Expected cursor in an ordinary tab (`display-mode: browser`). */
   readonly browserTab: string;
@@ -173,6 +179,24 @@ describeCursorPolicy("Control UI cursor policy", () => {
 
       expect(probe.displayMode).toBe("browser");
       expect(probe.cursors).toEqual(expectedCursors("browserTab"));
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+
+  it("keeps the desktop arrow on app chrome in a native app host", async () => {
+    const page = await tabBrowser.newPage();
+    try {
+      await page.goto(`file://${fixtureFile}`);
+      // The macOS dashboard is a plain web view, so it reports display-mode
+      // browser and marks itself with these classes at document end instead.
+      await page.evaluate((markers: readonly string[]) => {
+        document.documentElement.classList.add(...markers);
+      }, NATIVE_HOST_MARKERS);
+      const probe = await probeWindow(page);
+
+      expect(probe.displayMode).toBe("browser");
+      expect(probe.cursors).toEqual(expectedCursors("appWindow"));
     } finally {
       await page.close().catch(() => {});
     }

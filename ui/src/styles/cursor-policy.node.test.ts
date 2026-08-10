@@ -7,6 +7,12 @@ import { describe, expect, it } from "vitest";
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
 
 const APP_LIKE_MODES = ["standalone", "minimal-ui", "window-controls-overlay"] as const;
+/** `<html>` markers the native app hosts stamp; they report display-mode browser. */
+const NATIVE_HOST_MARKERS = [
+  "openclaw-native-macos",
+  "openclaw-native-nav",
+  "openclaw-native-web-chrome",
+] as const;
 
 function collectStyleSources(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -60,6 +66,18 @@ describe("Control UI cursor policy", () => {
     expect(appLikeQuery).not.toContain("fullscreen");
   });
 
+  it("gives the native app hosts the same arrow as an app-like display mode", () => {
+    const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+
+    const nativeHostRule = baseCss.match(
+      /html:is\([^)]*\)\s*\{\s*--cursor-action:\s*default;/u,
+    )?.[0];
+    expect(nativeHostRule, "base.css must map the native host markers to the arrow").toBeDefined();
+    for (const marker of NATIVE_HOST_MARKERS) {
+      expect(nativeHostRule).toContain(`.${marker}`);
+    }
+  });
+
   it("repeats the same app-like mode list in the pre-boot mount fallback", () => {
     // The fallback ships its own inline stylesheet because it has to render when
     // the bundle fails to load, so the policy is duplicated there on purpose.
@@ -71,6 +89,17 @@ describe("Control UI cursor policy", () => {
     expect(fallbackQuery, "ui/index.html must keep the fallback on the policy").toBeDefined();
     for (const mode of APP_LIKE_MODES) {
       expect(fallbackQuery).toContain(`display-mode: ${mode}`);
+    }
+
+    const fallbackNativeRule = indexHtml.match(
+      /html:is\([^)]*\)\s*\.mount-fallback__button\s*\{\s*cursor:\s*default;/u,
+    )?.[0];
+    expect(
+      fallbackNativeRule,
+      "ui/index.html must keep the fallback on the native host policy",
+    ).toBeDefined();
+    for (const marker of NATIVE_HOST_MARKERS) {
+      expect(fallbackNativeRule).toContain(`.${marker}`);
     }
   });
 
