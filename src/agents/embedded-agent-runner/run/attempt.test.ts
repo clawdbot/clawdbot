@@ -19,6 +19,7 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
 } from "../stream-resolution.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-catalog.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -36,7 +37,6 @@ import {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 const llmRuntime = {
   ...defaultLlmRuntime,
