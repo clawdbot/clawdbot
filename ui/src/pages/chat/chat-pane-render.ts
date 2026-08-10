@@ -230,8 +230,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     // Only side-docked rails narrow the conversation region.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
-    const selectedSessionRailMode =
-      this.sessionRailModeSessionKey === state.sessionKey ? this.sessionRailMode : "hidden";
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -299,7 +297,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         ? undefined
         : this.sessionCompanionThreads.view(state.sessionKey),
       ...this.sessionRailCommandProps(state.sessionKey),
-      sessionRailMode: selectedSessionRailMode,
+      sessionRailMode: this.selectedSessionRailMode(state.sessionKey),
       sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onSessionRailDraftChange: (draft) =>

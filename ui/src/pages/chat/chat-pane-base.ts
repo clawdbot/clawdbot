@@ -206,6 +206,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       });
   }
 
+  /** The mirrored mode belongs to one session; every other session reads hidden. */
+  protected selectedSessionRailMode(sessionKey: string): SessionRailMode {
+    return this.sessionRailModeSessionKey === sessionKey ? this.sessionRailMode : "hidden";
+  }
+
   protected requestSessionRail(intent: SessionRailCommand["intent"]): void {
     this.ensureSessionRail();
     this.sessionRailCommand = {

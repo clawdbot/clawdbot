@@ -210,10 +210,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       sessionRailAction: renderSessionRailToggle({
-        mode:
-          this.sessionRailModeSessionKey === this.state?.sessionKey
-            ? this.sessionRailMode
-            : "hidden",
+        mode: this.selectedSessionRailMode(this.state?.sessionKey ?? ""),
         onToggle: () => this.requestSessionRail("toggle"),
       }),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
