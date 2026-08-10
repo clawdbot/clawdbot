@@ -14,13 +14,6 @@ export { normalizeAnyChannelId } from "./registry-normalize.js";
 export { normalizeChatChannelId };
 
 /**
- * Normalizes built-in chat channel ids without loading channel plugin implementations.
- */
-export function normalizeChannelId(raw?: string | null): ChatChannelId | null {
-  return normalizeChatChannelId(raw);
-}
-
-/**
  * Lists registered channel plugin ids without importing their runtime implementations.
  */
 export function listRegisteredChannelPluginIds(): ChannelId[] {
