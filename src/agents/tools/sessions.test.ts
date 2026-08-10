@@ -1190,7 +1190,11 @@ describe("sessions_send gating", () => {
     vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async () => {
       inheritedFence = getOwnedSessionTranscriptWriterFence();
     });
-    const parentTranscriptWrite = vi.fn(async <T>(run: () => Promise<T> | T) => await run());
+    let parentTranscriptWriteCalls = 0;
+    const parentTranscriptWrite = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      parentTranscriptWriteCalls += 1;
+      return await run();
+    };
 
     await withOwnedSessionTranscriptWrites(
       {
@@ -1208,7 +1212,7 @@ describe("sessions_send gating", () => {
     await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
 
     expect(inheritedFence).toBeUndefined();
-    expect(parentTranscriptWrite).not.toHaveBeenCalled();
+    expect(parentTranscriptWriteCalls).toBe(0);
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {
