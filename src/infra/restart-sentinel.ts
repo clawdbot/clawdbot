@@ -29,7 +29,7 @@ export type {
   RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 
-export type SuccessfulGitUpdateReceipt = {
+export type VerifiedGitUpdateReceipt = {
   root: string;
   sha: string;
   upstreamRef?: string;
@@ -175,7 +175,10 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
       if (!finalized) {
         return null;
       }
-      if (payload.status === "ok" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
+      // This receipt records the install fact proven by the running process. Post-install
+      // failures such as managed-service-handoff-failed keep the sentinel in error without
+      // erasing the upstream fallback for campaign-managed detached installs (#121634).
+      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
         writeUpdateInstallReceiptRowSync(db, payload);
       }
       return changed ? finalized : null;
@@ -264,12 +267,13 @@ async function readUpdateInstallReceiptPayload(
   }
 }
 
-function normalizeSuccessfulGitUpdateReceipt(
+function normalizeVerifiedGitUpdateReceipt(
   payload: RestartSentinelPayload | null,
-): SuccessfulGitUpdateReceipt | null {
+): VerifiedGitUpdateReceipt | null {
+  // Receipt rows are only written after the running install verifies root and revision.
+  // An error status records a post-install failure, not an untrusted install.
   if (
     payload?.kind !== "update" ||
-    payload.status !== "ok" ||
     payload.stats?.mode !== "git" ||
     !isPlainRecord(payload.stats.after)
   ) {
@@ -292,10 +296,10 @@ function normalizeSuccessfulGitUpdateReceipt(
   };
 }
 
-export async function readSuccessfulGitUpdateReceipt(
+export async function readVerifiedGitUpdateReceipt(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<SuccessfulGitUpdateReceipt | null> {
-  return normalizeSuccessfulGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
+): Promise<VerifiedGitUpdateReceipt | null> {
+  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {

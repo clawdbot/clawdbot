@@ -1,5 +1,5 @@
 /** Deterministic lookup helpers for plugin-registered cloud-worker providers. */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CloudWorkersConfig } from "../config/types.cloud-workers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -17,7 +17,9 @@ export function normalizeWorkerProviderIds(providerIds: readonly string[]): stri
   return [...new Set(normalized)].toSorted(compareText);
 }
 
-export function collectConfiguredWorkerProviderIds(config: OpenClawConfig): string[] {
+export function collectConfiguredWorkerProviderIds(config: {
+  cloudWorkers?: CloudWorkersConfig;
+}): string[] {
   return normalizeWorkerProviderIds(
     Object.values(config.cloudWorkers?.profiles ?? {}).map((profile) => profile.provider),
   );

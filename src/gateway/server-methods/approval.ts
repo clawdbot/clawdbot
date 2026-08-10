@@ -401,10 +401,7 @@ export function createApprovalHandlers(
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
             : undefined;
-      if (
-        resolveParams?.reviewer &&
-        (!custody || !liveRecord || !custody.authorizes(liveRecord))
-      ) {
+      if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;
       }

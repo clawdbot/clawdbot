@@ -843,13 +843,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 });
               }),
           } satisfies PluginRuntime["agent"]["session"];
-          const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) =>
-            await runWithPluginScope(async () => {
-              const ownerPluginId = resolveRunSessionExecutionOwner(params);
+          const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
+            const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
+            return await runWithPluginScope(async () => {
+              const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
               return ownerPluginId
-                ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(params)
-                : await agent.runEmbeddedAgent(params);
+                ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams)
+                : await agent.runEmbeddedAgent(runParams);
             });
+          };
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),
             Object.getOwnPropertyDescriptors(agent),

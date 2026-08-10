@@ -36,10 +36,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import {
-  readSuccessfulGitUpdateReceipt,
-  type SuccessfulGitUpdateReceipt,
-} from "./restart-sentinel.js";
+import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import {
   resolveGatewayRestartDeferralTimeoutMs,
   scheduleGatewaySigusr1Restart,
@@ -577,7 +574,7 @@ async function resolveStartupInstallStatus(fetchGit: boolean) {
       argv1: process.argv[1],
       cwd: process.cwd(),
     }),
-    readSuccessfulGitUpdateReceipt(),
+    readVerifiedGitUpdateReceipt(),
   ]);
   const gitUpstreamFallback =
     installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
@@ -607,7 +604,7 @@ function gitCommitsMatch(left: string, right: string): boolean {
 
 function resolveGitInstalledAtMs(
   git: NonNullable<UpdateCheckResult["git"]>,
-  installReceipt: SuccessfulGitUpdateReceipt | null,
+  installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): number | undefined {
   return installReceipt &&
@@ -621,7 +618,7 @@ function resolveGitInstalledAtMs(
 
 function resolveGitScheduleStatus(
   update: UpdateCheckResult,
-  installReceipt: SuccessfulGitUpdateReceipt | null,
+  installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): GitScheduleStatus | undefined {
   if (update.installKind !== "git") {
@@ -672,7 +669,7 @@ function withInstallStatus(
   schedule: UpdateScheduleState,
   update: UpdateCheckResult,
   includeGitStatus: boolean,
-  installReceipt: SuccessfulGitUpdateReceipt | null,
+  installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): UpdateScheduleState {
   const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;

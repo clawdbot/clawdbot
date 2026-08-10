@@ -558,10 +558,13 @@ export async function runPreparedEmbeddedLoop(
         terminalState: resolvedTerminalState,
         attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
-        finalizationAttempted: settledTurnFinalizationAttempted,
+        finalizationOutcome: settledTurnFinalizationOutcome,
       } = finalizedTerminal;
       lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
-      if (finalizedTerminal.finalizationSucceeded) {
+      if (
+        settledTurnFinalizationOutcome === "answered" ||
+        settledTurnFinalizationOutcome === "completed-empty"
+      ) {
         assistantProfileFailureReason = null;
       }
 
@@ -650,7 +653,7 @@ export async function runPreparedEmbeddedLoop(
         attemptAuthProfileStore,
         apiKeyInfo: getApiKeyInfo(),
         agentHarnessId: agentHarness.id,
-        settledTurnFinalizationAttempted,
+        settledTurnFinalizationOutcome,
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         reportedModelRef,
