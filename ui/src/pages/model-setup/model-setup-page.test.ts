@@ -107,6 +107,7 @@ function createContext() {
     client,
     request,
     runtimeConfig,
+    snapshot,
     context: {
       gateway,
       basePath: "/openclaw",
@@ -571,6 +572,55 @@ describe("ModelSetupPage catalog icons", () => {
       expect(page.textContent).toContain("Connection verified");
     });
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
+
+  it("drops a queued wizard action when setup access changes before dispatch", async () => {
+    const { context, client, request, runtimeConfig, snapshot } = createContext();
+    let releaseConfigSet: ((value: { hash: string }) => void) | undefined;
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          sourceConfig: {},
+          raw: "{}",
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        return await new Promise<{ hash: string }>((resolve) => {
+          releaseConfigSet = resolve;
+        });
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["pending"], true);
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+        },
+      },
+      client,
+      firstRun: false,
+    });
+
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+    await vi.waitFor(() => expect(releaseConfigSet).toBeTypeOf("function"));
+    snapshot.hello.auth.scopes = ["operator.read"];
+    releaseConfigSet?.({ hash: "hash-2" });
+
+    await vi.waitFor(() => expect(page.textContent).toContain("Model setup request failed."));
+    expect(request).not.toHaveBeenCalledWith(
+      "openclaw.setup.auth.start",
+      expect.anything(),
+      expect.anything(),
+    );
     runtimeConfig.dispose();
   });
 

@@ -517,6 +517,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           }
           return await task();
         },
+        {
+          canDispatch: () =>
+            generation === this.wizardMutationGeneration &&
+            this.context.gateway.snapshot.client === client &&
+            this.canUseSetup(client),
+          dispatchError: t("modelSetup.errors.requestFailed"),
+        },
       );
       if (generation !== this.wizardMutationGeneration) {
         if (mutation.ok && !mutation.refresh.ok && this.isConnected) {
