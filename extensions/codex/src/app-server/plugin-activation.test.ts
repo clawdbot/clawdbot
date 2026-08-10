@@ -300,61 +300,117 @@ describe("Codex plugin activation", () => {
     ]);
   });
 
-  it("converts an admin-disabled remote plugin install rejection into an activation failure", async () => {
-    const calls: string[] = [];
+  it.each([
+    {
+      rejectionMessage: "remote plugin plugin_connector_google_calendar is disabled by admin",
+    },
+    {
+      rejectionMessage:
+        "remote plugin plugin_connector_google_calendar is not available for install",
+    },
+  ])(
+    "converts an exact terminal remote plugin rejection into an activation failure ($rejectionMessage)",
+    async ({ rejectionMessage }) => {
+      const calls: string[] = [];
+      const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
+        name: "google-calendar",
+        remotePluginId: "plugin_connector_google_calendar",
+        installed: false,
+        enabled: false,
+        availability: "AVAILABLE",
+        installPolicy: "AVAILABLE",
+      });
+      const result = await ensureCodexPluginActivation({
+        identity: identity("google-calendar"),
+        request: async (method, params) => {
+          calls.push(method);
+          if (method === "plugin/list") {
+            return {
+              marketplaces: [
+                {
+                  name: "openai-curated-remote",
+                  path: null,
+                  interface: null,
+                  plugins: [remoteSummary],
+                },
+              ],
+              marketplaceLoadErrors: [],
+              featuredPluginIds: [],
+            } satisfies v2.PluginListResponse;
+          }
+          if (method === "plugin/install") {
+            expect(params).toEqual({
+              remoteMarketplaceName: "openai-curated-remote",
+              pluginName: "plugin_connector_google_calendar",
+            });
+            throw new CodexAppServerRpcError(
+              {
+                code: -32600,
+                message: rejectionMessage,
+              },
+              "plugin/install",
+            );
+          }
+          throw new Error(`unexpected request ${method}`);
+        },
+      });
+
+      expectActivationResult(result, {
+        ok: false,
+        reason: "install_failed",
+        installAttempted: true,
+      });
+      expect(result.diagnostics).toEqual([
+        {
+          message: `Codex plugin install failed: ${rejectionMessage}`,
+        },
+      ]);
+      expect(calls).toEqual(["plugin/list", "plugin/install"]);
+    },
+  );
+
+  it.each([
+    {
+      code: -32_001,
+      message: "remote plugin plugin_connector_google_calendar is disabled by admin",
+    },
+    { code: -32_600, message: "plugin service temporarily unavailable" },
+  ])("does not hide unrelated plugin install RPC failures ($code)", async ({ code, message }) => {
+    const error = new CodexAppServerRpcError({ code, message }, "plugin/install");
     const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
       name: "google-calendar",
       remotePluginId: "plugin_connector_google_calendar",
       installed: false,
       enabled: false,
-    });
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      request: async (method, params) => {
-        calls.push(method);
-        if (method === "plugin/list") {
-          return {
-            marketplaces: [
-              {
-                name: "openai-curated-remote",
-                path: null,
-                interface: null,
-                plugins: [remoteSummary],
-              },
-            ],
-            marketplaceLoadErrors: [],
-            featuredPluginIds: [],
-          } satisfies v2.PluginListResponse;
-        }
-        if (method === "plugin/install") {
-          expect(params).toEqual({
-            remoteMarketplaceName: "openai-curated-remote",
-            pluginName: "plugin_connector_google_calendar",
-          });
-          throw new CodexAppServerRpcError(
-            {
-              code: -32600,
-              message: "remote plugin plugin_connector_google_calendar is disabled by admin",
-            },
-            "plugin/install",
-          );
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
+      availability: "DISABLED_BY_ADMIN",
+      installPolicy: "NOT_AVAILABLE",
     });
 
-    expectActivationResult(result, {
-      ok: false,
-      reason: "install_failed",
-      installAttempted: true,
-    });
-    expect(result.diagnostics).toEqual([
-      {
-        message:
-          "Codex plugin install failed: remote plugin plugin_connector_google_calendar is disabled by admin",
-      },
-    ]);
-    expect(calls).toEqual(["plugin/list", "plugin/install"]);
+    await expect(
+      ensureCodexPluginActivation({
+        identity: identity("google-calendar"),
+        request: async (method) => {
+          if (method === "plugin/list") {
+            return {
+              marketplaces: [
+                {
+                  name: "openai-curated-remote",
+                  path: null,
+                  interface: null,
+                  plugins: [remoteSummary],
+                },
+              ],
+              marketplaceLoadErrors: [],
+              featuredPluginIds: [],
+            } satisfies v2.PluginListResponse;
+          }
+          if (method === "plugin/install") {
+            throw error;
+          }
+          throw new Error(`unexpected request ${method}`);
+        },
+      }),
+    ).rejects.toBe(error);
   });
 
   it("does not hide non-RPC plugin install failures", async () => {

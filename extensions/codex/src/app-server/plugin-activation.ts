@@ -106,23 +106,30 @@ export async function ensureCodexPluginActivation(
     };
   }
 
+  const remotePluginId = resolved.marketplace.remoteMarketplaceName
+    ? resolved.summary.remotePluginId
+    : undefined;
   let installResponse: v2.PluginInstallResponse;
   try {
     installResponse = (await params.request(
       "plugin/install",
       pluginReadParams(
         resolved.marketplace,
-        resolved.marketplace.remoteMarketplaceName && resolved.summary.remotePluginId
-          ? resolved.summary.remotePluginId
-          : params.identity.pluginName,
+        remotePluginId ?? params.identity.pluginName,
       ) satisfies v2.PluginInstallParams,
     )) as v2.PluginInstallResponse;
   } catch (error) {
-    if (!(error instanceof CodexAppServerRpcError)) {
+    if (
+      !(error instanceof CodexAppServerRpcError) ||
+      error.code !== -32600 ||
+      !remotePluginId ||
+      (error.message !== `remote plugin ${remotePluginId} is disabled by admin` &&
+        error.message !== `remote plugin ${remotePluginId} is not available for install`)
+    ) {
       throw error;
     }
-    // An application-level install rejection belongs to this plugin. Keep the
-    // plugin fail-closed without aborting setup for the thread's other apps.
+    // The catalog can be stale by install time. Isolate only Codex's exact
+    // terminal remote-install contract; unrelated RPC failures abort the turn.
     return {
       identity: params.identity,
       ok: false,
