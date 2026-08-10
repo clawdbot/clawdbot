@@ -92,12 +92,20 @@ export async function uploadDirectoryToDaytonaSandbox(params: {
         remoteTarPath,
         Math.ceil(params.timeoutMs / 1000),
       );
-      await params.runRemoteShellScript({
-        // Extraction failures must still remove the staged tar, and the
-        // original extract exit code has to survive the cleanup.
-        script: 'mkdir -p -- "$1" && tar -xf "$2" -C "$1"; ec=$?; rm -f -- "$2"; exit $ec',
-        args: [params.remoteDir, remoteTarPath],
-      });
+      try {
+        await params.runRemoteShellScript({
+          // Extraction failures must still remove the staged tar, and the
+          // original extract exit code has to survive the cleanup.
+          script: 'mkdir -p -- "$1" && tar -xf "$2" -C "$1"; ec=$?; rm -f -- "$2"; exit $ec',
+          args: [params.remoteDir, remoteTarPath],
+        });
+      } catch (error) {
+        // The sandbox persists per scope; a transport failure must not leave
+        // the staged workspace tar behind. The extract script removes it on
+        // the normal path, so a missing file here is fine.
+        await params.sandbox.fs.deleteFile(remoteTarPath).catch(() => {});
+        throw error;
+      }
     },
   );
 }

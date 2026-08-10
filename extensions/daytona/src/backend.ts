@@ -488,6 +488,7 @@ class DaytonaSandboxBackendImpl {
       {
         stdin: command.stdin,
         allowFailure: command.allowFailure,
+        signal: command.signal,
       },
     );
   }
@@ -500,17 +501,14 @@ class DaytonaSandboxBackendImpl {
   private async runWrappedRemoteCommand(
     sandbox: Sandbox,
     rawCommand: string,
-    options: { stdin?: Buffer | string; allowFailure?: boolean },
+    options: { stdin?: Buffer | string; allowFailure?: boolean; signal?: AbortSignal },
   ): Promise<SandboxBackendCommandResult> {
+    options.signal?.throwIfAborted();
     const token = randomBytes(8).toString("hex");
     const stdinPath = options.stdin === undefined ? null : `/tmp/openclaw-in-${token}`;
-    if (stdinPath) {
-      const data =
-        typeof options.stdin === "string" ? Buffer.from(options.stdin, "utf8") : options.stdin;
-      await sandbox.fs.uploadFile(data ?? Buffer.alloc(0), stdinPath, this.timeoutSeconds);
-    }
     const outPath = `/tmp/openclaw-out-${token}`;
     const errPath = `/tmp/openclaw-err-${token}`;
+    const stagedPaths = stdinPath ? [stdinPath, outPath, errPath] : [outPath, errPath];
     const separator = `__openclaw-daytona-${token}__`;
     const wrapped = [
       `{ ${rawCommand}${stdinPath ? ` < ${stdinPath}` : ""} ; } > ${outPath} 2> ${errPath}`,
@@ -521,12 +519,24 @@ class DaytonaSandboxBackendImpl {
       `rm -f ${outPath} ${errPath}${stdinPath ? ` ${stdinPath}` : ""}`,
       "exit $oc_ec",
     ].join("; ");
-    const response = await sandbox.process.executeCommand(
-      wrapped,
-      undefined,
-      undefined,
-      this.timeoutSeconds,
-    );
+    let response: Awaited<ReturnType<typeof sandbox.process.executeCommand>>;
+    try {
+      if (stdinPath) {
+        const data =
+          typeof options.stdin === "string" ? Buffer.from(options.stdin, "utf8") : options.stdin;
+        await sandbox.fs.uploadFile(data ?? Buffer.alloc(0), stdinPath, this.timeoutSeconds);
+      }
+      response = await this.raceWithAbort(
+        sandbox.process.executeCommand(wrapped, undefined, undefined, this.timeoutSeconds),
+        options.signal,
+      );
+    } catch (error) {
+      // The sandbox persists per scope, so staged transport files must not
+      // outlive a failed or aborted operation. The command removes its own
+      // staging on the success path; missing files are ignored here.
+      await this.removeRemoteStagingFiles(sandbox, stagedPaths);
+      throw error;
+    }
     const separatorIndex = response.result.indexOf(separator);
     if (separatorIndex < 0) {
       throw new Error(
@@ -542,6 +552,42 @@ class DaytonaSandboxBackendImpl {
       );
     }
     return { stdout, stderr, code };
+  }
+
+  /**
+   * Reject promptly when the caller aborts. The in-flight toolbox call cannot
+   * be cancelled remotely; it stays bounded by the configured API timeout and
+   * the wrapped command still removes its own staging when it completes.
+   */
+  private async raceWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) {
+      return await operation;
+    }
+    signal.throwIfAborted();
+    let removeAbortListener: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      const onAbort = () =>
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Daytona sandbox command aborted"),
+        );
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+    });
+    try {
+      return await Promise.race([operation, aborted]);
+    } finally {
+      removeAbortListener?.();
+      // Silence rejections from the losing branch after settle.
+      operation.catch(() => {});
+    }
+  }
+
+  private async removeRemoteStagingFiles(sandbox: Sandbox, stagedPaths: string[]): Promise<void> {
+    for (const stagedPath of stagedPaths) {
+      await sandbox.fs.deleteFile(stagedPath).catch(() => {});
+    }
   }
 }
 

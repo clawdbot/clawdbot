@@ -28,7 +28,7 @@ type FakeSandbox = {
   start: ReturnType<typeof vi.fn>;
   refreshData: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
-  fs: { uploadFile: ReturnType<typeof vi.fn> };
+  fs: { uploadFile: ReturnType<typeof vi.fn>; deleteFile: ReturnType<typeof vi.fn> };
   process: { executeCommand: ReturnType<typeof vi.fn> };
 };
 
@@ -99,6 +99,9 @@ function createFakeSandbox(overrides?: Partial<Pick<FakeSandbox, "id" | "state" 
           return;
         }
         await fs.copyFile(source, remotePath);
+      }),
+      deleteFile: vi.fn(async (remotePath: string) => {
+        await fs.rm(remotePath, { force: true });
       }),
     },
     process: {
@@ -348,6 +351,19 @@ describe("daytona backend provisioning", () => {
     expect(handle.configLabelKind).toBe("Image");
   });
 
+  it("removes the staged seed tar when the extract transport fails", async () => {
+    const setup = await createTestSetup({ workspaceFiles: { "seed.txt": "data" } });
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    created.process.executeCommand.mockRejectedValue(new Error("api 502"));
+
+    await expect(createFactory(setup.pluginConfig)(setup.createParams)).rejects.toThrow("api 502");
+    const deletedPaths = created.fs.deleteFile.mock.calls.map((call) => call[0] as string);
+    expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-seed-"))).toBe(
+      true,
+    );
+  });
+
   it("refuses to seed workspaces containing symlinks that escape the tree", async () => {
     const setup = await createTestSetup({ workspaceFiles: { "inside.txt": "data" } });
     await fs.symlink("/etc", path.join(setup.workspaceDir, "escape-link"));
@@ -479,6 +495,69 @@ describe("daytona backend shell transport", () => {
     expect([...result.stdout.subarray(0, 3)]).toEqual([0x00, 0x01, 0xff]);
     expect(result.stdout.subarray(3).toString("utf8")).toBe(":first:second arg");
     expect(result.code).toBe(0);
+  });
+
+  it("rejects pre-aborted commands before contacting the sandbox", async () => {
+    const setup = await createTestSetup();
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    const handle = await createFactory(setup.pluginConfig)(setup.createParams);
+    created.process.executeCommand.mockClear();
+
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    await expect(
+      handle.runShellCommand({ script: "true", signal: controller.signal }),
+    ).rejects.toThrow("caller cancelled");
+    expect(created.process.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects promptly on abort and removes staged transport files", async () => {
+    const setup = await createTestSetup();
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    const handle = await createFactory(setup.pluginConfig)(setup.createParams);
+    // The in-flight toolbox call hangs; the abort fires only once the command
+    // is actually running so the staged stdin/out/err files already exist.
+    const controller = new AbortController();
+    created.process.executeCommand.mockReturnValue(new Promise(() => {}));
+
+    const pending = handle.runShellCommand({
+      script: "cat",
+      stdin: Buffer.from("data"),
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    controller.abort(new Error("caller cancelled"));
+    await expect(pending).rejects.toThrow("caller cancelled");
+    const deletedPaths = created.fs.deleteFile.mock.calls.map((call) => call[0] as string);
+    expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-in-"))).toBe(
+      true,
+    );
+    expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-out-"))).toBe(
+      true,
+    );
+    expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-err-"))).toBe(
+      true,
+    );
+  });
+
+  it("removes staged transport files when the toolbox call fails", async () => {
+    const setup = await createTestSetup();
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    const handle = await createFactory(setup.pluginConfig)(setup.createParams);
+    created.process.executeCommand.mockRejectedValue(new Error("api 502"));
+
+    await expect(
+      handle.runShellCommand({ script: "cat", stdin: Buffer.from("data") }),
+    ).rejects.toThrow("api 502");
+    const deletedPaths = created.fs.deleteFile.mock.calls.map((call) => call[0] as string);
+    expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-in-"))).toBe(
+      true,
+    );
   });
 
   it("throws stderr text for failed commands unless allowFailure is set", async () => {
