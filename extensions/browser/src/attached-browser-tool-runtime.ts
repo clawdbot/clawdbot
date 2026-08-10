@@ -5,10 +5,13 @@
  * by the caller and survives bridge disposal.
  */
 import { randomBytes } from "node:crypto";
+import { chmod, copyFile } from "node:fs/promises";
+import path from "node:path";
 import { createBrowserTool } from "./browser-tool.js";
 import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
 import { resolveBrowserConfig } from "./browser/config.js";
+import { writeExternalFileWithinRoot } from "./sdk-security-runtime.js";
 
 const ATTACHED_PROFILE_NAME = "worker";
 
@@ -22,12 +25,27 @@ export type CreateAttachedBrowserToolRuntimeParams = {
   ensureAttachTarget: () => Promise<void>;
   agentSessionKey?: string;
   agentDir?: string;
-  workspaceDir?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
+  workspaceDir: string;
 };
+
+async function persistAttachedScreenshot(params: {
+  sourcePath: string;
+  workspaceDir: string;
+  type: "png" | "jpeg";
+}): Promise<string> {
+  const extension = params.type === "jpeg" ? "jpg" : "png";
+  const fileName = `screenshot-${randomBytes(8).toString("hex")}.${extension}`;
+  const result = await writeExternalFileWithinRoot({
+    rootDir: params.workspaceDir,
+    path: path.join(".artifacts", "cloud-worker-browser", fileName),
+    fallbackFileName: fileName,
+    write: async (stagedPath) => {
+      await copyFile(params.sourcePath, stagedPath);
+      await chmod(stagedPath, 0o600);
+    },
+  });
+  return result.path;
+}
 
 function normalizeAttachedCdpUrl(raw: string): string {
   let parsed: URL;
@@ -102,7 +120,15 @@ export async function createAttachedBrowserToolRuntime(
       ...(params.agentSessionKey !== undefined ? { agentSessionKey: params.agentSessionKey } : {}),
       ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      ...(params.activeModel !== undefined ? { activeModel: params.activeModel } : {}),
+      // Worker transcript frames are bounded and inference is Gateway-proxied.
+      // Persist proof in the managed workspace, then return only a bounded receipt.
+      screenshotResultMode: "path",
+      persistScreenshot: async ({ sourcePath, type }) =>
+        await persistAttachedScreenshot({
+          sourcePath,
+          workspaceDir: params.workspaceDir,
+          type,
+        }),
     });
     return {
       tool,

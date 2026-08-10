@@ -1562,6 +1562,45 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("returns a transcript-safe screenshot path when requested", async () => {
+    browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
+      ok: true,
+      path: "/tmp/screen.png",
+      targetId: "tab-1",
+      url: `https://example.com/${"x".repeat(3_000)}`,
+      annotations: Array.from({ length: 1_000 }, (_, index) => ({ index })),
+    });
+    const persistScreenshot = vi.fn(
+      async () => "/workspace/.artifacts/cloud-worker-browser/shot.png",
+    );
+    const tool = createBrowserTool({
+      screenshotResultMode: "path",
+      persistScreenshot,
+    });
+    const out = await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    expect(persistScreenshot).toHaveBeenCalledWith({
+      sourcePath: "/tmp/screen.png",
+      targetId: "tab-1",
+      type: "png",
+    });
+    expect(toolCommonMocks.describeImageFile).not.toHaveBeenCalled();
+    expect(toolCommonMocks.stageBrowserScreenshotForSharing).not.toHaveBeenCalled();
+    expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
+    expect(out?.details).toEqual({
+      ok: true,
+      path: "/workspace/.artifacts/cloud-worker-browser/shot.png",
+      targetId: "tab-1",
+      url: `https://example.com/${"x".repeat(2_028)}`,
+      annotationCount: 1_000,
+      media: { outbound: false },
+    });
+  });
+
   it("defangs vision MEDIA-looking text and does not attach media", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},

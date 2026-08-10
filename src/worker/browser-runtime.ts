@@ -14,10 +14,6 @@ type BundledBrowserRuntimeSurface = {
     agentSessionKey?: string;
     agentDir?: string;
     workspaceDir?: string;
-    activeModel?: {
-      provider?: string;
-      model?: string;
-    };
   }) => Promise<{
     tool: AnyAgentTool;
     dispose: () => Promise<void>;
@@ -34,8 +30,6 @@ type CreateWorkerBrowserToolRuntimeParams = {
   sessionKey: string;
   stateDir: string;
   workspaceDir: string;
-  modelProvider: string;
-  modelId: string;
 };
 
 function runWorkerBrowserLauncher(launcherPath: string): Promise<void> {
@@ -78,9 +72,5 @@ export async function createWorkerBrowserToolRuntime(
     agentSessionKey: params.sessionKey,
     agentDir: params.stateDir,
     workspaceDir: params.workspaceDir,
-    activeModel: {
-      provider: params.modelProvider,
-      model: params.modelId,
-    },
   });
 }

@@ -170,8 +170,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         sessionKey: params.sessionKey,
         stateDir: params.stateDir,
         workspaceDir: params.cwd,
-        modelProvider: params.modelRef.provider,
-        modelId: params.modelRef.model,
       })
     : undefined;
   const { session } = await (async () => {

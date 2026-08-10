@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -30,13 +33,13 @@ describe("attached Browser tool runtime", () => {
 
   it("exposes only one raw attach-only CDP profile through an authenticated loopback bridge", async () => {
     const ensureAttachTarget = vi.fn().mockResolvedValue(undefined);
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "attached-browser-workspace-"));
     const runtime = await createAttachedBrowserToolRuntime({
       cdpUrl: "http://127.0.0.1:9222",
       ensureAttachTarget,
       agentSessionKey: "worker:session-1",
       agentDir: "/tmp/worker-state",
-      workspaceDir: "/tmp/workspace",
-      activeModel: { provider: "openai", model: "gpt-test" },
+      workspaceDir,
     });
 
     expect(mocks.startBrowserBridgeServer).toHaveBeenCalledOnce();
@@ -69,15 +72,56 @@ describe("attached Browser tool runtime", () => {
       allowHostControl: false,
       agentSessionKey: "worker:session-1",
       agentDir: "/tmp/worker-state",
-      workspaceDir: "/tmp/workspace",
-      activeModel: { provider: "openai", model: "gpt-test" },
+      workspaceDir,
+      screenshotResultMode: "path",
+      persistScreenshot: expect.any(Function),
     });
+    const toolParams = mocks.createBrowserTool.mock.calls[0]?.[0];
+    const sourcePath = path.join(workspaceDir, "source.png");
+    await fs.writeFile(sourcePath, "screenshot-bytes");
+    const artifactPath = await toolParams.persistScreenshot({ sourcePath, type: "png" });
+    expect(artifactPath).toMatch(
+      /\.artifacts\/cloud-worker-browser\/screenshot-[a-f0-9]{16}\.png$/u,
+    );
+    expect(await fs.readFile(artifactPath, "utf8")).toBe("screenshot-bytes");
+    expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
+    const filesBeforeFailure = await fs.readdir(path.dirname(artifactPath));
+    await expect(
+      toolParams.persistScreenshot({
+        sourcePath: path.join(workspaceDir, "missing.png"),
+        type: "png",
+      }),
+    ).rejects.toThrow();
+    expect(await fs.readdir(path.dirname(artifactPath))).toEqual(filesBeforeFailure);
     expect(runtime.tool).toEqual({ name: "browser" });
 
     await runtime.dispose();
     expect(mocks.stopBrowserBridgeServer).toHaveBeenCalledWith({ marker: "bridge-server" });
     expect(ensureAttachTarget).toHaveBeenCalledOnce();
+    await fs.rm(workspaceDir, { recursive: true, force: true });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects screenshot artifact symlink escapes",
+    async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "attached-browser-workspace-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "attached-browser-outside-"));
+      await fs.symlink(outsideDir, path.join(workspaceDir, ".artifacts"));
+      await createAttachedBrowserToolRuntime({
+        cdpUrl: "http://127.0.0.1:9222",
+        ensureAttachTarget: async () => {},
+        workspaceDir,
+      });
+      const toolParams = mocks.createBrowserTool.mock.calls.at(-1)?.[0];
+      const sourcePath = path.join(workspaceDir, "source.png");
+      await fs.writeFile(sourcePath, "screenshot-bytes");
+
+      await expect(toolParams.persistScreenshot({ sourcePath, type: "png" })).rejects.toThrow();
+      expect(await fs.readdir(outsideDir)).toEqual([]);
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    },
+  );
 
   it.each([
     "http://localhost:9222",
@@ -89,6 +133,7 @@ describe("attached Browser tool runtime", () => {
       createAttachedBrowserToolRuntime({
         cdpUrl,
         ensureAttachTarget: async () => {},
+        workspaceDir: "/tmp/workspace",
       }),
     ).rejects.toThrow("loopback HTTP URL with an explicit port");
     expect(mocks.startBrowserBridgeServer).not.toHaveBeenCalled();

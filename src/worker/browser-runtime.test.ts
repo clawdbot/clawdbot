@@ -49,8 +49,6 @@ describe("worker Browser runtime", () => {
       sessionKey: "worker:session-1",
       stateDir: "/tmp/worker-state",
       workspaceDir: "/tmp/workspace",
-      modelProvider: "openai",
-      modelId: "gpt-test",
     });
 
     expect(mocks.loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
@@ -64,7 +62,6 @@ describe("worker Browser runtime", () => {
       agentSessionKey: "worker:session-1",
       agentDir: "/tmp/worker-state",
       workspaceDir: "/tmp/workspace",
-      activeModel: { provider: "openai", model: "gpt-test" },
     });
 
     const ensureAttachTarget = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
@@ -113,8 +110,6 @@ describe("worker Browser runtime", () => {
       sessionKey: "worker:session-1",
       stateDir: "/tmp/worker-state",
       workspaceDir: "/tmp/workspace",
-      modelProvider: "openai",
-      modelId: "gpt-test",
     });
     const ensureAttachTarget = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
       .ensureAttachTarget as () => Promise<void>;
