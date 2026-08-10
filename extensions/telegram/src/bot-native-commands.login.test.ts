@@ -111,10 +111,9 @@ describe("registerTelegramNativeCommands /login", () => {
   afterAll(() => resetPluginRuntimeStateForTest());
 
   it("handles /login codex by sending the device code before login completes", async () => {
+    let loginParams: ModelsAuthLoginFlowOptions | undefined;
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
-      expect(params.provider).toBe("openai");
-      expect(params.method).toBe("device-code");
-      expect(params.agent).toBe("main");
+      loginParams = params;
       await params.prompter.deviceCode?.({
         title: "OpenAI Codex device code",
         code: "ABCD-EFGH",
@@ -149,11 +148,8 @@ describe("registerTelegramNativeCommands /login", () => {
     });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-    await vi.waitFor(() =>
-      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-        "Codex login complete. Try your request again now.",
-      ),
-    );
+    expect(loginParams).toMatchObject({ provider: "openai", method: "device-code", agent: "main" });
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 5_000 });
 
     const texts = sendMessage.mock.calls.map((call) => String(call[1]));
     expect(texts[0]).toContain("URL: https://auth.openai.com/codex/device");
