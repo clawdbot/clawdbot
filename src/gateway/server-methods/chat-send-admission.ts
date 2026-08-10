@@ -237,14 +237,14 @@ export async function admitChatSend(params: {
         : expectedLeafEntryId === null
           ? "exact"
           : "off-path";
-      // The lifecycle fence blocks branch switching. A displayed ancestor is safe only when
-      // the client names the same backing session and SQLite still places it on the active path;
-      // that keeps siblings and copied entry ids across rotations out of the next turn.
-      const matchesSameSessionActiveAncestor =
-        activePathRelation === "ancestor" &&
-        requestedSessionId !== undefined &&
-        requestedSessionId === latestEntry?.sessionId;
-      if (activePathRelation !== "exact" && !matchesSameSessionActiveAncestor) {
+      // Branch switches preserve entry ids while rotating session ids. A supplied session id
+      // must fence exact and ancestor matches; omission remains legacy exact-only compatibility.
+      const matchesRequestedSession =
+        requestedSessionId === undefined || requestedSessionId === latestEntry?.sessionId;
+      const matchesActivePath =
+        activePathRelation === "exact" ||
+        (activePathRelation === "ancestor" && requestedSessionId !== undefined);
+      if (!matchesRequestedSession || !matchesActivePath) {
         throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
       }
     }

@@ -35,6 +35,8 @@ import {
   loadSessionEntry as loadSqliteSessionEntry,
   loadTranscriptEventsSync,
   replaceSessionEntry,
+  resolveSessionTranscriptActiveLeafEntryId,
+  switchSessionBranch,
   type SessionAccessScope,
   type SessionTranscriptReadScope,
   upsertSessionEntry,
@@ -1409,6 +1411,68 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       );
       expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
     }
+  });
+
+  it("rejects a copied exact leaf from the session before a branch switch", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-rotated-exact-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "branch-root",
+      message: { role: "user", content: "root" },
+      now: 1,
+      parentId: null,
+    });
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "copied-leaf",
+      message: { role: "assistant", content: "selected branch" },
+      now: 2,
+      parentId: "branch-root",
+    });
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "active-sibling",
+      message: { role: "assistant", content: "active branch" },
+      now: 3,
+      parentId: "branch-root",
+    });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      path: suiteDatabasePath,
+    });
+    const staleSessionId = mockState.sessionId;
+    const switched = await switchSessionBranch({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      leafEntryId: "copied-leaf",
+      sessionKey: "main",
+      storePath: suiteDatabasePath,
+    });
+    expect(switched.status).toBe("created");
+    if (switched.status !== "created") {
+      throw new Error("expected branch switch test invariant");
+    }
+    expect(switched.entry.sessionId).not.toBe(staleSessionId);
+    mockState.sessionId = switched.entry.sessionId;
+    const before = loadTranscriptEventsSync(transcriptScope());
+    expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
+    const { context, respond, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-rotated-exact-leaf",
+      requestParams: {
+        expectedLeafEntryId: "copied-leaf",
+        sessionId: staleSessionId,
+      },
+      waitFor: "none",
+    });
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
   });
 
   it("rejects an expected sibling that is off the active path", async () => {
