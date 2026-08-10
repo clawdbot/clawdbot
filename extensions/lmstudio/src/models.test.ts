@@ -895,7 +895,7 @@ describe("lmstudio-models", () => {
     expect(bytesEmitted).toBeLessThan(32 * 1024 * 1024);
   });
 
-  it("bounds model load error bodies", async () => {
+  it("suppresses truncated model load error bodies", async () => {
     const body = `${"lmstudio load unavailable ".repeat(512)}tail`;
     const tracked = cancelTrackedResponse(body, { status: 503 });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
@@ -917,9 +917,8 @@ describe("lmstudio-models", () => {
       modelKey: "qwen3-8b-instruct",
     }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(
-      /LM Studio model load failed \(503\): lmstudio load unavailable/,
-    );
+    expect((error as Error).message).toBe("LM Studio model load failed (503)");
+    expect((error as Error).message).not.toContain("lmstudio load unavailable");
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
@@ -981,6 +980,42 @@ describe("lmstudio-models", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).not.toContain("sk-test");
     expect((error as Error).message).toMatch(/LM Studio model load failed \(502\)/);
+  });
+
+  it("suppresses truncated error bodies so a split credential cannot leak", async () => {
+    // A reflected credential that straddles the 8 KiB byte cap cannot be
+    // reliably redacted, so the whole body must be omitted when truncated.
+    const secret = "split-credential-xyz";
+    const prefix = "x".repeat(8 * 1024 - 5);
+    const tracked = cancelTrackedResponse(`${prefix}Bearer ${secret}${"y".repeat(1000)}`, {
+      status: 502,
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return tracked.response;
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: secret,
+      modelKey: "qwen3-8b-instruct",
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("LM Studio model load failed (502)");
+    expect((error as Error).message).not.toContain(secret);
+    expect((error as Error).message).not.toContain("Bearer");
+    expect((error as Error).message).not.toContain(prefix.slice(0, 20));
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("reloads model to the clamped default target when already loaded below the default window", async () => {
