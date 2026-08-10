@@ -669,10 +669,7 @@ describe("split-turn compaction", () => {
         tokensBefore: result.value.tokensBefore,
         details: result.value.details,
       },
-      createMessageEntry(
-        { role: "assistant", content: [{ type: "text", text: "kept suffix" }], timestamp: 4 },
-        3,
-      ),
+      createMessageEntry(createAssistant("kept suffix", createUsage(10), 4), 3),
     ]);
     expect(replayContext.messages[0]).toMatchObject({
       role: "compactionSummary",
