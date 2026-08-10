@@ -173,6 +173,12 @@ export function createFakeApi(
             agentId: "main",
             accountId: "default",
           }),
+          // Declared here, not assigned ad hoc by individual tests: `agent-route.ts`
+          // calls it on every routed turn, so a fake that omits it type-checks only
+          // until a test inspects the mock.
+          buildAgentSessionKey: vi.fn(
+            (params: { agentId?: string }) => `agui:${params?.agentId ?? "main"}:session`,
+          ),
         },
         // Retained for the handful of passing tests that still reference these
         // mocks; the refactored handler no longer calls the reply pipeline or

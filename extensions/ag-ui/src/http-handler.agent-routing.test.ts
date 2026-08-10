@@ -82,9 +82,6 @@ describe("privileged request inputs are scoped to the trusted route", () => {
       lastRoutePolicy: "main",
       matchedBy: "binding.peer",
     });
-    fakeApi.runtime.channel.routing.buildAgentSessionKey = vi.fn(
-      (p: { agentId: string }) => `agui:${p.agentId}:rebuilt`,
-    );
     paired = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
     operator = createOperatorAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
   });
