@@ -1,4 +1,4 @@
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceAgentConsultRunner } from "openclaw/plugin-sdk/realtime-voice";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
@@ -38,12 +38,7 @@ type OpenAIQuicksilverDelegationControllerOptions = {
 };
 
 function shortFailureReason(error: unknown): string {
-  return (
-    toErrorObject(error, "OpenAI GPT-Live delegation failed")
-      .message.replaceAll(/\s+/g, " ")
-      .trim()
-      .slice(0, 180) || "unknown error"
-  );
+  return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
 }
 
 function readWireEventType(payload: string): string | undefined {
