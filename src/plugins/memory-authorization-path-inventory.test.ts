@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { listGitTrackedFiles } from "../test-utils/repo-files.js";
+import { listRepoFilesSync } from "../../scripts/check-file-utils.js";
 import {
   MEMORY_AUTHORIZATION_PATH_DISPOSITIONS,
   MEMORY_AUTHORIZATION_PATH_INVENTORY,
@@ -142,18 +142,15 @@ const MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES = [
 ] as const;
 
 const MEMORY_MIGRATION_IMPORT_ROOTS = [
-  "src/cli/program/register.migrate.ts",
-  "src/commands/migrate.ts",
+  "src/cli/program",
+  "src/commands",
   "src/commands/migrate",
   "extensions/migrate-claude",
   "extensions/migrate-hermes",
   "extensions/codex/src/migration",
-  "src/gateway/server-methods/migrations.ts",
-  "src/wizard/setup.migration-import.ts",
-  "src/wizard/setup.migration-finalize.ts",
-  "src/wizard/setup.post-install-migration.ts",
-  "src/wizard/setup.memory-import.ts",
-  "src/plugin-sdk/migration-runtime.ts",
+  "src/gateway/server-methods",
+  "src/wizard",
+  "src/plugin-sdk",
 ] as const;
 
 const MEMORY_CORE_DOCTOR_STATE_MIGRATION_REGISTRATION_SURFACES = [
@@ -178,6 +175,11 @@ const SESSION_TRANSCRIPT_INGESTION_CALL_NAMES = [
   "appendSessionCorpusLines",
   "writeSessionIngestionState",
 ] as const;
+
+const SHORT_TERM_RECALL_RECORDING_CALL_NAMES = new Set([
+  "recordShortTermRecalls",
+  "recordGroundedShortTermCandidates",
+]);
 
 function isProductionTypeScript(file: string): boolean {
   return (
@@ -377,6 +379,42 @@ function listSessionTranscriptIngestionCalls(file: string, sourceText: string): 
   return calls;
 }
 
+function listImportedShortTermRecallRecordingCalls(file: string, sourceText: string): string[] {
+  const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+  const importedBindings = new Map<string, string>();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
+      continue;
+    }
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings || ts.isNamespaceImport(namedBindings)) {
+      continue;
+    }
+    for (const element of namedBindings.elements) {
+      if (element.isTypeOnly) {
+        continue;
+      }
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (SHORT_TERM_RECALL_RECORDING_CALL_NAMES.has(imported)) {
+        importedBindings.set(element.name.text, imported);
+      }
+    }
+  }
+
+  const calls: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const imported = importedBindings.get(node.expression.text);
+      if (imported) {
+        calls.push(imported);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return calls;
+}
+
 describe("memory authorization path inventory", () => {
   const inventory: readonly MemoryAuthorizationPathInventoryEntry[] =
     MEMORY_AUTHORIZATION_PATH_INVENTORY;
@@ -562,6 +600,8 @@ describe("memory authorization path inventory", () => {
         "src/gateway/server-methods/doctor.ts",
         "src/gateway/server-methods/doctor.memory-core-runtime.ts",
         "src/plugin-sdk/memory-core-bundled-runtime.ts",
+        "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/session-backfill.ts",
         "extensions/memory-core/src/short-term-promotion-artifacts.ts",
       ]),
     });
@@ -573,6 +613,7 @@ describe("memory authorization path inventory", () => {
         "extensions/memory-core/src/cli.ts",
         "extensions/memory-core/src/cli.runtime.ts",
         "extensions/memory-core/src/cli-rem.runtime.ts",
+        "extensions/memory-core/src/rem-evidence.ts",
         "extensions/memory-core/src/rem-harness.ts",
         "src/gateway/server-methods/doctor.ts",
         "src/gateway/server-methods/doctor.memory-core-runtime.ts",
@@ -741,6 +782,25 @@ describe("memory authorization path inventory", () => {
     ).toEqual(["provider-memory-import-apply"]);
   });
 
+  it("finds direct and aliased short-term recall recorders without matching properties", () => {
+    expect(
+      listImportedShortTermRecallRecordingCalls(
+        "fixture.ts",
+        `
+          import {
+            recordGroundedShortTermCandidates,
+            recordShortTermRecalls as recall,
+          } from "./short-term-promotion.js";
+          async function record(unrelated: { recordShortTermRecalls: Function }) {
+            await recall({});
+            await recordGroundedShortTermCandidates({});
+            await unrelated.recordShortTermRecalls({});
+          }
+        `,
+      ),
+    ).toEqual(["recordShortTermRecalls", "recordGroundedShortTermCandidates"]);
+  });
+
   it("recognizes the generic CLI migration apply ingress", () => {
     const command = "src/cli/program/register.migrate.ts";
     const source = fs.readFileSync(path.join(REPO_ROOT, command), "utf8");
@@ -772,16 +832,12 @@ describe("memory authorization path inventory", () => {
   });
 
   it("does not allow an unrecorded production context-free manager acquisition", () => {
-    const tracked = listGitTrackedFiles({
-      repoRoot: REPO_ROOT,
-      pathspecs: ["src", "extensions", "packages"],
+    const scanned = listRepoFilesSync(REPO_ROOT, {
+      roots: ["src", "extensions", "packages"],
+      includeFile: isProductionTypeScript,
     });
-    if (!tracked) {
-      throw new Error("could not list tracked files for the authorization-path inventory");
-    }
     const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
-    const missing = tracked
-      .filter(isProductionTypeScript)
+    const missing = scanned
       .filter(
         (file) =>
           listContextFreeMemoryManagerCalls(
@@ -794,18 +850,12 @@ describe("memory authorization path inventory", () => {
   });
 
   it("does not allow an unrecorded production migration memory-import producer or consumer", () => {
-    const tracked = listGitTrackedFiles({
-      repoRoot: REPO_ROOT,
-      pathspecs: [...MEMORY_MIGRATION_IMPORT_ROOTS],
+    const scanned = listRepoFilesSync(REPO_ROOT, {
+      roots: MEMORY_MIGRATION_IMPORT_ROOTS,
+      includeFile: isProductionTypeScript,
     });
-    if (!tracked) {
-      throw new Error(
-        "could not list tracked files for the migration authorization-path inventory",
-      );
-    }
     const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
-    const missing = tracked
-      .filter(isProductionTypeScript)
+    const missing = scanned
       .filter(
         (file) =>
           listMemoryMigrationIngressMarkers(
@@ -819,18 +869,12 @@ describe("memory authorization path inventory", () => {
   });
 
   it("does not allow an unrecorded production session transcript ingestion route", () => {
-    const tracked = listGitTrackedFiles({
-      repoRoot: REPO_ROOT,
-      pathspecs: ["extensions/memory-core/src"],
+    const scanned = listRepoFilesSync(REPO_ROOT, {
+      roots: ["extensions/memory-core/src"],
+      includeFile: isProductionTypeScript,
     });
-    if (!tracked) {
-      throw new Error(
-        "could not list tracked files for the session transcript ingestion inventory",
-      );
-    }
     const inventoried = new Set(inventory.flatMap((item) => item.surfaces));
-    const missing = tracked
-      .filter(isProductionTypeScript)
+    const missing = scanned
       .filter(
         (file) =>
           listSessionTranscriptIngestionCalls(
@@ -839,6 +883,27 @@ describe("memory authorization path inventory", () => {
           ).length > 0,
       )
       .filter((file) => !inventoried.has(file));
+
+    expect(missing).toEqual([]);
+  });
+
+  it("does not allow a direct short-term recall recorder outside its dedicated inventory path", () => {
+    const recording = inventory.find((item) => item.id === "short-term-promotion-recall-recording");
+    expect(recording).toBeDefined();
+    const recordingSurfaces = new Set(recording?.surfaces);
+    const scanned = listRepoFilesSync(REPO_ROOT, {
+      roots: ["extensions/memory-core/src"],
+      includeFile: isProductionTypeScript,
+    });
+    const missing = scanned
+      .filter(
+        (file) =>
+          listImportedShortTermRecallRecordingCalls(
+            file,
+            fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
+          ).length > 0,
+      )
+      .filter((file) => !recordingSurfaces.has(file));
 
     expect(missing).toEqual([]);
   });

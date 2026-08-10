@@ -662,6 +662,8 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "src/gateway/server-methods/doctor.ts",
     "src/gateway/server-methods/doctor.memory-core-runtime.ts",
     "src/plugin-sdk/memory-core-bundled-runtime.ts",
+    "extensions/memory-core/src/cli-rem.runtime.ts",
+    "extensions/memory-core/src/session-backfill.ts",
     "extensions/memory-core/src/short-term-promotion-artifacts.ts",
   ),
   entry(
@@ -672,6 +674,7 @@ export const MEMORY_AUTHORIZATION_PATH_INVENTORY = Object.freeze([
     "extensions/memory-core/src/cli.ts",
     "extensions/memory-core/src/cli.runtime.ts",
     "extensions/memory-core/src/cli-rem.runtime.ts",
+    "extensions/memory-core/src/rem-evidence.ts",
     "extensions/memory-core/src/rem-harness.ts",
     "src/gateway/server-methods/doctor.ts",
     "src/gateway/server-methods/doctor.memory-core-runtime.ts",
