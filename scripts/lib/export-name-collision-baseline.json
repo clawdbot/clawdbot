@@ -347,22 +347,6 @@
     "sdk": true
   },
   {
-    "name": "dispatchChannelInboundReply",
-    "files": [
-      "src/channels/message/inbound-reply-dispatch.ts",
-      "src/channels/turn/kernel.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "dispatchChannelInboundTurn",
-    "files": [
-      "src/channels/message/inbound-reply-dispatch.ts",
-      "src/channels/turn/kernel.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "dispatchReplyWithBufferedBlockDispatcher",
     "files": [
       "src/auto-reply/reply/provider-dispatcher.ts",
@@ -1469,14 +1453,6 @@
     ]
   },
   {
-    "name": "runChannelInboundEvent",
-    "files": [
-      "src/channels/message/inbound-reply-dispatch.ts",
-      "src/channels/turn/kernel.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "runExec",
     "files": [
       "src/agents/code-mode-execution.ts",
@@ -1496,14 +1472,6 @@
     "files": [
       "src/commands/models/auth.ts",
       "src/plugin-sdk/provider-auth-login-flow-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "runPreparedInboundReply",
-    "files": [
-      "src/channels/message/inbound-reply-dispatch.ts",
-      "src/channels/turn/execution.ts"
     ],
     "sdk": true
   },
