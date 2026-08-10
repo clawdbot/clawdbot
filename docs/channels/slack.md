@@ -156,7 +156,6 @@ uses the org-installed bot token:
     slack: {
       enabled: true,
       mode: "socket",
-      enterpriseOrgInstall: true,
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       slashCommand: { enabled: true, name: "openclaw" },
@@ -257,7 +256,6 @@ the enterprise account with the same Request URL path:
     slack: {
       enabled: true,
       mode: "http",
-      enterpriseOrgInstall: true,
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       signingSecret: {
         source: "env",
@@ -277,11 +275,12 @@ the enterprise account with the same Request URL path:
 }
 ```
 
-At startup, OpenClaw verifies `enterpriseOrgInstall` with Slack `auth.test`.
-An org-installed token without the flag, or a workspace token with the flag,
-fails startup. Slack remains the source of truth for which workspaces have
-granted the installation; OpenClaw then applies the configured channel, user,
-DM, and mention policies to each delivered event. Enterprise accounts reject all
+At startup, OpenClaw uses Slack `auth.test` to detect whether the token belongs
+to a workspace installation or an Enterprise Grid org-wide installation. No
+installation-mode setting is required. Slack remains the source of truth for
+which workspaces have granted the installation; OpenClaw then applies the
+configured channel, user, DM, and mention policies to each delivered event.
+Enterprise installs reject all
 bot-authored `message` and `app_mention` events before dispatch, regardless of
 `allowBots`, because org installs do not provide a stable workspace-qualified
 bot identity for loop prevention.
@@ -294,12 +293,13 @@ workspace-qualified outbound messages. Add any shortcuts to the app manifest's
 interaction path. The manifest examples register the single `/openclaw`
 command; native command mode still requires the administrator-managed command
 entries described below. Relay mode, channel-ID-change events, App Home, Agent
-and Assistant lifecycle events, and bindings
-remain unavailable for an enterprise account. Slack-native approvals that
-originate from a delivered, workspace-qualified Slack turn are supported;
-approval buttons use the same listener-owned, workspace-scoped interaction
-path. Slack action tools are supported for enterprise accounts across every
-group listed in [Actions and gates](#actions-and-gates); the configured
+and Assistant lifecycle events, configured static bindings, and runtime
+current-conversation bindings remain unavailable for an enterprise account.
+Slack-native approvals that originate from a delivered, workspace-qualified
+Slack turn are supported; approval buttons use the same listener-owned,
+workspace-scoped interaction path. Slack action tools are supported for
+enterprise accounts across every group listed in
+[Actions and gates](#actions-and-gates); the configured
 `channels.slack.actions.*` gates and OAuth scopes still apply. Inbound
 membership, reaction, pin, channel-created, and channel-renamed notifications
 use validated listener-owned, workspace-scoped event routing. Outbound
@@ -320,16 +320,13 @@ validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
 
-Channel policy keys may use the `"*"` wildcard, raw stable Slack channel IDs,
-or the `channel:<id>` form. `dm.groupChannels` entries accept only the raw or
-`channel:<id>` forms. OpenClaw normalizes either ID form to the raw channel ID
-for runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
-User allowlists may use raw stable Slack user IDs or the `slack:<id>` and
-`user:<id>` forms. `toolsBySender` keys may use raw IDs, `id:<id>`,
-`channel:slack:<id>`, or `"*"`. Names, slugs, display names, and email addresses
-fail startup. IDs must use Slack's canonical uppercase prefix and body (for
-example, `C0123456789` or `U0123456789`); lowercase and short lookalikes fail
-startup. Enterprise accounts cannot enable
+Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
+`channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
+runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
+User policy entries must use stable Slack user IDs; names, slugs, display names,
+and email addresses fail startup. IDs must use Slack's canonical uppercase
+prefix and body (for example, `C0123456789` or `U0123456789`); lowercase and
+short lookalikes fail startup. Enterprise accounts cannot enable
 `dangerouslyAllowNameMatching`. Enterprise accounts may set the global
 `mentionPatterns.mode`, but `mentionPatterns.allowIn` and
 `mentionPatterns.denyIn` fail startup because bare Slack channel IDs are not
@@ -1911,7 +1908,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 <Accordion title="High-signal Slack fields">
 
-- mode/auth: `identity`, `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- mode/auth: `identity`, `mode`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`

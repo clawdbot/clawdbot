@@ -8,10 +8,16 @@ import {
 } from "./enterprise-install.js";
 
 describe("resolveSlackInstallationIdentity", () => {
-  it("validates an explicitly configured org-wide installation", () => {
+  it("preserves degraded startup when auth.test is unavailable", () => {
+    expect(resolveSlackInstallationIdentity({})).toEqual({
+      kind: "degraded",
+      reason: "auth_test_failed",
+    });
+  });
+
+  it("detects an org-wide installation", () => {
     expect(
       resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: true,
         auth: {
           app_id: "A123",
           enterprise_id: "E123",
@@ -22,32 +28,9 @@ describe("resolveSlackInstallationIdentity", () => {
     ).toEqual({ kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" });
   });
 
-  it("fails closed when an org token is used without explicit configuration", () => {
-    expect(() =>
-      resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: false,
-        auth: {
-          app_id: "A123",
-          enterprise_id: "E123",
-          is_enterprise_install: true,
-        },
-      }),
-    ).toThrow(/set enterpriseOrgInstall=true/);
-  });
-
-  it("preserves degraded workspace startup after auth.test failure", () => {
+  it("detects a workspace installation when auth.test omits app_id", () => {
     expect(
       resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: false,
-        authError: new Error("timeout"),
-      }),
-    ).toEqual({ kind: "degraded", reason: "auth_test_failed" });
-  });
-
-  it("preserves workspace startup when auth.test omits app_id", () => {
-    expect(
-      resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: false,
         auth: {
           team_id: "T123",
           is_enterprise_install: false,
@@ -59,7 +42,6 @@ describe("resolveSlackInstallationIdentity", () => {
   it("preserves the human workspace name from auth.test", () => {
     expect(
       resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: false,
         auth: {
           team: "Local Claw",
           team_id: "T123",
@@ -72,7 +54,6 @@ describe("resolveSlackInstallationIdentity", () => {
   it("accepts an org-wide auth.test response without app_id", () => {
     expect(
       resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: true,
         auth: {
           enterprise_id: "E123",
           is_enterprise_install: true,
@@ -84,7 +65,6 @@ describe("resolveSlackInstallationIdentity", () => {
   it("uses the transport app id when org-wide auth.test omits app_id", () => {
     expect(
       resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: true,
         transportApiAppId: "A123",
         auth: {
           enterprise_id: "E123",
@@ -97,7 +77,6 @@ describe("resolveSlackInstallationIdentity", () => {
   it("rejects mismatched bot and transport app ids", () => {
     expect(() =>
       resolveSlackInstallationIdentity({
-        enterpriseOrgInstall: true,
         transportApiAppId: "A_TRANSPORT",
         auth: {
           app_id: "A_BOT",

@@ -43,9 +43,7 @@ type EnterpriseTestClient = WebClient & {
 
 const ENTERPRISE_CFG: OpenClawConfig = {
   channels: {
-    slack: {
-      enterpriseOrgInstall: true,
-    },
+    slack: {},
   },
 };
 
@@ -115,21 +113,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps ordinary and arbitrarily client-injected Enterprise sends fail closed", async () => {
-    const client = createEnterpriseClient();
-
-    for (const message of ["hello", "NO_REPLY"]) {
-      await expect(
-        sendMessageSlack("channel:C123", message, {
-          cfg: ENTERPRISE_CFG,
-          token: "xoxb-enterprise",
-          client,
-        }),
-      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-    }
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
   it("creates a workspace-scoped client for a qualified detached send", async () => {
     const scopedClient = createEnterpriseClient();
     const injectedClient = createEnterpriseClient();
@@ -150,17 +133,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
   });
 
-  it("requires an Enterprise account for an event scope", async () => {
-    const client = createEnterpriseClient();
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
-        ...enterpriseOptions(client),
-        cfg: { channels: { slack: { botToken: "xoxb-workspace" } } },
-      }),
-    ).rejects.toThrow("unexpected_enterprise_slack_listener_scope");
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
   it("uses the exact listener client without a token or team_id method payload", async () => {
     const client = createEnterpriseClient();
 
@@ -170,7 +142,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
         channels: {
           slack: {
             botToken: "xoxb-enterprise",
-            enterpriseOrgInstall: true,
             unfurlLinks: true,
             unfurlMedia: true,
           },

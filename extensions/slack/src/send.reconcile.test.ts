@@ -118,7 +118,7 @@ describe("reconcileSlackUnknownSend", () => {
     slackClientMocks.getSlackWriteClient.mockReset();
   });
 
-  it("uses workspace-scoped clients for an Enterprise reconciliation", async () => {
+  it("uses workspace-scoped clients for a qualified reconciliation", async () => {
     const readClient = createSlackReconcileTestClient();
     const writeClient = createSlackReconcileTestClient();
     slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
@@ -130,7 +130,6 @@ describe("reconcileSlackUnknownSend", () => {
           channels: {
             slack: {
               botToken: "xoxb-org",
-              enterpriseOrgInstall: true,
             },
           },
         } as OpenClawConfig,

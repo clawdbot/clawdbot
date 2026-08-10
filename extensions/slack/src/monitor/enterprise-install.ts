@@ -1,8 +1,7 @@
-// Slack plugin module implements explicit Enterprise Grid installation policy.
+// Slack plugin module implements detected Enterprise Grid installation policy.
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "../accounts.js";
-import { formatSlackError } from "../errors.js";
 
 export type SlackInstallationIdentity =
   | {
@@ -197,33 +196,17 @@ export function assertNoEnterpriseSlackBindings(params: {
 }
 
 export function resolveSlackInstallationIdentity(params: {
-  enterpriseOrgInstall: boolean;
   auth?: SlackAuthTestIdentity;
-  authError?: unknown;
   transportApiAppId?: string;
 }): SlackInstallationIdentity {
   const auth = params.auth;
   if (!auth) {
-    if (params.enterpriseOrgInstall) {
-      throw new Error(
-        `Slack enterpriseOrgInstall=true requires a successful auth.test (${formatSlackError(params.authError)})`,
-      );
-    }
     return { kind: "degraded", reason: "auth_test_failed" };
   }
-
   const isEnterpriseInstall = auth.is_enterprise_install === true;
-  if (isEnterpriseInstall !== params.enterpriseOrgInstall) {
-    throw new Error(
-      isEnterpriseInstall
-        ? "Slack auth.test detected an org-wide installation; set enterpriseOrgInstall=true"
-        : "Slack enterpriseOrgInstall=true requires an org-wide bot installation",
-    );
-  }
-
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
-  if (params.enterpriseOrgInstall) {
+  if (isEnterpriseInstall) {
     if (!enterpriseId) {
       throw new Error("Slack org-wide auth.test returned no enterprise_id");
     }

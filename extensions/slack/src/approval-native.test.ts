@@ -10,6 +10,10 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
+import {
+  registerSlackInstallationState,
+  type SlackInstallationStateRegistration,
+} from "./installation-identity-state.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -31,8 +35,12 @@ function buildConfig(
 }
 
 const tempDirs: string[] = [];
+const installationStates: SlackInstallationStateRegistration[] = [];
 
 afterEach(() => {
+  for (const installationState of installationStates.splice(0)) {
+    installationState.release();
+  }
   closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -218,7 +226,8 @@ describe("slack native approval adapter", () => {
   });
 
   it("preserves the Grid team on approval origin and approver DM targets", async () => {
-    const cfg = buildConfig({ enterpriseOrgInstall: true });
+    const cfg = buildConfig();
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
     const request = {
       ...createExecApprovalRequest(),
       request: {
@@ -249,8 +258,9 @@ describe("slack native approval adapter", () => {
   });
 
   it("does not enable Grid approval delivery without a trusted team-qualified origin", () => {
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
     const capabilities = slackApprovalCapability.native?.describeDeliveryCapabilities({
-      cfg: buildConfig({ enterpriseOrgInstall: true }),
+      cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
       request: createExecApprovalRequest(),

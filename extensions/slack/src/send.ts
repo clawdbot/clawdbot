@@ -40,7 +40,6 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
-import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { formatSlackError } from "./errors.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
@@ -381,16 +380,10 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
-function resolveSlackSendEventScope(params: {
-  account: ReturnType<typeof resolveSlackAccount>;
-  opts: SlackSendOpts;
-}): SlackEventScope | undefined {
+function resolveSlackSendEventScope(params: { opts: SlackSendOpts }): SlackEventScope | undefined {
   const scope = params.opts.eventScope;
   if (!scope) {
     return undefined;
-  }
-  if (params.account.config.enterpriseOrgInstall !== true) {
-    throw new Error("unexpected_enterprise_slack_listener_scope");
   }
   if (!/^T[A-Z0-9]+$/i.test(scope.teamId) || !scope.client) {
     throw new Error("invalid_enterprise_slack_listener_scope");
@@ -955,15 +948,6 @@ export async function reconcileSlackUnknownSend(
     };
   }
   const recipient = parseRecipient(ctx.to);
-  try {
-    assertSlackDirectSendAllowed(account, recipient.teamId);
-  } catch (error) {
-    return {
-      status: "unresolved",
-      error: error instanceof Error ? error.message : String(error),
-      retryable: false,
-    };
-  }
   const readToken = resolveSlackOperationToken(account, "read");
   if (!readToken) {
     return {
@@ -1076,11 +1060,8 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  const eventScope = resolveSlackSendEventScope({ account, opts });
+  const eventScope = resolveSlackSendEventScope({ opts });
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
-  if (!eventScope) {
-    assertSlackDirectSendAllowed(account, recipient.teamId);
-  }
   if (isSilentReplyText(normalizedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return {
