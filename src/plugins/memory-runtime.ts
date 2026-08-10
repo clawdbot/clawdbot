@@ -23,6 +23,7 @@ type MemorySearchAuthorization = Parameters<
 >[0];
 type MemoryRuntimeOwner = { runtime: MemoryRuntime; registry?: PluginRegistry };
 const log = createSubsystemLogger("plugins/memory-authorization");
+const selectedMemoryRuntimeByRegistry = new WeakMap<PluginRegistry, MemoryRuntime | undefined>();
 let standaloneMemoryRegistrySlot:
   | { key: string; registry: PluginRegistry; retiredRuntimes: Map<MemoryRuntime, PluginRegistry> }
   | undefined;
@@ -53,10 +54,18 @@ function resolveMemoryRuntimeWorkspaceDir(
 }
 
 function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry): MemoryRuntime | undefined {
+  const cachedRuntime = selectedMemoryRuntimeByRegistry.get(registry);
+  if (cachedRuntime || selectedMemoryRuntimeByRegistry.has(registry)) {
+    return cachedRuntime;
+  }
   const registration = resolveSelectedMemoryCapabilityRegistration(registry);
-  return registration
+  const runtime = registration
     ? inspectSelectedMemoryCapability({ capability: registration.capability, registry })
     : undefined;
+  // Registry metadata is process-stable after assembly. Keep reflection and shadow logging out of
+  // repeated selected-runtime resolution while preserving the exact legacy runtime result.
+  selectedMemoryRuntimeByRegistry.set(registry, runtime);
+  return runtime;
 }
 
 function listCurrentMemoryRuntimeOwners(): MemoryRuntimeOwner[] {

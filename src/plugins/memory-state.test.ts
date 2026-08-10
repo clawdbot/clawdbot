@@ -22,7 +22,11 @@ import {
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { withPluginRegistrationContext } from "./runtime.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "./runtime.js";
 
 function createMemoryRuntime() {
   return {
@@ -72,6 +76,7 @@ function registerMemoryState(params: {
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
+    resetPluginRuntimeStateForTest();
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {
@@ -237,6 +242,101 @@ describe("memory plugin state", () => {
     });
 
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([]);
+  });
+
+  it("preserves selected core behavior with a LanceDB public-artifact sidecar", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "memory-core", memorySlotSelected: true } as never,
+      { id: "memory-lancedb" } as never,
+    );
+    setActivePluginRegistry(registry);
+
+    const runtime = createMemoryRuntime();
+    const flushPlan = createMemoryFlushPlan("memory/sidecar.md");
+    const coreCorpus = {
+      search: async () => [
+        { corpus: "memory", path: "MEMORY.md", score: 0.8, snippet: "core result" },
+      ],
+      get: async () => null,
+    };
+    const wikiCorpus = {
+      search: async () => [
+        { corpus: "wiki", path: "sources/alpha.md", score: 0.9, snippet: "wiki result" },
+      ],
+      get: async () => null,
+    };
+
+    registerMemoryCapability("memory-core", {
+      authorization: COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
+      flushPlanResolver: () => flushPlan,
+      runtime,
+    });
+    registerMemoryCapability("memory-lancedb", {
+      authorization: LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "daily-note",
+              workspaceDir: "/tmp/workspace-b",
+              relativePath: "memory/2026-04-06.md",
+              absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+              agentIds: ["beta"],
+              contentType: "markdown" as const,
+            },
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace-a",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace-a/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    registerMemoryCorpusSupplement("memory-wiki", wikiCorpus);
+    registerMemoryCorpusSupplement("memory-core", coreCorpus);
+
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(resolveMemoryFlushPlan({ nowMs: 1_717_171_717_000 })).toEqual(flushPlan);
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace-a",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace-a/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace-b",
+        relativePath: "memory/2026-04-06.md",
+        absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+        agentIds: ["beta"],
+        contentType: "markdown",
+      },
+    ]);
+    await expect(
+      Promise.all(
+        listMemoryCorpusSupplements().map(async ({ pluginId, supplement }) => ({
+          pluginId,
+          results: await supplement.search({ query: "selected runtime" }),
+        })),
+      ),
+    ).resolves.toEqual([
+      {
+        pluginId: "memory-wiki",
+        results: [{ corpus: "wiki", path: "sources/alpha.md", score: 0.9, snippet: "wiki result" }],
+      },
+      {
+        pluginId: "memory-core",
+        results: [{ corpus: "memory", path: "MEMORY.md", score: 0.8, snippet: "core result" }],
+      },
+    ]);
   });
 
   it("keeps selected core authorization when an artifact sidecar registers later", () => {
