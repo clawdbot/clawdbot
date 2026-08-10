@@ -565,21 +565,25 @@ export function renderCliTimeoutReplyCopy(params: {
   const routingSuffix = routedModelRef ? ` (routing ${routedModelRef})` : "";
   const mode = timeout?.mode ?? (stall ? "no-output" : "overall");
   const stoppedWork: string[] = [];
-  if (timeout?.backgroundTaskCount)
+  if (timeout?.backgroundTaskCount) {
     stoppedWork.push(
       `${timeout.backgroundTaskCount} CLI background ${timeout.backgroundTaskCount === 1 ? "task" : "tasks"}`,
     );
-  if (timeout?.activeToolCount)
+  }
+  if (timeout?.activeToolCount) {
     stoppedWork.push(
       `${timeout.activeToolCount} active CLI tool ${timeout.activeToolCount === 1 ? "call" : "calls"}`,
     );
+  }
   let workStatus =
     stoppedWork.length > 0
       ? ` It also stopped ${stoppedWork.join(" and ")}; that work shares the parent CLI process. Effects may be partial; check before retrying.`
       : timeout?.observedActivity
         ? " The CLI had already begun work, so effects may be partial; check before retrying."
         : "";
-  if (params.replayPrevented) workStatus += " OpenClaw did not replay this turn automatically.";
+  if (params.replayPrevented) {
+    workStatus += " OpenClaw did not replay this turn automatically.";
+  }
   return mode === "no-output"
     ? `⚠️ CLI subprocess${routingSuffix}: no output for ${seconds}s, so the no-output watchdog stopped it. This is separate from the overall agent timeout; the gateway is unaffected.${workStatus} Check for an interactive prompt. The CLI backend ${params.provider ?? "<id>"} produced no output before its watchdog expired.`
     : `⚠️ CLI turn${routingSuffix}: timed out after ${seconds}s (overall turn limit). The gateway is unaffected.${workStatus} For long work, use a detached OpenClaw sub-agent (no run timeout by default), or raise \`agents.defaults.timeoutSeconds\`.`;
