@@ -252,7 +252,7 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
     mocks.resolveLocalSkillCardStatusSyncMock(...args),
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-skills.js", () => ({
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
   fetchClawHubSkillVerification: (...args: unknown[]) =>

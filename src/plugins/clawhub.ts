@@ -19,23 +19,24 @@ import {
   loadZipArchiveWithPreflight,
 } from "../infra/archive.js";
 import {
+  downloadClawHubPackageArchive,
+  normalizeClawHubSha256Integrity,
+  normalizeClawHubSha256Hex,
+} from "../infra/clawhub-artifacts.js";
+import {
+  ClawHubRequestError,
+  isDefaultClawHubBaseUrl,
+  resolveClawHubBaseUrl,
+} from "../infra/clawhub-client.js";
+import {
   ensureClawHubPackageTrustAcknowledged,
   type ClawHubRiskAcknowledgementRequest,
 } from "../infra/clawhub-install-trust.js";
 import {
-  ClawHubRequestError,
-  downloadClawHubPackageArchive,
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
   fetchClawHubPackageVersion,
-  isDefaultClawHubBaseUrl,
-  normalizeClawHubSha256Integrity,
-  normalizeClawHubSha256Hex,
-  parseClawHubPluginSpec,
-  resolveClawHubBaseUrl,
   resolveLatestVersionFromPackage,
-  satisfiesGatewayMinimum,
-  satisfiesPluginApiRange,
   type ClawHubPackageArtifactSummary,
   type ClawHubPackageArtifactResolverResponse,
   type ClawHubPackageCompatibility,
@@ -43,7 +44,8 @@ import {
   type ClawHubPackageClawPackSummary,
   type ClawHubResolvedArtifact,
   type ClawHubPackageVersion,
-} from "../infra/clawhub.js";
+} from "../infra/clawhub-packages.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
