@@ -5,6 +5,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
@@ -16,17 +17,14 @@ import {
 
 type BoundaryAllowedType = "file" | "directory";
 
-const NON_BLOCKING_READ_FLAG = process.platform === "win32" ? 0 : fs.constants.O_NONBLOCK;
-const nonBlockingBoundaryFs = {
-  closeSync: fs.closeSync,
-  constants: fs.constants,
-  fstatSync: fs.fstatSync,
-  lstatSync: fs.lstatSync,
-  openSync: (filePath: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode | null) =>
-    fs.openSync(filePath, typeof flags === "number" ? flags | NON_BLOCKING_READ_FLAG : flags, mode),
-  readFileSync: fs.readFileSync,
-  realpathSync: fs.realpathSync,
-};
+function sandboxBoundaryError(action: string, containerPath: string, error: unknown): Error {
+  if (error instanceof Error && !(error instanceof FsSafeError && error.code === "not-file")) {
+    return error;
+  }
+  return new Error(`Sandbox boundary checks failed; cannot ${action}: ${containerPath}`, {
+    cause: error,
+  });
+}
 
 /** Caller-provided path safety requirements for one fs bridge operation. */
 type PathSafetyOptions = {
@@ -100,9 +98,7 @@ export class SandboxFsPathGuard {
   ): Promise<RootFileOpenResult & { ok: true }> {
     const opened = await this.openBoundaryWithinRequiredMount(target, "read files");
     if (!opened.ok) {
-      throw opened.error instanceof Error
-        ? opened.error
-        : new Error(`Sandbox boundary checks failed; cannot read files: ${target.containerPath}`);
+      throw sandboxBoundaryError("read files", target.containerPath, opened.error);
     }
     return opened;
   }
@@ -145,11 +141,7 @@ export class SandboxFsPathGuard {
         const canFallbackToDirectoryStat =
           options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
         if (!canFallbackToDirectoryStat) {
-          throw guarded.error instanceof Error
-            ? guarded.error
-            : new Error(
-                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-              );
+          throw sandboxBoundaryError(options.action, target.containerPath, guarded.error);
         }
       }
     } else {
@@ -182,15 +174,12 @@ export class SandboxFsPathGuard {
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
-      // Follow in-mount symlink hops (fs-safe 0.5.2 rejects them by default):
+      // Follow in-mount symlink hops (fs-safe rejects them by default):
       // escaping hops still fail with fs-safe's containment error, and the
       // canonical container path is re-checked against mounts afterwards.
       rejectSymlinks: false,
       aliasPolicy: options?.aliasPolicy,
       allowedType: options?.allowedType,
-      // Type validation happens after open; nonblocking prevents a raced FIFO
-      // or device from stalling before the descriptor can be rejected.
-      ioFs: nonBlockingBoundaryFs,
     });
     return guarded;
   }

@@ -1,14 +1,10 @@
 import { constants } from "node:fs";
-import {
-  access as fsAccess,
-  open as fsOpen,
-  readdir as fsReaddir,
-  stat as fsStat,
-} from "node:fs/promises";
+import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
+import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
@@ -150,27 +146,6 @@ async function assertLocalReadableFile(filePath: string): Promise<void> {
   await fsAccess(filePath, constants.R_OK);
 }
 
-async function readLocalRegularFile(filePath: string): Promise<Buffer> {
-  const before = await fsStat(filePath);
-  if (!before.isFile()) {
-    throw regularFileReadError(filePath);
-  }
-  const nonBlocking = process.platform === "win32" ? 0 : constants.O_NONBLOCK;
-  const handle = await fsOpen(filePath, constants.O_RDONLY | nonBlocking);
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile()) {
-      throw regularFileReadError(filePath);
-    }
-    if (before.dev !== opened.dev || before.ino !== opened.ino) {
-      throw new Error(`File changed during read: ${filePath}`);
-    }
-    return await handle.readFile();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
   let entries: string[];
   try {
@@ -223,7 +198,7 @@ export interface ReadOperations {
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
   decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
-  readFile: readLocalRegularFile,
+  readFile: async (filePath) => (await readRegularFile({ filePath })).buffer,
   access: assertLocalReadableFile,
 };
 
