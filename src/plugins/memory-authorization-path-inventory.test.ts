@@ -144,7 +144,6 @@ const MEMORY_MIGRATION_IMPORT_ROUTE_SURFACES = [
 const MEMORY_MIGRATION_IMPORT_ROOTS = [
   "src/cli/program",
   "src/commands",
-  "src/commands/migrate",
   "extensions/migrate-claude",
   "extensions/migrate-hermes",
   "extensions/codex/src/migration",
