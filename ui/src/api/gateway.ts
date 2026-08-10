@@ -8,7 +8,6 @@ import {
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
-  GatewayScopeUpgrade,
   type GatewayConnectAuthSelection,
   type GatewayClientMode,
   type GatewayClientName,
@@ -16,8 +15,6 @@ import {
   type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
   type GatewayProtocolTiming,
-  type ScopeUpgradeBinding,
-  type ScopeUpgradeOutcome,
   type ConnectParams,
   type ErrorShape,
   type EventFrame,
@@ -33,6 +30,11 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+import type {
+  ScopeUpgradeBinding,
+  ScopeUpgradeOptions,
+  ScopeUpgradeOutcome,
+} from "@openclaw/gateway-client/scope-upgrade";
 // Control UI module implements gateway behavior.
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
@@ -54,6 +56,11 @@ import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
 export type GatewayEventFrame = EventFrame;
+
+type GatewayScopeUpgradeRuntime = {
+  requestScopeUpgrade: (options: ScopeUpgradeOptions) => Promise<ScopeUpgradeOutcome>;
+  cancelScopeUpgrade: () => void;
+};
 
 type GatewayErrorInfo = ErrorShape;
 
@@ -312,7 +319,7 @@ async function buildGatewayConnectDevice(params: {
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
-  private readonly scopeUpgrade: GatewayScopeUpgrade;
+  private scopeUpgradeRuntime: Promise<GatewayScopeUpgradeRuntime> | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
@@ -386,25 +393,6 @@ export class GatewayBrowserClient {
           ? performance.now()
           : Date.now(),
     });
-    this.scopeUpgrade = new GatewayScopeUpgrade({
-      request: (method, params, options) => this.request(method, params, options),
-      tokenStore: {
-        load: ({ deviceId, role }) =>
-          loadDeviceAuthToken({ deviceId, gatewayUrl: this.opts.url, role }),
-        store: ({ deviceId, role, token, scopes }) => {
-          storeDeviceAuthToken({
-            deviceId,
-            gatewayUrl: this.opts.url,
-            role,
-            token,
-            scopes,
-          });
-        },
-        clear: ({ deviceId, role }) =>
-          clearDeviceAuthToken({ deviceId, gatewayUrl: this.opts.url, role }),
-      },
-      reconnect: () => this.forceReconnect("scope upgrade approved"),
-    });
   }
 
   get instanceId(): string | undefined {
@@ -422,7 +410,7 @@ export class GatewayBrowserClient {
   stop() {
     this.stopTickWatch();
     this.client.stop();
-    this.scopeUpgrade.cancelScopeUpgrade();
+    this.cancelScopeUpgrade();
     this.scopeUpgradeBinding = null;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -709,15 +697,35 @@ export class GatewayBrowserClient {
     if (!this.connected || !binding) {
       return Promise.reject(new Error("scope upgrade requires a connected browser device"));
     }
-    return this.scopeUpgrade.requestScopeUpgrade({
-      binding,
-      scopes: CONTROL_UI_OPERATOR_SCOPES,
-      onPending: options.onPending,
-    });
+    return this.loadScopeUpgradeRuntime().then((runtime) =>
+      runtime.requestScopeUpgrade({
+        binding,
+        scopes: CONTROL_UI_OPERATOR_SCOPES,
+        onPending: options.onPending,
+      }),
+    );
   }
 
   cancelScopeUpgrade(): void {
-    this.scopeUpgrade.cancelScopeUpgrade();
+    void this.scopeUpgradeRuntime?.then(
+      (runtime) => runtime.cancelScopeUpgrade(),
+      () => undefined,
+    );
+  }
+
+  private loadScopeUpgradeRuntime(): Promise<GatewayScopeUpgradeRuntime> {
+    return (this.scopeUpgradeRuntime ??= import("./gateway-scope-upgrade.runtime.ts")
+      .then(({ createGatewayScopeUpgradeRuntime }) =>
+        createGatewayScopeUpgradeRuntime({
+          gatewayUrl: this.opts.url,
+          request: (method, params, options) => this.request(method, params, options),
+          reconnect: () => this.forceReconnect("scope upgrade approved"),
+        }),
+      )
+      .catch((error: unknown) => {
+        this.scopeUpgradeRuntime = null;
+        throw error;
+      }));
   }
 
   addEventListener(listener: GatewayEventListener): () => void {

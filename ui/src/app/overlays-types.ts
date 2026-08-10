@@ -1,7 +1,6 @@
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { DevicePairSetup, DevicePairSetupAccess } from "../lib/device-pair-setup.ts";
 import type { DeviceAuthMigrationSnapshot } from "./device-auth-migration.ts";
-import type { ScopeUpgradeState } from "./device-scope-upgrade.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
 import type { ApplicationStatusBanner } from "./update-overlay-helpers.ts";
 
@@ -24,7 +23,6 @@ export type ApplicationOverlaySnapshot = {
   devicePairSetupAccess: DevicePairSetupAccess;
   devicePairPendingCount: number;
   deviceAuthMigration: DeviceAuthMigrationSnapshot;
-  scopeUpgrade: ScopeUpgradeState;
 };
 
 export type ApplicationOverlays = {
@@ -39,8 +37,5 @@ export type ApplicationOverlays = {
   setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
   closeDevicePairSetup: () => void;
   secureThisBrowser: () => Promise<void>;
-  requestScopeUpgrade: () => void;
-  retryScopeUpgrade: () => void;
-  cancelScopeUpgrade: () => void;
   dispose: () => void;
 };

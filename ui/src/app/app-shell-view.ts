@@ -25,7 +25,7 @@ import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import type { ScopeUpgradeState } from "./device-scope-upgrade.ts";
+import { readScopeUpgradeAvailability } from "./device-scope-upgrade.ts";
 import { isOptionalElementDefined, type OptionalCustomElement } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
@@ -46,57 +46,36 @@ const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platfo
   ? "⌘K"
   : "Ctrl K";
 
+let scopeUpgradeBannerLoad: Promise<unknown> | null = null;
+
 function renderScopeUpgradeBanner(
-  state: ScopeUpgradeState,
-  actions: { request: () => void; retry: () => void; cancel: () => void },
+  snapshot: ApplicationContext["gateway"]["snapshot"],
   chromeOffset: boolean,
 ) {
+  const state = readScopeUpgradeAvailability(snapshot);
   if (state.phase === "hidden") {
     return nothing;
   }
-  const retryable =
-    state.phase === "pending" || state.phase === "rejected" || state.phase === "error";
-  const text =
-    state.phase === "available"
-      ? t("connection.scopeUpgrade.limited")
-      : state.phase === "requesting"
-        ? t("connection.scopeUpgrade.requesting")
-        : state.phase === "pending"
-          ? t("connection.scopeUpgrade.pending")
-          : state.phase === "rejected"
-            ? t(
-                state.expired
-                  ? "connection.scopeUpgrade.expired"
-                  : "connection.scopeUpgrade.rejected",
-              )
-            : t("connection.scopeUpgrade.error", { error: state.message });
-  return html`<div
-    class="callout ${state.phase === "error" || state.phase === "rejected"
-      ? "danger"
-      : "warn"} callout--action"
-    style=${chromeOffset ? "margin-left: 72px" : nothing}
-    role="status"
-  >
-    <span class="callout__content">${text}</span>
-    ${state.phase === "available"
-      ? html`<button class="btn btn--sm" type="button" @click=${actions.request}>
-          ${t("connection.scopeUpgrade.request")}
-        </button>`
-      : state.phase === "requesting"
-        ? html`<button class="btn btn--sm" type="button" disabled>
-            ${t("connection.scopeUpgrade.requestingAction")}
-          </button>`
-        : retryable
-          ? html`
-              <button class="btn btn--sm" type="button" @click=${actions.retry}>
-                ${t("connection.scopeUpgrade.retry")}
-              </button>
-              <button class="btn btn--sm" type="button" @click=${actions.cancel}>
-                ${t("connection.scopeUpgrade.cancel")}
-              </button>
-            `
-          : nothing}
-  </div>`;
+  scopeUpgradeBannerLoad ??= import("./device-scope-upgrade.runtime.ts").catch((error: unknown) => {
+    scopeUpgradeBannerLoad = null;
+    console.error("[scope-upgrade] failed to load banner:", error);
+  });
+  if (customElements.get("openclaw-device-scope-upgrade-banner")) {
+    return html`<openclaw-device-scope-upgrade-banner
+      .props=${{
+        snapshot,
+        chromeOffset,
+      }}
+    ></openclaw-device-scope-upgrade-banner>`;
+  }
+  return html`<openclaw-update-banner
+    .props=${{
+      statusBanner: {
+        tone: "warn",
+        text: t("connection.scopeUpgrade.limited"),
+      },
+    }}
+  ></openclaw-update-banner>`;
 }
 
 export interface ShellViewHost {
@@ -510,15 +489,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(
-          overlaySnapshot.scopeUpgrade,
-          {
-            request: () => context.overlays.requestScopeUpgrade(),
-            retry: () => context.overlays.retryScopeUpgrade(),
-            cancel: () => context.overlays.cancelScopeUpgrade(),
-          },
-          !settingsTakeover && !mobileNavLayout,
-        )}
+        ${renderScopeUpgradeBanner(gatewaySnapshot, !settingsTakeover && !mobileNavLayout)}
         ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
           ? // The migration banner is registered by a rare-flow dynamic import after first render.
             customElements.get("openclaw-device-auth-migration-banner")

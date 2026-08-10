@@ -19,7 +19,6 @@ import {
   createDeviceAuthMigrationLoader,
   EMPTY_DEVICE_AUTH_MIGRATION,
 } from "./device-auth-migration-loader.ts";
-import { ScopeUpgradeController } from "./device-scope-upgrade.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -96,7 +95,6 @@ export function createApplicationOverlays(
     devicePairSetupAccess: "full",
     devicePairPendingCount: 0,
     deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
-    scopeUpgrade: { phase: "hidden" },
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
@@ -117,7 +115,6 @@ export function createApplicationOverlays(
     grantGeneration: number;
     id: string;
   } | null = null;
-  let scopeUpgrade: ScopeUpgradeController | null = null;
   const devicePairSetupState = createDevicePairSetupState({
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
@@ -141,7 +138,6 @@ export function createApplicationOverlays(
       approvalBusy: promptState.execApprovalBusy,
       approvalErrors: new Map(promptState.execApprovalErrors),
       approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
-      scopeUpgrade: scopeUpgrade?.state ?? snapshot.scopeUpgrade,
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {
@@ -149,7 +145,6 @@ export function createApplicationOverlays(
     }
   };
   promptState.execApprovalChanged = publish;
-  scopeUpgrade = new ScopeUpgradeController(gateway.snapshot, publish);
   const pairingPendingCount = createOverlayPairingPendingCount({
     gateway,
     state: devicePairSetupState,
@@ -240,7 +235,6 @@ export function createApplicationOverlays(
   });
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
-    scopeUpgrade?.sync(next);
     const previousClient = activeClient;
     const helloChanged = activeHello !== next.hello;
     const connected = next.phase === "connected";
@@ -664,22 +658,12 @@ export function createApplicationOverlays(
       const epoch = connectedEpoch;
       await deviceAuthMigration.secure(client, epoch);
     },
-    requestScopeUpgrade() {
-      scopeUpgrade?.request();
-    },
-    retryScopeUpgrade() {
-      scopeUpgrade?.retry();
-    },
-    cancelScopeUpgrade() {
-      scopeUpgrade?.cancel();
-    },
     dispose() {
       disposed = true;
       approvalDecision = null;
       updateRunGeneration += 1;
       pairingPendingCount.invalidate();
       deviceAuthMigration.dispose();
-      scopeUpgrade?.dispose();
       updateVerification.cancel();
       updateCampaignPoller.stop();
       closeDevicePairSetupState(devicePairSetupState);
