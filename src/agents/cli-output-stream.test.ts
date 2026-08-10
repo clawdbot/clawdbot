@@ -99,23 +99,6 @@ function claudeTextDelta(text: string, index?: number | string) {
 }
 
 describe("createCliJsonlStreamingParser", () => {
-  function createClaudeTaggedReasoningHarness() {
-    const assistant: Array<{ text: string; delta: string }> = [];
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: (delta) => assistant.push(delta),
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-    return { assistant, parser, thinking };
-  }
-
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name while incrementally streaming CLI JSONL",
     ({ raw, normalized }) => {

@@ -13,8 +13,8 @@ import type {
   CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
+import type { CliEventProjectionState } from "./cli-output-events.js";
 import {
-  type CliEventProjectionState,
   createLeadingTaggedReasoningRouter,
   createThinkingTracker,
   createToolUseTracker,
