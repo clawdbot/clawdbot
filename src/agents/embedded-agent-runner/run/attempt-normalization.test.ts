@@ -8,7 +8,10 @@ const sessionAccessorMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
+vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
+  ...sessionAccessorMocks,
+}));
 
 beforeEach(() => {
   sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);
