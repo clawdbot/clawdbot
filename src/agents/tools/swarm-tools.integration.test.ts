@@ -9,7 +9,7 @@ import {
 } from "../subagent-registry.test-helpers.js";
 import "../subagent-registry.mocks.shared.js";
 import { testing as spawnTesting } from "../subagent-spawn.test-support.js";
-import { testing as swarmSchedulerTesting } from "../swarm-scheduler.test-support.js";
+import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 import { testing as structuredOutputTesting } from "./structured-output-tool.test-support.js";

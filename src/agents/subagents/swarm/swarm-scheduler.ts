@@ -1,4 +1,4 @@
-import { isFastTestRuntimeEnv } from "../infra/env.js";
+import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 
 type QueuedSwarmRun = {
   runId: string;

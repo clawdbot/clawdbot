@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureCompletionState } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord, SwarmCollectorStatus } from "./subagent-registry.types.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
-import { consumeSwarmStructuredOutput } from "./tools/structured-output-tool.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { ensureCompletionState } from "../../subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../subagent-lifecycle-events.js";
+import { updateSubagentArchiveAtMs } from "../../subagent-registry-helpers.js";
+import type { SubagentRunRecord, SwarmCollectorStatus } from "../../subagent-registry.types.js";
+import { loadSubagentSessionEntry } from "../../subagent-session-reconciliation.js";
+import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 
 function resolveStatus(
   entry: SubagentRunRecord,

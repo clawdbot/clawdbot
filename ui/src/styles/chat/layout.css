@@ -429,7 +429,7 @@ openclaw-chat-page {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   pointer-events: auto;
   transform: translateX(-50%);
 }
@@ -1099,7 +1099,7 @@ openclaw-chat-video-player {
   border-radius: 999px;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     transform 120ms ease,
     background 120ms ease;
@@ -1140,7 +1140,7 @@ openclaw-chat-video-player {
       var(--chat-audio-buffered),
     color-mix(in srgb, var(--border) 72%, transparent) var(--chat-audio-buffered) 100%
   );
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-audio-player__seek::-webkit-slider-thumb {
@@ -2032,7 +2032,7 @@ openclaw-chat-video-player {
   padding: 2px 8px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, currentColor 12%, transparent);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
   list-style: none;
@@ -2178,7 +2178,7 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-pr__dismiss:hover {
@@ -2197,7 +2197,7 @@ openclaw-chat-video-player {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted) 14%, transparent);
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
 }
@@ -2785,7 +2785,7 @@ openclaw-chat-video-player {
   background: transparent;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .agent-chat__session-overrides-open {
@@ -3345,7 +3345,7 @@ openclaw-chat-video-player {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, #000 68%, transparent);
   color: white;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   place-items: center;
   backdrop-filter: blur(8px);
 }
@@ -3920,7 +3920,7 @@ openclaw-chat-video-player {
 }
 
 .chat-browser-annotation-card__remove:not(:disabled) {
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-browser-annotation-card__remove:focus-visible {
@@ -4039,7 +4039,7 @@ openclaw-chat-video-player {
   border: none;
   color: var(--muted);
   background: transparent;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font: inherit;
   line-height: 1.15;
   text-align: left;
@@ -4645,7 +4645,7 @@ openclaw-chat-video-player {
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
 }

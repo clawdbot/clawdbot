@@ -95,7 +95,7 @@ openclaw-board-view {
   border: 0;
   border-radius: 7px;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   display: inline-flex;
   justify-content: center;
   user-select: none;

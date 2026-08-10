@@ -5,7 +5,6 @@ import { findCapabilityProviderById } from "../../../packages/media-generation-c
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveImageGenerationMaxInputImages } from "../../image-generation/capabilities.js";
-import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -25,6 +24,7 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import {
   resolveConfiguredMediaMaxBytes,
@@ -60,14 +60,6 @@ import {
 } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import {
-  completeImageGenerationTaskRun,
-  createImageGenerationTaskRun,
-  failImageGenerationTaskRun,
-  imageGenerationTaskLifecycle,
-  recordImageGenerationTaskProgress,
-  type ImageGenerationTaskHandle,
-} from "./image-generate-background.js";
-import {
   createImageGenerateDuplicateGuardResult,
   createImageGenerateListActionResult,
   createImageGenerateStatusActionResult,
@@ -82,6 +74,14 @@ import {
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
+import {
+  completeImageGenerationTaskRun,
+  createImageGenerationTaskRun,
+  failImageGenerationTaskRun,
+  imageGenerationTaskLifecycle,
+  recordImageGenerationTaskProgress,
+  type ImageGenerationTaskHandle,
+} from "./media-generate-background.js";
 import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,

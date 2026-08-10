@@ -171,7 +171,7 @@
 
 .channels-pairing-request__details summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-pairing-request__details .settings-kv {
@@ -201,7 +201,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   color: var(--text);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-pairing-dialog__option input {
@@ -328,7 +328,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   padding: var(--space-2) var(--space-3);
   background: var(--card);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out);
@@ -413,7 +413,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-item__detail:focus-visible {

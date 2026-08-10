@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  WorkerLiveEventErrorDetails as ErrorDetails,
-  WorkerLiveEventParams as Params,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  type WorkerLiveEventErrorDetails as ErrorDetails,
+  type WorkerLiveEventParams as Params,
+  WorkerLiveEventParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema.js";
+import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {
@@ -69,6 +72,68 @@ type Payload<K extends WireEvent["kind"]> = Extract<WireEvent, { kind: K }>["pay
 const tool = (payload: Payload<"tool">): WireEvent => ({ kind: "tool", payload });
 const approval = (payload: Payload<"approval">): WireEvent => ({ kind: "approval", payload });
 const lifecycle = (payload: Payload<"lifecycle">): WireEvent => ({ kind: "lifecycle", payload });
+
+const FAILOVER_REASONS = Object.keys({
+  auth: true,
+  auth_permanent: true,
+  format: true,
+  rate_limit: true,
+  overloaded: true,
+  billing: true,
+  server_error: true,
+  timeout: true,
+  tls_certificate: true,
+  context_overflow: true,
+  model_not_found: true,
+  session_expired: true,
+  empty_response: true,
+  no_error_details: true,
+  unclassified: true,
+  unknown: true,
+} satisfies Record<FailoverReason, true>) as FailoverReason[];
+
+const validateLiveProtocolEvent = (event: unknown) =>
+  Value.Check(WorkerLiveEventParamsSchema, {
+    runEpoch: EPOCH,
+    lastAckedSeq: 0,
+    seq: 1,
+    runId: RUN,
+    event,
+  });
+const fallbackEvent = (reason: FailoverReason) => ({
+  kind: "lifecycle",
+  payload: {
+    phase: "fallback",
+    selectedProvider: "p",
+    selectedModel: "m",
+    activeProvider: "q",
+    activeModel: "n",
+    reasonSummary: "x",
+    attemptSummaries: ["x"],
+    attempts: [{ provider: "p", model: "m", error: "x", reason }],
+  },
+});
+const fallbackStepEvent = (reason: string) => ({
+  kind: "lifecycle",
+  payload: {
+    phase: "fallback_step",
+    fallbackStepType: "fallback_step",
+    fallbackStepFromModel: "p/m",
+    fallbackStepFromFailureReason: reason,
+    fallbackStepFinalOutcome: "chain_exhausted",
+  },
+});
+
+describe("worker live protocol conformance", () => {
+  it("accepts every core failover reason in live fallback schemas", () => {
+    for (const reason of FAILOVER_REASONS) {
+      expect(validateLiveProtocolEvent(fallbackEvent(reason))).toBe(true);
+      expect(validateLiveProtocolEvent(fallbackStepEvent(reason))).toBe(true);
+    }
+
+    expect(validateLiveProtocolEvent(fallbackStepEvent("not-a-reason"))).toBe(false);
+  });
+});
 
 describe("worker live events", () => {
   let root: string;
