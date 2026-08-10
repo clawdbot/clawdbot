@@ -20,6 +20,7 @@ import {
   cardBoardId,
   cardParentIds,
   cardSessionKey,
+  canHoldPrimarySessionBinding,
   compareCards,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
@@ -68,10 +69,6 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
-
-function canHoldPrimarySessionBinding(card: Pick<WorkboardCard, "status" | "metadata">): boolean {
-  return !card.metadata?.archivedAt && card.status !== "blocked" && card.status !== "done";
-}
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
@@ -317,6 +314,23 @@ export class WorkboardCoreStore {
     }
   }
 
+  private async registerCard(
+    card: WorkboardCard,
+    knownCards?: readonly WorkboardCard[],
+  ): Promise<void> {
+    const value = { version: 1 as const, card };
+    if (!cardSessionKey(card) || !canHoldPrimarySessionBinding(card)) {
+      await this.store.register(card.id, value);
+      return;
+    }
+    if (this.store.registerWithPrimarySessionReservation) {
+      await this.store.registerWithPrimarySessionReservation(card.id, value);
+      return;
+    }
+    this.assertPrimarySessionAvailable(knownCards ?? (await this.list()), card);
+    await this.store.register(card.id, value);
+  }
+
   private async removeReferencesToCard(cardId: string): Promise<void> {
     for (const card of await this.list()) {
       const links = card.metadata?.links;
@@ -458,8 +472,7 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
-    this.assertPrimarySessionAvailable(cards, card);
-    await this.store.register(card.id, { version: 1, card });
+    await this.registerCard(card, cards);
     try {
       for (const parent of parentCards) {
         card = await this.linkCardsDirect(parent.id, card.id, now, {
@@ -632,9 +645,6 @@ export class WorkboardCoreStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       options,
     );
-    if (cardSessionKey(next) && canHoldPrimarySessionBinding(next)) {
-      this.assertPrimarySessionAvailable(await this.list(), next);
-    }
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
@@ -651,7 +661,7 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    await this.store.register(next.id, { version: 1, card: next });
+    await this.registerCard(next);
     await this.deleteDetachedAttachments(existing, next);
     return next;
   }

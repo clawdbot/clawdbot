@@ -46,6 +46,12 @@ export function cardSessionKey(card: WorkboardCard): string | undefined {
   return card.sessionKey ?? card.execution?.sessionKey;
 }
 
+export function canHoldPrimarySessionBinding(
+  card: Pick<WorkboardCard, "status" | "metadata">,
+): boolean {
+  return !card.metadata?.archivedAt && card.status !== "blocked" && card.status !== "done";
+}
+
 export function cardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
 }

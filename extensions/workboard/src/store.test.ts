@@ -14,6 +14,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { cardSessionKey } from "./store-card-helpers.js";
 import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
 
@@ -959,6 +960,40 @@ describe("WorkboardStore", () => {
     });
     expect(claimed.card.status).toBe("running");
     expect(claimed.card.sessionKey).toBe(sessionKey);
+  });
+
+  it("reserves one primary session across independent SQLite stores", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-session-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const firstStore = new WorkboardStore(firstStores.cards);
+      const secondStore = new WorkboardStore(secondStores.cards);
+      const first = await firstStore.create({ title: "First candidate" });
+      const second = await secondStore.create({ title: "Second candidate" });
+      const sessionKey = "agent:main:sqlite-race";
+
+      const results = await Promise.allSettled([
+        firstStore.update(first.id, { sessionKey }),
+        secondStore.update(second.id, { sessionKey }),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toEqual([
+        expect.objectContaining({
+          reason: expect.objectContaining({
+            message: expect.stringContaining("already reserved by card"),
+          }),
+        }),
+      ]);
+      const persisted = await firstStore.list();
+      expect(persisted.filter((card) => cardSessionKey(card) === sessionKey)).toHaveLength(1);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {

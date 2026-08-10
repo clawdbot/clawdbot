@@ -19,6 +19,14 @@ export class WorkboardChangeTracker {
         await store.register(key, value);
         this.mutationRevision += 1;
       },
+      ...(store.registerWithPrimarySessionReservation
+        ? {
+            registerWithPrimarySessionReservation: async (key: string, value: T) => {
+              await store.registerWithPrimarySessionReservation?.(key, value);
+              this.mutationRevision += 1;
+            },
+          }
+        : {}),
       lookup: async (key) => await store.lookup(key),
       delete: async (key) => {
         const deleted = await store.delete(key);

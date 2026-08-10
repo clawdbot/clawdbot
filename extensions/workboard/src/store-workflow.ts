@@ -101,13 +101,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
         throw new Error(`card is bound to session ${boundSessionKey}.`);
       }
-      const preflight =
-        callerSessionKey && !boundSessionKey
-          ? { ...existing, sessionKey: callerSessionKey }
-          : existing;
-      if (cardSessionKey(preflight)) {
-        this.assertPrimarySessionAvailable(await this.list(), preflight);
-      }
       const dependencyStatus = await this.dependencyTargetStatus(existing, now);
       const guarded =
         dependencyStatus === existing.status ? existing : { ...existing, status: dependencyStatus };

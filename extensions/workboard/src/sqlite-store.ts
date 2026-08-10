@@ -29,6 +29,7 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
+import { cardSessionKey, canHoldPrimarySessionBinding } from "./store-card-helpers.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
@@ -1203,6 +1204,39 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
       throw new Error("invalid workboard card payload");
     }
     runTransaction(this.db, () => insertCard(this.db, value.card));
+  }
+
+  async registerWithPrimarySessionReservation(
+    key: string,
+    value: PersistedWorkboardCard,
+  ): Promise<void> {
+    if (value.version !== 1 || value.card.id !== key) {
+      throw new Error("invalid workboard card payload");
+    }
+    runTransaction(this.db, () => {
+      const sessionKey = cardSessionKey(value.card);
+      if (sessionKey && canHoldPrimarySessionBinding(value.card)) {
+        const conflict = this.db
+          .prepare(
+            `
+              SELECT id
+              FROM workboard_cards
+              WHERE id <> ?
+                AND archived_at IS NULL
+                AND status NOT IN ('blocked', 'done')
+                AND COALESCE(session_key, execution_session_key) = ?
+              LIMIT 1
+            `,
+          )
+          .get(key, sessionKey) as Row | undefined;
+        if (conflict) {
+          throw new Error(
+            `session ${sessionKey} is already reserved by card ${requiredString(conflict, "id")}.`,
+          );
+        }
+      }
+      insertCard(this.db, value.card);
+    });
   }
 
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {

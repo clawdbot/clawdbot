@@ -30,6 +30,7 @@ export const WORKBOARD_TOOL_NAMES = [
   "workboard_link",
   "workboard_read",
   "workboard_claim",
+  "workboard_session_bind",
   "workboard_heartbeat",
   "workboard_complete",
   "workboard_attachment_add",

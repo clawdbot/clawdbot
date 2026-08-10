@@ -1,11 +1,12 @@
 // Workboard tests cover tools plugin behavior.
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
-import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
+import { guardWorkboardToolsForWorkspaceAccess, WORKBOARD_TOOL_NAMES } from "./workspace-access.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -30,6 +31,22 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("declares every runtime tool in the canonical list and plugin manifest", () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const runtimeNames = createWorkboardTools({ api, store }).map((tool) => tool.name);
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      contracts?: { tools?: string[] };
+      toolMetadata?: Record<string, { optional?: boolean }>;
+    };
+
+    expect(new Set(runtimeNames)).toEqual(new Set(WORKBOARD_TOOL_NAMES));
+    expect(new Set(manifest.contracts?.tools ?? [])).toEqual(new Set(WORKBOARD_TOOL_NAMES));
+    expect(manifest.toolMetadata?.workboard_session_bind).toEqual({ optional: true });
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = { runtime: {} } as unknown as OpenClawPluginApi;
