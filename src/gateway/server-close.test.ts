@@ -89,7 +89,7 @@ vi.mock("../agents/session-suspension.js", () => ({
   clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
 }));
 
-vi.mock("../acp/control-plane/manager.core.js", () => ({
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
   disposeAcpSessionManagerInstance: mocks.disposeAcpSessionManagerInstance,
 }));
 

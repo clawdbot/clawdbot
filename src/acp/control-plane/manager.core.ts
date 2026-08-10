@@ -14,6 +14,7 @@ import { runManagerCancelSession } from "./manager.cancel-session.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
+import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
 import {
   applyManagerRuntimeControls,
   resolveManagerRuntimeCapabilities,
@@ -62,20 +63,6 @@ import {
 import { SessionActorQueue } from "./session-actor-queue.js";
 
 const DEFAULT_ACP_MAX_CONCURRENT_SESSIONS = Number.POSITIVE_INFINITY;
-const ACP_SESSION_MANAGER_DISPOSERS = new WeakMap<
-  AcpSessionManager,
-  (reason: string) => Promise<void>
->();
-
-/** Internal shutdown seam that keeps disposal off the public manager surface. */
-export async function disposeAcpSessionManagerInstance(
-  manager: AcpSessionManager,
-  reason: string,
-): Promise<void> {
-  const dispose = ACP_SESSION_MANAGER_DISPOSERS.get(manager);
-  if (!dispose) throw new Error("ACP session manager disposer unavailable");
-  await dispose(reason);
-}
 
 /** Coordinates ACP session metadata, runtime handles, per-session queues, and turn execution. */
 export class AcpSessionManager {
@@ -93,7 +80,7 @@ export class AcpSessionManager {
 
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
     this.deps = deps;
-    ACP_SESSION_MANAGER_DISPOSERS.set(this, async (reason) => {
+    registerAcpSessionManagerDisposer(this, async (reason) => {
       for (const activeTurn of this.activeTurnBySession.values()) {
         activeTurn.abortController.abort();
       }
