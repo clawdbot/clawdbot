@@ -3781,6 +3781,60 @@ describe("grouped chat rendering", () => {
     expect(pulls).toBeLessThan(64);
   });
 
+  it("decodes only the preview budget from a single oversized chunk", async () => {
+    const giantChunk = new TextEncoder().encode("z".repeat(1024 * 1024));
+    const giantBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(giantChunk);
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response(giantBody));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const decodedByteLengths: number[] = [];
+    const originalDecode = TextDecoder.prototype.decode;
+    const decodeSpy = vi
+      .spyOn(TextDecoder.prototype, "decode")
+      .mockImplementation(function (this: TextDecoder, input?, options?) {
+        if (input) {
+          decodedByteLengths.push(input.byteLength);
+        }
+        return originalDecode.call(this, input, options);
+      });
+    try {
+      const container = document.createElement("div");
+      const message = createAssistantMessage(
+        [
+          createAttachmentBlock(
+            "https://example.com/one-giant-chunk.txt",
+            "document",
+            "one-giant-chunk.txt",
+            "text/plain",
+          ),
+        ],
+        { id: "assistant-oversized-chunk-text-document" },
+      );
+      const rerender = () =>
+        renderAssistantMessage(container, message, {
+          showToolCalls: false,
+          onRequestUpdate: rerender,
+        });
+      documentPreviewSubscribers.add(rerender);
+
+      rerender();
+
+      await vi.waitFor(() => {
+        expect(
+          container.querySelector(".chat-assistant-attachment-card__preview-text")?.textContent,
+        ).toBe(`${"z".repeat(16 * 1024)}…`);
+      });
+      // The 1 MiB chunk must be sliced to the byte budget before decoding.
+      expect(Math.max(...decodedByteLengths)).toBeLessThanOrEqual((16 * 1024 + 1) * 4);
+    } finally {
+      decodeSpy.mockRestore();
+    }
+  });
+
   it("omits attachment anchors for unsafe transcript URLs", async () => {
     const container = document.body.appendChild(document.createElement("div"));
     container.dataset.mediaPlayerTestFixture = "";

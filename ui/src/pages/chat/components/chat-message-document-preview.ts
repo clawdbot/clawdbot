@@ -68,7 +68,14 @@ async function readBoundedPreviewText(response: Response): Promise<string> {
       if (done) {
         return capPreviewText(text + decoder.decode());
       }
-      text += decoder.decode(value, { stream: true });
+      // Slice before decoding: a blob/misbehaving source can deliver one giant
+      // chunk, and UTF-8 spends at most 4 bytes per char, so this byte budget
+      // still yields enough chars to exit the loop. A partial trailing code
+      // point stays pending in the decoder and is discarded with the cancel.
+      const remainingChars = DOCUMENT_PREVIEW_MAX_CHARS + 1 - text.length;
+      const bounded =
+        value.byteLength > remainingChars * 4 ? value.subarray(0, remainingChars * 4) : value;
+      text += decoder.decode(bounded, { stream: true });
     }
   } finally {
     void reader.cancel().catch(() => {});
