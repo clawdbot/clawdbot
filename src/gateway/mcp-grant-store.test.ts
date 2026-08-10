@@ -34,7 +34,7 @@ async function admitted(runId: string): Promise<AdmittedRunContext> {
     operationalRunInstance: createOperationalRunInstanceRef(runId),
   });
   admissions.push(admission);
-  return await admission.admit("cli", `cli-${runId}`);
+  return await admission.admit("gateway", `gateway-${runId}`);
 }
 
 describe("mcp-grant-store", () => {

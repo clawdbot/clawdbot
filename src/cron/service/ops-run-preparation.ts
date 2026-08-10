@@ -75,6 +75,8 @@ export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
 
 export type ManualRunOptions = {
   runId?: string;
+  /** Revalidates the admitted caller immediately before reserving durable work. */
+  commitGuard?: () => void;
   scheduleOwnershipAtMs?: number;
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;

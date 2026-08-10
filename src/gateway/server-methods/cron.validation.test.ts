@@ -1228,8 +1228,8 @@ describe("cron method validation", () => {
   it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
     let authorityActive = true;
     let releasePreparation: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => {
-      releasePreparation = resolve;
+    const held = new Promise<undefined>((resolve) => {
+      releasePreparation = () => resolve(undefined);
     });
     const context = createCronContext();
     context.cron.prepareWake.mockImplementationOnce(async () => await held);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createOperationalRunInstanceRef } from "../../../agents/admitted-run-context.js";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
@@ -7,6 +8,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
 import {
   connectOk,
   getFreePort,
@@ -47,6 +49,22 @@ function createClient(): GatewayWsClient {
     },
     connId: "conn-trace-test",
     usesSharedGatewayAuth: false,
+  };
+}
+
+function createTestAgentRuntimeIdentity(runId: string): AgentRuntimeIdentity {
+  const operationalRunInstance = createOperationalRunInstanceRef(runId);
+  return {
+    kind: "agentRuntime",
+    agentId: "main",
+    sessionKey: "agent:main:test",
+    operationalRunInstance,
+    delegatedAuthority: {
+      kind: "local",
+      operationalRunInstance,
+      lifecycleGeneration: `generation-${runId}`,
+      claimId: `claim-${runId}`,
+    },
   };
 }
 
@@ -182,19 +200,12 @@ describe("authenticated WebSocket request trace dispatch", () => {
       validateAgentRuntimeApprovalAuthority,
     });
     const client = createClient();
-    client.internal = {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:test",
-      },
-    } as never;
+    const agentRuntimeIdentity = createTestAgentRuntimeIdentity("closed-authority");
+    client.internal = { agentRuntimeIdentity };
 
     await dispatchInFreshMessageScope(dispatcher, client, "closed-authority");
 
-    expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(
-      client.internal.agentRuntimeIdentity,
-    );
+    expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(agentRuntimeIdentity);
     expect(handler).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -225,12 +236,8 @@ describe("authenticated WebSocket request trace dispatch", () => {
     });
     const client = createClient();
     client.internal = {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:test",
-      },
-    } as never;
+      agentRuntimeIdentity: createTestAgentRuntimeIdentity("closed-before-result"),
+    };
 
     await dispatchInFreshMessageScope(dispatcher, client, "closed-before-result");
     await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());

@@ -43,7 +43,7 @@ async function activeAdmission(runId: string): Promise<AdmittedRunContext> {
     operationalRunInstance: createOperationalRunInstanceRef(runId),
   });
   activeAdmissions.push(admission);
-  return await admission.admit("cli", `cli-${runId}`);
+  return await admission.admit("gateway", `gateway-${runId}`);
 }
 
 type MockGatewayScopedTools = {

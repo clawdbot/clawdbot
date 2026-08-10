@@ -1392,7 +1392,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {
-    const preparation = createDeferred<void>();
+    const preparation = createDeferred<undefined>();
     mocks.ensureOutboundSessionEntry.mockReturnValueOnce(preparation.promise);
     let authorityActive = true;
     const context = {
@@ -1412,7 +1412,7 @@ describe("gateway send mirroring", () => {
     );
     await vi.waitFor(() => expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce());
     authorityActive = false;
-    preparation.resolve();
+    preparation.resolve(undefined);
 
     const { respond } = await request;
     expect(firstRespondCall(respond)[0]).toBe(false);
