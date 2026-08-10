@@ -219,7 +219,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
     await waitForFast(() =>
       expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-        "Group “Alpha” was not deleted. Open its menu and try again.",
+        'Gateway connection replaced before "Alpha" was deleted. Try again.',
       ),
     );
     toast.remove();

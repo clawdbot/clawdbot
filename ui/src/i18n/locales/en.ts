@@ -949,7 +949,7 @@ export const en: TranslationMap = {
     deleteGroupMenu: "Delete group…",
     deleteGroupTitle: 'Delete group "{group}"',
     deleteGroupConfirm: "The group is removed. Its sessions move back to the session list.",
-    deleteGroupStale: "Group “{group}” was not deleted. Open its menu and try again.",
+    deleteGroupStale: 'Gateway connection replaced before "{group}" was deleted. Try again.',
     dragSessionHint: "Drag session to move between groups",
     dateToday: "Today",
     dateYesterday: "Yesterday",
