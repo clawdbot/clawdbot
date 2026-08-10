@@ -161,6 +161,29 @@ export function emitProviderFallbackCoverage(params: {
   });
 }
 
+export function emitTransportSemanticCoverage(params: {
+  callId: string;
+  reason:
+    | "transport_terminal_unverified"
+    | "transport_endpoint_authority_partial"
+    | "transport_submission_authority_partial";
+  transport?: string;
+  eventId?: string;
+}): void {
+  observeProviderTransportEvent({
+    type: "coverage",
+    eventId: params.eventId ?? `semantic-coverage-${params.callId}`,
+    callId: params.callId,
+    provider: ANTHROPIC_ROUTE.provider,
+    model: ANTHROPIC_ROUTE.model,
+    api: ANTHROPIC_ROUTE.api,
+    transport: params.transport ?? ANTHROPIC_ROUTE.transport,
+    scope: "transport_semantics",
+    state: "unverified",
+    reason: params.reason,
+  });
+}
+
 export function emitZeroSubmission(params: {
   callId: string;
   eventId?: string;

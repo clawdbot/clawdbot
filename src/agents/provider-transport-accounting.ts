@@ -10,6 +10,7 @@ import {
   countProviderTransportFallback,
   lowerMissingTransportFallbackCause,
   projectProviderTransportAccounting,
+  providerTransportAggregateKeysForEvent,
   retainProviderTransportEventDetail,
   type ProviderTransportProjectionCall,
 } from "./provider-transport-accounting-project.js";
@@ -447,30 +448,39 @@ function applyCoverage(
     call.latestZeroSubmissionOutcome ||
     call.phase ||
     call.pendingTransportTarget ||
-    !call.lastAttempt ||
     !validateRequestedIdentity(event, call, state)
   ) {
-    if (
-      call &&
-      (call.latestZeroSubmissionOutcome ||
-        call.phase ||
-        call.pendingTransportTarget ||
-        !call.lastAttempt)
-    ) {
+    if (call && (call.latestZeroSubmissionOutcome || call.phase || call.pendingTransportTarget)) {
       rejectFact(state, "transport_event_conflict", "event");
     }
     return false;
   }
-  if (
+  if (!call.lastAttempt) {
+    if (event.scope !== "transport_semantics") {
+      return rejectFact(state, "transport_event_conflict", "event");
+    }
+    if (!bindOrValidateCurrentTransport(call, event.transport, state)) {
+      return false;
+    }
+  } else if (
     !validateEventTransport(event, call.lastAttempt.transport, state) ||
     (call.currentTransport !== undefined &&
       !validateEventTransport(event, call.currentTransport, state))
   ) {
     return false;
   }
-  state.aggregateLowerBounds.providerFallbacks = true;
-  if (!call.currentServingModelConfirmedByProviderFallback) {
-    call.currentServingModel = undefined;
+  if (event.scope === "provider_fallbacks") {
+    state.aggregateLowerBounds.providerFallbacks = true;
+    if (!call.currentServingModelConfirmedByProviderFallback) {
+      call.currentServingModel = undefined;
+    }
+  } else {
+    state.issues.add(event.reason);
+    if (event.reason === "transport_submission_authority_partial") {
+      state.aggregateLowerBounds.attempts = true;
+      state.aggregateLowerBounds.providerFallbacks = true;
+      state.aggregateLowerBounds.zeroSubmissions = true;
+    }
   }
   return true;
 }
@@ -649,7 +659,7 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
       sealPendingSettlement(call, state);
     },
     onTransportEvent(rawEvent) {
-      state.activeEventType = rawEvent.type;
+      state.activeAggregateKeys = providerTransportAggregateKeysForEvent(rawEvent);
       try {
         const correlation = correlateTransportEvent(rawEvent, state);
         if (!correlation) {
@@ -680,7 +690,7 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
         state.acceptedEvents += 1;
         retainProviderTransportEventDetail(event, state, MAX_MODEL_TRANSPORT_EVENTS);
       } finally {
-        state.activeEventType = undefined;
+        state.activeAggregateKeys = undefined;
       }
     },
     onLogicalCallFinalized(rawCallId) {

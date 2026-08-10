@@ -9,7 +9,9 @@ import {
   streamOpenAICodexResponses,
   streamSimpleOpenAICodexResponses,
 } from "../providers/openai-chatgpt-responses.js";
+import { installTestModelWebSocketHost } from "../providers/openai-chatgpt-responses.test-websocket.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import { openAIResponsesDispatchGuards } from "./openai-responses-contracts.js";
 
 const sdkState = vi.hoisted(() => ({
   clients: [] as Array<"openai" | "azure">,
@@ -130,6 +132,7 @@ beforeEach(() => {
   sdkState.order = [];
   sdkState.requests = [];
   configureAiTransportHost(initialHost);
+  installTestModelWebSocketHost();
 });
 
 afterEach(() => {
@@ -261,6 +264,100 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(run.requests[1])).not.toContain("encrypted_content");
   });
 
+  it("runs blocking request guards immediately before each OpenAI SDK request", async () => {
+    const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
+      code: "invalid_encrypted_content",
+    });
+    const options: Record<string, unknown> = {
+      onPayload: (request: Record<string, unknown>) => ({
+        ...request,
+        input: [
+          ...((request.input as unknown[]) ?? []),
+          { type: "reasoning", encrypted_content: "opaque", summary: [] },
+        ],
+      }),
+    };
+    openAIResponsesDispatchGuards.set(options, {
+      beforeTransportDispatch: ({ payloadVariant }) => {
+        sdkState.order.push(`guard.${payloadVariant}`);
+      },
+      beforeFetchDispatch: vi.fn(),
+    });
+    configureAiTransportHost({
+      ...initialHost,
+      buildModelFetchWithBlockingDispatchGuard: () => ({
+        fetch: vi.fn() as unknown as typeof fetch,
+        provenance: "dispatch_attested",
+      }),
+    });
+
+    const run = await runObservedRequest({
+      context: createContext("GUARDED-REPLAY-PROMPT"),
+      errors: [invalidEncryptedContent, new Error("stop after retry")],
+      options,
+    });
+
+    expect(run.order).toEqual([
+      "observe",
+      "guard.initial",
+      "openai.create",
+      "observe",
+      "guard.encrypted-content-retry",
+      "openai.create",
+    ]);
+  });
+
+  it("blocks the OpenAI SDK request when the request guard rejects", async () => {
+    const options: Record<string, unknown> = {};
+    openAIResponsesDispatchGuards.set(options, {
+      beforeTransportDispatch: () => {
+        sdkState.order.push("guard.reject");
+        throw new Error("request rejected");
+      },
+      beforeFetchDispatch: vi.fn(),
+    });
+    configureAiTransportHost({
+      ...initialHost,
+      buildModelFetchWithBlockingDispatchGuard: () => ({
+        fetch: vi.fn() as unknown as typeof fetch,
+        provenance: "dispatch_attested",
+      }),
+    });
+
+    const run = await runObservedRequest({
+      context: createContext("REJECTED-PROMPT"),
+      options,
+    });
+
+    expect(run.order).toEqual(["observe", "guard.reject"]);
+    expect(run.requests).toEqual([]);
+  });
+
+  it("does not install OpenAI dispatch guards on Azure Responses", async () => {
+    const guard = vi.fn();
+    const beforeFetchDispatch = vi.fn();
+    const options: Record<string, unknown> = {};
+    openAIResponsesDispatchGuards.set(options, {
+      beforeTransportDispatch: guard,
+      beforeFetchDispatch,
+    });
+
+    const run = await runObservedRequest({
+      azure: true,
+      context: createContext("AZURE-UNGARDED-PROMPT"),
+      model: createModel({
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        baseUrl: "https://example.openai.azure.com",
+      }),
+      options,
+    });
+
+    expect(run.order).toEqual(["observe", "azure.create"]);
+    expect(guard).not.toHaveBeenCalled();
+    expect(beforeFetchDispatch).not.toHaveBeenCalled();
+  });
+
   it("uses cache-boundary and surrogate normalization as the expected prompt owner", async () => {
     const systemPrompt = `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic\ud800`;
     const normalizedPrompt = "stable\ndynamic";
@@ -356,7 +453,13 @@ describe("OpenAI Responses provider prompt observer", () => {
     }
     vi.stubGlobal("WebSocket", ConnectionLimitWebSocket);
     vi.stubGlobal("fetch", vi.fn());
-    const options = { apiKey: createJwt(), transport: "websocket" as const };
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback: TimerHandler) => {
+      if (typeof callback === "function") {
+        callback();
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+    const options = { apiKey: createJwt(), maxRetries: 1, transport: "websocket" as const };
     responsesPromptObserver.set(options, (observation) => {
       order.push("observe");
       observations.push(observation);
@@ -468,7 +571,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       "fetch",
       vi.fn(async () => completedSseResponse()),
     );
-    const options = { apiKey: createJwt(), transport: "auto" as const };
+    const options = { apiKey: createJwt(), maxRetries: 0, transport: "auto" as const };
     responsesPromptObserver.set(options, (observation) => observations.push(observation));
 
     const result = await streamOpenAICodexResponses(
@@ -484,7 +587,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(observations.map((entry) => entry.egress)).toEqual(["native-codex-sse"]);
   });
 
-  it("observes WebSocket then SSE when fallback happens after send", async () => {
+  it("observes fallback egress after an admitted no-output WebSocket failure", async () => {
     const prompt = "PRIVATE-POST-SEND-FALLBACK-PROMPT";
     const observations: ResponsesPromptObservation[] = [];
     const order: string[] = [];
@@ -513,7 +616,7 @@ describe("OpenAI Responses provider prompt observer", () => {
         return completedSseResponse();
       }),
     );
-    const options = { apiKey: createJwt(), transport: "auto" as const };
+    const options = { apiKey: createJwt(), maxRetries: 0, transport: "auto" as const };
     responsesPromptObserver.set(options, (observation) => {
       order.push(`observe:${observation.egress}`);
       observations.push(observation);

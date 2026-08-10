@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 import {
@@ -7,6 +7,9 @@ import {
   resetOpenAICodexWebSocketStateForTest,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
+import { installTestModelWebSocketHost } from "./openai-chatgpt-responses.test-websocket.js";
+
+beforeEach(installTestModelWebSocketHost);
 
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");

@@ -2,18 +2,24 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { zstdDecompressSync } from "node:zlib";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { configureAiTransportHost } from "../host.js";
+import {
+  configureAiTransportHost,
+  type AiModelWebSocket,
+  type AiModelWebSocketResource,
+} from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
+import { installTestModelWebSocketHost } from "./openai-chatgpt-responses.test-websocket.js";
+
+beforeEach(installTestModelWebSocketHost);
 
 const model = {
   id: "gpt-5.5",
@@ -135,6 +141,83 @@ describe("ChatGPT Responses cached transport", () => {
     expect(sockets[1]?.readyState).toBe(1);
   });
 
+  it("disposes a connection that finishes opening after its session was closed", async () => {
+    const sessionId = "close-during-open-".repeat(5);
+    let resolveOpening: ((resource: AiModelWebSocketResource) => void) | undefined;
+    const disposeOpening = vi.fn();
+    const sendOpening = vi.fn();
+    configureAiTransportHost({
+      connectModelWebSocket: async () =>
+        await new Promise<AiModelWebSocketResource>((resolve) => {
+          resolveOpening = resolve;
+        }),
+    });
+
+    const pending = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt(),
+      maxRetries: 0,
+      requestId: "call-close-during-open",
+      sessionId,
+      transport: "websocket-cached",
+    }).result();
+    await vi.waitFor(() => expect(resolveOpening).toBeTypeOf("function"));
+
+    closeOpenAICodexWebSocketSessions(sessionId);
+    resolveOpening?.({
+      socket: {
+        readyState: 1,
+        bufferedAmount: 0,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        send: sendOpening,
+        close: () => {},
+      },
+      handshakeHeaders: {},
+      dispose: disposeOpening,
+    });
+
+    await expect(pending).resolves.toMatchObject({ stopReason: "error" });
+    expect(disposeOpening).toHaveBeenCalledOnce();
+    expect(sendOpening).not.toHaveBeenCalled();
+
+    const replacementSocket = new EventTarget() as EventTarget & AiModelWebSocket;
+    Object.defineProperties(replacementSocket, {
+      bufferedAmount: { value: 0 },
+      readyState: { value: 1 },
+    });
+    replacementSocket.send = (_data, callback) => {
+      callback();
+      queueMicrotask(() => {
+        replacementSocket.dispatchEvent(
+          Object.assign(new Event("message"), {
+            data: JSON.stringify(completion("resp_after_close_during_open")),
+          }),
+        );
+      });
+    };
+    replacementSocket.close = () => {};
+    configureAiTransportHost({
+      connectModelWebSocket: async () => ({
+        socket: replacementSocket,
+        handshakeHeaders: {},
+        dispose: () => {},
+      }),
+    });
+
+    await expect(
+      streamOpenAICodexResponses(model, context, {
+        apiKey: createJwt(),
+        maxRetries: 0,
+        requestId: "call-after-close-during-open",
+        sessionId,
+        transport: "websocket-cached",
+      }).result(),
+    ).resolves.toMatchObject({
+      stopReason: "stop",
+      responseId: "resp_after_close_during_open",
+    });
+  });
+
   it.each(["close", "abort"] as const)(
     "keeps an authenticated replacement socket when a reused lease ends by %s",
     async (termination) => {
@@ -144,6 +227,8 @@ describe("ChatGPT Responses cached transport", () => {
         authorization?: string;
         accountId?: string;
         openaiBeta?: string;
+        canonicalSessionId?: string;
+        threadId?: string;
         sessionId?: string;
         requestId?: string;
       }> = [];
@@ -154,7 +239,7 @@ describe("ChatGPT Responses cached transport", () => {
 
       class AuthenticatedLoopbackWebSocket extends WebSocket {
         override close(code?: number, reason?: string | Buffer): void {
-          if (holdOriginalDebugClose && reason === "debug_close") {
+          if (holdOriginalDebugClose) {
             holdOriginalDebugClose = false;
             deferredOriginalClose = () => super.close(code, reason);
             return;
@@ -171,6 +256,8 @@ describe("ChatGPT Responses cached transport", () => {
           authorization: request.headers.authorization,
           accountId: request.headers["chatgpt-account-id"] as string | undefined,
           openaiBeta: request.headers["openai-beta"] as string | undefined,
+          canonicalSessionId: request.headers["session-id"] as string | undefined,
+          threadId: request.headers["thread-id"] as string | undefined,
           sessionId: request.headers.session_id as string | undefined,
           requestId: request.headers["x-client-request-id"] as string | undefined,
         });
@@ -235,6 +322,8 @@ describe("ChatGPT Responses cached transport", () => {
             authorization: `Bearer ${apiKey}`,
             accountId: "acct-1",
             openaiBeta: "responses_websockets=2026-02-06",
+            canonicalSessionId: sessionId,
+            threadId: sessionId,
             sessionId,
             requestId: sessionId,
           },
@@ -242,6 +331,8 @@ describe("ChatGPT Responses cached transport", () => {
             authorization: `Bearer ${apiKey}`,
             accountId: "acct-1",
             openaiBeta: "responses_websockets=2026-02-06",
+            canonicalSessionId: sessionId,
+            threadId: sessionId,
             sessionId,
             requestId: sessionId,
           },
@@ -492,21 +583,21 @@ describe("ChatGPT Responses cached transport", () => {
     );
     expect(sockets[0]?.activeStreamListenerCount()).toBe(0);
 
-    const rejected = await streamOpenAICodexResponses(model, followUpContext, options).result();
-    expect(rejected).toMatchObject({
-      stopReason: "error",
-      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-    });
+    const recovered = await streamOpenAICodexResponses(model, followUpContext, options).result();
+    expect(recovered.stopReason).toBe("stop");
     expect(sockets[0]).toMatchObject({ readyState: 3, sendCount: 2 });
     expect(sockets[0]?.activeStreamListenerCount()).toBe(0);
     expect(sentPayloads[1]?.previous_response_id).toBe("resp_1_1");
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1]?.activeStreamListenerCount()).toBe(0);
+    expect(sentPayloads[2]?.previous_response_id).toBeUndefined();
 
     expect(
       (await streamOpenAICodexResponses(model, followUpContext, options).result()).stopReason,
     ).toBe("stop");
     expect(sockets).toHaveLength(2);
     expect(sockets[1]?.activeStreamListenerCount()).toBe(0);
-    expect(sentPayloads[2]?.previous_response_id).toBeUndefined();
+    expect(sentPayloads[3]?.previous_response_id).toBe("resp_2_1");
   });
 
   it("closes the concurrent acquire loser promptly without leaking its socket", async () => {
@@ -691,7 +782,10 @@ describe("ChatGPT Responses cached transport", () => {
     vi.stubGlobal("WebSocket", WebSocket);
     const apiKey = createJwt();
     const runSession = (sessionId: string) =>
-      streamOpenAICodexResponses(loopbackModel, context, { apiKey, sessionId }).result();
+      streamOpenAICodexResponses(loopbackModel, context, {
+        apiKey,
+        sessionId,
+      }).result();
 
     try {
       const firstStickyResult = await runSession("sticky-sse-fallback");

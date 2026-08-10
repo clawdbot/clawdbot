@@ -101,7 +101,7 @@ type ResolvedProviderRequestAuthConfig =
       injectAuthorizationHeader: false;
     };
 
-type ResolvedProviderRequestProxyConfig =
+export type ResolvedProviderRequestProxyConfig =
   | {
       configured: false;
     }
@@ -117,7 +117,7 @@ type ResolvedProviderRequestProxyConfig =
       tls: ResolvedProviderRequestTlsConfig;
     };
 
-type ResolvedProviderRequestTlsConfig =
+export type ResolvedProviderRequestTlsConfig =
   | {
       configured: false;
     }
@@ -151,7 +151,7 @@ type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
 // Policy config includes the resolved transport plus attribution/security facts
 // required before a provider request can be attached to a model call.
-type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
+export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
   privateNetworkExplicitlyDenied: boolean;
   capabilities: ProviderRequestCapabilities;

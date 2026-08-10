@@ -107,6 +107,8 @@ type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   ) => void;
   signal?: AbortSignal;
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
+  onValidatedEvent?: (event: OpenAIResponsesStreamEvent) => void;
+  resolveResponseModel?: () => string | undefined;
 };
 
 export class ResponsesStreamFailure extends Error {
@@ -295,6 +297,7 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
+      options?.onValidatedEvent?.(event);
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {

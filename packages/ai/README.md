@@ -22,14 +22,35 @@ application concerns. OpenClaw supplies those policies around this package.
 Host policy (request fetch guarding, secret redaction, strict-tool defaults,
 provider plugin hooks, diagnostics logging, and typed transport-event
 observation) can be injected with `configureAiTransportHost`; the defaults are
-inert. A transport attempt is one provider request dispatched through its
-transport. Connection setup
-and prewarm are separate facts. Transport fallback stages a concrete target
-until a matching attempt or zero-submission phase consumes it. Server-side
-provider fallback records an in-stream serving-model transition without
-rewriting the requested provider/model/API identity. Failed or aborted calls
-that end before dispatch use an explicit zero-submission fact instead of an
-invented attempt. When a physical attempt is known but terminal provider
+inert. `buildModelFetchWithBlockingDispatchGuard` owns the fail-closed
+`beforeFetchDispatch` callback invoked for every physical fetch hop after SSRF
+and DNS preflight but before network dispatch; throwing prevents that hop, and
+a host that cannot install the named guard fails closed.
+`buildModelFetchWithDispatchAttestation` is the separate optional port for
+non-blocking per-hop observation. Both named ports require a structured
+`AiModelFetchResult` with `dispatch_attested` provenance; legacy
+`buildModelFetch` remains callable-only and cannot attest dispatch.
+`connectModelWebSocket` is the host-owned guarded WebSocket port. A returned
+resource attests complete upgrade-header observation and callback-based send
+admission; `dispose()` owns the socket, proxy/TLS connection, and local
+provider-service lease. Its abort signal applies only while opening.
+Node and Bun applications can provide this port for guarded OpenClaw routing;
+standalone runtimes use the packaged WebSocket client. Browser runtimes may use
+their ambient WebSocket implementation. An installed host port that returns no
+resource declines the route and never falls through to an unguarded client.
+Within those ports, `observeFetchDispatch` runs once per physical hop, including
+redirects. `onFetchDispatch` remains isolated observational accounting, runs
+once per provider-request fetch invocation, and cannot change provider
+behavior. A transport attempt is one dispatched provider request, distinct from
+its physical fetch hops. Connection setup and prewarm are separate facts.
+Transport fallback stages a concrete target until a matching attempt or
+zero-submission phase consumes it. Server-side provider fallback records an
+in-stream serving-model transition without rewriting the requested
+provider/model/API identity. Failed or aborted calls that end before the
+dispatch boundary use an explicit zero-submission fact instead of an invented
+attempt. Exact zero requires a structured `AiModelFetchResult` with
+`dispatch_attested` provenance; a legacy bare fetch without callback evidence
+remains unavailable. When a physical attempt is known but terminal provider
 fallback metadata is unavailable, scoped coverage lowers only the derived
 provider-fallback total and serving-model identity; attempt and event counts
 remain exact.

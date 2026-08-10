@@ -198,7 +198,7 @@ describe("provider transport accounting transitions", () => {
       snapshot: {
         connections: { total: 1 },
         fallbacks: { total: 0, totalKind: "lower_bound" },
-        zeroSubmissions: { total: 0, totalKind: "exact" },
+        zeroSubmissions: { total: 0, totalKind: "lower_bound" },
       },
     });
   });
@@ -277,6 +277,7 @@ describe("provider transport accounting transitions", () => {
         logicalCalls: { completed: 1 },
         attempts: { total: 2, transportFallbacks: 1 },
         fallbacks: { total: 1, submissionFailures: 0, streamFailures: 1 },
+        zeroSubmissions: { total: 0, totalKind: "lower_bound" },
       },
     });
 

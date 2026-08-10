@@ -170,6 +170,36 @@ export type AiBlockingModelFetchOptions = AiModelFetchOptions & {
   beforeFetchDispatch: AiBeforeFetchDispatch;
 };
 
+export type AiModelWebSocketEventType = "message" | "error" | "close";
+export type AiModelWebSocketListener = (event: unknown) => void;
+
+/** Host-attested callback-send WebSocket surface kept independent of Node dependencies. */
+export interface AiModelWebSocket {
+  readonly readyState?: number;
+  readonly bufferedAmount?: number;
+  addEventListener(type: AiModelWebSocketEventType, listener: AiModelWebSocketListener): void;
+  removeEventListener(type: AiModelWebSocketEventType, listener: AiModelWebSocketListener): void;
+  send(data: string, callback: (error?: Error) => void): void;
+  close(code?: number, reason?: string): void;
+  terminate?(): void;
+}
+
+export type AiModelWebSocketResource = {
+  socket: AiModelWebSocket;
+  /** Upgrade response headers observed by the host, including an authoritative absence. */
+  handshakeHeaders: Record<string, string | readonly string[] | undefined>;
+  /** Idempotently closes the socket and releases all host-owned connection resources. */
+  dispose(): void;
+};
+
+export type AiModelWebSocketConnectOptions = {
+  url: string;
+  headers: Record<string, string>;
+  /** Cancels connection establishment; an opened resource lives until `dispose()`. */
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
 type AiModelTransportEventBase = {
   /** Stable identity for de-duplicating one emitted transport fact. */
   eventId: string;
@@ -245,6 +275,17 @@ export type AiModelTransportEvent =
       transport: string;
     })
   | (AiModelTransportCallEventBase & {
+      /** Semantic or dispatch uncertainty scoped to one transport. */
+      type: "coverage";
+      scope: "transport_semantics";
+      state: "unverified";
+      reason:
+        | "transport_terminal_unverified"
+        | "transport_endpoint_authority_partial"
+        | "transport_submission_authority_partial";
+      transport: string;
+    })
+  | (AiModelTransportCallEventBase & {
       type: "submission";
       transport: string;
       total: 0;
@@ -281,6 +322,14 @@ export interface AiTransportHost {
     timeoutMs: number | undefined,
     options: AiBlockingModelFetchOptions,
   ): AiModelFetchResult | undefined;
+  /**
+   * Opens one policy-guarded model WebSocket. A returned resource attests
+   * upgrade-header observation and callback-based send admission.
+   */
+  connectModelWebSocket?(
+    model: Model,
+    options: AiModelWebSocketConnectOptions,
+  ): Promise<AiModelWebSocketResource | undefined>;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
   /** Redacts secrets inside structured tool-result payloads. */

@@ -3,6 +3,7 @@
  *
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
+import type { AiBlockingModelFetchOptions, AiProviderRequestPolicyInput } from "@openclaw/ai";
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 import { emitModelTransportDebug } from "@openclaw/ai/transports";
 import { formatModelTransportDebugUrl } from "@openclaw/ai/transports";
@@ -19,7 +20,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
-  type GuardedFetchOptions,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
@@ -69,10 +69,6 @@ const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
-
-type GuardedModelFetchOptions = {
-  sanitizeSse?: boolean;
-} & Pick<GuardedFetchOptions, "beforeFetchDispatch" | "observeFetchDispatch" | "onFetchDispatch">;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -576,7 +572,10 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model) {
+export function resolveModelRequestPolicy(
+  model: Model,
+  transport: NonNullable<AiProviderRequestPolicyInput["transport"]> = "stream",
+) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -603,7 +602,7 @@ function resolveModelRequestPolicy(model: Model) {
     baseUrl: model.baseUrl,
     ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
     capability: "llm",
-    transport: "stream",
+    transport,
     request,
   });
 }
@@ -758,7 +757,7 @@ function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[
   return { text, unknown: [...unknown] };
 }
 
-function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
+export function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
   url: string;
   headers?: Headers;
 } {
@@ -789,7 +788,7 @@ function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersIn
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
-  options?: GuardedModelFetchOptions,
+  options?: Partial<AiBlockingModelFetchOptions>,
 ): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);

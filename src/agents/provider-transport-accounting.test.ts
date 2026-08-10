@@ -10,6 +10,7 @@ import {
   ANTHROPIC_ROUTE,
   emitAttempt,
   emitProviderFallbackCoverage,
+  emitTransportSemanticCoverage,
   emitTransportFallback,
   emitZeroSubmission,
   observeMalformedTransportEvent,
@@ -76,6 +77,141 @@ describe("provider transport accounting", () => {
         zeroSubmissions: { total: 2, failed: 2, totalKind: "exact" },
         logicalCalls: { completed: 1, outcomeKind: "exact" },
       },
+    });
+  });
+
+  it("preserves exact transport counters for semantic-only coverage", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-semantic-coverage", ANTHROPIC_ROUTE);
+      emitAttempt({
+        callId: "call-semantic-coverage",
+        ordinal: 1,
+        route: ANTHROPIC_ROUTE,
+        outcome: "completed",
+      });
+      emitTransportSemanticCoverage({
+        callId: "call-semantic-coverage",
+        reason: "transport_terminal_unverified",
+      });
+      observeProviderTransportLogicalCallSettled("call-semantic-coverage", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining(["transport_terminal_unverified"]),
+      },
+      snapshot: {
+        attempts: { total: 1, totalKind: "exact" },
+        providerFallbacks: { total: 0, totalKind: "exact" },
+        events: { total: 2, totalKind: "exact" },
+      },
+    });
+  });
+
+  it("preserves exact attempts when semantic coverage precedes the exact attempt", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-coverage-before-attempt", ANTHROPIC_ROUTE);
+      emitTransportSemanticCoverage({
+        callId: "call-coverage-before-attempt",
+        reason: "transport_endpoint_authority_partial",
+      });
+      emitAttempt({
+        callId: "call-coverage-before-attempt",
+        ordinal: 1,
+        route: ANTHROPIC_ROUTE,
+        outcome: "completed",
+      });
+      observeProviderTransportLogicalCallSettled("call-coverage-before-attempt", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: ["transport_endpoint_authority_partial"],
+      },
+      snapshot: {
+        attempts: { total: 1, totalKind: "exact" },
+        events: { total: 2, totalKind: "exact" },
+      },
+    });
+  });
+
+  it("lowers all submission-dependent totals when submission authority is partial", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-partial-submission-authority", ANTHROPIC_ROUTE);
+      emitAttempt({
+        callId: "call-partial-submission-authority",
+        ordinal: 1,
+        route: ANTHROPIC_ROUTE,
+        outcome: "completed",
+      });
+      emitTransportSemanticCoverage({
+        callId: "call-partial-submission-authority",
+        reason: "transport_submission_authority_partial",
+      });
+      observeProviderTransportLogicalCallSettled("call-partial-submission-authority", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining([
+          "transport_submission_authority_partial",
+          "transport_totals_lower_bound",
+        ]),
+      },
+      snapshot: {
+        attempts: { total: 1, totalKind: "lower_bound" },
+        fallbacks: { total: 0, totalKind: "exact" },
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        zeroSubmissions: { total: 0, totalKind: "lower_bound" },
+        events: { total: 2, totalKind: "exact" },
+      },
+    });
+  });
+
+  it("accepts semantic coverage without an observable attempt as partial accounting", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-injected-semantic-coverage", ANTHROPIC_ROUTE);
+      emitTransportSemanticCoverage({
+        callId: "call-injected-semantic-coverage",
+        eventId: "semantic-endpoint-call-injected",
+        reason: "transport_endpoint_authority_partial",
+      });
+      emitTransportSemanticCoverage({
+        callId: "call-injected-semantic-coverage",
+        eventId: "semantic-terminal-call-injected",
+        reason: "transport_terminal_unverified",
+      });
+      observeProviderTransportLogicalCallSettled("call-injected-semantic-coverage", "completed");
+    });
+
+    const projection = collector.project();
+    expect(projection).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: [
+          "transport_endpoint_authority_partial",
+          "transport_terminal_unverified",
+          "transport_totals_lower_bound",
+        ],
+      },
+      snapshot: {
+        logicalCalls: {
+          completed: 1,
+          entries: [{ transport: "sse", outcome: "completed" }],
+        },
+        attempts: { total: 0, totalKind: "lower_bound" },
+        events: { total: 2, totalKind: "lower_bound" },
+      },
+    });
+    expect(projection.coverage).not.toMatchObject({
+      reasons: expect.arrayContaining(["not_instrumented", "transport_event_conflict"]),
     });
   });
 
@@ -723,6 +859,73 @@ describe("provider transport accounting", () => {
         logicalCalls: { failed: 1, outcomeKind: "exact" },
         attempts: { total: 1, totalKind: "lower_bound" },
         fallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 1, totalKind: "lower_bound" },
+      },
+    });
+  });
+
+  it("lowers both aggregates for a same-type cross-scope coverage collision", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-cross-scope-id", ANTHROPIC_ROUTE);
+      emitAttempt({
+        callId: "call-cross-scope-id",
+        ordinal: 1,
+        outcome: "completed",
+        route: ANTHROPIC_ROUTE,
+      });
+      emitProviderFallbackCoverage({
+        callId: "call-cross-scope-id",
+        eventId: "shared-coverage-id",
+      });
+      emitTransportSemanticCoverage({
+        callId: "call-cross-scope-id",
+        eventId: "shared-coverage-id",
+        reason: "transport_submission_authority_partial",
+      });
+      observeProviderTransportLogicalCallSettled("call-cross-scope-id", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining(["transport_event_conflict"]),
+      },
+      snapshot: {
+        attempts: { total: 1, totalKind: "lower_bound" },
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 2, totalKind: "lower_bound" },
+      },
+    });
+  });
+
+  it("lowers one aggregate for a cross-type collision with the same aggregate key", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-same-aggregate-id", ANTHROPIC_ROUTE);
+      emitAttempt({
+        callId: "call-same-aggregate-id",
+        ordinal: 1,
+        outcome: "completed",
+        route: ANTHROPIC_ROUTE,
+        eventId: "shared-attempt-id",
+      });
+      emitTransportSemanticCoverage({
+        callId: "call-same-aggregate-id",
+        eventId: "shared-attempt-id",
+        reason: "transport_submission_authority_partial",
+      });
+      observeProviderTransportLogicalCallSettled("call-same-aggregate-id", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining(["transport_event_conflict"]),
+      },
+      snapshot: {
+        attempts: { total: 1, totalKind: "lower_bound" },
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
         events: { total: 1, totalKind: "lower_bound" },
       },
     });

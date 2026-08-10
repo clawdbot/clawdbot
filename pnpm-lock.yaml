@@ -2213,6 +2213,9 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
+      ws:
+        specifier: 8.21.1
+        version: 8.21.1
 
   packages/gateway-client:
     dependencies:

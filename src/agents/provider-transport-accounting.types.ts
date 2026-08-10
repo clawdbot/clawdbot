@@ -17,7 +17,10 @@ export type ProviderTransportAccountingCoverageReason =
   | "transport_invalid_fact"
   | "transport_invalid_ordinal"
   | "transport_observer_failed"
-  | "transport_logical_call_incomplete";
+  | "transport_logical_call_incomplete"
+  | "transport_terminal_unverified"
+  | "transport_endpoint_authority_partial"
+  | "transport_submission_authority_partial";
 
 export type ProviderTransportAccountingCoverage =
   | { state: "complete" }

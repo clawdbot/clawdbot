@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { getAiTransportHost } from "../host.js";
+import { getAiTransportHost, type AiBeforeFetchDispatch } from "../host.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
@@ -12,11 +12,12 @@ import {
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
-import { buildGuardedModelFetch } from "./host-policy.js";
+import { buildGuardedModelFetchResult } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+  openAIResponsesDispatchGuards,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
@@ -41,6 +42,15 @@ import {
   ResponsesStreamFailure,
 } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import {
+  createOpenAISdkAccountingFetch,
+  failOpenAISdkTransportScope,
+  finishOpenAISdkTransportScope,
+  markOpenAISdkPayloadRecovery,
+  observeOpenAISdkServingModelEvent,
+  readOpenAISdkResponseModel,
+  setOpenAISdkFetchProvenance,
+} from "./openai-sdk-transport-accounting-internal.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -95,15 +105,35 @@ export function createOpenAIResponsesClient(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
   sessionId?: string,
+  requestId?: string,
+  callerSignal?: AbortSignal,
+  accountingOverride?: ReturnType<typeof createOpenAISdkAccountingFetch>,
+  beforeFetchDispatch?: AiBeforeFetchDispatch,
+  observeFetchDispatch?: AiBeforeFetchDispatch,
 ) {
-  return new OpenAI({
+  const accounting =
+    accountingOverride ??
+    createOpenAISdkAccountingFetch({
+      model,
+      ...(requestId ? { callId: requestId } : {}),
+      scopeId: requestId ?? randomUUID(),
+      callerSignal,
+    });
+  const guardedFetch = buildGuardedModelFetchResult(model, undefined, {
+    ...(beforeFetchDispatch ? { beforeFetchDispatch } : {}),
+    ...(observeFetchDispatch ? { observeFetchDispatch } : {}),
+    onFetchDispatch: accounting.onFetchDispatch,
+  });
+  setOpenAISdkFetchProvenance(accounting.scope, guardedFetch.provenance);
+  const client = new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
-    fetch: buildGuardedModelFetch(model),
+    fetch: accounting.wrapGuardedFetch(guardedFetch.fetch),
     ...buildOpenAISdkClientOptions(model),
   });
+  return client;
 }
 
 type ResponsesPricingOptions = Pick<
@@ -117,6 +147,7 @@ type ResponsesStreamParams = Parameters<
 };
 
 type ResponsesTransportExecutorOptions = {
+  allowDispatchGuards?: true;
   outputApi?: AssistantMessage["api"];
   firstEventTimeoutMs?: number;
   streamRequest?: boolean;
@@ -136,6 +167,19 @@ type ResponsesTransportExecutorOptions = {
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
+    const dispatchGuards =
+      config.allowDispatchGuards === true &&
+      model.provider === "openai" &&
+      model.api === "openai-responses"
+        ? openAIResponsesDispatchGuards.get(options)
+        : undefined;
+    const accounting = createOpenAISdkAccountingFetch({
+      model,
+      ...(options?.requestId ? { callId: options.requestId } : {}),
+      scopeId: options?.requestId ?? randomUUID(),
+      callerSignal: options?.signal,
+      ...(options?.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
+    });
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
@@ -173,6 +217,11 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           options?.headers,
           turnState?.headers,
           options?.sessionId,
+          options?.requestId,
+          options?.signal,
+          accounting,
+          dispatchGuards?.beforeFetchDispatch,
+          dispatchGuards?.observeFetchDispatch,
         );
         let params = config.buildRequest(model, context, responsesOptions, turnState?.metadata);
         const nextParams = await options?.onPayload?.(params, model);
@@ -218,6 +267,14 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           requestOptions,
           model,
           observePrompt,
+          onPayloadRecovery: () => markOpenAISdkPayloadRecovery(accounting.scope),
+          beforeTransportDispatch: (request, payloadVariant) =>
+            dispatchGuards?.beforeTransportDispatch({
+              model,
+              request,
+              payloadVariant,
+              maxRetries: options?.maxRetries,
+            }),
         });
         await options?.onResponse?.(
           { status: response.status, headers: headersToRecord(response.headers) },
@@ -241,6 +298,8 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             abortFirstEventStream: firstEventAbort.abort,
             onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
             signal: options?.signal,
+            onValidatedEvent: (event) => observeOpenAISdkServingModelEvent(accounting.scope, event),
+            resolveResponseModel: () => readOpenAISdkResponseModel(accounting.scope),
             reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
               authProfileId: responsesOptions?.authProfileId,
               sessionId: options?.sessionId,
@@ -253,9 +312,14 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
         }
+        finishOpenAISdkTransportScope(accounting.scope, "completed", response.status);
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
+        failOpenAISdkTransportScope(
+          accounting.scope,
+          options?.signal?.aborted ? "aborted" : "failed",
+        );
         if (error instanceof ResponsesStreamFailure && error.observation) {
           logResponsesFailedNoDetails(error.observation);
         }
@@ -276,6 +340,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
 
 export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return createResponsesTransportExecutor({
+    allowDispatchGuards: true,
     streamRequest: true,
     createClient: createOpenAIResponsesClient,
     buildRequest: buildOpenAIResponsesParams,
@@ -297,8 +362,15 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         resolveAzureDeploymentName(model),
         metadata,
       ),
-    createResponseStream: async ({ client, request, requestOptions, observePrompt }) => {
+    createResponseStream: async ({
+      client,
+      request,
+      requestOptions,
+      observePrompt,
+      beforeTransportDispatch,
+    }) => {
       observePrompt?.(request, { egress: "responses-sdk", payloadVariant: "initial" });
+      beforeTransportDispatch?.(request, "initial");
       const { data, response } = await client.responses
         .create(request as never, requestOptions)
         .withResponse();
@@ -324,14 +396,30 @@ export function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  _sessionId?: string,
+  requestId?: string,
+  callerSignal?: AbortSignal,
+  accountingOverride?: ReturnType<typeof createOpenAISdkAccountingFetch>,
 ) {
   const baseURL = normalizeAzureBaseUrl(model.baseUrl);
+  const accounting =
+    accountingOverride ??
+    createOpenAISdkAccountingFetch({
+      model,
+      ...(requestId ? { callId: requestId } : {}),
+      scopeId: requestId ?? randomUUID(),
+      callerSignal,
+    });
+  const guardedFetch = buildGuardedModelFetchResult(model, undefined, {
+    onFetchDispatch: accounting.onFetchDispatch,
+  });
+  setOpenAISdkFetchProvenance(accounting.scope, guardedFetch.provenance);
   const clientOptions = {
     apiKey,
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL,
-    fetch: buildGuardedModelFetch(model),
+    fetch: accounting.wrapGuardedFetch(guardedFetch.fetch),
     ...buildOpenAISdkClientOptions(model),
   };
 

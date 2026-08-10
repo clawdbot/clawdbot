@@ -1,4 +1,4 @@
-import type { Api } from "@openclaw/llm-core";
+import type { Api, Model } from "@openclaw/llm-core";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
@@ -6,6 +6,7 @@ import type {
   ResponseOutputMessage,
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
+import type { AiBeforeFetchDispatch } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type {
   OpenAIApiReasoningEffort,
@@ -46,10 +47,38 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 };
 
+export type OpenAIResponsesPayloadVariant = "initial" | "encrypted-content-retry";
+export type BeforeTransportDispatch = (params: {
+  model: Model;
+  request: OpenAIResponsesRequestParams;
+  payloadVariant: OpenAIResponsesPayloadVariant;
+  maxRetries: number | undefined;
+}) => void;
+export type OpenAIResponsesDispatchGuards = {
+  beforeTransportDispatch: BeforeTransportDispatch;
+  beforeFetchDispatch: AiBeforeFetchDispatch;
+  observeFetchDispatch?: AiBeforeFetchDispatch;
+};
+
+const OPENAI_RESPONSES_DISPATCH_GUARDS = Symbol("openaiResponsesDispatchGuards");
+
+export const openAIResponsesDispatchGuards = {
+  set(options: object, guards: OpenAIResponsesDispatchGuards): void {
+    Reflect.set(options, OPENAI_RESPONSES_DISPATCH_GUARDS, guards);
+  },
+  get(options: object | undefined): OpenAIResponsesDispatchGuards | undefined {
+    return options
+      ? (Reflect.get(options, OPENAI_RESPONSES_DISPATCH_GUARDS) as
+          | OpenAIResponsesDispatchGuards
+          | undefined)
+      : undefined;
+  },
+};
+
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
   egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "encrypted-content-retry";
+  payloadVariant: OpenAIResponsesPayloadVariant;
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;

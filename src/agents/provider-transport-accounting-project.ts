@@ -15,24 +15,28 @@ export type ProviderTransportAggregateLowerBoundKey =
   | "providerFallbacks"
   | "zeroSubmissions";
 
-export function providerTransportAggregateKeyForEventType(
-  type: AiModelTransportEvent["type"],
-): ProviderTransportAggregateLowerBoundKey {
-  switch (type) {
+export function providerTransportAggregateKeysForEvent(
+  event: AiModelTransportEvent,
+): ProviderTransportAggregateLowerBoundKey[] {
+  switch (event.type) {
     case "attempt":
-      return "attempts";
+      return ["attempts"];
     case "connection":
-      return "connections";
+      return ["connections"];
     case "fallback":
-      return "fallbacks";
+      return ["fallbacks"];
     case "provider_fallback":
-      return "providerFallbacks";
+      return ["providerFallbacks"];
     case "coverage":
-      return "providerFallbacks";
+      return event.scope === "provider_fallbacks"
+        ? ["providerFallbacks"]
+        : event.reason === "transport_submission_authority_partial"
+          ? ["attempts", "providerFallbacks", "zeroSubmissions"]
+          : [];
     case "submission":
-      return "zeroSubmissions";
+      return ["zeroSubmissions"];
     default: {
-      const exhaustive: never = type;
+      const exhaustive: never = event;
       return exhaustive;
     }
   }
@@ -77,7 +81,13 @@ export type ProviderTransportProjectionState = {
   logicalCalls: Map<string, ProviderTransportProjectionCall>;
   latestLogicalCallKeyByCallId: Map<string, string>;
   nextLogicalCallLifecycleOrdinal: number;
-  eventFingerprints: Map<string, { fingerprint: string; type: AiModelTransportEvent["type"] }>;
+  eventFingerprints: Map<
+    string,
+    {
+      aggregateKeys: ProviderTransportAggregateLowerBoundKey[];
+      fingerprint: string;
+    }
+  >;
   aggregate: {
     attempts: Omit<ProviderTransportAccountingSnapshot["attempts"], "totalKind">;
     connections: Omit<ProviderTransportAccountingSnapshot["connections"], "totalKind">;
@@ -98,7 +108,7 @@ export type ProviderTransportProjectionState = {
     zeroSubmissions: boolean;
     events: boolean;
   };
-  activeEventType?: AiModelTransportEvent["type"];
+  activeAggregateKeys?: ProviderTransportAggregateLowerBoundKey[];
   callDetailsTruncated: boolean;
   eventDetailsTruncated: boolean;
   issues: Set<ProviderTransportAccountingCoverageReason>;
@@ -111,9 +121,11 @@ export function lowerMissingTransportFallbackCause(
   const aggregate =
     event.reason === "connection_failure"
       ? "connections"
-      : event.reason === "stream_failure"
-        ? "attempts"
-        : undefined;
+      : event.reason === "submission_failure"
+        ? "zeroSubmissions"
+        : event.reason === "stream_failure"
+          ? "attempts"
+          : undefined;
   if (aggregate) {
     state.aggregateLowerBounds[aggregate] = true;
     state.issues.add("transport_totals_lower_bound");

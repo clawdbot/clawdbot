@@ -13,6 +13,7 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
+import { connectGuardedModelWebSocket } from "../agents/provider-transport-websocket.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
@@ -63,6 +64,7 @@ configureAiTransportHost({
   buildModelFetch: buildOpenClawModelFetch,
   buildModelFetchWithDispatchAttestation: buildOpenClawAttestedModelFetch,
   buildModelFetchWithBlockingDispatchGuard: buildOpenClawBlockingModelFetch,
+  connectModelWebSocket: connectGuardedModelWebSocket,
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);
     const unknown = swapped.unknown[0];

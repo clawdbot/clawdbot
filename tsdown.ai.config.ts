@@ -8,6 +8,7 @@ const externalDependencies = [
   "@mistralai/mistralai",
   "openai",
   "typebox",
+  "ws",
 ] as const;
 
 const config = {
