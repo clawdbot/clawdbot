@@ -12,6 +12,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { listSlackAccountIds } from "./accounts.js";
 import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
+  formatSlackApprovalTarget,
   hasSlackPluginApprovers,
   isSlackAnyNativeApprovalClientEnabled,
   normalizeSlackForwardTarget,
@@ -33,7 +34,6 @@ import {
   isSlackExecApprovalClientEnabled,
   resolveSlackExecApprovalTarget,
 } from "./exec-approvals.js";
-import { formatSlackTarget } from "./target-parsing.js";
 
 type ApprovalRequest = SlackNativeApprovalRequest;
 type ApprovalKind = SlackApprovalKind;
@@ -109,7 +109,7 @@ function resolveSlackApproverDmTargets(params: {
       : getSlackExecApprovalApprovers(params);
   const teamId = resolveEnterpriseApprovalTeamId(params.request);
   return approvers.map((approver) => ({
-    to: teamId ? formatSlackTarget({ kind: "user", id: approver, teamId }) : `user:${approver}`,
+    to: formatSlackApprovalTarget({ kind: "user", id: approver, teamId }),
   }));
 }
 
