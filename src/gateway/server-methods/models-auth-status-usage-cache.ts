@@ -12,6 +12,7 @@ import {
 } from "../../agents/execution-auth-binding.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import type {
@@ -31,14 +32,17 @@ export type ProviderUsageStatus = Pick<
   "windows" | "summary" | "plan" | "billing" | "accountEmail"
 >;
 
-// Identity keys are values, never the config object: every gateway request
-// resolves its own runtime config, so an object-identity key never matches a
-// later read. Under the blocking cold read that only cost a redundant await,
-// but a marked cold read would answer "still refreshing" forever and leave the
-// client polling an empty panel. agentDir, credentialKey and providerKey carry
-// everything that changes an answer; the TTL bounds the rest.
+// The config identity is a value key, never the config object. The pinned
+// runtime snapshot is replaced on every config refresh, so an object-identity
+// key misses across reloads even when nothing changed: under the blocking cold
+// read that cost a redundant await, under the marked cold read it answers
+// "still refreshing" forever and leaves the client polling an empty panel.
+// The key must stay config-derived, because credentialKey fingerprints
+// credentials and providerKey lists provider ids, and neither sees a provider
+// baseUrl or custom headers that change the answer.
 type ProviderUsageCacheEntry = {
   agentDir: string;
+  configKey: string;
   credentialKey: string;
   providerKey: string;
   refreshedAt: number;
@@ -48,6 +52,7 @@ type ProviderUsageCacheEntry = {
 
 type ProviderUsageRefresh = {
   agentDir: string;
+  configKey: string;
   credentialKey: string;
   providerKey: string;
   promise: Promise<UsageSummary>;
@@ -55,6 +60,7 @@ type ProviderUsageRefresh = {
 
 type ProviderUsageRefreshFailure = {
   agentDir: string;
+  configKey: string;
   credentialKey: string;
   providerKey: string;
   error: unknown;
@@ -171,6 +177,7 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
 function scheduleProviderUsageRefresh(params: {
   agentId: string;
   agentDir: string;
+  configKey: string;
   credentialKey: string;
   providerIds: UsageProviderId[];
   providerKey: string;
@@ -178,6 +185,7 @@ function scheduleProviderUsageRefresh(params: {
   const active = usageRefreshByAgentId.get(params.agentId);
   if (
     active?.agentDir === params.agentDir &&
+    active.configKey === params.configKey &&
     active.credentialKey === params.credentialKey &&
     active.providerKey === params.providerKey
   ) {
@@ -196,6 +204,7 @@ function scheduleProviderUsageRefresh(params: {
       ) {
         usageCacheByAgentId.set(params.agentId, {
           agentDir: params.agentDir,
+          configKey: params.configKey,
           credentialKey: params.credentialKey,
           providerKey: params.providerKey,
           refreshedAt: Date.now(),
@@ -218,6 +227,7 @@ function scheduleProviderUsageRefresh(params: {
       ) {
         usageRefreshFailureByAgentId.set(params.agentId, {
           agentDir: params.agentDir,
+          configKey: params.configKey,
           credentialKey: params.credentialKey,
           providerKey: params.providerKey,
           error: err,
@@ -232,6 +242,7 @@ function scheduleProviderUsageRefresh(params: {
     });
   const refresh: ProviderUsageRefresh = {
     agentDir: params.agentDir,
+    configKey: params.configKey,
     credentialKey: params.credentialKey,
     providerKey: params.providerKey,
     promise,
@@ -243,6 +254,7 @@ function scheduleProviderUsageRefresh(params: {
 type ProviderUsageCacheParams = {
   agentId: string;
   agentDir: string;
+  configKey: string;
   credentialKey: string;
   coldRead?: "refresh-marker";
   forceRefresh?: boolean;
@@ -257,6 +269,7 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const cached = usageCacheByAgentId.get(params.agentId);
   const matching =
     cached?.agentDir === params.agentDir &&
+    cached.configKey === params.configKey &&
     cached.credentialKey === credentialKey &&
     cached.providerKey === providerKey
       ? cached
@@ -283,6 +296,7 @@ export function readProviderUsageStaleWhileRevalidate(
     void scheduleProviderUsageRefresh({
       agentId: params.agentId,
       agentDir: params.agentDir,
+      configKey: params.configKey,
       credentialKey,
       providerIds,
       providerKey,
@@ -307,6 +321,7 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
   const refresh = scheduleProviderUsageRefresh({
     agentId: params.agentId,
     agentDir: params.agentDir,
+    configKey: params.configKey,
     credentialKey,
     providerIds,
     providerKey,
@@ -324,6 +339,7 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
   if (
     recordedFailure &&
     recordedFailure.agentDir === params.agentDir &&
+    recordedFailure.configKey === params.configKey &&
     recordedFailure.credentialKey === credentialKey &&
     recordedFailure.providerKey === providerKey
   ) {
@@ -376,6 +392,7 @@ export async function loadUsageStatusStaleWhileRevalidate(params: {
   return await loadProviderUsageSummaryStaleWhileRevalidate({
     agentId,
     agentDir,
+    configKey: resolveRuntimeConfigCacheKey(params.config),
     credentialKey: fingerprintProviderUsageCredentials({
       cfg: params.config,
       directApiKeys,

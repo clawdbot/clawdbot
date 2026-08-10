@@ -44,6 +44,7 @@ import {
 } from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
@@ -628,6 +629,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const usageByProvider = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
+        configKey: resolveRuntimeConfigCacheKey(cfg),
         credentialKey: fingerprintProviderUsageCredentials({
           cfg,
           directApiKeys: apiKeys,

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -296,6 +297,48 @@ describe("usage.status provider usage cache", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
   });
 
+  it("refetches when only provider configuration changed", async () => {
+    // credentialKey fingerprints credentials and providerKey lists provider ids.
+    // A changed baseUrl or header keeps both identical while changing the answer,
+    // so the config identity has to carry it or the cache serves the old quota
+    // for the whole TTL.
+    const withBaseUrl = (baseUrl: string) =>
+      ({
+        ...config,
+        models: { providers: { openai: { baseUrl } } },
+      }) as OpenClawConfig;
+
+    const first = withBaseUrl("https://one.example/v1");
+    expect(await runUsageStatus(refreshingCapableClient, () => first)).toMatchObject({
+      providers: [],
+      refreshing: true,
+    });
+    const loaded = await vi.waitFor(async () => {
+      const result = (await runUsageStatus(refreshingCapableClient, () => first)) as {
+        providers: Array<{ windows: Array<{ usedPercent: number }> }>;
+      };
+      expect(result.providers[0]?.windows[0]?.usedPercent).toBe(10);
+      return result;
+    });
+    expect((loaded as { refreshing?: boolean }).refreshing).toBeUndefined();
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
+
+    // Same credentials, same provider set, different destination: the cached
+    // quota must not answer for it.
+    const second = withBaseUrl("https://two.example/v1");
+    expect(await runUsageStatus(refreshingCapableClient, () => second)).toMatchObject({
+      providers: [],
+      refreshing: true,
+    });
+    await vi.waitFor(async () => {
+      const result = (await runUsageStatus(refreshingCapableClient, () => second)) as {
+        providers: Array<{ windows: Array<{ usedPercent: number }> }>;
+      };
+      expect(result.providers[0]?.windows[0]?.usedPercent).toBe(20);
+    });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+  });
+
   it("shares the raw snapshot with models.authStatus and invalidates on credential rotation", async () => {
     expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [], refreshing: true });
     const agentId = resolveDefaultAgentId(config);
@@ -304,6 +347,7 @@ describe("usage.status provider usage cache", () => {
       readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
+        configKey: resolveRuntimeConfigCacheKey(config),
         credentialKey: fingerprintProviderUsageCredentials({
           cfg: config,
           directApiKeys: new Map(),
