@@ -9,7 +9,6 @@ import type {
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
-  runWorkerSshCandidates,
   type WorkerSshIdentityResolver,
   workerSshCommandOptions,
   workerSshOptions,
@@ -375,29 +374,25 @@ export function createWorkerDesktopTunnels(deps: {
       try {
         abortController.signal.throwIfAborted();
         const remainingLaunchMs = Math.max(0, APP_LAUNCH_TIMEOUT_MS - (Date.now() - startedAtMs));
-        const result = await runWorkerSshCandidates(
-          prepared,
-          remainingLaunchMs,
-          async (port, remainingTimeoutMs) => {
-            return await deps.runner.run(
-              [
-                "ssh",
-                ...workerSshOptions(prepared, { forwarding: "disabled" }),
-                "-a",
-                "-x",
-                "-T",
-                "-p",
-                String(port),
-                "--",
-                prepared.sshTarget,
-                workerSshRemoteCommand([request.app.executablePath]),
-              ],
-              workerSshCommandOptions({
-                timeoutMs: remainingTimeoutMs,
-                signal: abortController.signal,
-              }),
-            );
-          },
+        // Launchers are stateful: SSH exit 255 cannot prove the remote app did not start.
+        // Use the lifecycle-selected port once so an ambiguous disconnect cannot launch twice.
+        const result = await deps.runner.run(
+          [
+            "ssh",
+            ...workerSshOptions(prepared, { forwarding: "disabled" }),
+            "-a",
+            "-x",
+            "-T",
+            "-p",
+            String(prepared.port),
+            "--",
+            prepared.sshTarget,
+            workerSshRemoteCommand([request.app.executablePath]),
+          ],
+          workerSshCommandOptions({
+            timeoutMs: remainingLaunchMs,
+            signal: abortController.signal,
+          }),
         );
         if (!successful(result)) {
           throw workerSshProcessError(result.stderr || result.stdout);
