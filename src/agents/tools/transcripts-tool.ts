@@ -182,7 +182,7 @@ async function stopTranscripts(params: {
   ctx: TranscriptsRuntimeContext;
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
-  lifecycleSession?: TranscriptSessionIdentity;
+  lifecycleToken?: symbol;
 }) {
   const sessionSelector = readTranscriptStringParam(params.rawParams, "sessionId", {
     required: true,
@@ -190,8 +190,8 @@ async function stopTranscripts(params: {
   });
   const directActive = activeSessions.get(sessionSelector);
   if (
-    params.lifecycleSession &&
-    (!directActive || !sameSessionIdentity(directActive.session, params.lifecycleSession))
+    params.lifecycleToken &&
+    (!directActive || directActive.lifecycleToken !== params.lifecycleToken)
   ) {
     return toolText(`Transcripts session no longer active: ${sessionSelector}`, {
       sessionId: sessionSelector,
@@ -210,7 +210,7 @@ async function stopTranscripts(params: {
     sameSessionIdentity(activeCandidate.session, resolvedSession);
   const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
   const session = selectedActive?.session ?? resolvedSession;
-  if (!session || (!params.lifecycleSession && !ownsTranscriptSession(params.ctx, session))) {
+  if (!session || (!params.lifecycleToken && !ownsTranscriptSession(params.ctx, session))) {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
@@ -447,7 +447,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
 } {
   let stopped = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  const startedSessions = new Map<string, TranscriptSessionIdentity>();
+  const startedSessions = new Map<string, symbol>();
   const pendingStartControllers = new Set<AbortController>();
   const pendingStarts = new Set<Promise<void>>();
 
@@ -470,6 +470,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       return;
     }
     const abortController = new AbortController();
+    const lifecycleToken = Symbol(entry.sessionId);
     pendingStartControllers.add(abortController);
     const startTask = startTranscripts({
       ctx,
@@ -477,6 +478,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       abortSignal: abortController.signal,
       startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
       configuredLifecycle: true,
+      lifecycleToken,
       rawParams: {
         action: "start",
         ...entry,
@@ -485,9 +487,8 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
     })
       .then((result) => {
         const sessionId = result.details?.sessionId;
-        const startedAt = result.details?.startedAt;
-        if (typeof sessionId === "string" && typeof startedAt === "string") {
-          startedSessions.set(sessionId, { sessionId, startedAt });
+        if (typeof sessionId === "string") {
+          startedSessions.set(sessionId, lifecycleToken);
         }
       })
       .catch((err: unknown) => {
@@ -547,17 +548,17 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         );
       }
       const store = createStore(ctx);
-      for (const startedSession of startedSessions.values()) {
+      for (const [sessionId, lifecycleToken] of startedSessions) {
         await stopTranscripts({
           ctx,
           store,
-          rawParams: { action: "stop", sessionId: startedSession.sessionId },
+          rawParams: { action: "stop", sessionId },
           // Bypass authorization only while the exact capture created by this
           // service is still active; a reused id may belong to another owner.
-          lifecycleSession: startedSession,
+          lifecycleToken,
         }).catch((err: unknown) =>
           ctx.logger.warn(
-            `transcripts autoStart stop failed session=${startedSession.sessionId}: ${
+            `transcripts autoStart stop failed session=${sessionId}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           ),

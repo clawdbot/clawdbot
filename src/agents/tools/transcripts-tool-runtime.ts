@@ -34,6 +34,8 @@ export type TranscriptsRuntimeContext = {
 type ActiveTranscriptsSession = {
   session: TranscriptSessionDescriptor;
   providerId: string;
+  // Durable timestamps can collide; lifecycle cleanup must match this exact process-owned capture.
+  lifecycleToken?: symbol;
   // Aborted starts stay active until a later stop confirms provider cleanup.
   cleanupPending?: true;
 };
@@ -213,6 +215,7 @@ export async function startTranscripts(params: {
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
   configuredLifecycle?: true;
+  lifecycleToken?: symbol;
 }) {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
@@ -321,13 +324,18 @@ export async function startTranscripts(params: {
           session,
           providerId: provider.id,
           cleanupPending: true,
+          ...(params.lifecycleToken ? { lifecycleToken: params.lifecycleToken } : {}),
         });
         throw new Error(`transcripts start aborted; provider cleanup failed: ${cleanupError}`);
       }
       throw new Error("transcripts start aborted");
     }
     startupPending = false;
-    activeSessions.set(session.sessionId, { session, providerId: provider.id });
+    activeSessions.set(session.sessionId, {
+      session,
+      providerId: provider.id,
+      ...(params.lifecycleToken ? { lifecycleToken: params.lifecycleToken } : {}),
+    });
     const effectiveAccount = session.source.accountId;
     return toolText(
       `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${formatAccountIdForToolText(effectiveAccount)}` : ""}`,
