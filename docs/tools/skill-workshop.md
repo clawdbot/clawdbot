@@ -54,12 +54,19 @@ In `auto` mode, the Gateway starts one isolated collection-review session per
 writable agent workspace each day. The session can only read skills and submit
 one complete collection reconciliation. It keeps distinct useful skills,
 rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
+Choosing `auto` intentionally authorizes those rewrites and drops without a
+second approval; `propose` and `off` do not run collection review.
 
 Every current skill must be read and receive exactly one `keep`, `write`, or
 `drop` decision. OpenClaw validates and scans every write before changing the
 workspace, serializes collection edits with a workspace lease, and retains one
 backup under the state directory. The changed collection appears in new agent
 runs; running sessions keep their existing skill snapshot.
+
+The daily boundary is persisted per workspace, so Gateway restarts do not
+repeat a successful review. Review is admitted only for collections of at most
+200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged
+and emit a Gateway health-log error instead of starting a partial review.
 
 ## Chat
 

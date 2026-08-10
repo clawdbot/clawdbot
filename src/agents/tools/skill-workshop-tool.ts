@@ -8,7 +8,10 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasRunWorkspaceSkillUsage } from "../../skills/runtime/run-usage.js";
-import type { SkillCollectionReconcileContext } from "../../skills/workshop/collection-reconcile.js";
+import {
+  MAX_RECONCILED_SKILL_BYTES,
+  type SkillCollectionReconcileContext,
+} from "../../skills/workshop/collection-reconcile.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import {
@@ -325,6 +328,21 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           ? workshopConfig.maxSkillBytes
           : SKILL_WORKSHOP_READ_MAX_CHARS;
         const truncated = skill.content.length > readMaxChars;
+        if (options.collectionReconcile) {
+          const bytes = Buffer.byteLength(skill.content);
+          const readSkillBytes = options.collectionReconcile.readSkillBytes ?? new Map();
+          const previousBytes = readSkillBytes.get(skill.skillKey) ?? 0;
+          const readByteCount =
+            (options.collectionReconcile.readByteCount ?? 0) - previousBytes + bytes;
+          if (readByteCount > MAX_RECONCILED_SKILL_BYTES) {
+            throw new ToolInputError(
+              `skill collection exceeds the ${MAX_RECONCILED_SKILL_BYTES}-byte review limit`,
+            );
+          }
+          readSkillBytes.set(skill.skillKey, bytes);
+          options.collectionReconcile.readSkillBytes = readSkillBytes;
+          options.collectionReconcile.readByteCount = readByteCount;
+        }
         // A truncated read is context, not sight of the whole skill: it earns no
         // receipt, so oversized skills cannot be patched by a reviewer that never
         // saw their later content.

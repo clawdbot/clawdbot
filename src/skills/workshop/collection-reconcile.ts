@@ -6,9 +6,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists } from "../../infra/fs-safe.js";
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import type { PluginHookSkillArtifact } from "../../plugins/hook-types.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import {
+  dispatchCommittedSkillChangeBestEffort,
+  hasCommittedSkillChangeHooks,
+  snapshotCommittedSkillArtifactBestEffort,
+} from "../lifecycle/skill-change-hook.js";
 import {
   applyWorkspaceSkillMutation,
   prepareWorkspaceSkillMutation,
@@ -19,13 +24,13 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { clearCuratedSkillLifecycle } from "./curator.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { prepareSkillProposalDraft } from "./proposal-draft.js";
+import { withSkillCollectionLock } from "./target-lock.js";
 import { assertWritableSkillTarget } from "./workspace-skill-read.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
 const BACKUP_REL_DIR = path.join("skill-workshop", "collection-backups");
-const RECONCILE_LEASE_MS = 10 * 60_000;
-const RECONCILE_LEASE_WAIT_MS = 5_000;
 export const MAX_RECONCILED_SKILLS = 200;
+export const MAX_RECONCILED_SKILL_BYTES = 240_000;
 
 export type SkillCollectionPlanEntry =
   | { action: "keep"; name: string }
@@ -41,6 +46,8 @@ export type SkillCollectionReconcileResult = {
 
 export type SkillCollectionReconcileContext = {
   readSkillHashes?: Map<string, string>;
+  readSkillBytes?: Map<string, number>;
+  readByteCount?: number;
   result?: SkillCollectionReconcileResult;
 };
 
@@ -93,16 +100,8 @@ export async function reconcileSkillCollection(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionReconcileResult> {
   const workspaceDir = path.resolve(params.workspaceDir);
-  return await withOpenClawStateLease(
-    {
-      scope: "skill-collection",
-      key: sha256Hex(workspaceDir),
-      database: { scope: "shared", options: params.env ? { env: params.env } : {} },
-      leaseMs: RECONCILE_LEASE_MS,
-      waitMs: RECONCILE_LEASE_WAIT_MS,
-      leaseLabel: "skill collection lease",
-      operationLabel: "skill-collection.reconcile",
-    },
+  const commit = await withSkillCollectionLock(
+    workspaceDir,
     async () => {
       const current = listWritableSkillCollection(workspaceDir, {
         config: params.config,
@@ -122,6 +121,24 @@ export async function reconcileSkillCollection(params: {
       });
       const backup = await createCollectionBackup({ workspaceDir, current, plan, env: params.env });
       await pruneOlderBackups(backup.backupRoot, backup.manifest.id);
+      const shouldDispatch = hasCommittedSkillChangeHooks();
+      const before = new Map<string, PluginHookSkillArtifact | undefined>();
+      if (shouldDispatch) {
+        for (const entry of plan) {
+          const existing = currentByName.get(entry.name);
+          if (entry.action === "keep" || !existing) {
+            continue;
+          }
+          before.set(
+            entry.name,
+            await snapshotCommittedSkillArtifactBestEffort({
+              skillDir: existing.baseDir,
+              skillKey: existing.name,
+              source: "workshop",
+            }),
+          );
+        }
+      }
       try {
         for (const mutation of prepared) {
           await applyWorkspaceSkillMutation(mutation);
@@ -153,20 +170,60 @@ export async function reconcileSkillCollection(params: {
         throw error;
       }
       bumpSkillsSnapshotVersion({ reason: "workshop" });
+      const changes: SkillCollectionChange[] = [];
+      if (shouldDispatch) {
+        for (const entry of plan) {
+          if (entry.action === "keep") {
+            continue;
+          }
+          const existing = currentByName.get(entry.name);
+          const skillDir = existing?.baseDir ?? path.join(workspaceDir, "skills", entry.name);
+          changes.push({
+            action: entry.action === "drop" ? "removed" : existing ? "updated" : "created",
+            before: before.get(entry.name),
+            after:
+              entry.action === "write"
+                ? await snapshotCommittedSkillArtifactBestEffort({
+                    skillDir,
+                    skillKey: entry.name,
+                    source: "workshop",
+                  })
+                : undefined,
+          });
+        }
+      }
       return {
-        backupId: backup.manifest.id,
-        kept: plan.filter((entry) => entry.action === "keep").map((entry) => entry.name),
-        written: plan.filter((entry) => entry.action === "write").map((entry) => entry.name),
-        dropped: plan
-          .filter(
-            (entry): entry is Extract<SkillCollectionPlanEntry, { action: "drop" }> =>
-              entry.action === "drop",
-          )
-          .map((entry) => ({ name: entry.name, reason: entry.reason })),
+        result: {
+          backupId: backup.manifest.id,
+          kept: plan.filter((entry) => entry.action === "keep").map((entry) => entry.name),
+          written: plan.filter((entry) => entry.action === "write").map((entry) => entry.name),
+          dropped: plan
+            .filter(
+              (entry): entry is Extract<SkillCollectionPlanEntry, { action: "drop" }> =>
+                entry.action === "drop",
+            )
+            .map((entry) => ({ name: entry.name, reason: entry.reason })),
+        },
+        changes,
       };
     },
+    params.env ? { env: params.env } : {},
   );
+  for (const change of commit.changes) {
+    await dispatchCommittedSkillChangeBestEffort({
+      ...change,
+      source: "workshop",
+      workspaceDir,
+    });
+  }
+  return commit.result;
 }
+
+type SkillCollectionChange = {
+  action: "created" | "updated" | "removed";
+  before?: PluginHookSkillArtifact;
+  after?: PluginHookSkillArtifact;
+};
 
 function validatePlan(
   input: readonly SkillCollectionPlanEntry[],
@@ -212,8 +269,16 @@ async function assertReadsAreCurrent(
   current: readonly WritableSkillCollectionEntry[],
   readSkillHashes: ReadonlyMap<string, string>,
 ): Promise<void> {
+  let totalBytes = 0;
   for (const skill of current) {
-    if (readSkillHashes.get(skill.name) !== sha256Hex(await fs.readFile(skill.filePath, "utf8"))) {
+    const content = await fs.readFile(skill.filePath, "utf8");
+    totalBytes += Buffer.byteLength(content);
+    if (totalBytes > MAX_RECONCILED_SKILL_BYTES) {
+      throw new Error(
+        `Writable skill collection exceeds the ${MAX_RECONCILED_SKILL_BYTES}-byte review limit.`,
+      );
+    }
+    if (readSkillHashes.get(skill.name) !== sha256Hex(content)) {
       throw new Error(`Skill changed after it was read: ${skill.name}`);
     }
   }

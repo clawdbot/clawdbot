@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -10,12 +10,23 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import { listWritableSkillCollection, reconcileSkillCollection } from "./collection-reconcile.js";
+import { withSkillCollectionLock } from "./target-lock.js";
+
+const dispatchCommittedSkillChangeBestEffort = vi.hoisted(() =>
+  vi.fn(async (_event: { action: string }) => {}),
+);
+vi.mock("../lifecycle/skill-change-hook.js", () => ({
+  hasCommittedSkillChangeHooks: () => true,
+  snapshotCommittedSkillArtifactBestEffort: vi.fn(async () => undefined),
+  dispatchCommittedSkillChangeBestEffort,
+}));
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir: string;
 
 beforeEach(async () => {
+  dispatchCommittedSkillChangeBestEffort.mockClear();
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-collection-state-",
@@ -55,6 +66,9 @@ describe("skill collection reconciliation", () => {
     });
 
     expect(result.dropped).toHaveLength(2);
+    expect(
+      dispatchCommittedSkillChangeBestEffort.mock.calls.map(([event]) => event.action),
+    ).toEqual(["updated", "removed", "removed"]);
     expect(await fs.readdir(path.join(workspaceDir, "skills"))).toEqual(["deploy-one"]);
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "deploy-one", "SKILL.md"), "utf8"),
@@ -114,6 +128,47 @@ describe("skill collection reconciliation", () => {
         ],
       }),
     ).rejects.toThrow("Skill changed after it was read: second");
+  });
+
+  it("waits behind the same collection commit lock used by proposal apply", async () => {
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "obsolete", description: "Obsolete procedure" },
+    ]);
+    const readSkillHashes = await readCollectionHashes();
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+
+    let settled = false;
+    const reconcile = reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      readSkillHashes,
+      plan: [{ action: "drop", name: "obsolete", reason: "obsolete" }],
+    }).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(settled).toBe(false);
+
+    releaseLock?.();
+    await heldLock;
+    await reconcile;
   });
 
   it("rejects the whole collection before a dangerous rewrite is applied", async () => {

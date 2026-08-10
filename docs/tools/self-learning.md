@@ -214,7 +214,9 @@ the additional run.
 Daily collection review also uses the configured agent model. It receives the
 names and descriptions of writable workspace skills, then reads each complete
 skill before making one atomic collection change. It has no message tool or
-general agent tools.
+general agent tools. Skill bodies are treated as untrusted evidence, not as
+instructions. A persisted per-workspace success time prevents Gateway restarts
+from repeating the review within 24 hours.
 
 Manual history scan uses a separate bounded path. It reviews up to 20 substantial
 sessions with at least six model turns, redacts recognized secrets, bounds the

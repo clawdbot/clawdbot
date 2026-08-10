@@ -60,6 +60,26 @@ describe("skill_workshop tool", () => {
     await expect(fs.access(path.join(workspaceDir, "skills", "duplicate"))).rejects.toThrow();
   });
 
+  it("bounds total collection text returned to the reviewer", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-budget-");
+    await writeWorkspaceSkills(workspaceDir, [
+      {
+        name: "oversized",
+        description: "Oversized procedure",
+        body: "x".repeat(240_001),
+      },
+    ]);
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { maxSkillBytes: 300_000 } } },
+      collectionReconcile: {},
+    });
+
+    await expect(tool.execute("read", { action: "read", skill_name: "oversized" })).rejects.toThrow(
+      "review limit",
+    );
+  });
+
   it("describes action selection and pending-proposal discovery in its schema", () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
     const schema = JSON.stringify(tool.parameters);
