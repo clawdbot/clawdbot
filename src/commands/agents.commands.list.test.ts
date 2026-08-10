@@ -28,8 +28,8 @@ const {
   summarizeBindingsMock: vi.fn(),
 }));
 
-vi.mock("./agents.command-shared.js", () => ({
-  requireValidConfig: requireValidConfigMock,
+vi.mock("./config-validation.js", () => ({
+  requireValidConfigSnapshot: requireValidConfigMock,
 }));
 
 vi.mock("./agents.providers.js", () => ({
