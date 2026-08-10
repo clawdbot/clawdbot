@@ -101,6 +101,8 @@ const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
+const WRAPPER_SHADOWING_PATH_RE =
+  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/(?:export-name-collision-baseline\.json$|ts-guard-utils\.mts$|wrapper-shadowing-baseline\.json$)))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
@@ -379,6 +381,13 @@ export function shouldRunPluginSdkSurfaceChecks(paths: string[]) {
 export function shouldRunDeprecationHygieneChecks(paths: string[]) {
   return paths.some((changedPath) =>
     DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+/** Returns whether changed files can alter wrapper-shadowing results. */
+export function shouldRunWrapperShadowingCheck(paths: string[]) {
+  return paths.some((changedPath) =>
+    WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
   );
 }
 
@@ -676,6 +685,9 @@ export function createChangedCheckPlan(
     // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
     // until their scheduled deletion PRs land.
     add("plugin boundaries", ["plugins:boundary-report:ci"]);
+  }
+  if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
+    add("wrapper shadowing", ["check:wrapper-shadowing"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(
