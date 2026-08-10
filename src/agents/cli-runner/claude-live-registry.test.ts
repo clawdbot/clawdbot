@@ -24,6 +24,7 @@ import {
 } from "../cli-runner.test-support.js";
 import {
   buildClaudeOwnerKey,
+  closeClaudeSession,
   getClaudeGeneration,
 } from "./claude-live-registry.js";
 import { runClaudeTurn } from "./claude-live-session.js";
@@ -319,6 +320,69 @@ describe("Claude live registry lifecycle", () => {
     expect(results.map((result) => result.text).toSorted()).toEqual(["one", "two"]);
     expect(live.stdin.write).toHaveBeenCalledTimes(2);
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not register a process whose pending spawn was closed", async () => {
+    let releaseSpawn: (() => void) | undefined;
+    const spawnBlocked = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const cancel = vi.fn();
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      await spawnBlocked;
+      return {
+        pid: 2349,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
+            emitClaudeInputStarted(stdoutListener, data);
+            stdoutListener?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: "closed-spawn" }),
+                JSON.stringify({ type: "result", session_id: "closed-spawn", result: "late" }),
+              ].join("\n") + "\n",
+            );
+            callback?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+
+    const context = buildPreparedCliRunContext({
+      runId: "run-close-pending-spawn",
+      sessionId: "session-close-pending-spawn",
+      backend: { liveSession: "claude-stdio" },
+    });
+    const run = runClaudeTurn({
+      context,
+      args: context.preparedBackend.backend.args ?? [],
+      env: {},
+      prompt: "hello",
+      useResume: false,
+      noOutputTimeoutMs: 1_000,
+      getProcessSupervisor: getProcessSupervisorForTest,
+      onAssistantDelta: () => {},
+      cleanup: async () => {},
+    });
+
+    await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledOnce());
+    expect(
+      getClaudeGeneration({ backendId: "claude-cli", sessionId: "session-close-pending-spawn" }),
+    ).toBeDefined();
+    await closeClaudeSession(context, "restart");
+    releaseSpawn?.();
+
+    await expect(run).rejects.toThrow("closed before handling the turn");
+    expect(
+      getClaudeGeneration({ backendId: "claude-cli", sessionId: "session-close-pending-spawn" }),
+    ).toBeUndefined();
+    expect(cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it("recovers when a required warm Claude process exits during reuse cleanup", async () => {

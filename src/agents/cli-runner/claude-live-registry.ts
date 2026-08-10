@@ -30,7 +30,7 @@ type ClaudeLiveProcessHandle = {
 
 type ClaudeLiveSessionCreate = {
   generation: string;
-  promise: Promise<ClaudeLiveProcessHandle>;
+  closeReason?: ClaudeLiveCloseReason;
 };
 
 const liveSessions = new Map<string, ClaudeLiveProcessHandle>();
@@ -80,13 +80,14 @@ export function getClaudeSession<T extends ClaudeLiveProcessHandle>(key: string)
   return liveSessions.get(key) as T | undefined;
 }
 
-export function getClaudeSessionCreate<T extends ClaudeLiveProcessHandle>(
-  key: string,
-): { generation: string; promise: Promise<T> } | undefined {
-  return liveSessionCreates.get(key) as { generation: string; promise: Promise<T> } | undefined;
-}
-
-export function registerClaudeSession(session: ClaudeLiveProcessHandle): void {
+export function registerClaudeSession(
+  session: ClaudeLiveProcessHandle,
+  pending: ClaudeLiveSessionCreate,
+): void {
+  if (liveSessionCreates.get(session.key) !== pending || pending.closeReason) {
+    session.close(pending.closeReason ?? "restart");
+    return;
+  }
   liveSessions.set(session.key, session);
   cliBackendLog.info(
     `claude live session start: provider=${session.providerId} model=${session.modelId} activeSessions=${liveSessions.size}`,
@@ -99,15 +100,14 @@ export function removeClaudeSession(session: ClaudeLiveProcessHandle): void {
   }
 }
 
-export function setClaudeSessionCreate(key: string, create: ClaudeLiveSessionCreate): void {
+export function beginClaudeSessionCreate(key: string, generation: string): ClaudeLiveSessionCreate {
+  const create = { generation };
   liveSessionCreates.set(key, create);
+  return create;
 }
 
-export function deleteClaudeSessionCreate(
-  key: string,
-  promise?: Promise<ClaudeLiveProcessHandle>,
-): void {
-  if (!promise || liveSessionCreates.get(key)?.promise === promise) {
+export function finishClaudeSessionCreate(key: string, create: ClaudeLiveSessionCreate): void {
+  if (liveSessionCreates.get(key) === create) {
     liveSessionCreates.delete(key);
   }
 }
@@ -127,7 +127,11 @@ export async function closeClaudeSession(
     session.close(reason);
     await session.waitForExit();
   }
-  liveSessionCreates.delete(key);
+  const pending = liveSessionCreates.get(key);
+  if (pending) {
+    pending.closeReason = reason;
+    liveSessionCreates.delete(key);
+  }
 }
 
 function closeOldestIdleSession(): boolean {
@@ -165,6 +169,9 @@ function resetClaudeLiveSessionsForTest(): void {
     session.close("restart");
   }
   liveSessions.clear();
+  for (const pending of liveSessionCreates.values()) {
+    pending.closeReason = "restart";
+  }
   liveSessionCreates.clear();
 }
 

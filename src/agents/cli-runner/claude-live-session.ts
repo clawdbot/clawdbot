@@ -30,13 +30,13 @@ import {
 } from "./claude-live-process.js";
 import {
   buildClaudeLiveKey,
-  deleteClaudeSessionCreate,
+  beginClaudeSessionCreate,
   enqueueClaudeTurn,
   ensureClaudeSessionCapacity,
+  finishClaudeSessionCreate,
   getClaudeSession,
   registerClaudeSession,
   removeClaudeSession,
-  setClaudeSessionCreate,
 } from "./claude-live-registry.js";
 import type { ClaudeLiveToolTerminalOutcome } from "./claude-live-turn.js";
 import { cliBackendLog } from "./log.js";
@@ -461,6 +461,7 @@ async function runSerializedClaudeTurn(
         throw error;
       }
     }
+    const pendingCreate = beginClaudeSessionCreate(key, generation);
     const createSession: Promise<ClaudeLiveProcess> = spawnClaudeProcess({
       context: params.context,
       argv,
@@ -473,10 +474,9 @@ async function runSerializedClaudeTurn(
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       supervisor: params.getProcessSupervisor(),
       cleanup,
-      onSpawned: registerClaudeSession,
+      onSpawned: (spawned) => registerClaudeSession(spawned, pendingCreate),
       onClosed: removeClaudeSession,
-    }).finally(() => deleteClaudeSessionCreate(key, createSession));
-    setClaudeSessionCreate(key, { generation, promise: createSession });
+    }).finally(() => finishClaudeSessionCreate(key, pendingCreate));
     try {
       session = await createSession;
     } catch (error) {
