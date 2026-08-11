@@ -26,7 +26,9 @@ import {
   resolveAnnounceRetryDelayMs,
 } from "./subagent-registry-helpers.js";
 import {
+  buildSafeLifecycleErrorMeta,
   markPendingFinalDelivery,
+  maskLifecycleIdentifier,
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
@@ -34,13 +36,11 @@ import {
   markRequesterSettleWakePending,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-  type SubagentLifecycleCommonContext,
-  type SubagentLifecycleCompletionContext,
-  type SubagentLifecycleCleanupContext,
-  type SubagentLifecycleWakeContext,
+import type {
+  SubagentLifecycleCommonContext,
+  SubagentLifecycleCompletionContext,
+  SubagentLifecycleCleanupContext,
+  SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 

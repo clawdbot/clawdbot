@@ -9,14 +9,14 @@ import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
-import {
-  buildSafeLifecycleErrorMeta,
+import type {
   CleanupBookkeepingParams,
-  maskLifecycleIdentifier,
-  type SubagentLifecycleWakeContext,
+  SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";

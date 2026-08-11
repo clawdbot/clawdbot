@@ -29,21 +29,19 @@ import {
   suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import {
+  buildSafeLifecycleErrorMeta,
   clearPendingFinalDelivery,
   emitCompletionEndedHookIfNeeded,
   formatAnnounceDeliveryError,
   hasPriorRequesterDeliveryMirror,
   loadPendingFinalDeliveryPayload,
   markPendingFinalDelivery,
+  maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-  type SubagentLifecycleAnnounceCleanupContext,
-} from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 type RunSubagentAnnounceFlow =

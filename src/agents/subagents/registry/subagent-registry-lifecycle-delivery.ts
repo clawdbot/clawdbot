@@ -1,10 +1,12 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
+import { formatErrorMessage, readErrorName } from "../../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
@@ -31,16 +33,32 @@ import {
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-  type SubagentLifecycleCommonContext,
-  type SubagentLifecycleOptions,
+import type {
+  SubagentLifecycleCommonContext,
+  SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
+
+export function buildSafeLifecycleErrorMeta(error: unknown): Record<string, string> {
+  const message = formatErrorMessage(error);
+  const name = readErrorName(error);
+  return name ? { name, message } : { message };
+}
+
+export function maskLifecycleIdentifier(value: string, kind: "run" | "session"): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "unknown";
+  }
+  return kind === "session"
+    ? `${trimmed.split(":").slice(0, 2).join(":") || "session"}:…`
+    : trimmed.length <= 8
+      ? "***"
+      : `${sliceUtf16Safe(trimmed, 0, 4)}…${sliceUtf16Safe(trimmed, -4)}`;
+}
 
 export const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryResult): string => {
   const errors = [

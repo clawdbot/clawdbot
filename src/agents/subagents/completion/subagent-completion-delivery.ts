@@ -317,7 +317,7 @@ export async function retrySubagentCompletionDelivery(
 export async function dismissSubagentCompletionDelivery(
   taskId: string,
   options: {
-    discardTerminalDelivery: SubagentLifecycleController["discardTerminalDelivery"];
+    discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
     databaseOptions?: OpenClawStateDatabaseOptions;
   },
 ): Promise<CompletionDeliveryRecoveryResult> {
