@@ -418,7 +418,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -479,7 +479,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -604,7 +604,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({

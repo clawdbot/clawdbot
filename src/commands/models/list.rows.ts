@@ -16,7 +16,7 @@ import {
 } from "../../agents/model-ref-shared.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
-  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
@@ -235,7 +235,7 @@ function shouldSuppressListModel(params: {
       config: params.context.cfg,
     });
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.model.provider,
     id: params.model.id,
     baseUrl: params.model.baseUrl,

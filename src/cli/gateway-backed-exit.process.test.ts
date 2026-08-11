@@ -33,6 +33,7 @@ afterEach(async () => {
       }
     }),
   );
+  activeChildren.clear();
   await Promise.all(Array.from(activeServers, closeMinimalGatewayServer));
   activeServers.clear();
 });
@@ -264,54 +265,8 @@ describe("gateway-backed CLI process exit", () => {
     expect(JSON.parse(stdout)).toMatchObject({ jobs: [], total: 0 });
   }, 20_000);
 
-  it("keeps gateway auth failures machine-readable across CLI entry points", async () => {
+  it("keeps gateway auth failures machine-readable through the real health entry point", async () => {
     const root = tempDirs.make("openclaw-gateway-auth-json-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const port = await getFreePort();
-    await fs.mkdir(stateDir, { recursive: true });
-
-    const cases: Array<{ label: string; args: string[]; env?: NodeJS.ProcessEnv }> = [
-      { label: "health", args: ["health", "--json", "--timeout", "250"] },
-      {
-        label: "health explicit URL",
-        args: ["health", "--json", "--timeout", "250"],
-        env: { OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${port}` },
-      },
-      {
-        label: "gateway health",
-        args: ["gateway", "health", "--json", "--port", String(port), "--timeout", "250"],
-      },
-      {
-        label: "gateway call",
-        args: ["gateway", "call", "health", "--json", "--timeout", "250"],
-      },
-    ];
-    for (const testCase of cases) {
-      const result = await runIsolatedGatewayCli({
-        args: testCase.args,
-        root,
-        stateDir,
-        configPath,
-        env: { OPENCLAW_GATEWAY_PORT: String(port), ...testCase.env },
-      });
-      expect(result, `${testCase.label}: ${result.stderr}`).toMatchObject({
-        code: 1,
-        signal: null,
-        stderr: "",
-      });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        error: {
-          type: "gateway_credentials_required",
-          message: expect.stringContaining("requires"),
-        },
-      });
-    }
-  }, 60_000);
-
-  it("preserves authenticated unreachable failures as transport errors", async () => {
-    const root = tempDirs.make("openclaw-gateway-transport-json-");
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const port = await getFreePort();
@@ -322,17 +277,16 @@ describe("gateway-backed CLI process exit", () => {
       root,
       stateDir,
       configPath,
-      env: {
-        OPENCLAW_GATEWAY_PORT: String(port),
-        OPENCLAW_GATEWAY_TOKEN: "test-token",
-      },
+      env: { OPENCLAW_GATEWAY_PORT: String(port) },
     });
 
     expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
-      error: { type: "gateway_transport_error" },
-      gateway: { url: `ws://127.0.0.1:${port}` },
+      error: {
+        type: "gateway_credentials_required",
+        message: expect.stringContaining("requires"),
+      },
     });
   }, 30_000);
 

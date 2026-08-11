@@ -71,7 +71,12 @@ function testModelDefinition(id: string): Model {
 vi.mock("../plugins/setup-registry.js", async () => {
   const { readFileSync } = await import("node:fs");
   return {
-    resolvePluginSetupProvider: ({ provider }: { provider: string; env: NodeJS.ProcessEnv }) => {
+    resolvePluginSetupProviderCore: ({
+      provider,
+    }: {
+      provider: string;
+      env: NodeJS.ProcessEnv;
+    }) => {
       if (provider !== "anthropic-vertex") {
         return undefined;
       }

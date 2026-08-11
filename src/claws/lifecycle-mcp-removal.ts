@@ -1,5 +1,6 @@
+import { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
-import { listConfiguredMcpServers, unsetConfiguredMcpServer } from "../config/mcp-config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { ClawRemoveError } from "./lifecycle-delete-support.js";

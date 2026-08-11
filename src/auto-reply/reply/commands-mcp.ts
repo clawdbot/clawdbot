@@ -1,10 +1,10 @@
 /** Handles /mcp commands for showing and mutating configured MCP servers. */
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
-} from "../../config/mcp-config.js";
+} from "../../agents/mcp-config-mutation.js";
+import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { redactSensitiveArgv } from "../../config/redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../../config/schema.js";

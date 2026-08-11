@@ -3148,6 +3148,11 @@ function classifyTarget(arg: string, cwd: string) {
   if (relative.startsWith("src/plugins/contracts/")) {
     return "contractsPlugin";
   }
+  // These tests share stateful runner mocks and must keep the dedicated serial
+  // owner even when their contents also qualify for a unit-fast lane.
+  if (agentVitestProjectOwners.embeddedIncompleteTurn.include.includes(relative)) {
+    return agentVitestProjectOwners.embeddedIncompleteTurn.kind;
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -3332,9 +3337,6 @@ function classifyTarget(arg: string, cwd: string) {
       relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT
     ) {
       return agentVitestProjectOwners.all.kind;
-    }
-    if (agentVitestProjectOwners.embeddedIncompleteTurn.include.includes(relative)) {
-      return agentVitestProjectOwners.embeddedIncompleteTurn.kind;
     }
     if (agentVitestProjectOwners.embeddedOverflowCompaction.include.includes(relative)) {
       return agentVitestProjectOwners.embeddedOverflowCompaction.kind;

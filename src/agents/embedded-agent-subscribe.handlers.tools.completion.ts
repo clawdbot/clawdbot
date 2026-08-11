@@ -4,15 +4,11 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
-import type {
-  AgentCommandOutputEventData,
-  AgentItemEventData,
-  AgentPatchSummaryEventData,
-} from "../infra/agent-activity-events.js";
 import {
-  emitAgentApprovalEvent,
-  emitAgentCommandOutputEvent,
-  emitAgentPatchSummaryEvent,
+  emitAgentActivityEvent,
+  type AgentCommandOutputEventData,
+  type AgentItemEventData,
+  type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -88,6 +84,7 @@ import {
   sanitizeToolResult,
 } from "./embedded-agent-subscribe.tools.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
@@ -127,6 +124,10 @@ export async function handleToolExecutionEnd(
     if (channelView) {
       // A later successful app result supersedes the earlier launch target.
       ctx.state.latestMcpAppChannelView = channelView;
+    }
+    const connectAction = readMcpConnectAction(result);
+    if (connectAction) {
+      ctx.state.latestMcpConnectAction = connectAction;
     }
   }
   try {
@@ -452,9 +453,10 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentApprovalEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "approval",
         data: approvalData,
       });
       emitAgentEventCallbackBestEffort(ctx, {
@@ -519,9 +521,10 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentCommandOutputEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "command_output",
         data: outputData,
       });
       emitAgentEventCallbackBestEffort(ctx, {
@@ -545,9 +548,10 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentApprovalEvent({
+          emitAgentActivityEvent({
             runId: ctx.params.runId,
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+            stream: "approval",
             data: approvalData,
           });
           emitAgentEventCallbackBestEffort(ctx, {
@@ -591,9 +595,10 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentPatchSummaryEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "patch",
         data: patchData,
       });
       emitAgentEventCallbackBestEffort(ctx, {

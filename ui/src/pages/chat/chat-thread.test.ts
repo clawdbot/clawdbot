@@ -169,6 +169,14 @@ function compactionMessage(id: string, metrics: Record<string, unknown> = {}) {
   };
 }
 
+function resetMessage(id: string) {
+  return {
+    role: "system",
+    timestamp: 2_000,
+    __openclaw: { kind: "reset", id },
+  };
+}
+
 function canvasToolOutput(viewId: string, title: string, preferredHeight: number): string {
   return JSON.stringify({
     kind: "canvas",
@@ -3503,6 +3511,25 @@ describe("buildCachedChatItems", () => {
       label: "Compacted history",
       metric: "saved 875.3k tokens",
     });
+  });
+
+  it("explains reset boundaries without compaction-only details", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [resetMessage("reset-1")],
+      }),
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "divider",
+      key: "divider:reset:reset-1",
+      label: "Session reset",
+      icon: "rotateCcw",
+      description: "The earlier conversation was cleared.",
+    });
+    expect(items[0]).not.toHaveProperty("metric");
+    expect(items[0]).not.toHaveProperty("action");
   });
 });
 

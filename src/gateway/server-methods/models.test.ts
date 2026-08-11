@@ -320,6 +320,14 @@ describe("models.list", () => {
               reasoning: true,
               input: ["text", "image"],
               available: true,
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "minimal", label: "minimal" },
+                { id: "low", label: "low" },
+                { id: "medium", label: "medium" },
+                { id: "high", label: "high" },
+              ],
+              thinkingDefault: "medium",
             },
           ],
         },
@@ -1583,6 +1591,47 @@ describe("models.list", () => {
       },
       undefined,
     );
+  });
+
+  it("projects ordered thinking profiles without exposing raw compatibility metadata", async () => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "reasoning-model",
+            name: "Reasoning Model",
+            provider: "demo-provider",
+            reasoning: true,
+            compat: {
+              supportedReasoningEfforts: ["max", "xhigh"],
+              privateRouteHint: "do-not-publish",
+            },
+          },
+        ]),
+      ),
+      reqId: "req-models-list-thinking-profile",
+    });
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as { models: Array<Record<string, unknown>> };
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        id: "reasoning-model",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+          { id: "xhigh", label: "xhigh" },
+          { id: "max", label: "max" },
+          { id: "ultra", label: "ultra" },
+        ],
+        thinkingDefault: "medium",
+      }),
+    ]);
+    expect(payload.models[0]).not.toHaveProperty("compat");
   });
 
   it("does not reinterpret context tokens or expose model input metadata", async () => {

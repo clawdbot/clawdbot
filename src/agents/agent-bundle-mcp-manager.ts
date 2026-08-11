@@ -1,5 +1,6 @@
 /** Session MCP runtime manager: get-or-create and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
   createCombinedSessionMcpRuntime,
   isCombinedSessionMcpRuntime,
@@ -52,12 +53,16 @@ export function createSessionMcpRuntimeManager(
   const materializeRequesterScopedRuntime = async (
     params: Parameters<SessionMcpRuntimeManager["getOrCreate"]>[0] & {
       idleTtlMs: number;
-      requesterScopedServerNames: readonly string[];
+      mcpServers: Record<string, BundleMcpServerConfig>;
+      oauthRequesterServerNames: readonly string[];
+      resolverRequesterServerNames: readonly string[];
       scopedNameSet: ReadonlySet<string>;
       safeServerNamesByServer: ReadonlyMap<string, string>;
       requesterSenderId: string;
     },
   ) => {
+    const oauthRequesterNameSet = new Set(params.oauthRequesterServerNames);
+    const resolverRequesterNameSet = new Set(params.resolverRequesterServerNames);
     const agentAccountId = normalizeOptionalString(params.agentAccountId);
     const messageChannel = normalizeOptionalString(params.messageChannel);
     const runtimeKey = buildMcpRequesterRuntimeCacheKey({
@@ -72,7 +77,7 @@ export function createSessionMcpRuntimeManager(
       logDiagnostics: false,
       manifestRegistry: params.manifestRegistry,
       includeServerNames: params.scopedNameSet,
-      redactConnectionServerNames: params.scopedNameSet,
+      redactConnectionServerNames: resolverRequesterNameSet,
       safeServerNamesByServer: params.safeServerNamesByServer,
       toolOverrides: params.toolOverrides,
     }).fingerprint;
@@ -81,6 +86,7 @@ export function createSessionMcpRuntimeManager(
         ...params,
         runtimeKey,
         fullScopedFingerprint,
+        oauthRequesterNameSet,
         agentAccountId,
         messageChannel,
         requesterScope: {
@@ -115,9 +121,12 @@ export function createSessionMcpRuntimeManager(
       const safeServerNamesByServer = assignSafeServerNames(
         Object.keys(fullConfig.loaded.mcpServers),
       );
-      const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope(
-        fullConfig.loaded.mcpServers,
-      );
+      const {
+        staticServers,
+        requesterScopedServerNames,
+        oauthRequesterServerNames,
+        resolverRequesterServerNames,
+      } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
       const hasRequesterScoped = requesterScopedServerNames.length > 0;
 
       if (!hasRequesterScoped) {
@@ -176,7 +185,9 @@ export function createSessionMcpRuntimeManager(
         const { runtimeKey, runtime: scopedRuntime } = await materializeRequesterScopedRuntime({
           ...params,
           idleTtlMs,
-          requesterScopedServerNames,
+          mcpServers: fullConfig.loaded.mcpServers,
+          oauthRequesterServerNames,
+          resolverRequesterServerNames,
           scopedNameSet,
           safeServerNamesByServer,
           requesterSenderId,
@@ -236,9 +247,11 @@ export function createSessionMcpRuntimeManager(
         manifestRegistry: params.manifestRegistry,
         toolOverrides: params.toolOverrides,
       });
-      const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(
-        fullConfig.loaded.mcpServers,
-      );
+      const {
+        requesterScopedServerNames,
+        oauthRequesterServerNames,
+        resolverRequesterServerNames,
+      } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
       if (requesterScopedServerNames.length === 0) {
         return undefined;
       }
@@ -249,7 +262,9 @@ export function createSessionMcpRuntimeManager(
       const { runtimeKey, runtime } = await materializeRequesterScopedRuntime({
         ...params,
         idleTtlMs,
-        requesterScopedServerNames,
+        mcpServers: fullConfig.loaded.mcpServers,
+        oauthRequesterServerNames,
+        resolverRequesterServerNames,
         scopedNameSet,
         safeServerNamesByServer,
         requesterSenderId,

@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (
+  state TEXT NOT NULL PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  create_time INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,

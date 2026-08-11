@@ -219,6 +219,11 @@ describe("ModelsListResultSchema", () => {
       name: "GPT Image",
       provider: "openai",
       agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "xhigh", label: "Extra high" },
+      ],
+      thinkingDefault: "xhigh",
       input: ["text", "image", "audio", "video", "document"],
     };
 
@@ -241,6 +246,7 @@ describe("ModelsListResultSchema", () => {
       {
         models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
       },
+      { models: [{ ...model, thinkingLevels: [{ id: "", label: "Off" }] }] },
       { models: [{ ...model, input: ["text", "binary"] }] },
       { models: [], providerOutcomes: [{ provider: "openai", status: "unknown" }] },
       {

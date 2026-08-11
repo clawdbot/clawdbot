@@ -2410,6 +2410,32 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("runs the final fresh doctor for convergence-only current-process changes", async () => {
+    mockGitUpdateAfterMutation();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: ["Repaired configured plugin install records."],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    const doctorCall = vi.mocked(runExec).mock.calls.find(([, args]) => args[1] === "doctor");
+    expect(doctorCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    });
+    const strictValidationCall = vi
+      .mocked(runExec)
+      .mock.calls.find(([, args]) => args[1] === "config" && args[2] === "validate");
+    expect(strictValidationCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+    });
+  });
+
   it("runs the fresh plugin doctor with the selected Node runner", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
@@ -2545,6 +2571,51 @@ describe("update-cli", () => {
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("stages plugin-changing post-core config before updated plugin migrations run", async () => {
+    syncPluginsForUpdateChannel.mockImplementationOnce(async ({ config }) =>
+      pluginSyncResult(config, true),
+    );
+
+    await runPostCoreCommand({ restart: false });
+
+    expect(lastReplaceConfigCall()).toMatchObject({
+      writeOptions: { skipPluginValidation: true },
+    });
+  });
+
+  it("runs the final fresh doctor for convergence-only post-core changes", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: ["Repaired configured plugin install records."],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await runPostCoreCommand({ restart: false });
+
+    expect(syncPluginCall()?.config).toBeDefined();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    const doctorCalls = vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor");
+    expect(doctorCalls).toHaveLength(2);
+    expect(doctorCalls[1]?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    });
+    const strictValidationCall = vi
+      .mocked(runExec)
+      .mock.calls.find(
+        ([, args]) =>
+          args[0] === FRESH_POST_UPDATE_ENTRYPOINT &&
+          args[1] === "config" &&
+          args[2] === "validate" &&
+          args[3] === "--json",
+      );
+    expect(strictValidationCall?.[2]).toMatchObject({
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+    });
   });
 
   it("keeps fresh doctor output off stdout during json post-core resume", async () => {

@@ -326,6 +326,7 @@ describe("package scripts", () => {
   it("runs web and Teams file URL coverage in Windows CI", () => {
     const script = readPackageJson().scripts["test:windows:ci"];
 
+    expect(script).toContain("src/agents/tools/media-tool-file-url.windows.test.ts");
     expect(script).toContain("src/media/web-media.file-url.windows.test.ts");
     expect(script).toContain("extensions/msteams/src/media-helpers.test.ts");
     expect(script).toContain("extensions/msteams/src/messenger.test.ts");

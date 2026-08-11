@@ -110,6 +110,7 @@ describe("media understanding attachments SSRF", () => {
     });
     expect(result).toStrictEqual({
       buffer: Buffer.from("image"),
+      classification: { mime: "image/jpeg", class: "image" },
       mime: "image/jpeg",
       fileName: "file.jpg",
       size: 5,
@@ -137,6 +138,53 @@ describe("media understanding attachments SSRF", () => {
 
     expect(result.mime).toBe("image/png");
     expect(result.fileName).toBe("image.png");
+  });
+
+  it("keeps the attachment's concrete MIME when the download reports octet-stream", async () => {
+    const url = "http://198.18.0.153/export";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response('{"report":"q3"}', {
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/json" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    // A generic download header is a non-answer; the declared concrete type
+    // must survive so allowlists and extraction see application/json.
+    expect(result.classification.mime).toBe("application/json");
+    expect(result.classification.class).toBe("text");
+  });
+
+  it("prefers the channel-declared MIME over a generic fetched text header", async () => {
+    const url = "http://198.18.0.153/export.data";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response('{"report":"q4"}', {
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "application/json" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    // Channel declaration outranks transport Content-Type: a JSON-only
+    // allowlist must keep matching when a proxy relabels the download.
+    expect(result.classification.mime).toBe("application/json");
   });
 
   it("reads local attachments inside configured roots", async () => {

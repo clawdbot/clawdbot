@@ -116,7 +116,7 @@ const installRunEmbeddedMocks = () => {
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
     return {
       ...actual,
-      resolveSessionKeyForRequest: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+      resolveSessionKeyForRequestCore: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
       resolveStoredSessionKeyForSessionId: (opts: unknown) =>
         resolveStoredSessionKeyForSessionIdMock(opts),
     };

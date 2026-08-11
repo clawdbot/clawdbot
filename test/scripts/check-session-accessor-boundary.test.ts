@@ -358,6 +358,7 @@ describe("session accessor boundary guard", () => {
         sessions["loadSessionStore"](storePath);
         readSessionStoreReadOnly(storePath);
         resolveSessionStoreEntry({ store, sessionKey });
+        resolveSessionStoreEntryCore({ store, sessionKey });
       `),
     ).toEqual([
       { line: 2, reason: 'calls legacy session store access "loadSessionStore"' },
@@ -365,6 +366,7 @@ describe("session accessor boundary guard", () => {
       { line: 4, reason: 'references legacy session store access "loadSessionStore"' },
       { line: 5, reason: 'calls legacy session store access "readSessionStoreReadOnly"' },
       { line: 6, reason: 'calls legacy session store access "resolveSessionStoreEntry"' },
+      { line: 7, reason: 'calls legacy session store access "resolveSessionStoreEntryCore"' },
     ]);
   });
 

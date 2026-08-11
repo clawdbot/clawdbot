@@ -222,7 +222,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
 }
 
 /** Resolves the session key/store targeted by one command request. */
-export function resolveSessionKeyForRequest(opts: {
+export function resolveSessionKeyForRequestCore(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;
@@ -330,7 +330,7 @@ export function resolveSession(opts: {
   clone?: boolean;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
-  const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
+  const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequestCore({
     cfg: opts.cfg,
     to: opts.to,
     sessionId: opts.sessionId,

@@ -8,7 +8,7 @@ import { runSetupModelAuthStep } from "./setup.model-auth.js";
 type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolvePluginSetupProvider =
-  typeof import("../plugins/setup-registry.js").resolvePluginSetupProvider;
+  typeof import("../plugins/setup-registry.js").resolvePluginSetupProviderCore;
 
 const applyAuthChoice = vi.hoisted(() => vi.fn());
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn());
@@ -27,7 +27,7 @@ const resolveManifestProviderAuthChoice = vi.hoisted(() =>
     choiceLabel: "Anthropic CLI",
   })),
 );
-const resolvePluginSetupProvider = vi.hoisted(() =>
+const resolvePluginSetupProviderCore = vi.hoisted(() =>
   vi.fn<ResolvePluginSetupProvider>(() => undefined),
 );
 
@@ -61,7 +61,7 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore,
 }));
 
 function createPrompter(): WizardPrompter {

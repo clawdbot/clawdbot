@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -110,7 +110,7 @@ describe("setup provider workspace trust", () => {
     };
 
     withEnv(env, () => {
-      const providers = resolvePluginProviders({
+      const providers = resolvePluginProvidersCore({
         config: {
           plugins: {
             enabled: true,
@@ -151,7 +151,7 @@ describe("setup provider workspace trust", () => {
     };
 
     withEnv(env, () => {
-      const providers = resolvePluginProviders({
+      const providers = resolvePluginProvidersCore({
         config: {
           plugins: {
             allow: ["setup-trusted-provider"],

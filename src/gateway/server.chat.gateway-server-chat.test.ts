@@ -830,7 +830,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history applies the reset boundary kept-tail cut", async () => {
+  test("chat.history applies the reset kept-tail cut and preserves its marker", async () => {
     await withMainSessionStore(async () => {
       const storePath = testState.sessionStorePath;
       if (!storePath) {
@@ -883,6 +883,7 @@ describe("gateway server chat", () => {
       expect(collectHistoryTextValues(history.payload?.messages ?? [])).toEqual([
         "kept question",
         "kept answer",
+        "Reset",
         "new turn",
       ]);
     });
