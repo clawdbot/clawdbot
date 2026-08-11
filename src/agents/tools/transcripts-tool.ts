@@ -25,6 +25,7 @@ import {
   activeSessions,
   createTranscriptSessionId,
   readTranscriptStringParam,
+  resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   sourceFromParams,
   startTranscripts,
@@ -282,14 +283,21 @@ async function importTranscripts(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
-  const providerSource = {
+  const requestedSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
+  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
   if (!provider?.importTranscript) {
-    throw new Error(`transcripts provider ${providerSource.providerId} cannot import transcripts`);
+    throw new Error(`transcripts provider ${requestedSource.providerId} cannot import transcripts`);
   }
+  const resolvedSource = resolveTranscriptSourceOwnership({
+    ctx: params.ctx,
+    operation: "import",
+    provider,
+    source: requestedSource,
+  });
+  const providerSource = resolvedSource.source;
   const session: TranscriptSessionDescriptor = {
     sessionId:
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
@@ -303,6 +311,7 @@ async function importTranscripts(params: {
       // mistake an intentional local-only import for a historical row.
       ownerBindingVersion: TRANSCRIPT_OWNER_BINDING_VERSION,
       ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+      ...resolvedSource.owner,
     },
   };
   const transcript = readTranscriptStringParam(params.rawParams, "transcript", {

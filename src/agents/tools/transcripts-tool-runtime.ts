@@ -124,6 +124,7 @@ export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntim
 
 function bindSourceToTurnAccount(params: {
   ctx: TranscriptsRuntimeContext;
+  operation: "import" | "start";
   provider: TranscriptSourceProvider;
   source: TranscriptSourceLocator;
 }): {
@@ -143,9 +144,7 @@ function bindSourceToTurnAccount(params: {
   }
   if (!providerChannels.includes(channel)) {
     throw new Error(
-      `transcripts provider ${params.provider.id} can only start from ${providerChannels.join(
-        ", ",
-      )} or a channel-less local tool`,
+      `transcripts provider ${params.provider.id} can only ${params.operation} from ${providerChannels.join(", ")} or a channel-less local tool`,
     );
   }
   if (!accountId) {
@@ -158,6 +157,54 @@ function bindSourceToTurnAccount(params: {
   return {
     source: { ...params.source, accountId },
     owner: { ownerChannel: channel, ownerAccountId: accountId },
+  };
+}
+
+export function resolveTranscriptSourceOwnership(params: {
+  ctx: TranscriptsRuntimeContext;
+  operation: "import" | "start";
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+  configuredLifecycle?: boolean;
+}): {
+  source: TranscriptSourceLocator;
+  owner?: { ownerChannel: string; ownerAccountId: string };
+} {
+  const boundSource = bindSourceToTurnAccount(params);
+  const accountBindingChannels = (params.provider.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const trustedAccountId = boundSource.owner?.ownerAccountId;
+  const sourceForResolution = trustedAccountId
+    ? { ...boundSource.source, accountId: trustedAccountId }
+    : boundSource.source;
+  const accountResolution = params.provider.resolveAccountId?.({
+    cfg: params.ctx.config,
+    source: sourceForResolution,
+  });
+  if (accountResolution && !accountResolution.ok) {
+    throw new Error(accountResolution.error);
+  }
+  const resolvedAccountId = accountResolution
+    ? accountResolution.value?.trim()
+    : sourceForResolution.accountId?.trim();
+  if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
+    );
+  }
+  const providerSource = params.provider.resolveAccountId
+    ? { ...sourceForResolution, accountId: resolvedAccountId }
+    : sourceForResolution;
+  const configuredOwner = resolveConfiguredLifecycleOwner({
+    accountBindingChannels,
+    accountId: providerSource.accountId?.trim(),
+    configuredLifecycle: params.configuredLifecycle,
+    providerId: params.provider.id,
+  });
+  return {
+    source: providerSource,
+    owner: boundSource.owner ?? configuredOwner,
   };
 }
 
@@ -236,43 +283,15 @@ export async function startTranscripts(params: {
   if (!provider?.start) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
   }
-  const boundSource = bindSourceToTurnAccount({
+  const resolvedSource = resolveTranscriptSourceOwnership({
     ctx: params.ctx,
+    operation: "start",
     provider,
     source: requestedSource,
-  });
-  const accountBindingChannels = (provider.accountBindingChannels ?? [])
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  const trustedAccountId = boundSource.owner?.ownerAccountId;
-  const sourceForResolution = trustedAccountId
-    ? { ...boundSource.source, accountId: trustedAccountId }
-    : boundSource.source;
-  const accountResolution = provider.resolveAccountId?.({
-    cfg: params.ctx.config,
-    source: sourceForResolution,
-  });
-  if (accountResolution && !accountResolution.ok) {
-    throw new Error(accountResolution.error);
-  }
-  const resolvedAccountId = accountResolution
-    ? accountResolution.value?.trim()
-    : sourceForResolution.accountId?.trim();
-  if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
-    throw new Error(
-      `transcripts provider ${provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
-    );
-  }
-  const providerSource = provider.resolveAccountId
-    ? { ...sourceForResolution, accountId: resolvedAccountId }
-    : sourceForResolution;
-  const configuredOwner = resolveConfiguredLifecycleOwner({
-    accountBindingChannels,
-    accountId: providerSource.accountId?.trim(),
     configuredLifecycle: params.configuredLifecycle,
-    providerId: provider.id,
   });
-  const owner = boundSource.owner ?? configuredOwner;
+  const providerSource = resolvedSource.source;
+  const owner = resolvedSource.owner;
   const session: TranscriptSessionDescriptor = {
     sessionId:
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
