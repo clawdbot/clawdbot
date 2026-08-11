@@ -3,7 +3,7 @@ import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
   packNpmSpecToArchive,
-  withTempDir,
+  withInstallWorkspace,
 } from "./install-source-utils.js";
 import {
   type NpmIntegrityDriftPayload,
@@ -117,7 +117,7 @@ async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params
   warn?: (message: string) => void;
   installFromArchive: (params: { archivePath: string }) => Promise<TResult>;
 }): Promise<NpmSpecArchiveInstallFlowResult<TResult>> {
-  return await withTempDir(params.tempDirPrefix, async (tmpDir) => {
+  return await withInstallWorkspace(params.tempDirPrefix, async (tmpDir) => {
     const parsedSpec = parseRegistryNpmSpec(params.spec);
     if (!parsedSpec) {
       return {

@@ -315,7 +315,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
-    upsertSessionEntry: async (
+    upsertSessionEntryCore: async (
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {

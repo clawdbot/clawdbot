@@ -3,7 +3,7 @@ import {
   resolveEnvelopeFormatOptions,
   type AgentEnvelopeParams,
 } from "../../auto-reply/envelope.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -20,7 +20,7 @@ export function createChannelInboundEnvelopeBuilder(params: {
   cfg: OpenClawConfig;
   route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
 }) {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
   const envelope = resolveEnvelopeFormatOptions(params.cfg);

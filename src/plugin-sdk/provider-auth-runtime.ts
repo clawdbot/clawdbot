@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveApiKeyForProviderCore as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
@@ -230,7 +230,8 @@ function isHttpOrigin(value: string): boolean {
   }
 }
 
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type ResolveApiKeyForProvider =
+  typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 type GetRuntimeAuthForModel =
   typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
 type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
@@ -266,8 +267,8 @@ export async function resolveApiKeyForProvider(
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   const runtimeAuth = await loadRuntimeModelAuthModule();
   const resolveApiKeyForProviderLocal =
-    typeof runtimeAuth.resolveApiKeyForProvider === "function"
-      ? runtimeAuth.resolveApiKeyForProvider
+    typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
+      ? runtimeAuth.resolveProviderRuntimeApiKey
       : resolveModelApiKeyForProvider;
   return resolveApiKeyForProviderLocal(params);
 }

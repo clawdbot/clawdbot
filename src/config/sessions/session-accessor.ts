@@ -154,7 +154,7 @@ export {
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
   updateResolvedSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.entry.js";
 export {
   createSessionEntryWithTranscript,

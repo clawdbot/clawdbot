@@ -14,6 +14,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
@@ -292,21 +293,37 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   backfillTranscriptMutationWatermarks(db);
 }
 
+const RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL = `
+CREATE TABLE state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, lease_key)
+) STRICT;
+`;
+
+function hasRetiredAgentStateLeaseSchema(db: DatabaseSync): boolean {
+  return Boolean(db.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get());
+}
+
 function migrateRetiredAgentStateLeaseSchema(
   db: DatabaseSync,
-  previousVersion: number,
+  pathname: string,
   targetVersion: number,
 ): void {
-  if (previousVersion >= 17 || targetVersion < 17) {
+  if (targetVersion < 17 || !hasRetiredAgentStateLeaseSchema(db)) {
     return;
   }
   // The 2026-08-10 tenant audit found no agent-DB lease writers after #121113;
   // #121615 removed the unreachable routing arm, so v17 retires this table.
-  db.exec(`
-    DROP INDEX IF EXISTS idx_agent_state_leases_owner;
-    DROP INDEX IF EXISTS idx_agent_state_leases_expiry;
-    DROP TABLE IF EXISTS state_leases;
-  `);
+  assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
+  // DROP TABLE also removes the retired indexes and sqlite_stat rows atomically.
+  db.exec("DROP TABLE state_leases;");
 }
 
 /** Backfill one generation token without copying or rewriting transcript rows. */
@@ -555,9 +572,13 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
   const hasPendingSessionContractMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
     hasPendingSessionKeyContractSchemaMigration(database);
-  const hasPendingAdditiveMigration =
-    hasPendingMemoryMigration || hasPendingSessionContractMigration;
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingAdditiveMigration) {
+  const hasPendingRetiredLeaseMigration =
+    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && hasRetiredAgentStateLeaseSchema(database);
+  const hasPendingCurrentVersionMigration =
+    hasPendingMemoryMigration ||
+    hasPendingSessionContractMigration ||
+    hasPendingRetiredLeaseMigration;
+  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
       allowMissingColumns: true,
       validateAfterRepair: () =>
@@ -567,9 +588,9 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }
-  // Current-version additive surfaces are installed atomically by ensureAgentSchema below.
-  // Validating them here would make the same-version repair path unreachable after an update.
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingAdditiveMigration) {
+  // Current-version convergence runs atomically in ensureAgentSchema below.
+  // Validating here would make same-version repair unreachable after an update.
+  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   }
 }
@@ -613,6 +634,7 @@ function ensureAgentSchema(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
       }
+      migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
@@ -640,7 +662,6 @@ function ensureAgentSchema(
       dropLegacyRuntimeJournalSchemas(db);
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
-      migrateRetiredAgentStateLeaseSchema(db, previousVersion, targetVersion);
       migrateConversationDeliveryTargetColumn(db);
       backfillOpenClawAgentSchema(db, previousVersion);
       // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.

@@ -139,7 +139,7 @@ const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse())
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const resolveAgentIdFromSessionKeySpy = vi.spyOn(configSessions, "resolveAgentIdFromSessionKey");
-const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
+const resolveStorePathSpy = vi.spyOn(configSessions, "resolveSessionStorePathCore");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
@@ -432,7 +432,7 @@ describe("subagent announce formatting", () => {
       getRuntimeConfig: () => configOverride,
       readSubagentSessionEntry: (_storePath, sessionKey) => loadSessionStoreFixture()[sessionKey],
       resolveAgentIdFromSessionKey: () => "main",
-      resolveStorePath: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => "/tmp/sessions.json",
     });
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");

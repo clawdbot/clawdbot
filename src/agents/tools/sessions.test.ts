@@ -7,14 +7,14 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
@@ -868,13 +868,13 @@ describe("sessions_send gating", () => {
   });
 
   it("keeps an exact-incarnation send synchronous to its scoped lifecycle grant", async () => {
-    await withTempDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
       const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
       vi.mocked(runSessionsSendA2AFlow).mockClear();
       const storePath = path.join(dir, "sessions.json");
       const targetSessionKey = "agent:main:dashboard:child";
       const targetSessionId = "child-incarnation";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: targetSessionKey, storePath },
         {
           sessionId: targetSessionId,

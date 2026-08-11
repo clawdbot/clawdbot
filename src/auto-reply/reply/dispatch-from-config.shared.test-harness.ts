@@ -156,7 +156,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
-  resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(
     (params: {
       store: Record<string, Record<string, unknown>>;
@@ -523,7 +523,7 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   loadSessionStore: sessionStoreMocks.loadSessionStore,
   readSessionEntry: sessionStoreMocks.readSessionEntry,
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
   updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));

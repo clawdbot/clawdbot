@@ -1,7 +1,10 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveStorePath, SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions.js";
+import {
+  resolveSessionStorePathCore,
+  SESSION_TOTAL_TOKENS_VERSION,
+} from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesCore,
@@ -107,7 +110,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
   const storePath =
     targetStorePath ??
     marker?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId });
   return {
     agentId,
     sessionId: targetSessionId ?? marker?.sessionId ?? params.sessionId,
@@ -139,7 +142,9 @@ export async function resetNoRealConversationTokenSnapshot(params: {
   if (!params.sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  const storePath = resolveSessionStorePathCore(params.config?.session?.store, {
+    agentId: params.agentId,
+  });
   try {
     await updateSessionEntry(
       {
@@ -222,7 +227,7 @@ export function assertAgentHarnessRunAdmission(
   const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId: admissionAgentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: admissionAgentId });
   const durableEntry = loadSessionEntry({
     ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
     readConsistency: "latest",

@@ -15,7 +15,9 @@ const resolveAgentRoute = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../config/sessions/paths.js", () => ({ resolveStorePath }));
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: resolveStorePath,
+}));
 vi.mock("../../config/sessions/session-accessor.js", () => ({ readSessionUpdatedAtCore }));
 vi.mock("../../routing/resolve-route.js", () => ({ resolveAgentRoute }));
 

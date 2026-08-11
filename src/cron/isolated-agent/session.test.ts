@@ -8,9 +8,9 @@ import { projectSessionDeliveryFields } from "../../utils/delivery-context.share
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+  resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
@@ -59,7 +59,7 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 
 describe("worker bundle producer", () => {
   it("hashes the same file manifest deterministically", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
       const packageA = path.join(root, "package-a");
       const packageB = path.join(root, "package-b");
       const files = [
@@ -94,7 +94,7 @@ describe("worker bundle producer", () => {
   });
 
   it("keeps lazy Control UI assets out of worker identity", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-control-ui-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-control-ui-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       const cacheDir = path.join(root, "cache");
       await writeFixture(packageRoot, [["dist/entry.js", "export const entry = true;\n"]]);
@@ -118,7 +118,7 @@ describe("worker bundle producer", () => {
   });
 
   it("prunes workspace deps and lifecycle fields from dev manifests", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       await writeFixture(packageRoot, [["dist/entry.js", "export const entry = true;\n"]]);
       await fs.writeFile(
@@ -155,7 +155,7 @@ describe("worker bundle producer", () => {
   });
 
   it("vendors workspace packages that the shipped dist imports", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-vendor-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-vendor-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       await writeFixture(packageRoot, [
         ["dist/entry.js", 'import { fake } from "@openclaw/fake-pkg";\nexport { fake };\n'],
@@ -229,7 +229,7 @@ describe("worker bundle producer", () => {
   });
 
   it("fails closed when a dist-referenced workspace package is not installed", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-vendor-missing-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-vendor-missing-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       await writeFixture(packageRoot, [
         ["dist/entry.js", 'import "@openclaw/fake-pkg";\nexport {};\n'],
@@ -257,7 +257,7 @@ describe("worker bundle producer", () => {
   });
 
   it("changes the hash when file contents change", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-change-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-change-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       const cacheDir = path.join(root, "cache");
       await writeFixture(packageRoot, [["dist/entry.js", "export const value = 1;\n"]]);
@@ -277,7 +277,7 @@ describe("worker bundle producer", () => {
   });
 
   it("archives the staged bytes when the source changes during packaging", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-mutation-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-mutation-" }, async (root) => {
       const baselineRoot = path.join(root, "baseline");
       const packageRoot = path.join(root, "package");
       const originalContents = "export const value = 'before';\n";
@@ -322,7 +322,7 @@ describe("worker bundle producer", () => {
   });
 
   it("owns one immutable build snapshot for its lifecycle", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-cache-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-cache-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
       const producer = createWorkerBundleProducer({
@@ -343,7 +343,7 @@ describe("worker bundle producer", () => {
   });
 
   it("retries after a failed preparation without polling a successful snapshot", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-retry-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-retry-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       const producer = createWorkerBundleProducer({
         packageRoot,
@@ -362,7 +362,7 @@ describe("worker bundle producer", () => {
   });
 
   it("replaces a corrupt content-addressed cache entry", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-corrupt-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-corrupt-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       const cacheDir = path.join(root, "cache");
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
@@ -382,7 +382,7 @@ describe("worker bundle producer", () => {
   });
 
   it.skipIf(process.platform === "win32")("rejects symlinked runtime files", async () => {
-    await withTempDir({ prefix: "openclaw-worker-bundle-symlink-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-symlink-" }, async (root) => {
       const packageRoot = path.join(root, "package");
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
       await fs.rename(
@@ -400,7 +400,7 @@ describe("worker bundle producer", () => {
 
 describe("worker npm installation artifact", () => {
   it("uses an exact registry-proven gateway package", async () => {
-    await withTempDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
+    await withTestDir({ prefix: "openclaw-worker-npm-release-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
       const packageIntegrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
       const verifyRelease = vi.fn(async () => packageIntegrity);
@@ -448,7 +448,7 @@ describe("worker npm installation artifact", () => {
   });
 
   it("rejects a source checkout even when its version is published", async () => {
-    await withTempDir({ prefix: "openclaw-worker-npm-source-" }, async (packageRoot) => {
+    await withTestDir({ prefix: "openclaw-worker-npm-source-" }, async (packageRoot) => {
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
       await fs.mkdir(path.join(packageRoot, ".git"));
       const verifyRelease = vi.fn(async () => `sha512-${Buffer.alloc(64).toString("base64")}`);

@@ -14,6 +14,7 @@ import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // Telegram tests cover bot native commands.session meta plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createTelegramGroupCommandContext,
@@ -22,7 +23,6 @@ import {
   createTelegramTopicCommandContext,
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts

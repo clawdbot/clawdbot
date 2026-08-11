@@ -927,30 +927,35 @@ export async function createBackupArchive(
         unexpectedSqliteSourcePaths.length = 0;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
-          archiveStream: tar.c(
-            {
-              gzip: true,
-              portable: true,
-              preservePaths: true,
-              linkCache: createBackupLinkCache(),
-              statCache: createBackupVolatileStatCache(volatilePlan),
-              filter: tarFilter,
-              onWriteEntry: (entry) => {
-                entry.path = remapArchiveEntryPath({
-                  entryPath: entry.path,
-                  manifestPath,
-                  archiveRoot,
-                  sourcePathRemaps,
-                });
+          createArchiveStream: (reportProgress) =>
+            tar.c(
+              {
+                gzip: true,
+                portable: true,
+                preservePaths: true,
+                linkCache: createBackupLinkCache(),
+                statCache: createBackupVolatileStatCache(volatilePlan),
+                filter: (entryPath, entryStat) => {
+                  reportProgress();
+                  return tarFilter(entryPath, entryStat);
+                },
+                onWriteEntry: (entry) => {
+                  reportProgress();
+                  entry.path = remapArchiveEntryPath({
+                    entryPath: entry.path,
+                    manifestPath,
+                    archiveRoot,
+                    sourcePathRemaps,
+                  });
+                },
               },
-            },
-            [
-              manifestPath,
-              ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
-              ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
-              ...result.assets.map((asset) => asset.sourcePath),
-            ],
-          ),
+              [
+                manifestPath,
+                ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+                ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
+                ...result.assets.map((asset) => asset.sourcePath),
+              ],
+            ),
           onPartialArchive: (partialArchive) => {
             publication.pendingCleanupArchives.push(partialArchive);
           },

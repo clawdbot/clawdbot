@@ -13,10 +13,10 @@ import {
   promptYesNoMock,
   readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
-  resolveMarketplaceInstallShortcut,
+  resolveMarketplaceInstallShortcutMock,
   runPluginsCommand,
   runtimeErrors,
-  writeConfigFile,
+  configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 import { resolvePluginInstallPreflight } from "./plugins-install-preflight.js";
 
@@ -40,7 +40,7 @@ function expectNoPluginInstallSideEffects(): void {
   expect(installPluginFromPathMock).not.toHaveBeenCalled();
   expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
   expect(installHooksFromPathMock).not.toHaveBeenCalled();
-  expect(writeConfigFile).not.toHaveBeenCalled();
+  expect(configWriteMock).not.toHaveBeenCalled();
 }
 
 describe("plugin install mutation-free preflight", () => {
@@ -54,7 +54,7 @@ describe("plugin install mutation-free preflight", () => {
   });
 
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {
-    resolveMarketplaceInstallShortcut.mockResolvedValue({
+    resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
       plugin: "superpowers",
       marketplaceName: "claude-plugins-official",

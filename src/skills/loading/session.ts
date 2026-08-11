@@ -4,7 +4,11 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
-import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+import {
+  addIgnoreRules,
+  normalizeNativePathSeparators,
+  type IgnoreMatcher,
+} from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
@@ -137,7 +141,7 @@ function loadSkillsFromDirInternal(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (!isFile || ig.ignores(relPath)) {
         continue;
       }
@@ -176,7 +180,7 @@ function loadSkillsFromDirInternal(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       const ignorePath = isDirectory ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;

@@ -25,7 +25,7 @@ import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   type AgentEventPayload,
   getAgentEventLifecycleGeneration,
@@ -155,7 +155,7 @@ describe("worker turn launcher", () => {
       sessionKey: SESSION_KEY,
       storePath: path.join(root, "sessions.json"),
     };
-    await upsertSessionEntry(sessionTarget, {
+    await upsertSessionEntryCore(sessionTarget, {
       sessionId: SESSION_ID,
       updatedAt: Date.now(),
     });
@@ -186,7 +186,7 @@ describe("worker turn launcher", () => {
   }
 
   it("rejects a transcript target after its session key is rebound", async () => {
-    await upsertSessionEntry(sessionTarget, {
+    await upsertSessionEntryCore(sessionTarget, {
       sessionId: "replacement-session",
       updatedAt: Date.now() + 1,
     });
@@ -687,7 +687,7 @@ describe("worker turn launcher", () => {
       sessionKey: "agent:worker-agent:worker-turn",
     };
     sessionFile = sessionTarget.sessionKey;
-    await upsertSessionEntry(sessionTarget, {
+    await upsertSessionEntryCore(sessionTarget, {
       sessionId: SESSION_ID,
       updatedAt: Date.now(),
     });

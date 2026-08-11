@@ -2309,7 +2309,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expectFields(extraParams, {
-      transport: "auto",
+      transport: "sse",
     });
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
@@ -2616,7 +2616,7 @@ describe("buildOpenAIProvider", () => {
     expect(allowedHostedToolTypes).toEqual(new Set());
   });
 
-  it("preserves explicit OpenAI responses transport overrides", () => {
+  it("defaults direct OpenAI API-key traffic to SSE and preserves explicit WebSocket", () => {
     const provider = buildOpenAIProvider();
 
     const explicit = {
@@ -2628,12 +2628,38 @@ describe("buildOpenAIProvider", () => {
       provider.prepareExtraParams?.({
         provider: "openai",
         modelId: "gpt-5.4",
+        model: {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5.4",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        config: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                auth: "api-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        extraParams: { effort: "high" },
+      } as never),
+    ).toEqual({ effort: "high", transport: "sse" });
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
         extraParams: explicit,
       } as never),
     ).toBe(explicit);
   });
 
-  it("does not infer Codex transport from an unselected OAuth profile", () => {
+  it("uses SSE for an unselected OAuth profile and native defaults for a Codex route", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -2654,7 +2680,7 @@ describe("buildOpenAIProvider", () => {
       } as never),
     ).toEqual({
       effort: "high",
-      transport: "auto",
+      transport: "sse",
     });
     expect(
       provider.prepareExtraParams?.({

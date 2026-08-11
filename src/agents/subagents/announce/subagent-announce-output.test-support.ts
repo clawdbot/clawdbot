@@ -8,7 +8,7 @@ type OutputDeps = Pick<
   | "readSubagentSessionEntry"
   | "readSessionMessagesAsync"
   | "resolveAgentIdFromSessionKey"
-  | "resolveStorePath"
+  | "resolveSessionStorePathCore"
 >;
 
 type Testing = {

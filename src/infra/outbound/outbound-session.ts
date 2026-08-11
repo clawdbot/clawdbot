@@ -7,7 +7,10 @@ import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { resolveStorePath, updateSessionLastRoute } from "../../config/sessions/inbound.runtime.js";
+import {
+  resolveSessionStorePathCore,
+  updateSessionLastRoute,
+} from "../../config/sessions/inbound.runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
@@ -235,7 +238,7 @@ type OutboundSessionEntryParams = {
 async function persistOutboundSessionEntry(
   params: OutboundSessionEntryParams,
 ): Promise<SessionEntry | null> {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
   });
   const ctx: MsgContext = {
