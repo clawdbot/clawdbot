@@ -276,10 +276,12 @@ export function completeGatewayBootLifecycle(
 
 /**
  * Reads the most recently recorded boot lifecycle outcome for the current
- * state directory. Returns `null` when the newest boot row is still open
- * (in progress), the outcome string otherwise, and `undefined` when the
- * lifecycle table cannot be read (fail-open — callers keep their default
- * behavior when lifecycle state is unavailable).
+ * state directory. Returns `null` only when the newest boot row is still open
+ * (in progress — a positive still-starting signal), the outcome string
+ * otherwise, and `undefined` when no boot row has been recorded or the
+ * lifecycle table cannot be read. Callers must treat only `null` as
+ * still-starting: `undefined` means there is no evidence of an in-progress
+ * boot, so the gateway must not be reported as still starting.
  */
 export function readLatestGatewayBootOutcome(
   env: NodeJS.ProcessEnv = process.env,
@@ -295,13 +297,17 @@ export function readLatestGatewayBootOutcome(
         .orderBy("started_at_ms", "desc")
         .limit(1),
     );
-    const outcome = row?.outcome;
+    if (!row) {
+      // No boot has been recorded for this state dir: not in progress.
+      return undefined;
+    }
+    const outcome = row.outcome;
     return outcome === null || outcome === undefined
       ? null
       : (outcome as GatewayBootLifecycleOutcome);
   } catch (err) {
     gatewayLifecycleLog.warn(
-      `failed to read latest gateway boot outcome; fail-open: ${String(err)}`,
+      `failed to read latest gateway boot outcome; fail-closed for still-starting: ${String(err)}`,
     );
     return undefined;
   }

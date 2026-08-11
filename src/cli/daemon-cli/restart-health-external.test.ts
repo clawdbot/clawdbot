@@ -195,6 +195,34 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("still-starting");
   });
 
+  it("reports timeout when no boot lifecycle row exists instead of still-starting", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const { readLatestGatewayBootOutcome } = await import("./restart-health.test-helpers.js");
+    // undefined = no boot row recorded or lifecycle storage unreadable:
+    // there is no evidence of an in-progress boot, so the gateway must not
+    // be reported as still starting.
+    readLatestGatewayBootOutcome.mockReturnValue(undefined);
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+      previousOwnerPid: 4200,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(killSpy).toHaveBeenCalledWith(4200, 0);
+    expect(readLatestGatewayBootOutcome).toHaveBeenCalled();
+  });
+
   it("keeps the healthy outcome for a reachable listener", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,
