@@ -356,7 +356,9 @@ describe("killProcessTree", () => {
 
     readFileSyncMock.mockImplementation((filePath: string) => {
       if (filePath === "/proc/5555/stat") {
-        if (is5555Dead) throw new Error("ENOENT");
+        if (is5555Dead) {
+          throw new Error("ENOENT");
+        }
         return "5555 (root) S 1 5555 5555 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12345";
       }
       if (filePath === "/proc/5556/stat") {
