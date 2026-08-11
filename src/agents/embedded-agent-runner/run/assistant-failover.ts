@@ -333,6 +333,7 @@ function resolveAssistantFailoverErrorMessage(params: {
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   activeErrorContext: { provider: string; model: string };
+  providerOwner?: PreparedProviderFailoverOwner;
   terminal: AgentRunAttemptTerminal;
   rateLimitFailure: boolean;
   billingFailure: boolean;

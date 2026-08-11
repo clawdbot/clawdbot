@@ -15,7 +15,17 @@ describe("provider-owned terminal error formatting", () => {
           [provider]: {
             api: "openai-completions",
             baseUrl: "https://openrouter.ai/api/v1",
-            models: [{ id: model, name: model }],
+            models: [
+              {
+                id: model,
+                name: model,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_000,
+                maxTokens: 1_024,
+              },
+            ],
           },
         },
       },
