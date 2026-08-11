@@ -23,6 +23,7 @@ import {
 import {
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
+  type PluginLoadConfig,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -93,6 +94,25 @@ describe("resolvePluginLoadCacheContext", () => {
     }).cacheKey;
 
     expect(isolatedKey).not.toBe(processHomeKey);
+  });
+
+  // #120332 round 46 (P2): capability candidates (provider auth, model/provider selection,
+  // web-search selection) join the suppression plan beside channel claims — an already-active
+  // capability owner changes neither entries nor autoEnabledReasons, so the cache identity must
+  // fingerprint the capability-candidate config inputs themselves.
+  it("keys the cache on capability-candidate config selections", () => {
+    const keyOf = (config: PluginLoadConfig) => resolvePluginLoadCacheContext({ config }).cacheKey;
+    const baseKey = keyOf({});
+
+    expect(
+      keyOf({
+        auth: { profiles: { "acme-prov:default": { provider: "acme-prov", mode: "api_key" } } },
+      }),
+    ).not.toBe(baseKey);
+    expect(
+      keyOf({ models: { providers: { "acme-prov": { baseUrl: "http://x", models: [] } } } }),
+    ).not.toBe(baseKey);
+    expect(keyOf({ tools: { web: { search: { provider: "acme-search" } } } })).not.toBe(baseKey);
   });
 
   it("partitions full and setup channel plugin load intent", () => {

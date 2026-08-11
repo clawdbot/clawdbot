@@ -104,6 +104,49 @@ describe("anchored claimants keep sibling-channel supersession", () => {
   });
 });
 
+// #120332 round 46 (P2): the per-pass preferOver cache keys claims by (plugin, channel) with a
+// collision-safe delimiter. Manifest and channel registration validation accept any nonempty
+// string, so a printable delimiter lets distinct claims share a key — plugin `acme:edge` on
+// channel `acme-c` and plugin `acme` on channel `edge:acme-c` — and the second lookup reuses
+// the first claim's replacement edges, superseding a plugin nothing replaces.
+describe("preferOver cache keys are collision-safe", () => {
+  const EDGE_COLON: RegistryPlugins[number] = {
+    id: "acme:edge",
+    origin: "global",
+    channels: ["acme-c"],
+    channelConfigs: { "acme-c": { schema: { type: "object" }, preferOver: ["acme-victim"] } },
+  };
+  const VICTIM: RegistryPlugins[number] = {
+    id: "acme-victim",
+    origin: "global",
+    channels: ["acme-c", "edge:acme-c"],
+    channelConfigs: {
+      "acme-c": { schema: { type: "object" } },
+      "edge:acme-c": { schema: { type: "object" } },
+    },
+  };
+  const PLAIN: RegistryPlugins[number] = {
+    id: "acme",
+    origin: "global",
+    channels: ["edge:acme-c"],
+    channelConfigs: { "edge:acme-c": { schema: { type: "object" } } },
+  };
+
+  it("does not reuse a colliding claim's replacement edges", () => {
+    const registry = makeRegistry([EDGE_COLON, VICTIM, PLAIN]);
+    const config: OpenClawConfig = {
+      channels: { "acme-c": { token: "c" }, "edge:acme-c": { token: "e" } },
+    };
+    const env = makeIsolatedEnv();
+    const suppressed = collectSupersededChannelClaims({ config, env, manifestRegistry: registry });
+
+    // The declared edge supersedes the victim on acme-c; the colliding cache key must not carry
+    // that edge onto plugin `acme`, which declares no replacement on edge:acme-c.
+    expect(suppressed.has(channelClaimSuppressionKey("acme-victim", "acme-c"))).toBe(true);
+    expect(suppressed.has(channelClaimSuppressionKey("acme-victim", "edge:acme-c"))).toBe(false);
+  });
+});
+
 // #120332 round 45 (P1): a channel detected from both `channels.*` settings and its credential
 // env vars is ONE logical configured channel. Presence signals dedupe per source, so the same
 // channel repeats and its claims re-decide against the landed dead fate — the recorded decision

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
   hasMeaningfulChannelConfig,
   listPotentialConfiguredChannelPresenceSignals,
@@ -24,6 +26,7 @@ import {
 } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type {
@@ -37,6 +40,7 @@ import {
 } from "./plugin-control-plane-context.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
+import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
 
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
   if (!stockRoot) {
@@ -205,6 +209,35 @@ function buildActivationMetadataHash(params: {
     .filter((signal) => signal.source === "env")
     .map((signal) => signal.channelId)
     .toSorted((left, right) => left.localeCompare(right));
+  // Capability candidates (provider auth, configured model refs, speech/worker providers,
+  // agent-harness runtimes, web-search selection) join the suppression plan beside channel
+  // claims and can change cross-channel claimant liveness. An already-active capability owner
+  // changes neither entries nor autoEnabledReasons, so those sections cannot key the
+  // difference — fingerprint the same config projections candidate detection consumes.
+  const capabilityConfig = (params.activationSource.rootConfig ?? {}) as OpenClawConfig;
+  const webSearchConfig = capabilityConfig.tools?.web?.search;
+  const sortStrings = (values: Iterable<string>) =>
+    [...values].toSorted((left, right) => left.localeCompare(right));
+  const capabilitySelections = {
+    authProviders: sortStrings(
+      Object.values(capabilityConfig.auth?.profiles ?? {}).flatMap((profile) =>
+        typeof profile?.provider === "string" ? [profile.provider] : [],
+      ),
+    ),
+    modelProviders: sortStrings(Object.keys(capabilityConfig.models?.providers ?? {})),
+    modelRefs: sortStrings(
+      collectConfiguredModelRefs(capabilityConfig, { includeChannelModelOverrides: false }).map(
+        (entry) => entry.value,
+      ),
+    ),
+    speechProviders: sortStrings(collectConfiguredSpeechProviderIds(capabilityConfig)),
+    workerProviders: sortStrings(collectConfiguredWorkerProviderIds(capabilityConfig)),
+    agentHarnessRuntimes: sortStrings(collectConfiguredAgentHarnessRuntimes(capabilityConfig)),
+    webSearchProvider:
+      webSearchConfig?.enabled !== false && typeof webSearchConfig?.provider === "string"
+        ? webSearchConfig.provider
+        : "",
+  };
 
   return createHash("sha256")
     .update(
@@ -223,6 +256,7 @@ function buildActivationMetadataHash(params: {
           params.env.OPENCLAW_MPM_CATALOG_PATHS ?? "",
         ],
         materialEntries: materialSourceEntries,
+        capabilitySelections,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )

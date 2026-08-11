@@ -154,7 +154,10 @@ export function resolveChannelClaimPreferOver(params: {
   registry: PluginManifestRegistry;
   cache: Map<string, string[]>;
 }): string[] {
-  const cacheKey = `${params.pluginId}:${params.channelId}`;
+  // NUL-delimited like `channelClaimSuppressionKey`: ids are validated only as nonempty
+  // strings, so a printable delimiter lets distinct claims collide (plugin `a:b` on channel `c`
+  // vs plugin `a` on channel `b:c`) and reuse the wrong claim's replacement edges.
+  const cacheKey = `${params.pluginId}\0${params.channelId}`;
   const cached = params.cache.get(cacheKey);
   if (cached) {
     return cached;
