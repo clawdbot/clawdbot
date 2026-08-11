@@ -259,10 +259,10 @@ describe("unit-fast vitest lane", () => {
 
   it("isolates tests that import stateful test helpers", () => {
     const files = [
+      "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
+      "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
-      "src/infra/outbound/message-action-execution.poll.test.ts",
-      "src/infra/outbound/message-action-runner.poll.test.ts",
     ];
     for (const file of files) {
       const analysis = unitFastAnalysis.find((entry) => entry.file === file);
