@@ -39,11 +39,10 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 
     Plugin auto-enable follows the same boundary: an implicitly Codex-compatible effective route can enable the Codex plugin, while explicit provider/model `agentRuntime.id: "codex"` or legacy `codex/<model>` refs require it. An `openai/*` prefix by itself does not.
 
-    Fresh OpenAI setup uses a route-specific GPT-5.6 ref: API-key setup selects
-    `openai/gpt-5.6` (the bare direct-API id resolves to Sol), while
-    ChatGPT/Codex OAuth selects exact `openai/gpt-5.6-sol` for the native Codex
-    catalog. Existing explicit primaries, including `openai/gpt-5.5`, are
-    preserved when OpenAI auth is added or refreshed. GPT-5.5 remains available
+    Fresh OpenAI API-key and ChatGPT/Codex OAuth setup select the canonical
+    `openai/gpt-5.6-sol` ref. The bare direct-API `openai/gpt-5.6` alias remains
+    supported and resolves to Sol. Existing explicit primaries, including
+    `openai/gpt-5.5`, are preserved when OpenAI auth is added or refreshed. GPT-5.5 remains available
     through either runtime as an explicit recovery choice for accounts without
     GPT-5.6 access.
 
@@ -105,8 +104,8 @@ Official provider plugins publish their own model catalog rows. These providers 
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
-- Fresh setup default: `openai/gpt-5.6`; on the direct API, the bare id resolves to Sol.
-- Example models: `openai/gpt-5.6`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`
+- Fresh setup default: `openai/gpt-5.6-sol`.
+- Example models: `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`; the bare direct-API `openai/gpt-5.6` alias remains supported.
 - Verify account/model availability with `openclaw models list --provider openai` if a specific install or API key behaves differently.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Default transport is `auto`; OpenClaw passes the transport choice to the shared model runtime.
@@ -120,7 +119,7 @@ Official provider plugins publish their own model catalog rows. These providers 
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
 }
 ```
 

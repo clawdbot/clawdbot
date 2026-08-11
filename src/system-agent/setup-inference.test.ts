@@ -2074,6 +2074,7 @@ describe("activateSetupInference", () => {
 
     const result = await activateSetupInference({
       kind: "openai-api-key",
+      modelRef: "openai/gpt-5.6",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(sourceConfig, { runtimeConfig }),
         runEmbeddedAgent: runEmbeddedAgent as never,
