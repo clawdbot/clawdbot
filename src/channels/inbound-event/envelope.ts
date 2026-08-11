@@ -3,8 +3,8 @@ import {
   resolveEnvelopeFormatOptions,
   type AgentEnvelopeParams,
 } from "../../auto-reply/envelope.js";
-import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAgentRoute,

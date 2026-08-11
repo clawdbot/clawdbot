@@ -5,8 +5,8 @@ import {
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
 import {

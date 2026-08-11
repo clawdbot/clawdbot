@@ -3,8 +3,8 @@
  */
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {

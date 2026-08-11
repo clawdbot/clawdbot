@@ -937,10 +937,10 @@ export function resetPluginsCliTestState() {
   readPersistedInstalledPluginIndexMock.mockResolvedValue(null);
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockImplementation(
     async (records) => {
-    const previous = await readPersistedInstalledPluginIndexMock();
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-    mockInstalledPluginIndexRevision += 1;
-    return { previous, revision: mockInstalledPluginIndexRevision };
+      const previous = await readPersistedInstalledPluginIndexMock();
+      mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
+      mockInstalledPluginIndexRevision += 1;
+      return { previous, revision: mockInstalledPluginIndexRevision };
     },
   );
   restorePersistedInstalledPluginIndexIfCurrentMock.mockImplementation(

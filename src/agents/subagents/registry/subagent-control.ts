@@ -5,11 +5,11 @@ import {
   resolveSubagentLabel,
   sortSubagentRuns,
 } from "../../../auto-reply/reply/subagents-utils.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
