@@ -84,6 +84,10 @@ export type ChannelHandler = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void>;
+  adoptTargetFromDelivery?: (params: {
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;

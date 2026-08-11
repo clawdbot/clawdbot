@@ -76,6 +76,12 @@ type ProviderSpecificErrorContext = {
   status?: number;
   code?: string;
   errorType?: string;
+  providerPlugin?: PreparedProviderFailoverOwner;
+};
+export type PreparedProviderFailoverOwner = {
+  id: string;
+  matchesContextOverflowError?: (ctx: ProviderSpecificErrorContext) => boolean | undefined;
+  classifyFailoverReason?: (ctx: ProviderSpecificErrorContext) => FailoverReason | null | undefined;
 };
 
 function normalizeProviderSpecificErrorContext(
@@ -98,10 +104,18 @@ export function classifyProviderPluginError(
   input: string | ProviderSpecificErrorContext,
 ): FailoverReason | null {
   const context = normalizeProviderSpecificErrorContext(input);
+  const { providerPlugin, ...providerContext } = context;
+  if (providerPlugin) {
+    const ownedContext = { ...providerContext, provider: providerPlugin.id };
+    if (providerPlugin.matchesContextOverflowError?.(ownedContext)) {
+      return "context_overflow";
+    }
+    return providerPlugin.classifyFailoverReason?.(ownedContext) ?? null;
+  }
   return (
     resolveProviderRuntimeHooks()?.classifyProviderFailoverSignalWithPlugin({
       provider: context.provider,
-      context,
+      context: providerContext,
     }) ?? null
   );
 }

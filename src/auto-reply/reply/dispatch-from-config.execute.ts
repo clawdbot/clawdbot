@@ -69,7 +69,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     shouldForwardProgressCallback,
     shouldRouteToOriginating,
     shouldSuppressDefaultToolProgressMessages,
-    sourceReplyDeliveryMode,
     trackDispatchLifecycleWork,
     typing,
     wasReplyDeliveredAsBlock,
@@ -120,8 +119,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               {
                 ...state.getReplyOptions(),
                 [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
-                sourceReplyDeliveryMode,
+                sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
+                ...state.sourceReplyDeliveryRuntimeOptions,
                 ...({
                   onDeliberateSilentTerminalReply: () => {
                     deliberateSilentTerminalReply = true;
@@ -673,7 +673,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ttsChannel: deliveryChannel,
                   suppressUserDelivery: state.suppressHookUserDelivery,
                   suppressReplyLifecycle: state.suppressHookReplyLifecycle,
-                  sourceReplyDeliveryMode,
+                  sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                   shouldRouteToOriginating,
                   originatingChannel: state.routeReplyChannel,
                   originatingTo: state.routeReplyTo,

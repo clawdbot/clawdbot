@@ -292,6 +292,23 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   backfillTranscriptMutationWatermarks(db);
 }
 
+function migrateRetiredAgentStateLeaseSchema(
+  db: DatabaseSync,
+  previousVersion: number,
+  targetVersion: number,
+): void {
+  if (previousVersion >= 17 || targetVersion < 17) {
+    return;
+  }
+  // The 2026-08-10 tenant audit found no agent-DB lease writers after #121113;
+  // #121615 removed the unreachable routing arm, so v17 retires this table.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_agent_state_leases_owner;
+    DROP INDEX IF EXISTS idx_agent_state_leases_expiry;
+    DROP TABLE IF EXISTS state_leases;
+  `);
+}
+
 /** Backfill one generation token without copying or rewriting transcript rows. */
 function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: number): void {
   // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
@@ -623,6 +640,7 @@ function ensureAgentSchema(
       dropLegacyRuntimeJournalSchemas(db);
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
+      migrateRetiredAgentStateLeaseSchema(db, previousVersion, targetVersion);
       migrateConversationDeliveryTargetColumn(db);
       backfillOpenClawAgentSchema(db, previousVersion);
       // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.

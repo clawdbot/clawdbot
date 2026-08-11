@@ -1,5 +1,6 @@
 import type { Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hasProviderTransportDispatcherPool } from "../../agents/provider-runtime-lifecycle.js";
 import {
   closeProviderTransportDispatcherPool,
   getProviderTransportDispatcherPool,
@@ -19,6 +20,14 @@ describe("PinnedDispatcherPool", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await closeProviderTransportDispatcherPool();
+  });
+
+  it("records dispatcher-pool activity only for an allocated generation", async () => {
+    expect(hasProviderTransportDispatcherPool()).toBe(false);
+    getProviderTransportDispatcherPool();
+    expect(hasProviderTransportDispatcherPool()).toBe(true);
+    await closeProviderTransportDispatcherPool();
+    expect(hasProviderTransportDispatcherPool()).toBe(false);
   });
 
   it("reuses an exact live key and closes it only at lifecycle shutdown", async () => {

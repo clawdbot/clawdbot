@@ -1,11 +1,14 @@
 import { isNixMode } from "../config/paths.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
-import { prepareGatewayRuntimeState } from "./server-runtime-state-prepare.js";
+import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
@@ -105,42 +108,11 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  ensureOpenClawCliOnPath();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
-  const bootstrap = await prepareGatewayServerBootstrap({
-    port,
-    opts,
-    log,
-    logSecrets,
-    loadWorkerEnvironmentStartupModule,
-    formatRuntimeGatewayAuthTokenWarning,
-  });
-  const runtime = await prepareGatewayRuntimeState({
-    bootstrap,
-    port,
-    opts,
-    log,
-    logChannels,
-    logHooks,
-    logPlugins,
-    gatewayRuntime,
-    resolveChannelRuntime: getChannelRuntime,
-    loadWorkerEnvironmentStartupModule,
-    loadWorkerPlacementStartupModule,
-  });
-  const lifecycleRuntime = await prepareGatewayLifecycle({
-    runtime,
-    port,
-    log,
-    logCron,
-    diagnosticsEnabled: bootstrap.diagnosticsEnabled,
-    loadGatewayCloseModule,
-    closeMcpLoopbackServerOnDemand,
-    stopTaskRegistryMaintenanceOnDemand,
-  });
+  const gatewayKernel = await createGatewayKernel(port, opts);
   const {
     beginClosePrelude,
     clearFallbackGatewayContextForServer,
@@ -150,23 +122,11 @@ export async function startGatewayServerCore(
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
     terminalSessions,
-  } = lifecycleRuntime;
+  } = gatewayKernel;
   try {
-    const coreRuntime = await startGatewayCoreRuntime({
-      lifecycleRuntime,
-      port,
-      log,
-      logDiscovery,
-      logHealth,
-      logChannels,
-      loadGatewayStartupEarlyModule,
-      loadGatewayPluginBootstrapModule,
-      loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
-    });
+    const transport = await gatewayKernel.createHttpTransport();
     await finishGatewayStartup({
-      coreRuntime,
+      kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
       log,
@@ -213,4 +173,68 @@ export async function startGatewayServerCore(
       }
     },
   };
+}
+
+/** Builds the Gateway kernel and internal dispatch surface without creating HTTP servers. */
+export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
+  ensureOpenClawCliOnPath();
+  let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
+  try {
+    const bootstrap = await prepareGatewayServerBootstrap({
+      port,
+      opts,
+      log,
+      logSecrets,
+      loadWorkerEnvironmentStartupModule,
+      formatRuntimeGatewayAuthTokenWarning,
+    });
+    const runtime = await prepareGatewayKernelState({
+      bootstrap,
+      port,
+      opts,
+      log,
+      logChannels,
+      logHooks,
+      logPlugins,
+      gatewayRuntime,
+      resolveChannelRuntime: getChannelRuntime,
+      loadWorkerEnvironmentStartupModule,
+      loadWorkerPlacementStartupModule,
+    });
+    lifecycleRuntime = await prepareGatewayLifecycle({
+      runtime,
+      port,
+      log,
+      logCron,
+      diagnosticsEnabled: bootstrap.diagnosticsEnabled,
+      loadGatewayCloseModule,
+      closeMcpLoopbackServerOnDemand,
+      stopTaskRegistryMaintenanceOnDemand,
+    });
+    if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
+      throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
+    }
+    const coreRuntime = await startGatewayCoreRuntime({
+      lifecycleRuntime,
+      port,
+      log,
+      logDiscovery,
+      logHealth,
+      logChannels,
+      loadGatewayStartupEarlyModule,
+      loadGatewayPluginBootstrapModule,
+      loadGatewayModelCatalog,
+      loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalog,
+    });
+    return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
+  } catch (error) {
+    if (lifecycleRuntime) {
+      await lifecycleRuntime.closeOnStartupFailure();
+    } else {
+      clearSecretsRuntimeSnapshot();
+      clearPluginMetadataLifecycleCaches();
+    }
+    throw error;
+  }
 }

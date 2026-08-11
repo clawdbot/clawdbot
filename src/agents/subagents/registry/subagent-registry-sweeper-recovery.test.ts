@@ -124,6 +124,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     resumeRequesterSettleWake: vi.fn(),
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
+    discardTerminalDelivery: vi.fn(),
     shouldEmitEndedHookForRun: vi.fn(() => false),
     emitSubagentEndedHookForRun,
     callGateway,

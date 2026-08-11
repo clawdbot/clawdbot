@@ -532,6 +532,7 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("routes settled turns only through an explicit harness finalizer", async () => {
+    const internalKey = "__openclawSourceReplyDeliveryRuntime";
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
     let hostAuthorityActive = true;
     const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
@@ -539,6 +540,7 @@ describe("runAgentHarnessAttempt", () => {
         hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
         expect(attempt.operation).toBe("settled-tool-finalization");
         expect(attempt).not.toHaveProperty("hostCapabilities");
+        expect(attempt).not.toHaveProperty(internalKey);
         return {
           assistant: createFinalAssistant(),
         };
@@ -553,6 +555,7 @@ describe("runAgentHarnessAttempt", () => {
     };
     registerAgentHarness(harness, { ownerPluginId: "codex" });
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
     const settledAttempt = createAttemptResult("settled");
 
     await expect(
@@ -565,6 +568,7 @@ describe("runAgentHarnessAttempt", () => {
     });
     expect(runAttempt).not.toHaveBeenCalled();
     expect(hostAuthorityActive).toBe(false);
+    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
     expect(finalizeSettledTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         settledAttempt,
@@ -638,6 +642,30 @@ describe("runAgentHarnessAttempt", () => {
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
+
+  it("strips the internal source delivery controller at the plugin harness handoff", async () => {
+    const internalKey = "__openclawSourceReplyDeliveryRuntime";
+    let handedOffRuntime: unknown;
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attemptParams) => {
+          handedOffRuntime = (attemptParams as unknown as Record<string, unknown>)[internalKey];
+          return createAttemptResult("codex");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+
+    await runAgentHarnessAttempt(params);
+
+    expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
+    expect(handedOffRuntime).toBeUndefined();
+  });
 
   it.each(["heartbeat"] as const)(
     "records %s classification on the host-owned turn candidate",

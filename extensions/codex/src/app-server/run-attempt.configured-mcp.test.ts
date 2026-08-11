@@ -69,15 +69,18 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/codex-mcp-projection")>();
   return {
     ...actual,
-    runWithCronCreatorAuthorityResolver: <T>(params: {
-      resolve: (options?: { signal?: AbortSignal }) => Promise<{
-        tools: readonly (string | { name: string; pluginId?: string })[];
-        provenance: { version: 1; source: "final-executable-surface" };
-      }>;
-      run: () => T;
-    }) => {
+    runWithCronCreatorAuthorityCapabilityResolver: (
+      params: Parameters<typeof actual.runWithCronCreatorAuthorityCapabilityResolver>[0],
+    ) => {
+      if (
+        params.capability?.active !== true ||
+        !params.runId ||
+        params.capability.runId !== params.runId
+      ) {
+        return actual.runWithCronCreatorAuthorityCapabilityResolver(params as never);
+      }
       mcpMocks.authorityResolvers.push(params.resolve);
-      return params.run();
+      return actual.runWithCronCreatorAuthorityCapabilityResolver(params as never);
     },
     materializeStaticMcpToolsForScheduledHarnessRun: async (params: Record<string, unknown>) => {
       mcpMocks.staticCalls.push(params);
@@ -200,6 +203,14 @@ function configureFakeMcp(params: ReturnType<typeof createParams>): void {
       },
     },
   };
+}
+
+function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
+  params.cronCreatorAuthorityCapability = {
+    active: true,
+    runId: params.runId,
+    signal: new AbortController().signal,
+  } as never;
 }
 
 describe("runCodexAppServerAttempt configured MCP ownership", () => {
@@ -451,6 +462,38 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
   });
 
+  it.each([
+    { name: "missing", capabilityRunId: undefined },
+    { name: "wrong-run", capabilityRunId: "other-run" },
+  ])(
+    "does not bind $name local-operator authority at Codex tool construction",
+    async (testCase) => {
+      const sessionFile = path.join(tempDir, `session-local-operator-${testCase.name}.jsonl`);
+      const params = createParams(
+        sessionFile,
+        path.join(tempDir, `workspace-local-operator-${testCase.name}`),
+      );
+      configureFakeMcp(params);
+      params.trigger = "user";
+      params.senderIsOwner = false;
+      if (testCase.capabilityRunId) {
+        params.cronCreatorAuthorityCapability = {
+          active: true,
+          runId: testCase.capabilityRunId,
+          signal: new AbortController().signal,
+        } as never;
+      }
+
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await expect(run).resolves.toBeDefined();
+
+      expect(mcpMocks.authorityResolvers).toHaveLength(0);
+    },
+  );
+
   it("lazily snapshots configured MCP through the local-operator resolver without replacing native MCP", async () => {
     const sessionFile = path.join(tempDir, "session-local-operator-mutation.jsonl");
     const params = createParams(
@@ -459,7 +502,8 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     );
     configureFakeMcp(params);
     params.trigger = "user";
-    params.senderIsOwner = true;
+    params.senderIsOwner = false;
+    admitLocalOperatorCronAuthority(params);
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
@@ -467,6 +511,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     const threadStart = harness.requests.find((request) => request.method === "thread/start")
       ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
     expect(JSON.stringify(threadStart?.config ?? {})).toContain("fake");
+    expect(JSON.stringify(threadStart?.dynamicTools ?? [])).toContain("automations");
     expect(JSON.stringify(threadStart?.dynamicTools ?? [])).not.toContain("fake__show");
     expect(mcpMocks.staticCalls).toHaveLength(0);
 
@@ -502,6 +547,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     configureFakeMcp(params);
     params.trigger = "user";
     params.senderIsOwner = true;
+    admitLocalOperatorCronAuthority(params);
     mcpMocks.staticDiagnosticNotice =
       "Configured MCP is incomplete for this scheduled run: fake: authentication required.";
 
@@ -527,6 +573,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     configureFakeMcp(params);
     params.trigger = "user";
     params.senderIsOwner = true;
+    admitLocalOperatorCronAuthority(params);
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
@@ -558,6 +605,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     configureFakeMcp(params);
     params.trigger = "user";
     params.senderIsOwner = true;
+    admitLocalOperatorCronAuthority(params);
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
@@ -585,6 +633,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     configureFakeMcp(params);
     params.trigger = "user";
     params.senderIsOwner = true;
+    admitLocalOperatorCronAuthority(params);
     let releaseFailure!: () => void;
     mcpMocks.staticFailureGate = new Promise<void>((resolve) => {
       releaseFailure = resolve;

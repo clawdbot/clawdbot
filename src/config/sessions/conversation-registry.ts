@@ -10,7 +10,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -88,7 +88,7 @@ function mapConversationRow(row: {
       ? row.role
       : undefined;
   const currentEntry = row.current_entry_json
-    ? parseSqliteSessionEntryJson({ entry_json: row.current_entry_json })
+    ? parseSessionEntryJson({ entry_json: row.current_entry_json })
     : null;
   const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
   return {

@@ -16,6 +16,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
+import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -36,6 +37,7 @@ import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.ex
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
+import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
@@ -111,6 +113,10 @@ export type RunEmbeddedAgentParams = {
   trigger?: EmbeddedRunTrigger;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
+  /** Store-private runtime authority forwarded only by the cron execution owner. */
+  scheduledRuntimeAuthority?: CronRuntimeAuthority;
+  /** A known runtime-specific authority envelope was explicitly cleared. */
+  scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
   /** Delivery target for topic/thread routing. */
@@ -270,6 +276,8 @@ export type RunEmbeddedAgentParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-stamped exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */
   cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */

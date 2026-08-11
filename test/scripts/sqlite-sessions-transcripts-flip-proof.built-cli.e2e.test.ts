@@ -11,7 +11,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../src/config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../src/config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../src/config/sessions/session-sqlite-target.js";
 import {
   connectGatewayClient,
@@ -58,12 +58,12 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
         { sessionKey: writerSessionKey, storePath },
         { sessionId: "sqlite-large-archive-writer", updatedAt: Date.now() },
       );
-      await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
       await replaceSessionEntry(
         { sessionKey: warmupSessionKey, storePath },
         { sessionId: warmupSessionId, updatedAt: Date.now() },
       );
-      await replaceSqliteTranscriptEvents(
+      await replaceTranscriptEvents(
         { sessionKey: warmupSessionKey, sessionId: warmupSessionId, storePath },
         [
           {
@@ -205,7 +205,7 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
   }, 180_000);
 });
 
-type TestTranscriptEvent = Parameters<typeof replaceSqliteTranscriptEvents>[1][number];
+type TestTranscriptEvent = Parameters<typeof replaceTranscriptEvents>[1][number];
 
 function createLargeTranscriptEvents(sessionId: string): TestTranscriptEvent[] {
   const indexedMessage = {

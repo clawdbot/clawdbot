@@ -1206,6 +1206,7 @@ export function runAgentAttempt(params: {
       ? params.opts.trustedInternalHandoff
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
+    cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,

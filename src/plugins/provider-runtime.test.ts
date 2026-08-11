@@ -1837,6 +1837,22 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("resolves prepared provider owner hints for custom routes", () => {
+    const openrouterPlugin: ProviderPlugin = {
+      id: "openrouter",
+      label: "OpenRouter",
+      auth: [],
+    };
+    resolvePluginProvidersMock.mockReturnValue([openrouterPlugin]);
+    expect(
+      resolveProviderRuntimePlugin({
+        provider: "custom-openrouter",
+        providerOwner: "openrouter",
+        modelId: "anthropic/claude-sonnet-4",
+      }),
+    ).toBe(openrouterPlugin);
+  });
+
   it("does not broad-scan failover hooks for unresolved providers with structured descriptors", () => {
     const classifyFailoverReason = vi.fn(() => "overloaded" as const);
     resolvePluginProvidersMock.mockReturnValue([

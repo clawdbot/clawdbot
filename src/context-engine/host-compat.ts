@@ -13,6 +13,16 @@ export type ContextEngineHostSupport = {
   capabilities: readonly ContextEngineHostCapability[];
 };
 
+/** Return whether an engine implements the durable method matching its declared contract. */
+export function supportsContextEngineDurableTurnAdvancement(engine: ContextEngine): boolean {
+  const contract = engine.info.transcriptSemantics?.turnAdvancementIdempotency;
+  return contract === "atomic-idempotent-v1"
+    ? typeof engine.commitTurn === "function"
+    : contract === "atomic-idempotent-turn-local-v1" &&
+        typeof engine.commitTurn === "function" &&
+        typeof engine.commitTurnLocal === "function";
+}
+
 const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "after-turn",

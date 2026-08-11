@@ -13,7 +13,7 @@ import {
   readTranscriptStatsSync,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   clearMemoryPluginState,
@@ -28,6 +28,7 @@ import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 
 const compactEmbeddedAgentSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -125,7 +126,7 @@ function loadMainSessionEntry(storePath: string): SessionEntry {
 
 async function writeTestSessionTranscript(params: {
   rootDir: string;
-  events: Parameters<typeof replaceSqliteTranscriptEvents>[1];
+  events: Parameters<typeof replaceTranscriptEvents>[1];
   sessionKey?: string;
   sessionId?: string;
 }): Promise<void> {
@@ -138,7 +139,7 @@ async function writeTestSessionTranscript(params: {
     storePath: path.join(params.rootDir, "sessions.json"),
   };
   await upsertSessionEntry(scope, { sessionId, updatedAt: 10 });
-  await replaceSqliteTranscriptEvents(scope, params.events);
+  await replaceTranscriptEvents(scope, params.events);
 }
 
 type RefreshQueuedFollowupSessionParams = {
@@ -559,7 +560,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       {
         type: "message",
         message: { role: "user", content: "Research this", __openclaw: { senderIsOwner: true } },
@@ -3208,7 +3209,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
@@ -3268,7 +3269,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "small" }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeLessThan(10 * 1024);
@@ -3329,7 +3330,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
@@ -3396,12 +3397,12 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("still byte-guards a genuine embedded SQLite-backed session", async () => {
+  it("preserves post-compaction context when prepared delivery ownership changes", async () => {
     const storePath = path.join(rootDir, "sqlite-large-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
@@ -3415,6 +3416,37 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
     const replyOperation = createReplyOperation();
+    await fs.writeFile(
+      path.join(rootDir, "AGENTS.md"),
+      [
+        "## Session Startup",
+        "Reload this required startup context after compaction.",
+        "",
+        "## Unrelated",
+        "Do not inject this section.",
+      ].join("\n"),
+      "utf-8",
+    );
+    const inboundPrompt = "current inbound metadata";
+    const messageToolPrompt = "message-tool delivery guidance";
+    const automaticPrompt = "automatic delivery guidance";
+    const independentPrompt = "group and operator context";
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionKey,
+      workspaceDir: rootDir,
+      extraSystemPrompt: [inboundPrompt, messageToolPrompt, independentPrompt].join("\n\n"),
+    });
+    const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
+      origin: "runtime_default",
+      initialMode: "message_tool_only",
+      projections: [followupRun.run],
+      promptComponentByMode: {
+        automatic: automaticPrompt,
+        message_tool_only: messageToolPrompt,
+      },
+      promptComponentOffset: inboundPrompt.length + 2,
+    });
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: {
@@ -3422,14 +3454,12 @@ describe("runMemoryFlushIfNeeded", () => {
           defaults: {
             compaction: {
               maxActiveTranscriptBytes: "10b",
+              postCompactionSections: ["Session Startup"],
             },
           },
         },
       },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionKey,
-      }),
+      followupRun,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,
       sessionEntry,
@@ -3444,6 +3474,19 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
+    expect(followupRun.run.extraSystemPrompt).toContain(
+      "Reload this required startup context after compaction.",
+    );
+
+    sourceReplyDeliveryRuntime.applyPreparedMode(followupRun.run, "automatic");
+    expect(followupRun.run.extraSystemPrompt).toContain(automaticPrompt);
+    expect(followupRun.run.extraSystemPrompt).not.toContain(messageToolPrompt);
+    expect(followupRun.run.extraSystemPrompt).toContain(inboundPrompt);
+    expect(followupRun.run.extraSystemPrompt).toContain(independentPrompt);
+    expect(followupRun.run.extraSystemPrompt).toContain(
+      "Reload this required startup context after compaction.",
+    );
+    expect(followupRun.run.extraSystemPrompt).not.toContain("Do not inject this section.");
   });
 
   it("keeps incognito preflight compaction in the process-local transcript store", async () => {
@@ -3534,7 +3577,7 @@ describe("runMemoryFlushIfNeeded", () => {
       parentId = id;
       return event;
     });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       activeRoot,
       ...abandonedBranch,
       {
@@ -3581,7 +3624,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
     await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     const sessionEntry: SessionEntry = {

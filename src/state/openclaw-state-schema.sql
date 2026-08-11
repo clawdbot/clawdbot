@@ -1421,6 +1421,25 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- Runtime-private authority is independent of job_json so downgraded writers
+-- can rewrite recognized job config without erasing or silently widening it.
+CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  authority_json TEXT,
+  authority_input_fingerprint TEXT,
+  recovery_required INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id),
+  FOREIGN KEY (store_key, job_id)
+    REFERENCES cron_jobs(store_key, job_id) ON DELETE CASCADE,
+  CHECK (recovery_required IN (0, 1)),
+  CHECK (
+    (recovery_required = 0 AND authority_json IS NOT NULL AND authority_input_fingerprint IS NOT NULL)
+    OR
+    (recovery_required = 1 AND authority_json IS NULL AND authority_input_fingerprint IS NULL)
+  )
+) STRICT;
+
 -- Scratch is separate from cron_jobs so scheduler state writes and downgraded
 -- full-row replacement preserve it. New builds prune rows explicitly on job removal.
 -- content NULL is a tombstone: it keeps the revision lineage monotonic across

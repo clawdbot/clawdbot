@@ -626,12 +626,19 @@ For an end-to-end authoring guide, see
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and
-`turnAdvancementIdempotency: "atomic-idempotent-v1"` under
-`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
-idempotent write keyed by `advancementKey`. Without the full contract, OpenClaw
-uses the legacy context path for the whole logical turn and its retries, leaves
-the configured engine unchanged, and tries that engine again on the next
-logical turn.
+`turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1"` under
+`info.transcriptSemantics`, then implement `commitTurnLocal(...)` as an atomic,
+idempotent write keyed by `advancementKey`. Retain `commitTurn(...)` with its
+v1 full-history behavior so queued work survives plugin upgrades. OpenClaw supplies only the inclusive
+accepted turn, from its admitted user entry through its terminal entry; use the
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
+rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+context path for the whole logical turn and its retries, leaves the configured
+engine unchanged, and tries that engine again on the next logical turn.
+
+The older `atomic-idempotent-v1` and `commitTurn(...)` contract supplies
+transcript history plus `prePromptMessageCount`. The turn-local declaration is
+valid only when the engine implements both commit methods.
 
 ### Deprecated memory embedding adapters
 

@@ -10,10 +10,6 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../sessions/session-lifecycle-admission.js";
-import {
-  loadExpectedRestartRecoveryClaim,
-  type ExpectedRestartRecoveryClaim,
-} from "./main-session-restart-claim.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -25,6 +21,8 @@ import {
   resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
 import {
+  type ExpectedRestartRecoveryClaim,
+  loadExpectedRestartRecoveryClaim,
   loadExpectedRestartRecoveryTarget,
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
