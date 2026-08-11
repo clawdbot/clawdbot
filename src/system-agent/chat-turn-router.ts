@@ -609,6 +609,8 @@ export class ChatTurnRouter {
   }
 
   private async startWizard(result: Promise<ChatWizardResult>): Promise<SystemAgentChatReply> {
+    // A masked channel handoff belongs only to the immediately preceding wizard.
+    this.lastSensitiveChannel = undefined;
     this.clearPendingProposals();
     const resolved = await result;
     if (resolved.sensitiveChannel) {

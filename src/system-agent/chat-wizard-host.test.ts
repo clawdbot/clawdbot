@@ -182,6 +182,28 @@ describe("SystemAgentChatEngine wizard", () => {
     });
   });
 
+  it("clears a sensitive channel before a different wizard session starts", async () => {
+    const engine = new SystemAgentChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+      runSkillsSetupWizard: async () => {},
+    });
+
+    const sensitive = await engine.handle("connect telegram");
+    expect(sensitive.text).toContain("masked terminal wizard for telegram");
+    await engine.handle("configure skills");
+
+    const handoff = await engine.handle("open channel wizard");
+    expect(handoff.action).toBe("none");
+    expect(handoff.handoff).toBeUndefined();
+    expect(handoff.text).toContain("Which channel");
+  });
+
   it("routes inference setup out of both CLI and gateway sessions", async () => {
     const common = {
       runAgentTurn: async () => null,
