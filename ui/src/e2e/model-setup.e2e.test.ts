@@ -695,7 +695,8 @@ suite.define(() => {
         await expect.poll(() => manualProviderHasFocus(lastProviderId)).toBe(true);
         await page.keyboard.press("Home");
         await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
-        await page.keyboard.press("z");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
         await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
         const zaiProviderHidden = waitForProviderHide();
         await page.keyboard.press("Enter");
