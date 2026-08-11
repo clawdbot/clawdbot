@@ -641,6 +641,51 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("preserves a finalized preview when the late media send fails", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    const mediaError = new Error("media rejected");
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.sendPayload.mockRejectedValueOnce(mediaError);
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: { text: "photo", mediaUrl: "https://example.com/a.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toMatchObject({
+      kind: "preview-finalized-partial",
+      delivery: {
+        content: "photo",
+        messageId: 999,
+        receipt: { primaryPlatformMessageId: "999" },
+      },
+      error: mediaError,
+    });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.answer?.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps throwing late media failures without a concrete preview receipt", async () => {
+    const answer = createTestDraftStream();
+    const harness = createHarness({ answerStream: answer });
+    const mediaError = new Error("media rejected");
+    answer.sendMayHaveLanded.mockReturnValue(true);
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.sendPayload.mockRejectedValueOnce(mediaError);
+
+    await expect(
+      harness.deliverLaneText({
+        laneName: "answer",
+        text: "photo",
+        payload: { text: "photo", mediaUrl: "https://example.com/a.png" },
+        infoKind: "final",
+      }),
+    ).rejects.toBe(mediaError);
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("uses normal media final delivery when no preview has streamed", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

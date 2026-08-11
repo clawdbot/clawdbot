@@ -35,6 +35,7 @@ import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js"
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramInlineButtons } from "./button-types.js";
+import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import {
   createLaneDeliveryStateTracker,
@@ -341,7 +342,10 @@ export function createTelegramDeliveryController(params: {
   };
 
   const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
-    if (params.isDispatchSuperseded() || result.kind !== "preview-finalized") {
+    if (
+      params.isDispatchSuperseded() ||
+      (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial")
+    ) {
       return;
     }
     // A finalized preview is the durable Telegram message. Emit the composite
@@ -532,8 +536,16 @@ export function createTelegramDeliveryController(params: {
         params.progress.markFinalDelivered();
       }
     }
-    if (result.kind === "preview-finalized") {
+    if (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial") {
       await emitPreviewFinalizedHook(result);
+    }
+    if (result.kind === "preview-finalized-partial") {
+      throw mergeTelegramPartialDeliveryError(result.error, {
+        receipt: result.delivery.receipt,
+        content: result.delivery.content,
+        messageIds: result.delivery.receipt.platformMessageIds,
+        visibleReplySent: true,
+      });
     }
     return result;
   };
