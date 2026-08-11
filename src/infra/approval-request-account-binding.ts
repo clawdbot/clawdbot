@@ -261,6 +261,9 @@ export function doesApprovalRequestSelectChannelAccount(params: {
   if (boundAccountId || forwardAccountIds.length > 0) {
     return false;
   }
+  // Native approval clients are intentional out-of-band surfaces: a sole eligible account may
+  // own an unbound request from another source channel. Configured approvers plus Gateway account
+  // custody are the authorization boundary.
   const eligibleAccountIds = params.eligibleAccountIds
     .map(normalizeOptionalAccountId)
     .filter((candidate): candidate is string => Boolean(candidate));

@@ -67,6 +67,23 @@ const baseRequest: ExecApprovalRequest = {
 };
 
 describe("native approval account selection", () => {
+  it("allows the sole eligible out-of-band approval account across channels", () => {
+    const discordRequest = buildRequest({
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "default",
+    });
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: discordRequest,
+        channel: "slack",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(true);
+  });
+
   it("selects only the sole eligible account when no owner is recorded", () => {
     expect(
       doesApprovalRequestSelectChannelAccount({
