@@ -7,6 +7,7 @@ import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticOutstandingBackgroundWork,
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
@@ -407,6 +408,33 @@ describe("reply run registry", () => {
           sessionKey: operation.key,
         }).lastProgressReason,
       ).toBe("global_lane:wait_ended");
+    } finally {
+      operation.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a healthy CLI background child from stale takeover", () => {
+    vi.useFakeTimers();
+    const operation = createTestReplyOperation({
+      sessionKey: "agent:main:telegram:direct:background",
+      sessionId: "session-background",
+    });
+    const refs = {
+      sessionId: operation.sessionId,
+      sessionKey: operation.key,
+      runId: "background-run",
+    };
+    try {
+      operation.setPhase("running");
+      markDiagnosticModelStartedForTest({ ...refs, provider: "claude-cli", model: "sonnet" });
+      markDiagnosticOutstandingBackgroundWork({ ...refs, outstanding: true });
+
+      vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
+      expect(isReplyRunEvidenceStale(operation)).toBe(false);
+
+      markDiagnosticOutstandingBackgroundWork({ ...refs, outstanding: false });
+      expect(isReplyRunEvidenceStale(operation)).toBe(true);
     } finally {
       operation.complete();
       vi.useRealTimers();

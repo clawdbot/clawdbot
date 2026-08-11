@@ -62,6 +62,7 @@ type SessionActivity = DiagnosticArgumentChurnActivity &
       CoreModelRequestOwnerGeneration,
       Map<string, DiagnosticRecoveryModelCall>
     >;
+    outstandingBackgroundWorkRunId?: string;
     recoveredOwnerStartEventCutoffs: Map<string, number>;
     lastProgressAt: number;
     lastProgressReason?: string;
@@ -91,12 +92,15 @@ export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
 // Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
 export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
 
-// Quiet-but-alive tool phases get the blocked-tool floor so a human message
-// cannot reclaim a healthy long tool that stuck recovery would not touch yet.
+// Quiet-but-alive tool phases and CLI-owned background work get the blocked-tool
+// floor so a human message cannot reclaim work that recovery would not touch yet.
 export function resolveRunStaleThresholdMs(
-  activity: Pick<DiagnosticSessionActivitySnapshot, "activeWorkKind">,
+  activity: Pick<
+    DiagnosticSessionActivitySnapshot,
+    "activeWorkKind" | "hasOutstandingBackgroundWork"
+  >,
 ): number {
-  return activity.activeWorkKind === "tool_call"
+  return activity.activeWorkKind === "tool_call" || activity.hasOutstandingBackgroundWork === true
     ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
     : RUN_STALE_TAKEOVER_MS;
 }
@@ -154,6 +158,7 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
+  target.outstandingBackgroundWorkRunId ??= source.outstandingBackgroundWorkRunId;
   for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
     const existing = target.activeEmbeddedRuns.get(key);
     if (existing && existing.runId !== embeddedRun.runId) {
@@ -413,6 +418,28 @@ export function markDiagnosticArgumentChurnObservation(
 
 export const markDiagnosticRunProgress: (params: RunProgressEvent) => void = applyRunProgress;
 
+/** Records CLI-owned background work in the canonical run activity state. */
+export function markDiagnosticOutstandingBackgroundWork(params: {
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  outstanding: boolean;
+}): void {
+  const runId = params.runId.trim();
+  if (!runId) {
+    return;
+  }
+  const activity = resolveSessionActivity({ ...params, runId, create: params.outstanding });
+  if (!activity) {
+    return;
+  }
+  if (params.outstanding) {
+    activity.outstandingBackgroundWorkRunId = runId;
+  } else if (activity.outstandingBackgroundWorkRunId === runId) {
+    activity.outstandingBackgroundWorkRunId = undefined;
+  }
+}
+
 function applyRunProgress(params: RunProgressEvent, semantic = false): void {
   const runId = params.runId?.trim() || undefined;
   const activity = resolveSessionActivity({ ...params, runId, create: true });
@@ -442,6 +469,9 @@ function recordRunCompleted(
   );
   if (hasCoreOwner) {
     return;
+  }
+  if (activity.outstandingBackgroundWorkRunId === event.runId) {
+    activity.outstandingBackgroundWorkRunId = undefined;
   }
   activityByRunId.delete(event.runId);
   if (activity.repeatedRequestOwnerRunId === event.runId) {
@@ -484,6 +514,10 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   // New owners must not inherit the prior owner's semantic-stall clock.
   if (activity.repeatedRequestOwnerRunId !== ownerRunId) {
     clearRepeatedRequestActivity(activity);
+  }
+  // A replacement run must not inherit a prior CLI child's liveness floor.
+  if (activity.outstandingBackgroundWorkRunId !== ownerRunId) {
+    activity.outstandingBackgroundWorkRunId = undefined;
   }
   if (activity.argumentChurnStartedAt !== undefined) {
     clearArgumentChurnActivity(activity, { runId: ownerRunId });
@@ -611,7 +645,8 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     activity.activeEmbeddedRuns.size === 0 &&
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0 &&
-    countActiveCoreModelCalls(activity) === 0
+    countActiveCoreModelCalls(activity) === 0 &&
+    activity.outstandingBackgroundWorkRunId === undefined
   ) {
     const clearedChurn = clearArgumentChurnActivity(activity, {
       runId: params.activeSessionId,
@@ -652,6 +687,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeCoreModelCalls.clear();
+  activity.outstandingBackgroundWorkRunId = undefined;
   clearArgumentChurnActivity(activity, { runId: params.activeSessionId });
   clearArgumentChurnPolicyWaits(activity, { runId: params.activeSessionId });
   clearRepeatedRequestActivity(activity);

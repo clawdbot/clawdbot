@@ -27,6 +27,7 @@ import {
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticOutstandingBackgroundWork,
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
   resolveRunStaleThresholdMs,
@@ -1032,6 +1033,27 @@ describe("repeated request liveness", () => {
   });
 });
 
+describe("outstanding CLI background work", () => {
+  it("is owned by its run and cleared only by that run", () => {
+    const ref = { sessionId: "background-session", sessionKey: "agent:main:background" };
+    markDiagnosticOutstandingBackgroundWork({ ...ref, runId: "background-run", outstanding: true });
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      hasOutstandingBackgroundWork: true,
+    });
+
+    markDiagnosticOutstandingBackgroundWork({ ...ref, runId: "replacement-run", outstanding: false });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      hasOutstandingBackgroundWork: true,
+    });
+
+    markDiagnosticOutstandingBackgroundWork({ ...ref, runId: "background-run", outstanding: false });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).not.toHaveProperty(
+      "hasOutstandingBackgroundWork",
+    );
+  });
+});
+
 describe("resolveRunStaleThresholdMs", () => {
   it.each([
     {
@@ -1052,6 +1074,11 @@ describe("resolveRunStaleThresholdMs", () => {
     {
       name: "blocked-tool floor for tool_call",
       activity: { activeWorkKind: "tool_call" as const },
+      expected: Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS),
+    },
+    {
+      name: "blocked-tool floor for CLI background work",
+      activity: { activeWorkKind: "model_call" as const, hasOutstandingBackgroundWork: true },
       expected: Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS),
     },
   ])("$name", ({ activity, expected }) => {

@@ -12,6 +12,10 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
 } from "./cli-live-session-registry.js";
@@ -184,6 +188,7 @@ afterEach(() => {
     admission.close();
   }
   mockCallGatewayTool.mockReset();
+  resetDiagnosticRunActivityForTest();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -860,6 +865,46 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     expect(approvalSignal?.aborted).toBe(true);
     approval.resolve({ id: "late-approval", decision: "allow-once" });
+  });
+
+  it("reports result-holding background work to diagnostic activity", async () => {
+    const { context } = await createExecution({ runId: "plugin-diagnostic-background" });
+    const backgroundObserved = createDeferred<void>();
+    const backgroundFinished = createDeferred<void>();
+    const run = runPlugin(
+      context,
+      async function* () {
+        yield {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
+        };
+        await backgroundFinished.promise;
+        yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
+        yield SUCCESS_RESULT;
+      },
+      { consumeStdout: () => backgroundObserved.resolve() },
+    );
+
+    try {
+      await backgroundObserved.promise;
+      expect(
+        getDiagnosticSessionActivitySnapshot({
+          sessionId: context.params.sessionId,
+          sessionKey: context.params.sessionKey,
+        }),
+      ).toMatchObject({ hasOutstandingBackgroundWork: true });
+    } finally {
+      backgroundFinished.resolve();
+    }
+
+    await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: context.params.sessionId,
+        sessionKey: context.params.sessionKey,
+      }),
+    ).not.toHaveProperty("hasOutstandingBackgroundWork");
   });
 
   it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {

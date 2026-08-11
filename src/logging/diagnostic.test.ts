@@ -21,6 +21,7 @@ import {
   createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticOutstandingBackgroundWork,
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
@@ -1212,6 +1213,35 @@ describe("stuck session diagnostics threshold", () => {
       "ageMs",
       "stateGeneration",
     ]);
+  it("keeps a quiet model call alive while its CLI background child is outstanding", () => {
+    const recoverStuckSession = vi.fn();
+    const refs = { sessionId: "s1", sessionKey: "main", runId: "background-run" };
+    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+    logSessionStateChange({ sessionId: refs.sessionId, sessionKey: refs.sessionKey, state: "processing" });
+    markDiagnosticEmbeddedRunStarted(refs);
+    markDiagnosticModelStartedForTest({
+      ...refs,
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+    markDiagnosticOutstandingBackgroundWork({ ...refs, outstanding: true });
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(getDiagnosticSessionActivitySnapshot(refs)).toMatchObject({
+      activeWorkKind: "model_call",
+      hasOutstandingBackgroundWork: true,
+    });
+
+    markDiagnosticOutstandingBackgroundWork({ ...refs, outstanding: false });
+    vi.advanceTimersByTime(30_000);
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: refs.sessionId, sessionKey: refs.sessionKey, queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
   });
 
   it("recovers stale model calls without active embedded-run ownership", async () => {

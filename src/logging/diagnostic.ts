@@ -526,10 +526,13 @@ function isStalledModelCallRecoveryEligible(params: {
   const effectiveAbortMs = Math.max(
     params.stuckSessionAbortMs,
     params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+    params.activity?.hasOutstandingBackgroundWork ? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS : 0,
   );
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
+  // A CLI-owned child is the exception: its parent stays quiet while the child
+  // works, so preserve the same floor used by stale-takeover consumers.
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&

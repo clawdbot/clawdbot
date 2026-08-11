@@ -3,7 +3,10 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
-import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
+import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  markDiagnosticOutstandingBackgroundWork,
+} from "../../logging/diagnostic-run-activity.js";
 import type {
   CliBackendExecute,
   CliBackendToolPermissionRequest,
@@ -33,6 +36,18 @@ import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
+const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
+
+function hasResultHoldingBackgroundTasks(tasks: unknown[]): boolean {
+  return tasks.some(
+    (task) =>
+      isRecord(task) &&
+      typeof task.task_type === "string" &&
+      RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(task.task_type) &&
+      typeof task.task_id === "string" &&
+      task.task_id.trim().length > 0,
+  );
+}
 
 function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
@@ -460,6 +475,13 @@ export async function executePluginOwnedProcess(params: {
         Array.isArray(next.value.tasks)
       ) {
         outstanding.background = next.value.tasks.filter(isRecord).length;
+        // The CLI's task list is authoritative while a child owns the quiet turn.
+        markDiagnosticOutstandingBackgroundWork({
+          runId: run.runId,
+          sessionId: run.sessionId,
+          sessionKey: run.sessionKey,
+          outstanding: hasResultHoldingBackgroundTasks(next.value.tasks),
+        });
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;

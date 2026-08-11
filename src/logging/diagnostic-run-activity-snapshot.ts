@@ -11,6 +11,7 @@ import {
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   hasActiveEmbeddedRun?: boolean;
+  hasOutstandingBackgroundWork?: boolean;
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
@@ -27,6 +28,7 @@ type SnapshotActivity = DiagnosticArgumentChurnActivity &
     activeModelCalls: ReadonlyMap<string, unknown>;
     activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
     activeTools: ReadonlyMap<string, SnapshotTool>;
+    outstandingBackgroundWorkRunId?: string;
     lastProgressAt: number;
     lastProgressReason?: string;
   };
@@ -71,6 +73,9 @@ export function buildDiagnosticSessionActivitySnapshot(
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
+    ...(activity.outstandingBackgroundWorkRunId
+      ? { hasOutstandingBackgroundWork: true }
+      : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
