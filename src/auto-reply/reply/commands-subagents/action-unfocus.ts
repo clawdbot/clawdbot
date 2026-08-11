@@ -5,7 +5,7 @@ import { getSessionBindingService } from "../../../infra/outbound/session-bindin
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
-import { type SubagentsCommandContext } from "./shared.js";
+import type { SubagentsCommandContext } from "./shared.js";
 
 export async function handleSubagentsUnfocusAction(
   ctx: SubagentsCommandContext,

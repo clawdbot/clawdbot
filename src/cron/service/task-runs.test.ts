@@ -296,8 +296,8 @@ describe("cron task run terminal records", () => {
         const customFinalize = vi.fn(() => []);
         setDetachedTaskLifecycleRuntime({
           ...getDetachedTaskLifecycleRuntime(),
-          createRunningTaskRunCore: customCreate,
-          finalizeTaskRunByRunIdCore: customFinalize,
+          createRunningTaskRun: customCreate,
+          finalizeTaskRunByRunId: customFinalize,
         });
         const job: CronJob = {
           id: "core-ledger-runtime",

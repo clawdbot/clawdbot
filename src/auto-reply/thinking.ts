@@ -4,6 +4,7 @@ import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinkin
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
+  resolveThinkingDefaultForModelCore,
   THINKING_LEVEL_RANKS,
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
@@ -310,11 +311,7 @@ export function resolveThinkingDefaultForModel(params: {
   if (profile.defaultLevel) {
     return profile.defaultLevel;
   }
-  const fallback = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  )?.reasoning
-    ? "low"
-    : "off";
+  const fallback = resolveThinkingDefaultForModelCore(params);
   if (fallback === "off") {
     return "off";
   }

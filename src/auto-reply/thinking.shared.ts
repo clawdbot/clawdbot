@@ -117,6 +117,18 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
 }
 
+/** Chooses the default thinking level for one provider/model catalog entry. */
+export function resolveThinkingDefaultForModelCore(params: {
+  provider: string;
+  model: string;
+  catalog?: readonly ThinkingCatalogEntry[];
+}): ThinkLevel {
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  return candidate?.reasoning ? "low" : "off";
+}
+
 type OnOffFullLevel = "off" | "on" | "full";
 
 function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
