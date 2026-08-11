@@ -61,13 +61,16 @@ describe("vitest E2E global setup", () => {
     );
   });
 
-  it("uses an exact-run prebuilt dist without rebuilding it", async () => {
-    const runCommand = vi.fn<SetupCommandRunner>();
+  it.each(["OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"] as const)(
+    "skips rebuilding when %s is set",
+    async (envName) => {
+      const runCommand = vi.fn<SetupCommandRunner>();
 
-    await runE2eGlobalSetup(runCommand, { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      await runE2eGlobalSetup(runCommand, { [envName]: "1" });
 
-    expect(runCommand).not.toHaveBeenCalled();
-  });
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
 
   posixIt("forwards output and SIGTERM through the runner process group", async () => {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-setup-group-"));

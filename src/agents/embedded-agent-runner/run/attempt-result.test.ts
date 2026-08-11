@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { completeEmbeddedAttemptResult, createMcpAttemptCarryover } from "./attempt-result.js";
 
 function completeResult(params?: {
+  successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
@@ -59,6 +60,7 @@ function completeResult(params?: {
       terminal: { kind: "ok" },
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
+      successfulNestedToolNames: params?.successfulNestedToolNames,
       yieldDetected: false,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
@@ -154,6 +156,13 @@ describe("attempt result projection", () => {
         asyncTaskId: "task-1",
       },
     ]);
+  });
+
+  it("projects successful nested tool names from settled attempt state", () => {
+    expect(
+      completeResult({ successfulNestedToolNames: ["read", "memory_search"] })
+        .successfulNestedToolNames,
+    ).toEqual(["read", "memory_search"]);
   });
 
   it("projects pending media and voice fields", () => {

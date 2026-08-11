@@ -20,6 +20,7 @@ import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -221,17 +222,31 @@ export function createMarkdownParser(): MarkdownIt {
     },
   });
 
-  // Override default link validator to allow all URLs through to renderers.
-  // marked.js does not validate URLs at all — it generates <a>/<img> tags for
-  // everything and relies on DOMPurify to strip dangerous schemes.
-  //
-  // We match this behavior exactly:
-  // - All URLs pass validation, including javascript:, vbscript:, file:, data:
-  // - Images: renderer.rules.image shows alt text for non-data-image URLs
-  // - Links: DOMPurify strips dangerous href schemes, leaving safe anchor text
-  // - Blocking at validateLink would skip token generation entirely, causing raw
-  //   markdown source to appear instead of graceful fallbacks.
+  // Keep label tokens for invalid destinations; the rule below removes only the
+  // link wrapper so rejected Markdown stays readable without a false affordance.
   markdownParser.validateLink = () => true;
+
+  markdownParser.core.ruler.after("linkify", "disallowed-link-schemes", (state) => {
+    for (const blockToken of state.tokens) {
+      const children = blockToken.children;
+      if (blockToken.type !== "inline" || !children) {
+        continue;
+      }
+      let hideClose = false;
+      for (const token of children) {
+        if (
+          token.type === "link_open" &&
+          DISALLOWED_LINK_SCHEME_RE.test(token.attrGet("href") ?? "")
+        ) {
+          token.hidden = true;
+          hideClose = true;
+        } else if (token.type === "link_close" && hideClose) {
+          token.hidden = true;
+          hideClose = false;
+        }
+      }
+    }
+  });
 
   // Trim trailing CJK characters from auto-linked URLs (RFC 3986: raw CJK is
   // not valid in URLs). markdown-it's built-in linkify for https:// URLs may

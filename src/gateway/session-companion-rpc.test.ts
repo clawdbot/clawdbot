@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
+import {
+  notifySessionCompanionPrepared,
+  registerSessionCompanionProgress,
+} from "./session-companion-progress.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 
 async function invoke(
@@ -11,7 +16,10 @@ async function invoke(
     state?: ReturnType<typeof vi.fn>;
     reset?: ReturnType<typeof vi.fn>;
   },
-  client: { connId?: string } = { connId: "conn-1" },
+  client: { connId?: string; connect?: { caps?: string[] } } = {
+    connId: "conn-1",
+    connect: { caps: [] },
+  },
 ) {
   const respond = vi.fn();
   await sessionCompanionHandlers[method]?.({
@@ -24,6 +32,35 @@ async function invoke(
 }
 
 describe("session companion RPC", () => {
+  it("keeps the first progress owner and isolates callback failures", () => {
+    const first = vi.fn(() => {
+      throw new Error("presentation failed");
+    });
+    const second = vi.fn();
+    const clearFirst = registerSessionCompanionProgress({
+      connId: "conn-1",
+      sessionKey: "agent:main:main",
+      listener: first,
+    });
+    const clearSecond = registerSessionCompanionProgress({
+      connId: "conn-1",
+      sessionKey: "agent:main:main",
+      listener: second,
+    });
+
+    expect(() =>
+      notifySessionCompanionPrepared({
+        connId: "conn-1",
+        empty: false,
+        sessionKey: "agent:main:main",
+      }),
+    ).not.toThrow();
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).not.toHaveBeenCalled();
+    clearSecond();
+    clearFirst();
+  });
+
   it("dispatches a valid ask and returns its timestamp", async () => {
     const ask = vi.fn(async () => ({ answer: "It is checking the fix.", ts: 123 }));
     const respond = await invoke(
@@ -41,6 +78,36 @@ describe("session companion RPC", () => {
       answer: "It is checking the fix.",
       ts: 123,
     });
+  });
+
+  it("emits progress only after context is ready, then returns the answer", async () => {
+    const ask = vi.fn(async () => {
+      notifySessionCompanionPrepared({
+        connId: "conn-1",
+        empty: false,
+        sessionKey: "agent:main:main",
+      });
+      return { answer: "It is checking the fix.", ts: 123 };
+    });
+    const respond = await invoke(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "What is happening?" },
+      { ask },
+      {
+        connId: "conn-1",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS] },
+      },
+    );
+
+    expect(ask).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      question: "What is happening?",
+      connId: "conn-1",
+    });
+    expect(respond.mock.calls).toEqual([
+      [true, { status: "accepted", empty: false }],
+      [true, { answer: "It is checking the fix.", ts: 123 }],
+    ]);
   });
 
   it.each([
@@ -91,6 +158,33 @@ describe("session companion RPC", () => {
         code: "UNAVAILABLE",
         retryable: true,
         details: { code: GatewayErrorDetailCodes.SESSION_COMPANION_BUSY },
+      }),
+    );
+  });
+
+  it("returns a retryable typed context-read failure", async () => {
+    const ask = vi.fn(async () => {
+      throw new SessionCompanionAskError(
+        "context-unavailable",
+        "The selected session history could not be loaded.",
+      );
+    });
+    const respond = await invoke(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "Why?" },
+      { ask },
+      {
+        connId: "conn-1",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS] },
+      },
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { reason: "context-unavailable" },
       }),
     );
   });
