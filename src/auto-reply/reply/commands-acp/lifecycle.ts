@@ -33,8 +33,8 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { commandReply } from "../command-gates.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpBindingLabelNoun,
