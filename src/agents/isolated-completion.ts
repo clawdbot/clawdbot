@@ -596,7 +596,10 @@ export async function runIsolatedCompletion(
           }
         }
         if (!result) {
-          throw firstError ?? new Error("No prepared auth attempts.");
+          if (firstError instanceof Error) {
+            throw firstError;
+          }
+          throw new Error("No prepared auth attempt succeeded.", { cause: firstError });
         }
       } else {
         const authorization = await prepareHostAuthorization({
