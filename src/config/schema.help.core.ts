@@ -142,7 +142,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
   "gateway.remote.transport":
-    'Remote connection transport: "direct" connects to a secure wss:// Gateway endpoint; "ssh" is the fallback tunnel transport.',
+    'Remote connection transport: "direct" is the default for secure WSS endpoints; trusted private ws:// URLs may be configured manually. "ssh" is the fallback tunnel transport.',
   "gateway.reload":
     "Live config-reload policy for how edits are applied and when full restarts are triggered. Keep hybrid behavior for safest operational updates unless debugging reload internals.",
   "gateway.tls":

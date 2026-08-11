@@ -521,7 +521,7 @@ final class AppState {
         let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
         let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
+        let storedRemoteTarget = AppDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
         let configRemoteUrl = configRemoteResolution.directURL?.absoluteString

@@ -46,14 +46,14 @@ enum GatewayRemoteConfig {
 
     static func resolveTransport(
         root: [String: Any],
-        defaults: UserDefaults = .standard) -> AppState.RemoteTransport
+        defaults: UserDefaults = AppDefaults.standard) -> AppState.RemoteTransport
     {
         self.resolveTransportResolution(root: root, defaults: defaults).transport
     }
 
     static func resolveTransportResolution(
         root: [String: Any],
-        defaults: UserDefaults = .standard) -> TransportResolution
+        defaults: UserDefaults = AppDefaults.standard) -> TransportResolution
     {
         let explicit = self.resolveExplicitTransport(root: root)
         switch explicit {
