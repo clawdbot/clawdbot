@@ -152,7 +152,10 @@ vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-vi.mock("./subagents/registry/subagent-registry-read.js", () => subagentRegistryRuntimeMock);
+vi.mock("./subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  ...subagentRegistryRuntimeMock,
+}));
 vi.mock("./subagents/registry/subagent-registry-runtime.js", () => subagentRegistryRuntimeMock);
 
 vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
@@ -261,7 +264,7 @@ describe("subagent-announce silent / silent-wake / wakeOnReturn routing (RFC §2
       traceparent: validTraceparent,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
 
     // No channel delivery on the silent path.
     expect(deliverSubagentAnnouncementMock).not.toHaveBeenCalled();
@@ -298,7 +301,7 @@ describe("subagent-announce silent / silent-wake / wakeOnReturn routing (RFC §2
       wakeOnReturn: false,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
 
     expect(deliverSubagentAnnouncementMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
@@ -352,7 +355,7 @@ describe("subagent-announce silent / silent-wake / wakeOnReturn routing (RFC §2
       silentAnnounce: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(deliverSubagentAnnouncementMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();

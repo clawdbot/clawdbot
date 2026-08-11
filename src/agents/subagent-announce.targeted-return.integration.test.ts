@@ -171,7 +171,7 @@ describe("subagent announce targeted continuation return integration", () => {
       });
 
       expect(runtimeErrorMock.mock.calls).toEqual([]);
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
 
       const queuedDeliveries = await loadPendingSessionDeliveries(stateDir);
       expect(queuedDeliveries).toHaveLength(1);
@@ -241,7 +241,7 @@ describe("subagent announce targeted continuation return integration", () => {
           continuationTargetSessionKey: targetSessionKey,
         });
 
-        expect(didAnnounce).toBe(true);
+        expect(didAnnounce).toBe("delivered");
         const queued = await loadPendingSessionDeliveries(stateDir);
         expect(queued).toHaveLength(1);
         expect(queued.at(0)).toEqual(expect.objectContaining({ sessionKey: targetSessionKey }));
@@ -285,7 +285,7 @@ describe("subagent announce targeted continuation return integration", () => {
       });
 
       expect(runtimeErrorMock.mock.calls).toEqual([]);
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession).toHaveBeenCalledWith(
         requesterSessionKey,
       );
@@ -353,7 +353,7 @@ describe("subagent announce targeted continuation return integration", () => {
           continuationTargetSessionKey: requesterSessionKey,
         });
 
-        expect(didAnnounce).toBe(true);
+        expect(didAnnounce).toBe("delivered");
         expect(await readQueuedSystemEventDeliveries(stateDir)).toHaveLength(0);
         expect(peekSystemEventEntries(requesterSessionKey)).toHaveLength(0);
         expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
@@ -393,7 +393,7 @@ describe("subagent announce targeted continuation return integration", () => {
         continuationFanoutMode: "all",
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(
         (await readQueuedSystemEventDeliveries(stateDir)).map((entry) => entry.sessionKey),
       ).toEqual([liveSessionKey]);
@@ -434,7 +434,7 @@ describe("subagent announce targeted continuation return integration", () => {
         wakeOnReturn: true,
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(await readQueuedSystemEventDeliveries(stateDir)).toEqual([]);
       expect(peekSystemEventEntries(requesterSessionKey)).toEqual([]);
       expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
@@ -466,7 +466,7 @@ describe("subagent announce targeted continuation return integration", () => {
         continuationFanoutMode: "tree",
       });
 
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
       expect(await readQueuedSystemEventDeliveries(stateDir)).toEqual([]);
       expect(peekSystemEventEntries(requesterSessionKey)).toEqual([]);
       expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
@@ -508,7 +508,7 @@ describe("subagent announce targeted continuation return integration", () => {
       });
 
       expect(runtimeErrorMock.mock.calls).toEqual([]);
-      expect(didAnnounce).toBe(true);
+      expect(didAnnounce).toBe("delivered");
 
       const persisted = await readQueuedSystemEventDeliveries(stateDir);
       expect(persisted).toHaveLength(2);

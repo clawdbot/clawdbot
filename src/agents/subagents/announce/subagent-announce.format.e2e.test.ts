@@ -3029,7 +3029,7 @@ describe("subagent announce formatting", () => {
       roundOneReply: "waiting for children",
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("retryable");
     expect(callGatewaySpy).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "chat.abort",
