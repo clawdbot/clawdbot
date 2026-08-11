@@ -19,11 +19,11 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import {
-  consumeDeviceBootstrapTokenWithSetupCompletion as consumeBootstrapTokenWithSetupCompletion,
+  consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
   loadDeviceBootstrapTokenRecords,
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
-  restoreConsumedDeviceBootstrapToken as restoreConsumedBootstrapToken,
+  restoreConsumedDeviceBootstrapTokenInTransaction,
 } from "./device-pairing-store.js";
 import type {
   DeviceBootstrapTokenRecord,
@@ -266,7 +266,7 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
 }) {
   return await withLock(async () => {
     const nowMs = Date.now();
-    return consumeBootstrapTokenWithSetupCompletion({
+    return consumeDeviceBootstrapTokenWithSetupCompletionInTransaction({
       token: params.token,
       deviceId: params.deviceId,
       completedAtMs: params.completedAtMs,
@@ -284,7 +284,7 @@ export async function restoreConsumedDeviceBootstrapToken(params: {
   baseDir?: string;
 }): Promise<void> {
   return await withLock(async () => {
-    restoreConsumedBootstrapToken(params);
+    restoreConsumedDeviceBootstrapTokenInTransaction(params);
   });
 }
 

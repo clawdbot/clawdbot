@@ -535,7 +535,7 @@ export function persistDeviceBootstrapTokenRecords(
 }
 
 /** Consume one bound bootstrap credential and record its setup outcome atomically. */
-export function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
+export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(params: {
   token: string;
   deviceId: string;
   completedAtMs: number;
@@ -613,7 +613,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
 }
 
 /** Restore an undelivered credential and remove only its exact setup outcome atomically. */
-export function restoreConsumedDeviceBootstrapToken(params: {
+export function restoreConsumedDeviceBootstrapTokenInTransaction(params: {
   record: DeviceBootstrapTokenRecord;
   completion?: DevicePairSetupCompletionRecord;
   baseDir?: string;
