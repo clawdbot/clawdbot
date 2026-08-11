@@ -600,7 +600,7 @@ openclaw-session-owner-chip {
   position: fixed;
   right: calc(20px + var(--safe-area-right));
   bottom: calc(20px + var(--safe-area-bottom));
-  z-index: 2000;
+  z-index: var(--z-toast);
   display: flex;
   align-items: center;
   gap: var(--space-3);

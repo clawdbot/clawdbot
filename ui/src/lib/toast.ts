@@ -85,7 +85,14 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 }
 
 export function showToast(options: ToastOptions): boolean {
-  const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
+  const openModals = document.querySelectorAll<HTMLElement>("openclaw-modal-dialog[open]");
+  const modalHost = [...openModals]
+    .toReversed()
+    .map((modal) => modal.querySelector<OpenClawToastHost>("openclaw-toast-host"))
+    .find(Boolean);
+  // Native modal dialogs own the browser top layer, so their in-dialog host
+  // wins over the app host while an overlay is open.
+  const host = modalHost ?? document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
     return false;
   }

@@ -1,6 +1,7 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
+import path from "node:path";
 import type { BrowserContext } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -15,6 +16,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
+const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
 
 let context: BrowserContext | undefined;
 
@@ -25,15 +27,18 @@ suite.define(() => {
   });
 
   async function openPage(options: {
+    colorScheme?: "dark" | "light";
+    height?: number;
     nativeNav?: boolean;
     scenario?: ControlUiMockGatewayScenario;
     webChrome?: boolean;
     width?: number;
   }) {
     context = await suite.browser.newContext({
+      colorScheme: options.colorScheme,
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 900, width: options.width ?? 1280 },
+      viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
     });
     const page = await context.newPage();
     if (options.nativeNav) {
@@ -395,6 +400,41 @@ suite.define(() => {
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
     await expect.poll(() => drawer.count()).toBe(0);
   });
+
+  it.each(["dark", "light"] as const)(
+    "keeps the toast above the mobile drawer in %s mode",
+    async (colorScheme) => {
+      const page = await openPage({ colorScheme, height: 844, nativeNav: false, width: 390 });
+      const drawer = page.locator("openclaw-modal-dialog.nav-drawer");
+      const dialog = page.getByRole("dialog", { name: "Navigation" });
+      await page.locator(".chat-pane__nav-toggle").first().click();
+      await expect.poll(() => dialog.isVisible()).toBe(true);
+
+      const host = drawer.locator("openclaw-toast-host");
+      await host.evaluate((element) => {
+        (
+          element as HTMLElement & {
+            show(options: { durationMs: number; message: string }): void;
+          }
+        ).show({
+          durationMs: 60_000,
+          message: "Mock sync complete — drawer remains open.",
+        });
+      });
+      const toast = host.locator(".app-toast");
+      await toast.waitFor();
+      const dismiss = toast.getByRole("button", { name: "Dismiss" });
+      await dismiss.click({ trial: true });
+
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
+      });
+      await dismiss.click();
+      await expect.poll(() => toast.isVisible()).toBe(false);
+      await expect.poll(() => dialog.isVisible()).toBe(true);
+    },
+  );
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {
     const page = await openPage({ webChrome: true, width: 620 });
