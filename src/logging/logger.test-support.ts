@@ -1,5 +1,4 @@
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
@@ -20,5 +19,4 @@ export const testApi = {
     loggerHostnameState.resolver = resolver ?? defaultLoggerHostnameResolver;
     loggerHostnameState.cached = null;
   },
-  shouldSkipMutatingLoggingConfigRead,
 };
