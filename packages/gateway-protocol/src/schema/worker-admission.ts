@@ -57,6 +57,9 @@ export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
 export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
+// Keep the largest valid nested-session request below the frame ceiling even
+// when every bounded string requires six-byte JSON escaping.
+export const WORKER_SESSION_TOOL_MAX_TEXT_LENGTH = 8 * 1024;
 // Replay is opaque and cannot be truncated. Transcript projection separately
 // verifies that the complete commit frame fits the protocol payload ceiling.
 export const WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES = WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
@@ -197,7 +200,7 @@ const WorkerSessionToolCallIdSchema = Type.String({ minLength: 1, maxLength: 256
 
 export const WorkerSessionsSpawnParamsSchema = closedObject({
   toolCallId: WorkerSessionToolCallIdSchema,
-  task: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  task: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   agentId: Type.Optional(WorkerIdentifierSchema),
   model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
@@ -207,7 +210,7 @@ export const WorkerSessionsSpawnParamsSchema = closedObject({
 export const WorkerSessionsSendParamsSchema = closedObject({
   toolCallId: WorkerSessionToolCallIdSchema,
   sessionKey: Type.String({ minLength: 1, maxLength: 1_024 }),
-  message: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  message: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
 });
 

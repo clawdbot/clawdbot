@@ -1,9 +1,10 @@
 import { Type } from "typebox";
-import type {
-  WorkerSessionsSendParams,
-  WorkerSessionsSendResponseFrame,
-  WorkerSessionsSpawnParams,
-  WorkerSessionsSpawnResponseFrame,
+import {
+  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
+  type WorkerSessionsSendParams,
+  type WorkerSessionsSendResponseFrame,
+  type WorkerSessionsSpawnParams,
+  type WorkerSessionsSpawnResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentToolResult } from "../agents/runtime/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -45,7 +46,7 @@ export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAge
       description:
         "Spawn a visible cloud child session in a fresh managed worktree. The child inherits the current cloud placement profile and attenuated tool policy.",
       parameters: Type.Object({
-        task: Type.String({ minLength: 1 }),
+        task: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
         label: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
         agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
         model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
@@ -63,7 +64,7 @@ export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAge
         "Send a message to an authorized parent, child, or sibling cloud session. Cross-tree and stale-incarnation targets are denied by the Gateway.",
       parameters: Type.Object({
         sessionKey: Type.String({ minLength: 1, maxLength: 1_024 }),
-        message: Type.String({ minLength: 1 }),
+        message: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
         timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
       }),
       execute: async (toolCallId, raw) => {

@@ -6,8 +6,8 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-  signalWorkerTurnClaimClosed,
-} from "./placement-turn-claims.js";
+} from "./placement-session-tool-operations.js";
+import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
 

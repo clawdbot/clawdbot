@@ -25,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferred } from "../../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -346,7 +347,7 @@ describe("dedicated worker websocket protocol", () => {
   });
 
   it("keeps heartbeats flowing while a session operation is pending", async () => {
-    const operation = Promise.withResolvers<WorkerSessionToolResult>();
+    const operation = createDeferred<WorkerSessionToolResult>();
     const harness = attachHarness({
       identity: ATTACHED_IDENTITY,
       onSessionTool: () => operation.promise,
@@ -377,7 +378,7 @@ describe("dedicated worker websocket protocol", () => {
   it("continues durable session work but suppresses its response after connection cleanup", async () => {
     let operationStarted = false;
     let operationSignal: AbortSignal | undefined;
-    const operation = Promise.withResolvers<WorkerSessionToolResult>();
+    const operation = createDeferred<WorkerSessionToolResult>();
     const harness = attachHarness({
       identity: ATTACHED_IDENTITY,
       onSessionTool: (signal) => {

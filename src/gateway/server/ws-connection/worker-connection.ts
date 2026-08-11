@@ -58,7 +58,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
-import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-turn-claims.js";
+import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 
 type WorkerServiceResult<TResult, TFailure> =

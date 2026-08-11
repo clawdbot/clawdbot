@@ -28,6 +28,14 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import {
+  assertWorkerSessionToolChild as assertExactChild,
+  resolveWorkerSessionToolSource as exactSource,
+  resolveWorkerSessionToolTarget as exactAuthorizedTarget,
+  workerSessionRelationKey as relationKey,
+  type WorkerSessionToolSource as ExactSource,
+  type WorkerSessionToolTarget as ExactTarget,
+} from "./worker-session-tool-topology.js";
 
 type WorkerSessionToolRequest =
   | {
@@ -42,31 +50,6 @@ type WorkerSessionToolRequest =
       request: WorkerSessionsSendParams;
       signal?: AbortSignal;
     };
-
-type ExactSource = {
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  binding: {
-    sessionId: string;
-    agentId: string;
-    sessionKey: string;
-    environmentId: string;
-    ownerEpoch: number;
-    runId: string;
-  };
-  entry: NonNullable<ReturnType<typeof loadSessionEntryReadOnly>["entry"]>;
-};
-
-type ExactTarget = {
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  topologyParent?: {
-    sessionKey: string;
-    sessionId: string;
-  };
-};
 
 class WorkerSessionToolOutcomeUnknownError extends Error {
   constructor(cause: unknown) {
@@ -118,144 +101,9 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   signal?.throwIfAborted();
 }
 
-function exactSource(params: {
-  identity: WorkerConnectionIdentity;
-  placements: WorkerSessionPlacementStore;
-}): ExactSource {
-  const identity = params.identity;
-  if (!identity.sessionId || !identity.runId) {
-    throw new Error("Worker session operation requires an active source turn");
-  }
-  const placement = params.placements.get(identity.sessionId);
-  if (
-    !placement ||
-    (placement.state !== "active" && placement.state !== "draining") ||
-    placement.environmentId !== identity.environmentId ||
-    placement.activeOwnerEpoch !== identity.ownerEpoch ||
-    placement.turnClaim?.owner !== "worker" ||
-    placement.turnClaim.runId !== identity.runId ||
-    placement.turnClaim.ownerEpoch !== identity.ownerEpoch
-  ) {
-    throw new Error("Worker source session placement changed");
-  }
-  const loaded = loadSessionEntryReadOnly(placement.sessionKey, { agentId: placement.agentId });
-  if (
-    loaded.canonicalKey !== placement.sessionKey ||
-    loaded.entry?.sessionId !== identity.sessionId ||
-    loaded.entry.archivedAt !== undefined
-  ) {
-    throw new Error("Worker source session incarnation changed");
-  }
-  return {
-    agentId: placement.agentId,
-    sessionKey: placement.sessionKey,
-    sessionId: identity.sessionId,
-    binding: {
-      sessionId: identity.sessionId,
-      agentId: placement.agentId,
-      sessionKey: placement.sessionKey,
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.ownerEpoch,
-      runId: identity.runId,
-    },
-    entry: loaded.entry,
-  };
-}
-
-function relationKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-function exactAuthorizedTarget(params: {
-  source: ExactSource;
-  requestedSessionKey: string;
-  placements: WorkerSessionPlacementStore;
-}): ExactTarget {
-  const loaded = loadSessionEntryReadOnly(params.requestedSessionKey);
-  const entry = loaded.entry;
-  const targetSessionId = entry?.sessionId;
-  if (
-    loaded.canonicalKey !== params.requestedSessionKey ||
-    !targetSessionId ||
-    !entry ||
-    entry.archivedAt !== undefined ||
-    targetSessionId === params.source.sessionId
-  ) {
-    throw new Error("Worker sessions_send target is not an exact live session");
-  }
-  const sourceParent =
-    relationKey(params.source.entry.parentSessionKey) ?? relationKey(params.source.entry.spawnedBy);
-  const sourceParentId = relationKey(params.source.entry.parentSessionId);
-  const targetParent = relationKey(entry.parentSessionKey) ?? relationKey(entry.spawnedBy);
-  const targetParentId = relationKey(entry.parentSessionId);
-  const parentToChild =
-    targetParent === params.source.sessionKey && targetParentId === params.source.sessionId;
-  const childToParent = sourceParent === loaded.canonicalKey && sourceParentId === targetSessionId;
-  const sharedParentIncarnation = Boolean(
-    sourceParent &&
-    sourceParentId &&
-    sourceParent === targetParent &&
-    sourceParentId === targetParentId,
-  );
-  const parent =
-    sharedParentIncarnation && sourceParent && sourceParentId
-      ? loadSessionEntryReadOnly(sourceParent)
-      : undefined;
-  const siblingToSibling = Boolean(
-    parent &&
-    parent.canonicalKey === sourceParent &&
-    parent.entry?.sessionId === sourceParentId &&
-    parent.entry?.archivedAt === undefined,
-  );
-  if (!parentToChild && !childToParent && !siblingToSibling) {
-    throw new Error("Worker sessions_send target is outside the authorized session tree");
-  }
-  const targetPlacement = params.placements.get(targetSessionId);
-  if (
-    !targetPlacement ||
-    targetPlacement.state !== "active" ||
-    targetPlacement.sessionKey !== loaded.canonicalKey
-  ) {
-    throw new Error("Worker sessions_send target is not an active cloud session incarnation");
-  }
-  return {
-    agentId: targetPlacement.agentId,
-    sessionKey: targetPlacement.sessionKey,
-    sessionId: targetPlacement.sessionId,
-    ...(siblingToSibling && sourceParent && sourceParentId
-      ? { topologyParent: { sessionKey: sourceParent, sessionId: sourceParentId } }
-      : {}),
-  };
-}
-
 function childSessionKey(params: { operationSeed: string; targetAgentId: string }): string {
   const suffix = operationKey(params.operationSeed, "child-session").slice(0, 32);
   return `agent:${params.targetAgentId}:dashboard:cloud-${suffix}`;
-}
-
-function assertExactChild(params: {
-  childSessionKey: string;
-  childSessionId: string;
-  sourceSessionKey: string;
-  sourceSessionId: string;
-  targetAgentId: string;
-}): void {
-  const loaded = loadSessionEntryReadOnly(params.childSessionKey, {
-    agentId: params.targetAgentId,
-  });
-  const parent =
-    relationKey(loaded.entry?.parentSessionKey) ?? relationKey(loaded.entry?.spawnedBy);
-  const parentSessionId = relationKey(loaded.entry?.parentSessionId);
-  if (
-    loaded.canonicalKey !== params.childSessionKey ||
-    loaded.entry?.sessionId !== params.childSessionId ||
-    loaded.entry.archivedAt !== undefined ||
-    parent !== params.sourceSessionKey ||
-    parentSessionId !== params.sourceSessionId
-  ) {
-    throw new Error("Spawned cloud child session incarnation changed");
-  }
 }
 
 export function createWorkerSessionToolExecutor(params: {
@@ -450,7 +298,7 @@ export function createWorkerSessionToolExecutor(params: {
                   targetAgentId,
                 });
                 assertActiveChildPlacement();
-                sendResult = await callAgentToolGatewayRequest<Record<string, unknown>>({
+                sendResult = await callAgentToolGatewayRequest({
                   method: "chat.send",
                   params: {
                     sessionKey: operation.childSessionKey,

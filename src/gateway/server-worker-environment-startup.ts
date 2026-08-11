@@ -145,7 +145,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     ),
   });
   const workerTunnelManager = createWorkerTunnelManager();
-  let executeSessionTool!: ReturnType<typeof createWorkerSessionToolExecutor>;
+  let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
+    throw new Error("Worker session tools are unavailable");
+  };
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
