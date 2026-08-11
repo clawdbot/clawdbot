@@ -1538,6 +1538,7 @@ jobs:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
           groups_json="$(node scripts/plan-targeted-docker-lane-groups.mjs)"
@@ -1555,7 +1556,7 @@ jobs:
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
       matrix:
