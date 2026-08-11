@@ -3,6 +3,7 @@ import { OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL } from "./openclaw-agent-board-
 const SHARING_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_members (";
 const SHARING_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";
 const SUGGESTIONS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_suggestions (";
+const RECEIPT_SOURCE_COLUMN = "  platform_message_id_source TEXT,\n";
 
 function splitSessionSharingSchema(sql: string): { sharing: string; withoutSharing: string } {
   const start = sql.indexOf(SHARING_SCHEMA_START);
@@ -27,4 +28,10 @@ export const AGENT_V14_SESSION_SHARING_SCHEMA_SQL = sessionSharingSchema.sharing
 );
 export const AGENT_V14_ADDITIVE_SCHEMA_SQL =
   sessionSharingSchema.sharing.slice(sessionSuggestionsStart);
-export const AGENT_V14_CORE_SCHEMA_SQL = sessionSharingSchema.withoutSharing;
+if (!sessionSharingSchema.withoutSharing.includes(RECEIPT_SOURCE_COLUMN)) {
+  throw new Error("OpenClaw agent receipt-source schema marker is missing.");
+}
+export const AGENT_V14_CORE_SCHEMA_SQL = sessionSharingSchema.withoutSharing.replace(
+  RECEIPT_SOURCE_COLUMN,
+  "",
+);
