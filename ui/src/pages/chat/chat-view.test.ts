@@ -218,6 +218,7 @@ type ChatHeaderTestState = {
   chatMessage: string;
   chatMessages: unknown[];
   chatModelCatalog: ModelCatalogEntry[];
+  chatModelCatalogMode?: "replace";
   chatModelsLoading?: boolean;
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
