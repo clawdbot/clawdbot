@@ -6,6 +6,22 @@ export type ActivityRouteData =
   | { mode: "live"; selector: null }
   | { mode: "run"; selector: RunInspectorSelector | null };
 
+export function resolveActivityRouteData(search: string): ActivityRouteData {
+  const params = new URLSearchParams(search);
+  if (params.get("view") !== "run") {
+    return { mode: "live", selector: null };
+  }
+  const executionId = params.get("execution");
+  if (executionId?.trim()) {
+    return { mode: "run", selector: { kind: "execution", id: executionId } };
+  }
+  const runId = params.get("run");
+  return {
+    mode: "run",
+    selector: runId?.trim() ? { kind: "run", id: runId } : null,
+  };
+}
+
 export type RunInspectorState =
   | { status: "empty" }
   | { status: "loading"; waitingForGateway: boolean }

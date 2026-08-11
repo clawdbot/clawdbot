@@ -6,8 +6,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { classifyRunInspection, type RunInspectorState } from "./run-inspector-model.ts";
 import "./run-inspector.css";
+
+registerActivityEnglish();
 
 type EvidenceState = "present" | "absent" | "unknown" | "unsupported";
 

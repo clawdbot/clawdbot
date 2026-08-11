@@ -3,21 +3,22 @@ import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { page } from "./route.ts";
-import type { ActivityRouteData } from "./run-inspector-model.ts";
+import { resolveActivityRouteData, type ActivityRouteData } from "./run-inspector-model.ts";
 
 function loadRoute(search: string): ActivityRouteData {
   if (!page.loader) {
     throw new Error("activity route has no loader");
   }
   const location: RouteLocation = { pathname: "/activity", search, hash: "" };
-  return page.loader({} as ApplicationContext, {
+  const loaded = page.loader({} as ApplicationContext, {
     signal: new AbortController().signal,
     shouldRun: () => true,
     revalidating: false,
     location,
     deps: search,
     cause: "navigation",
-  } satisfies RouteLoaderOptions) as ActivityRouteData;
+  } satisfies RouteLoaderOptions);
+  return resolveActivityRouteData(typeof loaded === "string" ? loaded : "");
 }
 
 describe("resolveActivityRouteData", () => {

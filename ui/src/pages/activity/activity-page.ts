@@ -25,10 +25,11 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type {
-  ActivityRouteData,
-  RunInspectorSelector,
-  RunInspectorState,
+import {
+  resolveActivityRouteData,
+  type ActivityRouteData,
+  type RunInspectorSelector,
+  type RunInspectorState,
 } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.ts";
 import {
@@ -49,7 +50,8 @@ class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeData: ActivityRouteData | undefined;
+  @property({ attribute: false }) routeSearch = "";
+  private routeData: ActivityRouteData = { mode: "live", selector: null };
 
   @state() private entries: ActivityEntry[] = [];
   @state() private filterText = "";
@@ -89,8 +91,14 @@ class ActivityPage extends OpenClawLightDomElement {
     },
   );
 
+  override willUpdate(changed: PropertyValues) {
+    if (changed.has("routeSearch")) {
+      this.routeData = resolveActivityRouteData(this.routeSearch);
+    }
+  }
+
   override updated(changed: PropertyValues) {
-    if (changed.has("routeData")) {
+    if (changed.has("routeSearch")) {
       this.bindInspectorRoute();
     }
     if (
@@ -405,6 +413,13 @@ class ActivityPage extends OpenClawLightDomElement {
     `;
   }
 }
+
+export const activityPageComponent = {
+  header: true,
+  render: (search: unknown) => html`<openclaw-activity-page
+    .routeSearch=${typeof search === "string" ? search : ""}
+  ></openclaw-activity-page>`,
+};
 
 if (!customElements.get("openclaw-activity-page")) {
   customElements.define("openclaw-activity-page", ActivityPage);
