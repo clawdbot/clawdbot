@@ -1,8 +1,10 @@
 // Control UI chat module owns lifting a queued message back into the composer.
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
+  isDurableQueuedMessage,
   readQueuedMessageById,
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
@@ -10,10 +12,11 @@ import {
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
- * see where the message will land. This records which row the composer owns and
- * the position the replacement inherits.
+ * see where the message will land. This records which row the composer owns, the
+ * outbox scope that owns the row, and the position the replacement inherits.
  */
 export type QueuedMessageEdit = {
+  agentId?: string;
   id: string;
   orderKey: number;
   sessionKey: string;
@@ -29,13 +32,15 @@ type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
 type QueuedMessageEditResult = "started" | "unavailable" | "composer-busy";
 
 /**
- * The edit belongs to the session it started in. Reading it through here is what
- * makes that true everywhere — a pane showing another session sees no edit, so
- * no lifecycle hook has to remember to clear one.
+ * The edit belongs to the scope it started in — session and agent, the pair every
+ * outbox is keyed by. Reading it through here is what makes that true everywhere:
+ * a pane showing another session, or the same raw global session after the
+ * selected agent changed underneath it, sees no edit. So no lifecycle hook has to
+ * remember to clear one, and no send can retire a row in the outbox it left.
  */
 export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMessageEdit | null {
   const edit = host.chatQueuedEdit;
-  return edit && edit.sessionKey === host.sessionKey ? edit : null;
+  return edit && visibleSessionMatches(host, edit.sessionKey, edit.agentId) ? edit : null;
 }
 
 /** True for the one row the composer is currently editing. */
@@ -64,7 +69,13 @@ export function beginQueuedMessageEdit(
   }
   // The row is left in storage on purpose: it keeps its place visibly, and the
   // drain refuses it while this edit owns it (see chat-outbox-drain).
-  host.chatQueuedEdit = { id, orderKey: chatQueueOrderKey(item), sessionKey: host.sessionKey };
+  const agentId = scopedAgentIdForSession(host, host.sessionKey);
+  host.chatQueuedEdit = {
+    ...(agentId ? { agentId } : {}),
+    id,
+    orderKey: chatQueueOrderKey(item),
+    sessionKey: host.sessionKey,
+  };
   host.chatMessage = item.text;
   host.chatAttachments = item.attachments ?? [];
   return "started";
@@ -82,18 +93,23 @@ export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
 }
 
 /**
- * A send that resumes an edit retires the original row and hands its position to
- * the replacement, which is what puts the corrected message back in the same
- * slot. Once the queue has drained, that position is simply the only one.
+ * A send that resumes an edit inherits the row's position, which is what puts the
+ * corrected message back in the same slot, and the durable admission retires the
+ * source in the same store write (see `admitQueuedMessageForSession`). This
+ * clears what that write left behind: the projection row and the payloads the
+ * replacement dropped. A rejected write retires nothing, so the original stays
+ * queued with its edit still open — what cancel already promises — and the caller
+ * must not fall back to a memory-only send that would strand it. A source with no
+ * stored copy has nothing to lose to a reload, so it retires with the memory row.
  */
-export function consumeQueuedMessageEdit(
+export function retireEditedQueuedMessageSource(
   host: QueuedMessageEditHost,
-  sessionKey: string,
+  admittedDurably: boolean,
   nextAttachments: readonly ChatAttachment[] = [],
-): number | undefined {
-  const edit = host.chatQueuedEdit;
-  if (!edit || edit.sessionKey !== sessionKey) {
-    return undefined;
+): void {
+  const edit = activeQueuedMessageEdit(host);
+  if (!edit || (!admittedDurably && isDurableQueuedMessage(host, edit.id))) {
+    return;
   }
   host.chatQueuedEdit = null;
   const removed = removeVisibleOrScopedQueuedMessageWithoutReleasing(
@@ -107,5 +123,4 @@ export function consumeQueuedMessageEdit(
   releaseChatAttachmentPayloads(
     (removed?.attachments ?? []).filter((attachment) => !retained.has(attachment.id)),
   );
-  return edit.orderKey;
 }

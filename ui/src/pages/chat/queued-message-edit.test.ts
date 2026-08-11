@@ -4,18 +4,21 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
-import { enqueuePendingSendMessage } from "./chat-send-queue-state.ts";
+import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import {
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
   isQueuedMessageBeingEdited,
 } from "./queued-message-edit.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
 
 const SESSION_KEY = "agent:main";
 
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
 });
 
 afterEach(() => {
@@ -48,6 +51,28 @@ function storedOrder(host: unknown): string[] {
   );
 }
 
+/** Queue text per owning agent, because an outbox is scoped by session *and* agent. */
+function storedOutboxesByAgent(host: unknown): Record<string, string[]> {
+  return Object.fromEntries(
+    listStoredChatOutboxes(host as never).map((outbox) => [
+      outbox.agentId ?? outbox.sessionKey,
+      outbox.queue.map((item) => item.text),
+    ]),
+  );
+}
+
+/** A full store: any write that would grow it is rejected, exactly as quota does. */
+function rejectStoredGrowth(): void {
+  const storage = globalThis.sessionStorage;
+  const write = storage.setItem.bind(storage);
+  vi.spyOn(storage, "setItem").mockImplementation((key: string, value: string) => {
+    if (value.length > (storage.getItem(key)?.length ?? 0)) {
+      throw new DOMException("exceeded the quota", "QuotaExceededError");
+    }
+    write(key, value);
+  });
+}
+
 describe("queued message edit round-trip", () => {
   it("keeps the row in place and lifts its attachments into the composer", () => {
     const attachment = { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,iVB" };
@@ -78,16 +103,63 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
-  it("replaces the row in the same slot when the edited message is sent", () => {
+  it("replaces the row in the same slot when the edited message is sent", async () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     beginQueuedMessageEdit(host as never, "queued-2");
+    host.chatMessage = "message 2, corrected";
 
-    const resent = enqueuePendingSendMessage(host as never, "message 2, corrected");
-    expect(resent).not.toBeNull();
-    expect(admitQueuedMessageForSession(host as never, SESSION_KEY, resent!)).toBe(true);
+    await handleSendChat(host as never);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
+    unsubscribe();
+  });
+
+  it("keeps the original queued when the replacement's stored write is rejected", async () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    beginQueuedMessageEdit(host as never, "queued-2");
+    host.chatMessage = "message 2, corrected";
+    rejectStoredGrowth();
+
+    await handleSendChat(host as never);
+
+    // Retiring the original before its replacement is stored would lose both, in
+    // the one failure the offline queue exists to survive. The edit stays open on
+    // the row that is still there, which is what cancelling already promises.
+    expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
+    expect(host.chatMessage).toBe("message 2, corrected");
+    expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+    unsubscribe();
+  });
+
+  it("cannot retire a row in the outbox a global agent switch left behind", async () => {
+    const host = makeChatHost({ assistantAgentId: "lily", connected: false, sessionKey: "global" });
+    const unsubscribe = subscribeChatOutboxProjection(host as never);
+    expect(
+      admitQueuedMessageForSession(host as never, "global", {
+        id: "queued-1",
+        text: "message 1",
+        agentId: "lily",
+        createdAt: 1_000,
+        sendState: "waiting-reconnect",
+        sessionKey: "global",
+      }),
+    ).toBe(true);
+    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
+
+    // A raw global session keeps its key across agent switches, so the session key
+    // alone cannot tell the two outboxes apart.
+    host.assistantAgentId = "nova";
+    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
+
+    host.chatMessage = "message 1, corrected";
+    await handleSendChat(host as never);
+
+    expect(storedOutboxesByAgent(host)).toEqual({
+      lily: ["message 1"],
+      nova: ["message 1, corrected"],
+    });
     unsubscribe();
   });
 

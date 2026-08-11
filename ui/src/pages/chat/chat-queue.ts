@@ -36,6 +36,11 @@ export function isVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: st
   return chatOutboxOwner(host).hasVolatile(host, id);
 }
 
+/** True while the row has a stored copy that would survive a reload. */
+export function isDurableQueuedMessage(host: ChatQueueScopedSessionHost, id: string): boolean {
+  return chatOutboxOwner(host).durable(host, id) !== undefined;
+}
+
 export function keepVolatileQueuedMessage(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
@@ -259,15 +264,21 @@ export function updateQueuedMessageForSession(
   return nextItem;
 }
 
+/**
+ * `replacesId` admits the item as the stored replacement for another row, which
+ * retires the source in the same write. A rejected write changes nothing, so an
+ * edited message can never lose both its original and its replacement.
+ */
 export function admitQueuedMessageForSession(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   item: ChatQueueItem,
+  replacesId?: string,
 ): boolean {
   const owner = chatOutboxOwner(host);
   const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
   owner.keep(host, scope, item);
-  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId)) {
+  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replacesId)) {
     return false;
   }
   if (item.sendState !== "waiting-model") {
