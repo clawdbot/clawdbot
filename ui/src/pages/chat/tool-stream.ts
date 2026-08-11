@@ -950,7 +950,8 @@ function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload): bool
     return false;
   }
   host.planStatus = normalizePlanSnapshot(data, payload.runId);
-  return true;
+  host.requestUpdate?.();
+  return false;
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
