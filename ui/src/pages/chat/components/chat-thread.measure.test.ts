@@ -173,7 +173,7 @@ describe("chat transcript row measurement", () => {
     }
   });
 
-  it("loads a truncated assistant message once across inline collapse and re-expansion", async () => {
+  it("loads a truncated assistant message once and keeps the full text visible", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const loadFullAssistantMessage = vi.fn().mockResolvedValue({
@@ -201,10 +201,6 @@ describe("chat transcript row measurement", () => {
     transcript.hostConnected();
     transcript.hostUpdated();
 
-    const showMore = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
-    expect(showMore?.textContent?.trim()).toBe("Show more");
-    showMore?.click();
-
     await vi.waitFor(() => expect(container.textContent).toContain("Complete assistant content."));
     expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
     expect(loadFullAssistantMessage).toHaveBeenCalledWith({
@@ -214,28 +210,16 @@ describe("chat transcript row measurement", () => {
       kind: "assistant_message",
     });
 
-    const showLess = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
-    expect(showLess?.textContent?.trim()).toBe("Show less");
-    showLess?.click();
-    expect(container.textContent).toContain("...(truncated)...");
-    expect(container.textContent).not.toContain("Complete assistant content.");
-
-    container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.click();
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
     expect(container.textContent).toContain("Complete assistant content.");
     expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
     transcript.hostDisconnected();
   });
 
-  it("shows a retryable inline error when full assistant content cannot be loaded", async () => {
+  it("keeps transport-cut assistant text as received when full content is unavailable", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({
-        ok: true,
-        message: { role: "assistant", content: "Recovered full content." },
-      });
+    const loadFullAssistantMessage = vi.fn().mockRejectedValue(new Error("offline"));
     function rerender() {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
@@ -256,17 +240,10 @@ describe("chat transcript row measurement", () => {
     transcript.hostConnected();
     transcript.hostUpdated();
 
-    container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.click();
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("Could not load the full message."),
-    );
-    const retry = container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
-    expect(retry?.textContent?.trim()).toBe("Show more");
-    expect(retry?.disabled).toBe(false);
-
-    retry?.click();
-    await vi.waitFor(() => expect(container.textContent).toContain("Recovered full content."));
-    expect(loadFullAssistantMessage).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(loadFullAssistantMessage).toHaveBeenCalledOnce());
+    expect(container.textContent).toContain("Preview");
+    expect(container.textContent).toContain("...(truncated)...");
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
     transcript.hostDisconnected();
   });
 
