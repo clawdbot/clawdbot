@@ -13,7 +13,11 @@ import {
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
-import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
+import {
+  applyQaMergePatch,
+  isQaMergePatchObject,
+  mergeQaMergePatchDocuments,
+} from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
@@ -218,7 +222,7 @@ function collectQaSuiteGatewayConfigPatch(
       scenario.gatewayConfigPatch,
       resolvedSelectedAccountId,
     );
-    merged = applyQaMergePatch(merged ?? {}, resolvedPatch) as Record<string, unknown>;
+    merged = mergeQaMergePatchDocuments(merged ?? {}, resolvedPatch) as Record<string, unknown>;
   }
   return merged;
 }

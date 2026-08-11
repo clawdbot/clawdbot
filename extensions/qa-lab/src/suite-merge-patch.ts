@@ -39,6 +39,23 @@ function mergeObjectArraysById(target: unknown[], patch: unknown[]): unknown[] |
   return merged;
 }
 
+// Merging two patch documents is not the same as applying one to a config: a
+// `null` here is the deletion a scenario still intends, so it survives to the
+// application step instead of deleting a key the empty accumulator never had.
+export function mergeQaMergePatchDocuments(target: unknown, patch: unknown): unknown {
+  if (!isQaMergePatchObject(patch) || !isQaMergePatchObject(target)) {
+    return structuredClone(patch);
+  }
+  const result = structuredClone(target);
+  for (const [key, value] of Object.entries(patch)) {
+    if (QA_MERGE_PATCH_BLOCKED_KEYS.has(key)) {
+      continue;
+    }
+    result[key] = mergeQaMergePatchDocuments(result[key], value);
+  }
+  return result;
+}
+
 export function applyQaMergePatch(target: unknown, patch: unknown): unknown {
   if (Array.isArray(target) && Array.isArray(patch)) {
     return mergeObjectArraysById(target, patch) ?? structuredClone(patch);
