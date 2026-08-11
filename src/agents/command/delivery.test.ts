@@ -181,6 +181,7 @@ function latestOutboundDeliveryArgs(): {
   bestEffort?: boolean;
   queuePolicy?: string;
   replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
+  identity?: { name?: string; avatarUrl?: string; emoji?: string; theme?: string };
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
@@ -196,6 +197,7 @@ function latestOutboundDeliveryArgs(): {
     bestEffort?: boolean;
     queuePolicy?: string;
     replyPayloadSendingHook?: ReplyPayloadSendingHookArgs;
+    identity?: { name?: string; avatarUrl?: string; emoji?: string; theme?: string };
   };
 }
 
@@ -1498,6 +1500,44 @@ describe("deliverAgentCommandResult payload normalization", () => {
       error: true,
       reason: "unknown_channel",
     });
+  });
+
+  it("projects the configured agent identity into outbound delivery args", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "tester",
+            identity: { name: "Test Bot", emoji: "🤖" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const delivered = await deliverAgentCommandResultForTest({
+      cfg,
+      payloads: [{ text: "Ready" }],
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().identity).toEqual({
+      name: "Test Bot",
+      emoji: "🤖",
+    });
+  });
+
+  it("omits identity when no agent identity is configured", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResultForTest({
+      payloads: [{ text: "Ready" }],
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    expect(latestOutboundDeliveryArgs().identity).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
