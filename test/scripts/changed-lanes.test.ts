@@ -1592,7 +1592,8 @@ describe("scripts/changed-lanes", () => {
       docs: true,
       releaseMetadata: true,
     });
-    expect(plan.commands.map((command) => command.args[0])).toEqual([
+    const commands = plan.commands.map((command) => command.args[0]);
+    expect(commands).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
       "check:doctor-deprecation-registry",
@@ -1608,11 +1609,11 @@ describe("scripts/changed-lanes", () => {
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
-      "ios:version:check",
       "config:schema:check",
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
+    expect(commands).not.toContain("ios:version:check");
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--staged"]);
