@@ -209,8 +209,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact: true,
     });
 
-    expect(compact.length).toBeGreaterThanOrEqual(12);
-    expect(compact.length).toBeLessThanOrEqual(28);
+    // Rebalancing may change ownership but must not add CI workers.
+    expect(compact).toHaveLength(24);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -231,6 +231,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
+    const refreshedOutliers = [
+      "agentic-agents-core-runtime",
+      "agentic-agents-support",
+      "auto-reply-reply-commands-2",
+      "core-unit-fast-2",
+    ];
+    expect(new Set(refreshedOutliers.map(jobOf)).size).toBe(refreshedOutliers.length);
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.

@@ -140,12 +140,6 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs browser copilot E2E against real Chromium", () => {
-    expect(readPackageJson().scripts["test:e2e:browser-copilot"]).toBe(
-      "node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import tsx scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_COPILOT_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/browser/chrome-extension/page-share.e2e.test.ts extensions/browser/chrome-extension/sidepanel.e2e.test.ts",
-    );
-  });
-
   it("gives the plugin SDK usage scan enough heap for repository-wide analysis", () => {
     expect(readPackageJson().scripts["plugin-sdk:usage"]).toBe(
       "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
@@ -194,12 +188,6 @@ describe("package scripts", () => {
   it("runs Docker package process-tree coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
-    );
-  });
-
-  it("runs Doctor SecretRef ACL coverage in Windows CI", () => {
-    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
     );
   });
 

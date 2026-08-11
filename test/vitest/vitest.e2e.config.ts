@@ -16,6 +16,12 @@ const e2eWorkers =
     ? Math.min(16, requestedWorkers)
     : defaultWorkers;
 const verboseE2E = process.env.OPENCLAW_E2E_VERBOSE === "1";
+// Browser-copilot tests import source directly and do not launch the packaged
+// CLI, so the private-QA and AI dist build is unrelated setup for that lane.
+const globalSetup =
+  process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1"
+    ? []
+    : [resolveRepoRootPath("test/vitest/vitest.e2e.global-setup.ts")];
 
 const baseTestWithProjects =
   (baseConfig as { test?: { exclude?: string[]; projects?: string[]; setupFiles?: string[] } })
@@ -39,7 +45,7 @@ export default defineConfig({
     ...baseTest,
     maxWorkers: e2eWorkers,
     silent: !verboseE2E,
-    globalSetup: [resolveRepoRootPath("test/vitest/vitest.e2e.global-setup.ts")],
+    globalSetup,
     setupFiles: [
       ...new Set(
         [...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(resolveRepoRootPath),

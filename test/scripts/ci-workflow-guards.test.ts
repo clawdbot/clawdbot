@@ -5458,8 +5458,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
-    // Each Chromium worker keeps serial file ownership while all four shards
-    // together remain required by the aggregate CI gate.
+    // Three serial workers own Control UI files while the fourth owns browser
+    // copilot E2E; all four remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
     expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy).toEqual({
@@ -5604,14 +5604,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
+    expect(scenario.if).toBe("matrix.shard != 4");
     expect(scenario.run).toBe(
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/3",
     );
     const browserCopilot = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test browser copilot end-to-end"),
       "browser copilot E2E suite",
     );
-    expect(browserCopilot.if).toBe("matrix.shard == 1");
+    expect(browserCopilot.if).toBe("matrix.shard == 4");
     expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
     for (const { job } of routedUiE2eJobs) {
       const jobContract = JSON.stringify(job);

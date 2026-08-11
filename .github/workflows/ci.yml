@@ -1539,14 +1539,15 @@ jobs:
       - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
+        if: matrix.shard != 4
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
-          --shard ${{ matrix.shard }}/4
+          --shard ${{ matrix.shard }}/3
 
       - name: Test browser copilot end-to-end
-        if: matrix.shard == 1
+        if: matrix.shard == 4
         run: pnpm test:e2e:browser-copilot
 
   checks-ui-e2e-real-gateway:
