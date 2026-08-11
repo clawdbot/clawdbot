@@ -286,6 +286,8 @@ private fun latestContentVersion(
       append(',')
       append(activity.terminalSummary?.hashCode() ?: 0)
       append(',')
+      append(activity.error?.hashCode() ?: 0)
+      append(',')
       append(activity.diffStat)
       append(';')
     }

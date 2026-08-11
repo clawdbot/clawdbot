@@ -379,6 +379,7 @@ class ChatTimelineTest {
       snippet = snippet,
       diffStat = ChatDiffStat(added = added, removed = 0, files = 1),
       terminalSummary = null,
+      error = null,
       startedAtMs = startedAtMs,
       endedAtMs = endedAtMs,
       childSessionKey = "agent:worker:subagent:$id",

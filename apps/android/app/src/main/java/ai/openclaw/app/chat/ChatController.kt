@@ -3104,6 +3104,7 @@ class ChatController internal constructor(
         invalidateIncompleteRunTelemetry()
         publishRunPresentation()
         clearLiveRunUi()
+        clearSubagentActivities()
         refreshQuestions()
         refreshHistoryForRecovery()
       }
@@ -5884,6 +5885,9 @@ class ChatController internal constructor(
           terminalSummary =
             task["terminalSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
               ?: existing?.terminalSummary,
+          error =
+            task["error"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+              ?: existing?.error,
           startedAtMs =
             task["startedAt"]?.let(::parseTaskTimestampMs)
               ?: existing?.startedAtMs

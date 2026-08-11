@@ -117,6 +117,7 @@ data class ChatSubagentActivity(
   val snippet: String?,
   val diffStat: ChatDiffStat?,
   val terminalSummary: String?,
+  val error: String?,
   val startedAtMs: Long,
   val endedAtMs: Long?,
   val childSessionKey: String?,

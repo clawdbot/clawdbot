@@ -93,6 +93,34 @@ class ChatControllerSubagentActivityTest {
       assertTrue(controller.subagentActivities.value.isEmpty())
     }
 
+  @Test
+  fun sequenceGapClearsActivityThatCanNoLongerConverge() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "running"))
+
+      controller.handleGatewayEvent("seqGap", null)
+
+      assertTrue(controller.subagentActivities.value.isEmpty())
+    }
+
+  @Test
+  fun errorOnlyFailureRetainsTerminalDetail() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent(
+        "task",
+        taskPayload(id = "task-1", status = "failed", error = "Worker could not start"),
+      )
+
+      assertEquals(
+        "Worker could not start",
+        controller.subagentActivities.value
+          .getValue("task-1")
+          .error,
+      )
+    }
+
   private fun TestScope.newController(): ChatController =
     ChatController(
       scope = backgroundScope,
@@ -109,6 +137,7 @@ class ChatControllerSubagentActivityTest {
     progressSummary: String? = null,
     lastToolName: String? = null,
     terminalSummary: String? = null,
+    error: String? = null,
     diffStat: Triple<Int, Int, Int>? = null,
   ): String =
     buildString {
@@ -123,6 +152,7 @@ class ChatControllerSubagentActivityTest {
       progressSummary?.let { append(",\"progressSummary\":\"").append(it).append("\"") }
       lastToolName?.let { append(",\"lastToolName\":\"").append(it).append("\"") }
       terminalSummary?.let { append(",\"terminalSummary\":\"").append(it).append("\"") }
+      error?.let { append(",\"error\":\"").append(it).append("\"") }
       diffStat?.let { (files, added, removed) ->
         append(",\"diffStat\":{\"files\":").append(files)
         append(",\"added\":").append(added)
