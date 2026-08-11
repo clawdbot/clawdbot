@@ -38,7 +38,7 @@ function removeSchemaRange(sql: string, startMarker: string, endMarker: string):
   return sql.slice(0, start) + sql.slice(end);
 }
 
-/** Exact schema bytes from 509a5f0373764, derived from current SQL with later additions removed. */
+/** Exact physical schema bytes shared by v15 and v16, reconstructed from 509a5f0373764. */
 export function historicalV15AgentSchemaSql(): string {
   let sql = restoreHistoricalAgentLeaseSchema(OPENCLAW_AGENT_SCHEMA_SQL).replace(
     "  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n",

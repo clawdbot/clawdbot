@@ -31,7 +31,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
-import { VERSION } from "../version.js";
 import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
 import {
   executeSqliteQuerySync,
@@ -51,7 +50,7 @@ const ARCHIVE_TEMP_MARKER = ".media-retirement";
 
 type MediaMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "schema_meta" | "session_windows" | "trajectory_runtime_events" | "transcript_events"
+  "session_windows" | "trajectory_runtime_events" | "transcript_events"
 >;
 
 type TranscriptRowSnapshot = {
@@ -419,20 +418,6 @@ function migrateAgentDatabase(params: {
               .where("seq", "=", row.seq),
           );
         }
-        if (versionAdvanced) {
-          database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-          executeSqliteQuerySync(
-            database,
-            db
-              .updateTable("schema_meta")
-              .set({
-                app_version: VERSION,
-                schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-                updated_at: Date.now(),
-              })
-              .where("meta_key", "=", "primary"),
-          );
-        }
       },
       {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -440,6 +425,14 @@ function migrateAgentDatabase(params: {
         operationLabel: "media-persistence-retirement",
       },
     );
+    if (versionAdvanced) {
+      // Final convergence owns version metadata and retired-object cleanup.
+      // Run it after media commit so the schema owner controls its own transaction.
+      ensureOpenClawAgentDatabaseSchema(database, {
+        agentId: params.agentId,
+        path: params.pathname,
+      });
+    }
     return {
       rewrittenSessions: changedSessions.length,
       rewrittenTrajectoryRows: changedTrajectoryRows.length,
