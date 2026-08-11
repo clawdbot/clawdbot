@@ -43,7 +43,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { formatProviderError } from "../utils/provider-error.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -660,13 +660,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         refusalBuffer.discard();
         output.content = [];
       }
-      output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
-      // A bare JSON.stringify here dies on the circular error objects HTTP/socket
-      // layers raise, and the throw escapes this catch so stream.end() never runs
-      // and the consumer hangs. formatProviderError guards that conversion, matching
-      // the other provider terminal paths.
-      output.errorMessage = formatProviderError(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      const terminal = projectProviderError(error, requestOptions?.signal);
+      Object.assign(output, terminal);
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
   })();

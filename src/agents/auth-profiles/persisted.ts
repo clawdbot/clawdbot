@@ -10,10 +10,10 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
-  hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,

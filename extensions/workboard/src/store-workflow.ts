@@ -9,6 +9,7 @@ import type {
 } from "@openclaw/workboard-contract";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendEvent,
   assertCanMutateClaimedCard,
@@ -51,7 +52,6 @@ import {
   normalizeArtifact,
   normalizeAutomation,
   normalizeBoundedString,
-  normalizeOptionalString,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,

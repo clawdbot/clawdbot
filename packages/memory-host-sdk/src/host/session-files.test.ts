@@ -6,7 +6,7 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { encodeSessionArchiveContent } from "../../../../src/config/sessions/archive-compression.js";
 import {
@@ -130,6 +130,23 @@ describe("listSessionFilesForAgent", () => {
 });
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("surfaces unexpected archive-directory scan failures", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const scanError = Object.assign(new Error("transient session archive scan failure"), {
+      code: "EIO",
+    });
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+      throw scanError;
+    });
+
+    try {
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main")).rejects.toBe(scanError);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("includes rotated SQLite sessions only when retained history is requested", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");

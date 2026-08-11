@@ -80,6 +80,13 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("rejects the built-in runtime id before mutating the registry", () => {
+    expect(() =>
+      registerAgentHarness(makeHarness("openclaw"), { ownerPluginId: "untrusted-plugin" }),
+    ).toThrow('agent harness id "openclaw" is reserved for the built-in runtime');
+    expect(listRegisteredAgentHarnesses()).toEqual([]);
+  });
+
   it("registers and retrieves a harness with owner metadata", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });

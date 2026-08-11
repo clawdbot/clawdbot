@@ -40,9 +40,9 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import type { CliOutput } from "./cli-output.js";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
-import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
+import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -66,6 +66,7 @@ import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasCo
 import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
+import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "./embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -196,6 +197,8 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return params.error.code === "cli_unknown_empty_failure";
     case "empty_response":
       return params.error.code === "cli_unknown_empty_failure";
+    case "format":
+      return params.error.code === "cli_synthetic_no_response";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
     case "context_overflow":
@@ -727,9 +730,8 @@ async function runCliAgentInternal(
   };
   if (params.cleanupCliLiveSessionOnRunEnd === true) {
     try {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
+      const { closeClaudeSession } = await import("./cli-runner/claude-live-registry.js");
+      await closeClaudeSession(context, "restart");
     } catch (error) {
       recordCleanupError(error);
     }
@@ -942,19 +944,19 @@ export async function runPreparedCliAgent(
       CliOutput,
       | "didSendViaMessagingTool"
       | "didDeliverSourceReplyViaMessageTool"
+      | "messagingToolSentTargets"
       | "messagingToolSourceReplyPayloads"
     >,
   ): ReplyPayload[] => {
     return buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: [],
       lastAssistant: undefined,
-      inlineToolResultsAllowed: false,
       sessionKey: params.sessionKey ?? "",
       provider: params.provider,
       model: context.modelId,
       didSendViaMessagingTool: evidence.didSendViaMessagingTool,
       didDeliverSourceReplyViaMessageTool: evidence.didDeliverSourceReplyViaMessageTool,
+      messagingToolSentTargets: evidence.messagingToolSentTargets,
       messagingToolSourceReplyPayloads: evidence.messagingToolSourceReplyPayloads,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       agentId: params.agentId,
@@ -967,6 +969,7 @@ export async function runPreparedCliAgent(
       CliOutput,
       | "didSendViaMessagingTool"
       | "didDeliverSourceReplyViaMessageTool"
+      | "messagingToolSentTargets"
       | "messagingToolSourceReplyPayloads"
     >,
   ) => {
@@ -989,9 +992,15 @@ export async function runPreparedCliAgent(
   ): EmbeddedAgentRunResult => {
     const message = formatErrorMessage(error);
     const { payloads } = resolveCliSourceReplyMirror(evidence);
+    const visiblePayloads =
+      payloads.length > 0
+        ? payloads
+        : resolveExplicitFinalSourceReplyDeliveryEvidence(evidence) === false
+          ? [{ text: "The reply stopped after sending progress. Please try again.", isError: true }]
+          : undefined;
     deliveredMessagingSideEffect = true;
     return {
-      ...(payloads.length > 0 ? { payloads } : {}),
+      ...(visiblePayloads ? { payloads: visiblePayloads } : {}),
       meta: {
         durationMs: Date.now() - context.started,
         systemPromptReport: context.systemPromptReport,
@@ -1536,7 +1545,7 @@ export async function runPreparedCliAgent(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: shouldUseClaudeLiveSession(context) },
+              { skipTranscriptProbe: acceptsClaudeLive(context) },
             );
         await runCliAgentEndHook(params, {
           event: {

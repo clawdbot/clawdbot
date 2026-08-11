@@ -14,12 +14,11 @@ import {
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  asFiniteNumber,
   createOpenAIRealtimeTranscriptionClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
-  trimToUndefined,
 } from "./realtime-provider-shared.js";
 
 type OpenAIRealtimeTranscriptionProviderConfig = {
@@ -125,9 +124,9 @@ function normalizeProviderConfig(
         value: raw?.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    language: trimToUndefined(raw?.language),
-    model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
-    prompt: trimToUndefined(raw?.prompt),
+    language: normalizeOptionalString(raw?.language),
+    model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
+    prompt: normalizeOptionalString(raw?.prompt),
     silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
     vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };

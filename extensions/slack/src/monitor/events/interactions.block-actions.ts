@@ -657,6 +657,7 @@ async function handleSlackApprovalInteraction(params: {
       approvalKind: params.approval.approvalKind,
       decision: params.approval.decision,
       channel: "slack",
+      accountId: params.ctx.accountId,
       senderId: params.parsed.userId,
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
@@ -752,6 +753,7 @@ async function handleSlackLegacyApprovalInteraction(params: {
         approvalId: parsedApproval.approvalId,
         decision: parsedApproval.decision,
         channel: "slack",
+        accountId: params.ctx.accountId,
         senderId: params.parsed.userId,
         resolveMethod,
       });
@@ -902,6 +904,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
   const isRoom = params.auth.channelType === "channel" || params.auth.channelType === "group";
   const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
     includePairingStore: isDirectMessage,
+    eventScope: params.eventScope,
   });
   const sender = await params.ctx
     .resolveUserName(params.parsed.userId, params.eventScope)

@@ -635,11 +635,9 @@ struct OnboardingView: View {
     }
 
     @State var currentPage = 0
-    @State var isRequesting = false
     @State var installingCLI = false
     @State var cliInstallPhase: CLIInstallPhase = .idle
     @State var cliStatus: String?
-    @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
@@ -655,15 +653,12 @@ struct OnboardingView: View {
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
-    @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var finishState = OnboardingFinishState()
     @State var aiSetup = OnboardingAISetupModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
-    @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
-    var permissionMonitor: PermissionMonitor
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
@@ -677,10 +672,7 @@ struct OnboardingView: View {
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
-    let onboardingChatPageIndex = 8
     let readyPageIndex = 9
-
-    let permissionsPageIndex = 5
 
     var heroFrameHeight: CGFloat {
         145
@@ -814,15 +806,34 @@ struct OnboardingView: View {
     }
 
     struct LocalGatewayProbe: Equatable {
-        let port: Int
-        let pid: Int32
-        let command: String
-        let expected: Bool
+        let subtitle: String
+
+        init(
+            port: Int,
+            pid: Int32,
+            command: String,
+            profile: AppProfile,
+            managedServicePID: Int32?)
+        {
+            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
+            let looksLikeGateway = expectedTokens.contains { command.lowercased().contains($0) }
+            let process = command.isEmpty ? "" : " (\(command) pid \(pid))"
+            guard GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+                profile: profile,
+                listenerPID: pid,
+                managedServicePID: managedServicePID)
+            else {
+                let profile = profile.name.map { " for profile \($0)" } ?? ""
+                self.subtitle = "Port \(port) already in use\(process). Choose a different Gateway port\(profile)."
+                return
+            }
+            let base = looksLikeGateway ? "Existing gateway detected" : "Port \(port) already in use"
+            self.subtitle = "\(base)\(process). Will attach."
+        }
     }
 
     init(
         state: AppState = AppStateStore.shared,
-        permissionMonitor: PermissionMonitor = .shared,
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
@@ -836,7 +847,6 @@ struct OnboardingView: View {
         })
     {
         self.state = state
-        self.permissionMonitor = permissionMonitor
         self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)

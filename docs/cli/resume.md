@@ -43,7 +43,7 @@ status 1. If no recent session matches, it suggests the picker and
 configured Gateway is unavailable, start or repair it and rerun the command.
 
 `resume` resolves configured Gateway auth SecretRefs for token/password auth
-when possible (`env`/`file`/`exec` providers).
+when possible (`env`/`file`/`exec`/`store` providers).
 
 Gateway target precedence is explicit `--url`, then `OPENCLAW_GATEWAY_URL`,
 then `gateway.remote.url` when `gateway.mode` is `remote`, then the local

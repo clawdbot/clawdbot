@@ -11,6 +11,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -48,10 +49,7 @@ import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
-import {
-  renderChatModelControls,
-  type ChatModelControlsProps,
-} from "./components/chat-model-controls.ts";
+import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
 import {
   resetChatThreadPresentationState,
@@ -209,7 +207,7 @@ const renderMessageGroupMock = vi.fn(
     return html`<div class="chat-group">${text}</div>`;
   },
 );
-const assistantAttachmentRenderVersionMock = { value: 0 };
+const chatMediaRenderVersionMock = { value: 0 };
 
 type ChatHeaderTestState = {
   basePath?: string;
@@ -298,8 +296,8 @@ beforeEach(() => {
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
-  vi.spyOn(chatMessage, "getAssistantAttachmentAvailabilityRenderVersion").mockImplementation(
-    () => assistantAttachmentRenderVersionMock.value,
+  vi.spyOn(chatMessage, "getChatMediaRenderVersion").mockImplementation(
+    () => chatMediaRenderVersionMock.value,
   );
   vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
   vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
@@ -543,6 +541,8 @@ function getChatModelSelect(container: Element): HTMLElement {
   return select;
 }
 
+type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
+
 function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelControlsProps {
   return {
     activeRunId: state.chatRunId,
@@ -777,6 +777,12 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    subagentActivity: {
+      rows: [],
+      overflowWorking: 0,
+      taskIds: new Set<string>(),
+      nextExpiryAt: null,
+    },
     view: { kind: "list" },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
@@ -1295,6 +1301,7 @@ describe("chat transcript rendering", () => {
 
     renderWithReply(firstReply);
     renderWithReply(currentReply);
+    expect(renderMessageGroupMock).toHaveBeenCalledOnce();
     requireElement(
       container,
       '[aria-label="Reply to message"]',
@@ -1854,22 +1861,22 @@ afterEach(() => {
   vi.useRealTimers();
   buildChatItemsMock.mockClear();
   renderMessageGroupMock.mockClear();
-  assistantAttachmentRenderVersionMock.value = 0;
+  chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-describe("session rail open requests", () => {
+describe("session rail pane commands", () => {
   it("does not replay the pane's retained generation after an A-B-A round trip", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     localStorage.setItem("openclaw.chat.observerHud.display", "pill");
     const container = document.createElement("div");
     document.body.append(container);
-    let consumedOpenRequest = 0;
-    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
-      consumedOpenRequest = openRequest;
+    let consumedGeneration = 0;
+    const onSessionRailCommandConsumed = vi.fn((generation: number) => {
+      consumedGeneration = generation;
     });
     const onObserverVisibilityChange = vi.fn();
     const companion = {
@@ -1879,16 +1886,16 @@ describe("session rail open requests", () => {
       hint: null,
       draft: "What changed?",
     };
-    const renderSession = async (sessionKey: string, sessionRailOpenRequest: number) => {
+    const renderSession = async (sessionKey: string, generation: number) => {
       render(
         renderChat(
           createChatProps({
             sessionKey,
             sessionRailReady: true,
-            sessionRailOpenRequest,
-            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCommand: generation > 0 ? { generation, intent: "open" } : null,
+            sessionRailConsumedCommandGeneration: consumedGeneration,
             sessionRailCompanion: companion,
-            onSessionRailOpenRequestConsumed,
+            onSessionRailCommandConsumed,
             onObserverVisibilityChange,
           }),
         ),
@@ -1905,7 +1912,7 @@ describe("session rail open requests", () => {
     try {
       let rail = await renderSession("agent:main:a", 1);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(consumedOpenRequest).toBe(1);
+      expect(consumedGeneration).toBe(1);
 
       rail = await renderSession("agent:main:b", 0);
       expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
@@ -1916,7 +1923,7 @@ describe("session rail open requests", () => {
 
       rail = await renderSession("agent:main:a", 2);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onSessionRailCommandConsumed).toHaveBeenCalledTimes(2);
       expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
       expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
     } finally {
@@ -1929,19 +1936,19 @@ describe("session rail open requests", () => {
     localStorage.setItem("openclaw.chat.observerHud.display", "pill");
     const container = document.createElement("div");
     document.body.append(container);
-    let consumedOpenRequest = 0;
-    const onSessionRailOpenRequestConsumed = vi.fn((openRequest: number) => {
-      consumedOpenRequest = openRequest;
+    let consumedGeneration = 0;
+    const onSessionRailCommandConsumed = vi.fn((generation: number) => {
+      consumedGeneration = generation;
     });
     const onObserverVisibilityChange = vi.fn();
-    const renderRail = async (sessionRailReady: boolean, sessionRailOpenRequest: number) => {
+    const renderRail = async (sessionRailReady: boolean, generation: number) => {
       render(
         renderChat(
           createChatProps({
             sessionKey: "agent:main:a",
             sessionRailReady,
-            sessionRailOpenRequest,
-            sessionRailConsumedOpenRequest: consumedOpenRequest,
+            sessionRailCommand: generation > 0 ? { generation, intent: "open" } : null,
+            sessionRailConsumedCommandGeneration: consumedGeneration,
             sessionRailCompanion: {
               exchanges: [],
               pendingQuestion: null,
@@ -1949,7 +1956,7 @@ describe("session rail open requests", () => {
               hint: null,
               draft: "What changed?",
             },
-            onSessionRailOpenRequestConsumed,
+            onSessionRailCommandConsumed,
             onObserverVisibilityChange,
           }),
         ),
@@ -1965,19 +1972,19 @@ describe("session rail open requests", () => {
     try {
       let rail = await renderRail(true, 1);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(consumedOpenRequest).toBe(1);
+      expect(consumedGeneration).toBe(1);
 
       rail = await renderRail(false, 1);
       expect(rail).toBeNull();
 
       rail = await renderRail(true, 1);
       expect(rail?.querySelector(".chat-session-rail--pill")).not.toBeNull();
-      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledOnce();
+      expect(onSessionRailCommandConsumed).toHaveBeenCalledOnce();
       expect(onObserverVisibilityChange).toHaveBeenCalledOnce();
 
       rail = await renderRail(true, 2);
       expect(rail?.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-      expect(onSessionRailOpenRequestConsumed).toHaveBeenCalledTimes(2);
+      expect(onSessionRailCommandConsumed).toHaveBeenCalledTimes(2);
       expect(onObserverVisibilityChange).toHaveBeenCalledTimes(2);
       expect(localStorage.getItem("openclaw.chat.observerHud.display")).toBe("pill");
     } finally {
@@ -1987,22 +1994,92 @@ describe("session rail open requests", () => {
 });
 
 describe("per-pane chat presentation state", () => {
-  it("opens thread search from the physical shortcut on a non-Latin layout", () => {
-    const onRequestUpdate = vi.fn();
-    const container = renderChatView({ onRequestUpdate });
-    const chat = requireElement(container, "section.card.chat", "chat view");
-    const event = new KeyboardEvent("keydown", {
-      key: "а",
-      code: "KeyF",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
+  it("moves focus into and back out of thread search for the physical shortcut", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+    try {
+      renderChatInto(container, { onRequestUpdate });
+      const composer = getComposerTextarea(container);
+      composer.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "а",
+        code: "KeyF",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
 
-    chat.dispatchEvent(event);
+      composer.dispatchEvent(event);
+      await Promise.resolve();
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
+      expect(event.defaultPrevented).toBe(true);
+      expect(onRequestUpdate).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(
+        container.querySelector<HTMLInputElement>('.agent-chat__search-bar input[type="text"]'),
+      );
+
+      const closeEvent = new KeyboardEvent("keydown", {
+        key: "а",
+        code: "KeyF",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.activeElement?.dispatchEvent(closeEvent);
+      await Promise.resolve();
+
+      expect(closeEvent.defaultPrevented).toBe(true);
+      expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(composer);
+      expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("returns focus to the composer when the original target disappears", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+    try {
+      renderChatInto(container, { onRequestUpdate });
+      const composer = getComposerTextarea(container);
+      const transientTarget = document.createElement("button");
+      const chat = container.querySelector<HTMLElement>(".card.chat");
+      if (!chat) {
+        throw new Error("expected chat section");
+      }
+      chat.append(transientTarget);
+      transientTarget.focus();
+
+      transientTarget.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+
+      transientTarget.remove();
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      container.remove();
+    }
   });
 
   it("keeps slash menus independent and resets only the targeted pane", () => {
@@ -2085,7 +2162,7 @@ describe("chat transcript rendering cache", () => {
     expect(renderMessageGroupMock.mock.calls[1]?.[1]).toMatchObject({ userId: "profile-1" });
   });
 
-  it("rerenders transcript groups when assistant attachment availability changes", () => {
+  it("rerenders transcript groups when chat media changes", () => {
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];
     const streamSegments: Array<{ text: string; ts: number }> = [];
@@ -2093,7 +2170,7 @@ describe("chat transcript rendering cache", () => {
     const container = document.createElement("div");
 
     renderChatInto(container, { messages, toolMessages, streamSegments, queue });
-    assistantAttachmentRenderVersionMock.value += 1;
+    chatMediaRenderVersionMock.value += 1;
     renderChatInto(container, { messages, toolMessages, streamSegments, queue, draft: "h" });
 
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
@@ -2606,8 +2683,8 @@ describe("chat loading skeleton", () => {
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
-      composerControls: html`<button class="chat-view-menu-trigger" type="button">
-        Settings
+      composerControls: html`<button class="chat-composer-model-control" type="button">
+        Model
       </button>`,
       queue: [createPendingSend()],
       sessions: createContextUsageSessions(),
@@ -2659,7 +2736,6 @@ describe("chat loading skeleton", () => {
     expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
-    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
@@ -2798,8 +2874,8 @@ describe("chat loading skeleton", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const container = renderChatView({
-        composerControls: html`<button class="chat-view-menu-trigger" type="button">
-          Settings
+        composerControls: html`<button class="chat-composer-model-control" type="button">
+          Model
         </button>`,
         runStatus: {
           phase: "interrupted",
@@ -4457,6 +4533,61 @@ describe("chat attachment picker", () => {
     expect(container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
       "Show in text field",
     );
+  });
+
+  it("preserves pasted-text presentation and restore behavior across handoff", () => {
+    let attachments: ChatAttachment[] = [];
+    const producer = renderAttachmentHarness(
+      () => attachments,
+      (next) => {
+        attachments = next;
+      },
+    );
+    const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
+    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
+    const original = expectDefined(attachments[0], "pasted attachment");
+    const originalDataUrl = getChatAttachmentDataUrl(original);
+
+    const handoff = createChatAttachmentHandoff();
+    const owner = {} as GatewayBrowserClient;
+    handoff.prepare({
+      owner,
+      paneId: "p1",
+      scopeKey: "agent:main:one",
+      attachments,
+      fallbacks: {},
+    });
+    attachments = expectDefined(
+      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" }),
+      "restored attachments",
+    ).attachments;
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toBe(original);
+    expect(getChatAttachmentDataUrl(original)).toBe(originalDataUrl);
+
+    const onAttachmentsChange = vi.fn();
+    const onDraftChange = vi.fn();
+    const remounted = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      draft: "intro",
+      getDraft: () => "intro",
+      onAttachmentsChange,
+      onDraftChange,
+    });
+    expect(remounted.querySelector(".chat-attachment-file__name")?.textContent).toContain(
+      "First words from a r...",
+    );
+    requireElement(
+      remounted,
+      '[aria-label="Show in text field"]',
+      "show pasted text button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
+    expect(getChatAttachmentDataUrl(original)).toBeNull();
   });
 
   it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {

@@ -24,13 +24,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
     }
     respond(true, { subscribed: Boolean(connId) }, undefined);
   },
-  "sessions.unsubscribe": ({ client, context, respond }) => {
-    const connId = client?.connId?.trim();
-    if (connId) {
-      context.unsubscribeSessionEvents(connId);
-    }
-    respond(true, { subscribed: false }, undefined);
-  },
   "sessions.viewers.set": ({ params, client, context, respond }) => {
     if (
       !assertValidParams(

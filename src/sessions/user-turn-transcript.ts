@@ -458,6 +458,7 @@ export function createUserTurnTranscriptRecorder(
   let persistedMessageNotified = false;
   let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
   let sentToProvider = false;
+  let admissionHandler: ((admission: UserTurnTranscriptAdmissionReceipt) => void) | undefined;
   let resolvedBeforeProvider = false;
   let replacementText: string | undefined;
 
@@ -532,6 +533,7 @@ export function createUserTurnTranscriptRecorder(
     }
     admissionReceipt = resolveUserTurnTranscriptAdmission({ logicalTurnId, receipt });
     admittedMessage = persistedMessage;
+    admissionHandler?.(admissionReceipt);
   };
 
   const waitForRuntimePersistence = async () => {
@@ -682,6 +684,7 @@ export function createUserTurnTranscriptRecorder(
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
     getAdmissionReceipt: () => admissionReceipt,
+    setAdmissionHandler: (handler) => (admissionHandler = handler),
     markSentToProvider: () => {
       sentToProvider = true;
     },

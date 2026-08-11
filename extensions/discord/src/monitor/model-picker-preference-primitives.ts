@@ -43,7 +43,7 @@ export function buildPreferenceModelKey(scopeKey: string, modelRef: string): str
   return `v1:${hashSegment(scopeKey, 32)}:${hashSegment(modelRef, 24)}`;
 }
 
-export function timestampMs(value: unknown): number {
+export function preferenceTimestampMs(value: unknown): number {
   const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : 0;
 }

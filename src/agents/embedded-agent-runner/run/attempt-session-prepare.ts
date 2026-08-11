@@ -33,19 +33,19 @@ import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import {
+  type AttemptContextEngine,
+  runAttemptContextEngineBootstrap,
+} from "./attempt-context-engine-helpers.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
+import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
-import {
-  type AttemptContextEngine,
-  runAttemptContextEngineBootstrap,
-} from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
-import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
-import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
+import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";

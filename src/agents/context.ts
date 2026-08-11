@@ -55,8 +55,6 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
 };
 const loadPreparedModelCatalogRuntime = () => import("./prepared-model-catalog.js");
 
-class ContextWindowCachePrewarmCancelledError extends Error {}
-
 function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawConfig {
   const caches = getContextWindowCaches();
   applyConfiguredContextWindows({
@@ -210,7 +208,7 @@ export async function prewarmContextWindowCacheAfterReady(params: {
       modelCatalog: owner.modelCatalog,
       assertCurrent: () => {
         if (shouldStop()) {
-          throw new ContextWindowCachePrewarmCancelledError();
+          throw new Error("context window cache prewarm cancelled");
         }
       },
     });

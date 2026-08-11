@@ -17,6 +17,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
+import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
 import {
@@ -32,7 +33,7 @@ import {
   registerIdempotentCleanup,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
-import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
+import { startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;

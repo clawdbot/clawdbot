@@ -18,13 +18,9 @@ import {
   resolveCloudWorkerStopAction,
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type {
-  SessionMenuAction,
-  SessionMenuActionKind,
-  SessionMenuWork,
-} from "../../components/session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
@@ -99,6 +95,9 @@ type SessionsPageRequestScope = {
 };
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
+
+/** Type-only, so the dialog itself stays behind its lazy boundary. */
+type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
 type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
 
@@ -313,6 +312,9 @@ class SessionsPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.invalidatePageWork();
+    // Dialogs mount on document.body, so navigating away would otherwise leave
+    // one over the destination, still submitting against this detached page.
+    this.dialogLifecycle?.abort();
     this.gatewayClient = null;
     this.gatewayConnected = false;
     super.disconnectedCallback();
@@ -449,47 +451,6 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     }
     return undefined;
-  }
-
-  private sessionMenuActionDisabledReasons(
-    row: GatewaySessionRow,
-  ): Partial<Record<SessionMenuActionKind, string>> {
-    const patchReason = this.mutationDisabledReason({
-      method: "sessions.patch",
-      params: { key: row.key, label: null },
-    });
-    const groupReason = this.mutationDisabledReason({
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    });
-    const forkReason = this.mutationDisabledReason({
-      method: "sessions.create",
-      params: { parentSessionKey: row.key, fork: true },
-    });
-    const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
-    const cloudWorkerStopReason = cloudWorkerStopAction
-      ? this.mutationDisabledReason(cloudWorkerStopAction)
-      : undefined;
-    const deleteReason = this.mutationDisabledReason({
-      method: "sessions.delete",
-      params: { key: row.key, ...(row.archived === true ? { archivedOnly: true } : {}) },
-    });
-    return {
-      ...(patchReason
-        ? {
-            "toggle-pin": patchReason,
-            "set-icon": patchReason,
-            "toggle-unread": patchReason,
-            rename: patchReason,
-            "move-to-group": patchReason,
-            "toggle-archived": patchReason,
-          }
-        : {}),
-      ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
-      ...(forkReason ? { fork: forkReason } : {}),
-      ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
-      ...(deleteReason ? { delete: deleteReason } : {}),
-    };
   }
 
   private applyRouteData() {
@@ -1027,22 +988,26 @@ class SessionsPage extends OpenClawLightDomElement {
     saveStoredGroupBy(mode);
   }
 
-  private async rememberCustomGroup(name: string) {
-    const scope = this.captureRequestScope();
+  private async rememberCustomGroup(
+    name: string,
+    scope: SessionsPageRequestScope | null = this.captureRequestScope(),
+  ): Promise<SessionsPageMutationResult> {
+    if (!scope) {
+      return "stale";
+    }
     if (
-      scope &&
       !this.requireMutationAccess(scope, {
         method: "sessions.groups.put",
         requiredScope: "operator.write",
       })
     ) {
-      return;
+      return "failed";
     }
-    await rememberSessionCustomGroup({
+    return rememberSessionCustomGroup({
       name,
       knownCategories: this.knownCategories(),
-      sessions: scope?.sessions,
-      isCurrent: () => Boolean(scope && this.isRequestScopeCurrent(scope)),
+      sessions: scope.sessions,
+      isCurrent: () => this.isRequestScopeCurrent(scope),
       onError: (message) => {
         this.error = message;
       },
@@ -1067,22 +1032,101 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.patchSession(key, { category });
   }
 
-  private requestNewCategory(sessionKey?: string) {
-    const raw = window.prompt(t("sessionsView.newGroupPrompt"));
-    const name = raw?.trim();
-    if (!name) {
-      return;
+  /** Only one dialog is open at a time; disconnect closes whichever it is. */
+  private dialogLifecycle: AbortController | null = null;
+
+  private async withDialogLifecycle<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    // A second open while one is live must not take ownership. showInputDialog
+    // drops the reentrant request anyway, and if it installed its own controller
+    // it would clear this field on the way out, leaving the dialog that is
+    // actually on screen with nothing for disconnect to abort.
+    const active = this.dialogLifecycle;
+    if (active) {
+      return run(active.signal);
     }
-    void this.rememberCustomGroup(name);
-    if (sessionKey) {
-      void this.patchSession(sessionKey, { category: name });
+    const lifecycle = new AbortController();
+    this.dialogLifecycle = lifecycle;
+    try {
+      return await run(lifecycle.signal);
+    } finally {
+      if (this.dialogLifecycle === lifecycle) {
+        this.dialogLifecycle = null;
+      }
     }
   }
 
+  /** A dialog that never opens still owes the operator a visible outcome. */
+  private async loadInputDialog(): Promise<InputDialogOpener | null> {
+    try {
+      return (await import("../../components/input-dialog.ts")).showInputDialog;
+    } catch (error) {
+      this.error = String(error);
+      return null;
+    }
+  }
+
+  private async requestNewCategory(sessionKey?: string) {
+    await this.withDialogLifecycle(async (signal) => {
+      const showInputDialog = await this.loadInputDialog();
+      await showInputDialog?.({
+        signal,
+        title: t("sessionsView.newGroupTitle"),
+        label: t("sessionsView.newGroupPrompt"),
+        submitLabel: t("sessionsView.newGroupCreate"),
+        requireValue: true,
+        submit: (name) => this.writeNewCategory(name, sessionKey),
+      });
+    });
+  }
+
+  /**
+   * One captured scope covers both writes: the catalog entry lands before the
+   * row moves, and a catalog write that outlived its connection must not be
+   * followed by an assignment issued on the replacement one.
+   */
+  private async writeNewCategory(name: string, sessionKey?: string): Promise<string | null> {
+    this.error = null;
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return t("sessionsView.newGroupFailed");
+    }
+    const remembered = await this.rememberCustomGroup(name, scope);
+    if (remembered !== "completed") {
+      return remembered === "failed"
+        ? (this.error ?? t("sessionsView.newGroupFailed"))
+        : t("sessionsView.newGroupStale");
+    }
+    if (!sessionKey) {
+      return null;
+    }
+    // The catalog write is awaited first, so the row can leave this list in
+    // between. sessions.patch would recreate a store entry for a key the list no
+    // longer has, so the move is skipped — but this list is a bounded, filtered
+    // projection, and a plain refresh can page a live row out of it. Skipping
+    // silently would leave the operator with a new group, an unmoved session and
+    // nothing explaining why, so the partial outcome is stated and terminal:
+    // retrying here would only try to create the group that already exists.
+    if (!this.result?.sessions.some((row) => row.key === sessionKey)) {
+      this.error = t("sessionsView.newGroupMoveSkipped");
+      return null;
+    }
+    const assigned = await this.patchSession(sessionKey, { category: name }, scope);
+    if (assigned === "failed") {
+      return this.error ?? t("sessionsView.newGroupFailed");
+    }
+    return assigned === "stale" ? t("sessionsView.newGroupStale") : null;
+  }
+
   private async renameSession(row: GatewaySessionRow) {
-    const value = await showInputDialog({
-      title: t("sessionsView.renameSessionPrompt"),
-      defaultValue: normalizeOptionalString(row.label) ?? "",
+    const value = await this.withDialogLifecycle(async (signal) => {
+      const showInputDialog = await this.loadInputDialog();
+      return (
+        (await showInputDialog?.({
+          signal,
+          title: t("sessionsView.renameSessionPrompt"),
+          defaultValue: normalizeOptionalString(row.label) ?? "",
+        })) ?? null
+      );
     });
     if (value === null) {
       return;
@@ -1420,7 +1464,6 @@ class SessionsPage extends OpenClawLightDomElement {
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
-          icon: row.icon,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
@@ -1429,13 +1472,16 @@ class SessionsPage extends OpenClawLightDomElement {
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
-        .actionDisabledReasons=${this.sessionMenuActionDisabledReasons(row)}
+        .actionDisabledReasons=${sessionMenuReasons({
+          snapshot: gateway,
+          session: row,
+          cloudWorkerStopAction,
+        })}
         .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
-        .canOpenChat=${row.kind !== "global"}
         .work=${this.sessionMenuWork}
         .workboard=${canCapture && row.kind !== "global"
           ? {
@@ -1446,17 +1492,6 @@ class SessionsPage extends OpenClawLightDomElement {
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
-            case "open-chat":
-              context.navigate("chat", {
-                ...sessionNavigationTarget({
-                  context,
-                  face: "chat",
-                  sessionKey: row.key,
-                  agentId: this.sessionPathAgentId(row.key, context),
-                }).options,
-                hash: "",
-              });
-              break;
             case "open-pr":
               openExternalUrlSafe(action.url);
               break;
@@ -1465,9 +1500,6 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });
-              break;
-            case "set-icon":
-              void this.patchSession(row.key, { icon: action.icon });
               break;
             case "toggle-unread":
               void this.patchSession(row.key, { unread: row.unread !== true });
@@ -1485,7 +1517,7 @@ class SessionsPage extends OpenClawLightDomElement {
               this.assignCategory(row.key, action.category);
               break;
             case "new-group":
-              this.requestNewCategory(row.key);
+              void this.requestNewCategory(row.key);
               break;
             case "toggle-archived":
               if (row.archived === true) {
@@ -1620,7 +1652,7 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onGroupByChange: (mode) => this.setGroupBy(mode),
           onAssignCategory: (key, category) => this.assignCategory(key, category),
-          onRequestNewCategory: (sessionKey) => this.requestNewCategory(sessionKey),
+          onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
           onPageChange: (page) => {
             this.page = page;
           },

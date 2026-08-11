@@ -11,7 +11,10 @@ import {
   hasSessionAutoModelFallbackProvenance,
 } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  loadExactSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -19,6 +22,7 @@ import {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
@@ -36,6 +40,7 @@ import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
@@ -327,11 +332,25 @@ export async function getStatusSummary(
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    const heartbeatSession = resolveHeartbeatSessionKey(
+      cfg,
+      agent.id,
+      summary.session === undefined ? undefined : { session: summary.session },
+    );
+    // Status must not create, register, or migrate an absent session database.
+    const entry = loadExactSessionEntryReadOnly({
+      agentId: agent.id,
+      storePath: heartbeatSession.storePath,
+      sessionKey: heartbeatSession.sessionKey,
+    })?.entry;
+    const route = deliveryContextFromSession(entry);
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      waitingForRoute:
+        summary.enabled && summary.target === "last" && (!route?.channel || !route.to),
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -558,7 +577,6 @@ export async function getStatusSummary(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
-
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext

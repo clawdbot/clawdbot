@@ -15,7 +15,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   dismissSubagentCompletionDelivery,
   retrySubagentCompletionDelivery,
-} from "../../agents/subagent-completion-delivery.js";
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
@@ -130,9 +130,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
-    const { cancelDetachedTaskRunById } =
+    const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
-    const result = await cancelDetachedTaskRunById({
+    const result = await cancelDetachedTaskRunByIdCore({
       cfg: context.getRuntimeConfig(),
       taskId,
       ...(reason ? { reason } : {}),
@@ -178,8 +178,3 @@ export const tasksHandlers: GatewayRequestHandlers = {
     });
   },
 };
-
-export const testApi = {
-  mapTaskSummary,
-};
-export { testApi as __test };

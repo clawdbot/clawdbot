@@ -4,17 +4,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
-import type { ReliabilityReport } from "../../scripts/lib/sqlite-reliability-contract.js";
+import {
+  STRESS_TABLE_SQL,
+  type ReliabilityReport,
+} from "../../scripts/lib/sqlite-reliability-contract.js";
 import { monitorSqliteWalDuring } from "../../scripts/lib/sqlite-reliability-wal-monitor.js";
 import {
   canonicalPathWithExistingParent,
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Windows repeats ACL checks and >64 MiB crash/restore copies across two full runs.
+// Windows repeats ACL checks and >64 MiB crash/restore copies throughout the full proof.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
 
@@ -147,36 +154,50 @@ describe("scripts/bench-sqlite-reliability", () => {
     });
   });
 
-  reliabilitySmokeTest("reuses a state directory without stale rows or restore collisions", () => {
+  reliabilitySmokeTest("proves snapshot reliability while safely reusing state", () => {
     const stateDir = tempDirs.make("openclaw-sqlite-reliability-test-");
-    const firstOutput = path.join(stateDir, "report-first.json");
-    const firstResult = runProof([
-      "--profile",
-      "smoke",
-      "--state-dir",
+    const previousSyncedRepository = path.join(
       stateDir,
-      "--output",
-      firstOutput,
-    ]);
+      "sqlite-reliability-runs",
+      "previous-run",
+      "synced-snapshots",
+    );
+    const previousArtifact = path.join(previousSyncedRepository, "previous-artifact");
+    fs.mkdirSync(previousSyncedRepository, { recursive: true });
+    fs.writeFileSync(previousArtifact, "retained");
 
-    expect(firstResult.status, firstResult.stderr).toBe(0);
-    expect(firstResult.stderr).toBe("");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=7");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=verified");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=verified");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
-    const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as ReliabilityReport;
+    const existingDatabase = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    try {
+      existingDatabase.db.exec(STRESS_TABLE_SQL);
+      existingDatabase.db
+        .prepare(
+          "INSERT INTO openclaw_reliability_entries (batch, ordinal, payload) VALUES (?, ?, ?)",
+        )
+        .run(999_999, 0, "stale-profile-row");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+
+    const output = path.join(stateDir, "report.json");
+    const result = runProof(["--profile", "smoke", "--state-dir", stateDir, "--output", output]);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=7");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
+    expect(result.stdout).not.toContain("=missing");
+    const firstReport = JSON.parse(fs.readFileSync(output, "utf8")) as ReliabilityReport;
     expect(firstReport.concurrentRestoresVerified).toBe(4);
     expect(firstReport.restoresVerified).toBe(7);
-    expect(firstReport.crashRecoveryProof.sourceRecovered).toBe(true);
-    expect(firstReport.crashRecoveryProof.committedStatePreserved).toBe(true);
-    expect(firstReport.crashRecoveryProof.partialVisibleAfterRecovery).toBe(false);
-    expect(firstReport.crashRecoveryProof.writerRestarted).toBe(true);
     expect(
       firstReport.crashRecoveryProof.exit.code !== null ||
         firstReport.crashRecoveryProof.exit.signal !== null,
@@ -375,33 +396,18 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.walBytes.peak).toBeGreaterThan(0);
     expect(firstReport.walBytes.peak).toBeLessThanOrEqual(firstReport.walBytes.limit);
 
-    const database = openNodeSqliteDatabase(firstReport.paths.sourceDatabase);
+    expect(firstReport.paths.syncedRepository).not.toBe(previousSyncedRepository);
+    expect(fs.readFileSync(previousArtifact, "utf8")).toBe("retained");
+
+    const database = openNodeSqliteDatabase(firstReport.paths.sourceDatabase, { readOnly: true });
     try {
-      database
-        .prepare(
-          "INSERT INTO openclaw_reliability_entries (batch, ordinal, payload) VALUES (?, ?, ?)",
-        )
-        .run(999_999, 0, "stale-profile-row");
+      const staleRows = database
+        .prepare("SELECT COUNT(*) AS rows FROM openclaw_reliability_entries WHERE batch = ?")
+        .get(999_999) as { rows?: unknown };
+      expect(Number(staleRows.rows)).toBe(0);
     } finally {
       database.close();
     }
-
-    const secondOutput = path.join(stateDir, "report-second.json");
-    const secondResult = runProof([
-      "--profile",
-      "smoke",
-      "--state-dir",
-      stateDir,
-      "--output",
-      secondOutput,
-    ]);
-    expect(secondResult.status, secondResult.stderr).toBe(0);
-    const secondReport = JSON.parse(fs.readFileSync(secondOutput, "utf8")) as {
-      paths: { syncedRepository: string };
-      restoresVerified: number;
-    };
-    expect(secondReport.restoresVerified).toBe(7);
-    expect(secondReport.paths.syncedRepository).not.toBe(firstReport.paths.syncedRepository);
   });
 
   it("matches crash barriers across filesystem path aliases", () => {

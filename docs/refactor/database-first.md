@@ -150,6 +150,10 @@ without exceptions outside doctor/import/export/debug boundaries.
   and generated bootstrap hashes live in typed shared SQLite tables. Runtime
   does not read or write the retired workspace JSON and `.attested` sidecars;
   Doctor owns their validated import and verified removal.
+- Inferred commitments: retired. Extraction, delivery, runtime storage access,
+  and the CLI are removed. Existing rows and legacy JSON stay untouched and
+  inert until an approved retention and schema-version migration can remove
+  them.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -917,9 +921,8 @@ sessionId}` and session key context.
   old `transcriptDir` option is removed.
 - One-off slug generation and system-agent planner runs use SQLite transcript rows
   instead of creating temporary `session.jsonl` files.
-- `llm-task` helper runs and hidden commitment extraction also use SQLite
-  transcript rows, so these model-only helper sessions no longer create
-  temporary JSON/JSONL transcript files.
+- `llm-task` helper runs use SQLite transcript rows, so these model-only helper
+  sessions no longer create temporary JSON/JSONL transcript files.
 - `TranscriptSessionManager` is only an opened SQLite transcript scope now.
   Runtime code opens it with `openTranscriptSessionManagerForSession({agentId,
 sessionId})`; create, branch, continue, list, and fork flows live in their
@@ -1110,13 +1113,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   sharded JSON registry files and removes successful sources. Runtime reads use
   the typed row columns as source of truth; `entry_json` is only a replay/debug
   copy.
-- Commitments now use a typed shared `commitments` table instead of a
-  whole-store JSON blob. Runtime uses indexed scope, delivery-window, rolling
-  cap, status, and attempt queries plus synchronous SQLite transactions;
-  `record_json` is only a replay/debug copy. Explicit doctor repair validates
-  the complete legacy `commitments.json`, keeps newer SQLite rows, verifies the
-  result, and only then removes the unchanged source. Runtime never reads or
-  writes the retired file.
+- The retired `commitments` table remains in the shared schema only until an
+  approved schema-version migration can drop it. Runtime no longer reads or
+  writes commitment rows. Doctor leaves retained rows and the legacy
+  `commitments.json` source untouched.
 - Web Push subscriptions and the generated VAPID identity now use typed shared
   `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
   expiry cleanup, and first-use key generation use row-level SQLite
@@ -1469,10 +1469,10 @@ create` validates the written archive by default; `--no-verify` is the
   bridge; they are not a second canonical transcript store.
 - QMD's own `index.sqlite`, YAML collection config, and model downloads remain
   external-tool artifacts under `~/.openclaw/agents/<agentId>/qmd`; they are not
-  mirrored into `plugin_blob_entries`. OpenClaw-owned QMD coordination is
-  database-first: shared `state_leases` serialize embeds globally and per-agent
-  `state_leases` serialize collection/update/embed writers. Runtime creates no
-  QMD lock sidecars.
+  mirrored into `plugin_blob_entries`. Current host-owned lease consumers use
+  shared `state_leases`; the per-agent `state_leases` table remains in the
+  canonical schema but has no runtime tenants. Runtime creates no QMD lock
+  sidecars.
 - The optional `memory-lancedb` plugin no longer creates
   `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
   external LanceDB backend and stays disabled until the operator configures an
@@ -1646,8 +1646,10 @@ Move these into the global database:
 - Cron job definitions, schedule state, and run history now use shared SQLite;
   doctor imports/removes legacy `jobs.json`, `jobs-state.json`, and
   `cron/runs/*.jsonl` files
-- Device identity/auth, push, update check, commitments, OpenRouter model
-  cache, installed plugin index, and app-server bindings
+- Device identity/auth, push, update check, OpenRouter model cache, installed
+  plugin index, and app-server bindings
+- Retired commitment rows and the legacy `commitments.json` source stay inert
+  until an approved retention and schema-version migration removes them.
 - Device/node pairing and bootstrap records now use typed SQLite tables
 - Device-pair notification subscribers and delivered-request markers now use the
   shared SQLite plugin-state table instead of `device-pair-notify.json`.
@@ -2042,8 +2044,7 @@ payload.
      `gateway_locks` and no longer exposes a file-lock directory seam.
    - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
      files; it writes shared SQLite plugin-state rows. Done.
-   - QMD coordination uses a shared SQLite lease for embeds and a per-agent
-     SQLite lease for every collection/update/embed writer. Runtime no longer
+   - QMD writers no longer take OpenClaw state leases. Runtime no longer
      creates `qmd/embed.lock.lock` or `agents/<agentId>/qmd-write.lock.lock`;
      Doctor removes only definitely stale retired sidecars. Done.
 

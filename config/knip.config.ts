@@ -156,9 +156,9 @@ const rootEntries = [
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
-  "src/agents/subagent-registry.runtime.ts!",
+  "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
-  "src/agents/subagent-registry-restart-recovery.ts!",
+  "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
@@ -379,7 +379,6 @@ const config = {
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
-    "src/secrets/credential-matrix.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
@@ -395,24 +394,33 @@ const config = {
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
-    // Test and E2E callers reach these hooks through runtime.test-support.ts;
-    // the full-tree companion config still audits their actual consumers.
-    "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
+    // Transitional public failover predicates stay available until their remaining callers
+    // migrate in later consolidation PRs; focused tests audit the retained behavior.
+    "src/agents/failover/classify.ts": ["exports"],
+    "src/agents/failover/provider-patterns.ts": ["exports"],
+    // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
+    "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
     "src/plugins/compaction-provider.ts": ["exports"],
     "src/plugins/interactive-registry.ts": ["exports"],
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
     "src/tasks/detached-task-runtime-state.ts": ["exports"],
+    // Focused Control UI tests consume these explicit state-machine seams;
+    // production uses them through their owning module/controller.
+    "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
+    "ui/src/pages/chat/composer-persistence.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // Collection reconcile behavior is asserted by the focused review tests;
+    // production wires only the scheduled review loop.
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
@@ -677,13 +685,12 @@ const config = {
       "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
+      // Built by tsdown as the native messaging executable; Chrome launches it by path.
+      "native-host-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
+      "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
-      "chrome-extension/sidepanel.js!",
-      "scripts/build-copilot-runtime.mjs!",
-      // esbuild receives this browser bootstrap by an assembled path.
-      "scripts/copilot-runtime-entry.ts!",
       "scripts/copy-chrome-extension.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([

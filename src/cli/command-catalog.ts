@@ -273,15 +273,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "sessions" },
   },
   {
-    commandPath: ["commitments"],
-    policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
-  },
-  {
     commandPath: ["agents", "list"],
     // Text and JSON output are derived from config plus read-only channel
     // metadata, so the route should not preload bundled plugin runtimes.
@@ -459,6 +450,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["mcp", "serve"],
     exact: true,
     policy: { ownsProtocolStdout: true },
+  },
+  {
+    commandPath: ["browser", "extension", "native-host"],
+    exact: true,
+    policy: { hideBanner: true, ownsProtocolStdout: true, networkProxy: "bypass" },
   },
   {
     commandPath: ["node"],

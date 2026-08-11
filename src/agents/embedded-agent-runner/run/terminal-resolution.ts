@@ -191,7 +191,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptAuthProfileStore: AuthProfileStore;
   apiKeyInfo: ResolvedProviderAuth | null;
   agentHarnessId: string;
-  settledTurnFinalizationAttempted: boolean;
+  settledTurnFinalizationOutcome: "not-attempted" | "answered" | "completed-empty" | "failed";
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
   reportedModelRef: { provider: string; model: string };
@@ -223,7 +223,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
-  const settledTurnFinalizationAttempted = input.settledTurnFinalizationAttempted;
+  const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: runParams.terminalReplyExpectation,
@@ -309,16 +309,17 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
-  const incompleteTurnText = emptyAssistantReplyIsSilent
-    ? null
-    : resolveIncompleteTurnPayloadText({
-        payloadCount,
-        aborted: terminalAborted,
-        externalAbort: externalAbort || signalOwnedInterruption,
-        timedOut: terminalTimedOut,
-        hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
-        attempt,
-      });
+  const incompleteTurnText =
+    emptyAssistantReplyIsSilent || input.settledTurnFinalizationOutcome === "completed-empty"
+      ? null
+      : resolveIncompleteTurnPayloadText({
+          payloadCount,
+          aborted: terminalAborted,
+          externalAbort: externalAbort || signalOwnedInterruption,
+          timedOut: terminalTimedOut,
+          hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
+          attempt,
+        });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&

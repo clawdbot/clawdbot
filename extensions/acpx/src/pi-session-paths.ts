@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function optionalString(value: unknown, maxLength: number): string | undefined {
+function readBoundedString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -52,7 +52,7 @@ function resolveConfiguredPath(
 function settingsSessionDir(file: string): string | undefined {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    return isRecord(value) ? optionalString(value.sessionDir, 4_096) : undefined;
+    return isRecord(value) ? readBoundedString(value.sessionDir, 4_096) : undefined;
   } catch {
     return undefined;
   }

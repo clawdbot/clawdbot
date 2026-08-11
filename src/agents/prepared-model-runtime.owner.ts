@@ -318,10 +318,6 @@ export function hasSameLifecycleInput(
   );
 }
 
-export function toError(error: unknown): Error {
-  return toPreparedModelRuntimeError(error);
-}
-
 export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeReplacement {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -499,7 +495,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           }
           break;
         } catch (error) {
-          const refreshError = toError(error);
+          const refreshError = toPreparedModelRuntimeError(error);
           const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
           if (
             !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
@@ -528,7 +524,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         candidate.owner.needsRefresh = false;
       }
     } catch (error) {
-      const refreshError = toError(error);
+      const refreshError = toPreparedModelRuntimeError(error);
       for (const candidate of candidates) {
         if (!candidate.isCurrent()) {
           continue;
@@ -606,7 +602,7 @@ export async function publishModelRuntimeSnapshot(
       owner.needsRefresh = false;
       return result.snapshot;
     } catch (error) {
-      const refreshError = toError(error);
+      const refreshError = toPreparedModelRuntimeError(error);
       if (owner.generation === generation && owners.get(key) === owner) {
         owner.pending = undefined;
         owner.needsRefresh = true;

@@ -176,7 +176,7 @@ function createMockCompactionSession() {
   };
   return session;
 }
-export const createAgentSessionMock = vi.fn(async (_options?: unknown) => ({
+export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?]) => ({
   session: createMockCompactionSession(),
 }));
 function createMockToolDefinitions(tools: unknown[] = []) {
@@ -724,7 +724,6 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../sessions/index.js", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
-    createAgentSession: createAgentSessionMock,
     DefaultResourceLoader: function DefaultResourceLoader() {
       return {
         reload: vi.fn(async () => undefined),
@@ -740,6 +739,10 @@ export async function loadCompactHooksHarness(): Promise<{
     },
     estimateTokens: estimateTokensMock,
     generateSummary: vi.fn(async () => "summary"),
+  }));
+
+  vi.doMock("../sessions/sdk.js", () => ({
+    createAgentSessionForEmbeddedRunner: createAgentSessionMock,
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -961,9 +964,12 @@ export async function loadCompactHooksHarness(): Promise<{
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
   }));
 
-  vi.doMock("../../skills/loading/workspace.js", () => ({
-    loadWorkspaceSkillEntries: vi.fn(() => []),
-    resolveSkillsPromptForRun: vi.fn(() => undefined),
+  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => ({
+    loadWorkspaceSkills: vi.fn(() => []),
+  }));
+
+  vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
+    resolveSkillsPrompt: vi.fn(() => undefined),
   }));
 
   vi.doMock("../agent-scope.js", () => ({

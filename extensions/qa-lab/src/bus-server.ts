@@ -113,6 +113,13 @@ function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput
     label: "poll cursor",
     min: 0,
   });
+  const acknowledgedCursor = readOptionalIntegerField(input, "acknowledgedCursor", {
+    label: "acknowledged poll cursor",
+    min: 0,
+  });
+  if (acknowledgedCursor !== undefined && acknowledgedCursor > (cursor ?? 0)) {
+    throw new Error("acknowledged poll cursor must not exceed the requested poll cursor.");
+  }
   const limit = readOptionalIntegerField(input, "limit", {
     label: "poll limit",
     max: QA_BUS_POLL_LIMIT_MAX,
@@ -126,6 +133,7 @@ function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput
   return {
     ...input,
     ...(cursor !== undefined ? { cursor } : {}),
+    ...(acknowledgedCursor !== undefined ? { acknowledgedCursor } : {}),
     ...(limit !== undefined ? { limit } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   } as QaBusPollInput;

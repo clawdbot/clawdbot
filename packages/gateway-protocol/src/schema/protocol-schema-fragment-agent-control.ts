@@ -1,6 +1,7 @@
 import * as agent from "./agent.js";
 import * as environments from "./environments.js";
 import * as fsSchemas from "./fs.js";
+import * as projects from "./projects.js";
 import * as systemInfo from "./system-info.js";
 import * as worktrees from "./worktrees.js";
 
@@ -8,6 +9,7 @@ export const AgentControlProtocolSchemas = {
   EnvironmentStatus: environments.EnvironmentStatusSchema,
   WorkerEnvironmentState: environments.WorkerEnvironmentStateSchema,
   WorkerTunnelStatus: environments.WorkerTunnelStatusSchema,
+  WorkerDesktopAppId: environments.WorkerDesktopAppIdSchema,
   WorkerEnvironmentMetadata: environments.WorkerEnvironmentMetadataSchema,
   EnvironmentSummary: environments.EnvironmentSummarySchema,
   EnvironmentsCreateParams: environments.EnvironmentsCreateParamsSchema,
@@ -20,6 +22,8 @@ export const AgentControlProtocolSchemas = {
   EnvironmentsStatusResult: environments.EnvironmentsStatusResultSchema,
   WorkerDesktopObserveParams: environments.WorkerDesktopObserveParamsSchema,
   WorkerDesktopObserveResult: environments.WorkerDesktopObserveResultSchema,
+  WorkerDesktopLaunchParams: environments.WorkerDesktopLaunchParamsSchema,
+  WorkerDesktopLaunchResult: environments.WorkerDesktopLaunchResultSchema,
   SystemInfoParams: systemInfo.SystemInfoParamsSchema,
   SystemInfoResult: systemInfo.SystemInfoResultSchema,
   AgentEvent: agent.AgentEventSchema,
@@ -41,6 +45,13 @@ export const AgentControlProtocolSchemas = {
   AgentIdentityResult: agent.AgentIdentityResultSchema,
   AgentWaitParams: agent.AgentWaitParamsSchema,
   WakeParams: agent.WakeParamsSchema,
+  ProjectRecord: projects.ProjectRecordSchema,
+  ProjectsListParams: projects.ProjectsListParamsSchema,
+  ProjectsListResult: projects.ProjectsListResultSchema,
+  ProjectsRegisterParams: projects.ProjectsRegisterParamsSchema,
+  ProjectsRegisterResult: projects.ProjectsRegisterResultSchema,
+  ProjectsRemoveParams: projects.ProjectsRemoveParamsSchema,
+  ProjectsRemoveResult: projects.ProjectsRemoveResultSchema,
   WorktreeRecord: worktrees.WorktreeRecordSchema,
   WorktreesListParams: worktrees.WorktreesListParamsSchema,
   WorktreesListResult: worktrees.WorktreesListResultSchema,

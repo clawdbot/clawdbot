@@ -7,7 +7,7 @@ import {
   planPluginUninstall,
   refreshPluginRegistry,
   resetPluginsCliTestState,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
 
@@ -57,7 +57,7 @@ describe("plugin install persistence warning audiences", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       'Installed plugin "workboard" without enabling it because it requires configuration first. Configure it, then run `openclaw plugins enable workboard`.',
     );
-    expect(runtimeLogs).toEqual([
+    expect(pluginsCliRuntimeLogs).toEqual([
       "Installed plugin: workboard",
       "Restart the gateway to load plugins.",
     ]);
@@ -138,10 +138,10 @@ describe("plugin install persistence warning audiences", () => {
 
       if (audience === "terminal") {
         expect(warn).not.toHaveBeenCalled();
-        expect(runtimeLogs.join("\n")).toContain(cleanupDetail);
-        expect(runtimeLogs.join("\n")).toContain(refreshDetail);
-        expect(runtimeLogs.join("\n")).toContain(configuredSource);
-        expect(runtimeLogs.join("\n")).toContain(install.installPath);
+        expect(pluginsCliRuntimeLogs.join("\n")).toContain(cleanupDetail);
+        expect(pluginsCliRuntimeLogs.join("\n")).toContain(refreshDetail);
+        expect(pluginsCliRuntimeLogs.join("\n")).toContain(configuredSource);
+        expect(pluginsCliRuntimeLogs.join("\n")).toContain(install.installPath);
         return;
       }
 
@@ -153,7 +153,7 @@ describe("plugin install persistence warning audiences", () => {
       expect(warnings.join("\n")).not.toContain("/private/");
       expect(warnings.join("\n")).not.toContain("PRIVATE_NPM_MARKER");
       expect(warnings.join("\n")).not.toContain("PRIVATE_REFRESH_MARKER");
-      expect(runtimeLogs).toEqual([
+      expect(pluginsCliRuntimeLogs).toEqual([
         "Installed plugin: workboard",
         "Restart the gateway to load plugins.",
       ]);

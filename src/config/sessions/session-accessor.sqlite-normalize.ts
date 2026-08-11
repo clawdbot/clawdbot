@@ -21,6 +21,6 @@ export function normalizeSqliteChatType(value: unknown): "direct" | "group" | "c
   return null;
 }
 
-export function normalizeSqliteNumber(value: number | bigint): number {
+export function coerceSqliteNumber(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value;
 }

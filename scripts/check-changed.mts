@@ -96,11 +96,13 @@ const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
 const PLUGIN_SDK_API_BASELINE_PATH_RE =
-  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
+  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.jsonl$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
-  /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+  /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
+const WRAPPER_SHADOWING_PATH_RE =
+  /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/(?:export-name-collision-baseline\.json$|ts-guard-utils\.mts$|wrapper-shadowing-baseline\.json$)))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
@@ -382,6 +384,13 @@ export function shouldRunDeprecationHygieneChecks(paths: string[]) {
   );
 }
 
+/** Returns whether changed files can alter wrapper-shadowing results. */
+export function shouldRunWrapperShadowingCheck(paths: string[]) {
+  return paths.some((changedPath) =>
+    WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunCanvasA2uiNativeResourceCheck(paths: string[]) {
   return paths.some((changedPath) =>
     CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
@@ -611,6 +620,7 @@ export function createChangedCheckPlan(
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("coercion helper declaration guard", ["check:coercion-helpers"]);
   add("dependency pin guard", ["deps:pins:check"]);
   if (result.paths.length > 0) {
     add("format changed files", [
@@ -677,6 +687,9 @@ export function createChangedCheckPlan(
     // until their scheduled deletion PRs land.
     add("plugin boundaries", ["plugins:boundary-report:ci"]);
   }
+  if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
+    add("wrapper shadowing", ["check:wrapper-shadowing"]);
+  }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(
       "Canvas A2UI native resource generation",
@@ -726,7 +739,6 @@ export function createChangedCheckPlan(
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
     add("Android version sync", ["android:version:check"]);
-    add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);

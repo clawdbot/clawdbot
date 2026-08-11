@@ -121,6 +121,7 @@ export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
 
 export type SkillSnapshot = {
   prompt: string;
+  /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
     /** Config key can differ from the prompt-facing skill name. */

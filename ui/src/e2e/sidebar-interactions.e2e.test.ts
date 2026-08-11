@@ -247,6 +247,26 @@ suite.define(() => {
         .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
+      // The menu mixes avatar rows with command rows. They must share one
+      // leading column, or agent labels drift right of the command labels
+      // (Web Awesome's slotted-icon margin stacking on our own row gap).
+      const columns = await menu.evaluate((dropdown) => {
+        const left = (element: Element | null | undefined) =>
+          element ? Math.round(element.getBoundingClientRect().x) : Number.NaN;
+        const commandRow = dropdown.querySelector('wa-dropdown-item[value="command:new-agent"]');
+        const agentRow = dropdown.querySelector(
+          "wa-dropdown-item.sidebar-agent-menu__agent-switch",
+        );
+        return {
+          agentLead: left(agentRow?.querySelector('[slot="icon"]')),
+          commandLead: left(commandRow?.querySelector('[slot="icon"]')),
+          agentLabel: left(agentRow?.querySelector(".agent-select__option-copy")),
+          commandLabel: left(commandRow?.querySelector(".sidebar-customize-menu__text")),
+        };
+      });
+      expect(columns.agentLead).toBeGreaterThan(0);
+      expect(columns.agentLead).toBe(columns.commandLead);
+      expect(columns.agentLabel).toBe(columns.commandLabel);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);

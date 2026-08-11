@@ -99,7 +99,7 @@ export async function resolveAgentDeliveryPhase(params: {
   const resolvedAccountId = deliveryPlan.resolvedAccountId;
   let resolvedTo = deliveryPlan.resolvedTo;
   let effectivePlan = deliveryPlan;
-  let deliveryDowngradeReason: string | null = null;
+  let deliveryResolutionError: string | null = null;
   let deliveryTargetResolutionError: Error | undefined = deliveryPlan.targetResolutionError;
 
   if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
@@ -127,25 +127,17 @@ export async function resolveAgentDeliveryPhase(params: {
         params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return undefined;
       }
-      deliveryDowngradeReason = String(err);
+      deliveryResolutionError = String(err);
     }
   }
 
-  if (wantsDelivery && deliveryTargetResolutionError) {
-    if (!params.bestEffortDeliver) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
-      );
-      return undefined;
-    }
-    deliveryDowngradeReason = String(deliveryTargetResolutionError);
-    resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
-    deliveryTargetMode = undefined;
-    resolvedTo = undefined;
-    const { plugin: _plugin, ...pluginFreePlan } = deliveryPlan;
-    effectivePlan = { ...pluginFreePlan, resolvedChannel, resolvedTo, deliveryTargetMode };
+  if (wantsDelivery && deliveryTargetResolutionError && !params.bestEffortDeliver) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
+    );
+    return undefined;
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
@@ -202,9 +194,9 @@ export async function resolveAgentDeliveryPhase(params: {
       return undefined;
     }
     params.context.logGateway.info(
-      deliveryDowngradeReason
-        ? `agent delivery downgraded to session-only (bestEffortDeliver): ${deliveryDowngradeReason}`
-        : "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
+      deliveryResolutionError
+        ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
+        : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
     );
   }
 
@@ -227,7 +219,7 @@ export async function resolveAgentDeliveryPhase(params: {
       (params.client?.connect && params.isWebchatConnect(params.client.connect)
         ? INTERNAL_MESSAGE_CHANNEL
         : resolvedChannel),
-    deliver: wantsDelivery && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL,
+    deliver: wantsDelivery,
     explicitThreadId,
   };
 }

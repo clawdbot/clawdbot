@@ -113,8 +113,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 54 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 54-module owner list",
+  ownerModules.length === 55 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 55-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,
@@ -131,9 +131,22 @@ check(
   "schema-types.ts must remain a registry-free schema-modules wrapper",
 );
 
+const publicIndexSource = read("packages/gateway-protocol/src/index.ts");
+check(
+  publicIndexSource.includes('} from "./schema-modules.js";'),
+  "index.ts must explicitly export the reviewed public schema allowlist",
+);
+check(
+  !publicIndexSource.includes('export * from "./schema-modules.js";'),
+  "index.ts must not expose every schema module export implicitly",
+);
+check(
+  !fs.existsSync(path.join(repoRoot, "packages/gateway-protocol/src/schema-export-registry.ts")),
+  "the public schema allowlist must stay in the canonical package index",
+);
+
 for (const relativePath of [
   "packages/gateway-protocol/src/index.ts",
-  "packages/gateway-protocol/src/schema-export-registry.ts",
   "packages/gateway-protocol/src/validator-registry.ts",
 ]) {
   check(

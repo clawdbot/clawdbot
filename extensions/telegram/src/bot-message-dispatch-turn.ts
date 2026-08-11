@@ -48,6 +48,9 @@ export async function runTelegramDispatchTurn(params: {
 }) {
   const { context } = params;
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
+  const toolProgressEnabled =
+    params.streamMode !== "off" &&
+    resolveChannelStreamingPreviewToolProgress(params.telegramCfg, true, params.streamMode);
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
@@ -248,14 +251,11 @@ export async function runTelegramDispatchTurn(params: {
             },
             suppressDefaultToolProgressMessages:
               !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
+            suppressToolProgressMessages: !toolProgressEnabled,
             forceToolResultProgress:
               Boolean(params.draft.answerLane.stream) &&
               params.streamMode === "progress" &&
-              resolveChannelStreamingPreviewToolProgress(
-                params.telegramCfg,
-                true,
-                params.streamMode,
-              ),
+              toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(params.draft.answerLane.stream),
             onVerboseProgressVisibility: (isActive) => {

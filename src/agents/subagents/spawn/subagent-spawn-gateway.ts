@@ -1,6 +1,6 @@
-import type { SubagentLaunchAuthorization } from "../../subagent-launch-authorization.js";
-import { applySubagentLaunchAuthorization } from "../../subagent-launch-authorization.js";
-import { resolveSubagentRunTimerDelayMs } from "../../subagent-run-timeout.js";
+import { resolveSubagentRunTimerDelayMs } from "../registry/subagent-run-timeout.js";
+import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
+import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import {
   ADMIN_SCOPE,

@@ -2,6 +2,7 @@
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -168,7 +169,11 @@ const installRunEmbeddedMocks = () => {
   });
 };
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type TestRunEmbeddedAgent = (
+  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunEmbeddedAgent>;
+let runEmbeddedAgent: TestRunEmbeddedAgent;
 let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager;
 let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
 let upsertSessionEntry: typeof import("../config/sessions/session-accessor.js").upsertSessionEntry;
@@ -191,7 +196,9 @@ beforeAll(async () => {
   installRunEmbeddedMocks();
   ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
+  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
+    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+  );
   ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
   ({ loadTranscriptEvents, upsertSessionEntry } =
     await import("../config/sessions/session-accessor.js"));
@@ -693,7 +700,8 @@ describe("runEmbeddedAgent", () => {
     };
     resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) => {
       if (provider === "openai" && modelId === "gpt-5.5") {
-        return createResolvedEmbeddedRunnerModel(provider, modelId);
+        const resolved = createResolvedEmbeddedRunnerModel(provider, modelId);
+        return { ...resolved, model: { ...resolved.model, contextWindow: 272_000 } };
       }
       return {
         error: `Unknown model: ${provider}/${modelId}`,
@@ -709,10 +717,11 @@ describe("runEmbeddedAgent", () => {
         lastAssistant: buildEmbeddedRunnerAssistant({
           content: [{ type: "text", text: "ok" }],
         }),
+        contextTokens: 1_050_000,
       }),
     );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       sessionId: "codex-runtime-model",
       sessionFile,
       workspaceDir,
@@ -740,6 +749,7 @@ describe("runEmbeddedAgent", () => {
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
+    expect(result.meta.agentMeta?.contextTokens).toBe(1_050_000);
   });
 
   it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {

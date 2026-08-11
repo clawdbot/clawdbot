@@ -3,6 +3,7 @@
  *
  * Converts route, sender, command, media, and supplemental facts into finalized message context.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   commandTurnKindToSource,
   createCommandTurnContext,
@@ -249,10 +250,6 @@ function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T>
       (entry): entry is [string, Exclude<unknown, undefined>] => entry[1] !== undefined,
     ),
   ) as Partial<T>;
-}
-
-function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
-  return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
 }
 
 function stripQuoteRuntimeFields(

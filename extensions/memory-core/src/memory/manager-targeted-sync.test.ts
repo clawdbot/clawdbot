@@ -70,4 +70,22 @@ describe("memory targeted session sync", () => {
     expect(result).toEqual({ handled: true, sessionsDirty: true });
     expect(sessionsDirtyFiles.size).toBe(0);
   });
+
+  it("preserves source reconciliation after targeted cleanup", async () => {
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-reconcile.jsonl"]);
+
+    const result = await runMemoryTargetedSessionSync({
+      hasSessionSource: true,
+      targetArchiveFiles: new Set(["/tmp/targeted-reconcile.jsonl"]),
+      reason: "post-compaction",
+      sessionsReconcileDirty: true,
+      sessionsDirtyFiles,
+      syncArchiveFiles: async () => undefined,
+      shouldFallbackOnError: () => false,
+      activateFallbackProvider: async () => false,
+    });
+
+    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(sessionsDirtyFiles.size).toBe(0);
+  });
 });

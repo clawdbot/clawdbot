@@ -69,11 +69,7 @@ export function resolveClaudeCliBindingSessionId(
 }
 
 export function resolveClaudeCliTimestampMs(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return typeof value === "string" ? asFiniteNumber(Date.parse(value)) : undefined;
 }
 
 function resolveClaudeCliUsage(raw: ClaudeCliUsage) {

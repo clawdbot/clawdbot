@@ -89,8 +89,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.5.2
-        version: 0.5.2
+        specifier: 0.5.4
+        version: 0.5.4
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
@@ -527,12 +527,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
-      '@noble/ed25519':
-        specifier: 3.1.0
-        version: 3.1.0
-      esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
@@ -546,9 +540,6 @@ importers:
         specifier: 8.21.1
         version: 8.21.1
     devDependencies:
-      '@openclaw/gateway-client':
-        specifier: workspace:*
-        version: link:../../packages/gateway-client
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1496,8 +1487,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.5.2
-        version: 0.5.2
+        specifier: 0.5.4
+        version: 0.5.4
       execa:
         specifier: 10.0.0
         version: 10.0.0
@@ -2438,8 +2429,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/session-url-contract
       '@openclaw/uirouter':
-        specifier: 0.1.0
-        version: 0.1.0
+        specifier: 0.1.1
+        version: 0.1.1
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
@@ -4144,8 +4135,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.5.2':
-    resolution: {integrity: sha512-klidJFTE5FFAweNFpy/aVgschya3JYMWtXfdoSH3bTFN7+WAqlJtD+UQjOIFdkD42kJcWM7josNUpIIm7dnwXg==}
+  '@openclaw/fs-safe@0.5.4':
+    resolution: {integrity: sha512-lttlWKRBQU7eYDYykU2BPoF1S6AESGrT77mVCXsuWBxnRBTAI/PuGB89DB3D1lBCDaqTykIjymPJz4pFesGnkg==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -4163,8 +4154,8 @@ packages:
     peerDependencies:
       undici: '>=8.5.0 <9'
 
-  '@openclaw/uirouter@0.1.0':
-    resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
+  '@openclaw/uirouter@0.1.1':
+    resolution: {integrity: sha512-aiZFvWmP/ndpS3em5xVtiPlj1k6asA8ueoNxGxekA1024EZlCwnICPZklG6g2sU4Wlntp9AYocLCr5/iuvL7hw==}
     engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.221.0':
@@ -11435,7 +11426,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.2':
+  '@openclaw/fs-safe@0.5.4':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22
@@ -11448,7 +11439,7 @@ snapshots:
     dependencies:
       undici: 8.9.0
 
-  '@openclaw/uirouter@0.1.0': {}
+  '@openclaw/uirouter@0.1.1': {}
 
   '@opentelemetry/api-logs@0.221.0':
     dependencies:

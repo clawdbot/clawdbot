@@ -107,6 +107,7 @@ suite.define(() => {
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: true,
       sessionKey: "agent:main:ada",
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
@@ -120,8 +121,24 @@ suite.define(() => {
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
     const creatorMenu = await openSidebarSortMenu(currentPage);
-    await creatorMenu.locator('[value="creator:profile-ada"]').waitFor();
+    await creatorMenu.locator('[value="sort:people"]').waitFor();
+    await captureUiProof(currentPage, "00-people-sort-available.png");
     await creatorMenu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "sort:people" } },
+        }),
+      ),
+    );
+    const peopleMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(peopleMenu.locator('[value="sort:people"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureUiProof(currentPage, "01-people-sort-selected.png");
+    await peopleMenu.locator('[value="creator:profile-ada"]').waitFor();
+    await peopleMenu.evaluate((element) =>
       element.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,
@@ -163,6 +180,7 @@ suite.define(() => {
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     const creatorMenu = await openSidebarSortMenu(currentPage);
+    await captureUiProof(currentPage, "00-people-sort-hidden.png");
     expect(
       await creatorMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
     ).toBe(0);

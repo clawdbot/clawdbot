@@ -17,26 +17,11 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
-import type {
-  GatewayBroadcastFn,
-  GatewayBroadcastToConnIdsFn,
-  GatewayBufferedAmountFn,
-  GatewayPluginEventBroadcastFn,
-} from "./server-broadcast-types.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
-import {
-  type ChatRunEntry,
-  type ChatRunRegistration,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
   attachGatewayUpgradeHandler,
@@ -44,7 +29,6 @@ import {
   createGatewayHttpServer,
 } from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
@@ -59,7 +43,6 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { canReceiveSessionEvent } from "./session-sharing.js";
 import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
 type GatewayPluginRequestHandler = (
@@ -101,8 +84,8 @@ function hasMatchingGatewayPluginRoute(
     : matchingRoutes.length > 0;
 }
 
-/** Creates the HTTP/WebSocket runtime state for one gateway start. */
-export async function createGatewayRuntimeState(params: {
+/** Creates the HTTP/WebSocket transport for one gateway start. */
+export async function createGatewayHttpTransport(params: {
   cfg: import("../config/config.js").OpenClawConfig;
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
@@ -135,6 +118,7 @@ export async function createGatewayRuntimeState(params: {
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
   workerDesktopTunnels?: WorkerDesktopTunnels;
+  clients: Set<GatewayWsClient>;
 }): Promise<{
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -142,25 +126,6 @@ export async function createGatewayRuntimeState(params: {
   startListening: () => Promise<void>;
   wss: WebSocketServer;
   preauthConnectionBudget: PreauthConnectionBudget;
-  clients: Set<GatewayWsClient>;
-  broadcast: GatewayBroadcastFn;
-  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-  getBufferedAmount: GatewayBufferedAmountFn;
-  broadcastPluginEvent: GatewayPluginEventBroadcastFn;
-  agentRunSeq: Map<string, number>;
-  dedupe: Map<string, DedupeEntry>;
-  chatRunState: ReturnType<typeof createChatRunState>;
-  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
-  removeChatRun: (
-    sessionId: string,
-    clientRunId: string,
-    sessionKey?: string,
-  ) => ChatRunEntry | undefined;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
-  toolEventRecipients: ReturnType<typeof createChatRunState>["toolEventRecipients"];
-  sessionEventSubscribers: ReturnType<typeof createSessionEventSubscriberRegistry>;
-  sessionMessageSubscribers: ReturnType<typeof createSessionMessageSubscriberRegistry>;
   getWorkerIngressEndpoint: () => { host: "127.0.0.1"; port: number } | undefined;
   getMcpAppSandboxPort: () => number | undefined;
   ensureSandboxHostPort: () => Promise<number>;
@@ -168,22 +133,6 @@ export async function createGatewayRuntimeState(params: {
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
   const resolvePluginRouteRegistry = () =>
     params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
-  const clients = new Set<GatewayWsClient>();
-  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-  const gatewayBroadcaster = createGatewayBroadcaster({
-    clients,
-    sessionMessageSubscribers,
-    canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({
-        cfg: loadRuntimeConfig(),
-        client,
-        sessionKeys,
-        agentId,
-        event,
-        payload,
-      }),
-  });
 
   let loadedHooksRequestHandler: HooksRequestHandler | null = null;
   const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -306,7 +255,7 @@ export async function createGatewayRuntimeState(params: {
   const httpBindHosts: string[] = [];
   for (const _ of bindHosts) {
     const httpServer = createGatewayHttpServer({
-      clients,
+      clients: params.clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
       controlUiRoot: params.controlUiRoot,
@@ -336,7 +285,7 @@ export async function createGatewayRuntimeState(params: {
       handlePluginUpgrade,
       shouldEnforcePluginGatewayAuth,
       resolvePluginNodeCapabilityRoute,
-      clients,
+      clients: params.clients,
       preauthConnectionBudget,
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
@@ -519,16 +468,6 @@ export async function createGatewayRuntimeState(params: {
     })();
     await startListeningPromise;
   };
-  const agentRunSeq = new Map<string, number>();
-  const dedupe = new Map<string, DedupeEntry>();
-  const chatRunState = createChatRunState();
-  const chatRunRegistry = chatRunState.registry;
-  const addChatRun = chatRunRegistry.add;
-  const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-  const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
-  const toolEventRecipients = chatRunState.toolEventRecipients;
-
   return {
     httpServer,
     httpServers,
@@ -536,18 +475,6 @@ export async function createGatewayRuntimeState(params: {
     startListening,
     wss,
     preauthConnectionBudget,
-    clients,
-    ...gatewayBroadcaster,
-    agentRunSeq,
-    dedupe,
-    chatRunState,
-    addChatRun,
-    removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
-    toolEventRecipients,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
     getWorkerIngressEndpoint: () =>
       workerIngressPort === undefined
         ? undefined

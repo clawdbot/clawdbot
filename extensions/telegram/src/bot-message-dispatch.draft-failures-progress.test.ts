@@ -153,6 +153,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
         expect.stringMatching(
           /^partial answer\n\n.*Something went wrong while processing your request\. Please try again, or use \/new to start a fresh session\.$/,
         ),
+        expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
       );
       expect(answerDraftStream.clear).not.toHaveBeenCalled();
       expect(deliverReplies).not.toHaveBeenCalled();
@@ -267,7 +268,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update.mock.calls).toEqual([["Site A shows X."], ["Final answer"]]);
+    expect(answerDraftStream.update.mock.calls).toEqual([
+      ["Site A shows X."],
+      ["Final answer", expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) })],
+    ]);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
@@ -320,7 +324,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      3,
+      "Final answer",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // The tool-progress window repositions (deferred delete) rather than an
     // immediate clear when the following text block takes over the lane.
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -356,7 +364,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
 
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Partial before compaction");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Final after compaction");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Final after compaction",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -375,7 +387,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Branch is up to date",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // Reposition, not delete-then-repost: the tool-progress window is rewound
     // for a new message and its delete deferred until after the replacement
     // lands. clear() (immediate delete) must NOT run — that scroll-jumps.
@@ -422,7 +438,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      "Branch is up to date",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // Across an assistant boundary the tool-progress window still repositions
     // (new message first, deferred delete) rather than deleting immediately.
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
@@ -463,7 +483,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "🛠️ Exec: pnpm test");
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tests passed");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      2,
+      "Tests passed",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     // Verbose tool result window repositions before the final: new message
     // first, superseded delete deferred (no immediate clear/delete).
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);

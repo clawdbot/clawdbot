@@ -10,17 +10,16 @@ import { VERSION } from "../version.js";
 import {
   createTestInstalledPluginIndex,
   loadConfig,
-  notifyGatewayPluginMetadataChanged,
+  notifyGatewayPluginMetadataChangedMock,
   readConfigFileSnapshotForWrite,
   readPersistedInstalledPluginIndex,
   refreshPluginRegistry,
-  registerPluginsCli,
   replaceConfigFile,
   resetPluginsCliTestState,
   restorePersistedInstalledPluginIndexIfCurrent,
   runPluginsCommand,
   runtimeErrors,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
   setHookInstallRecords,
   updateNpmInstalledHookPacks,
@@ -28,6 +27,7 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "./plugins-cli-test-helpers.js";
+import { registerPluginsCli } from "./plugins-cli.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -78,7 +78,7 @@ function createTrackedPluginConfig(params: {
 
 function expectRestartNoticeLogged() {
   expect(
-    runtimeLogs.some((message) =>
+    pluginsCliRuntimeLogs.some((message) =>
       message.includes("Restart the gateway to load plugins and hooks."),
     ),
   ).toBe(true);
@@ -237,7 +237,7 @@ async function expectSkippedClawHubPluginUpdate(params: {
   await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
 
   expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-  expect(runtimeLogs.at(-1)).toContain(params.expectedLog);
+  expect(pluginsCliRuntimeLogs.at(-1)).toContain(params.expectedLog);
 }
 
 describe("plugins cli update", () => {
@@ -317,7 +317,7 @@ describe("plugins cli update", () => {
       expect(replaceConfigFile).not.toHaveBeenCalled();
       expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
       expect(refreshPluginRegistry).not.toHaveBeenCalled();
-      expect(runtimeLogs).toContain("Would update alpha: 1.0.0 -> 1.1.0.");
+      expect(pluginsCliRuntimeLogs).toContain("Would update alpha: 1.0.0 -> 1.1.0.");
     } finally {
       acquireLease.mockRestore();
     }
@@ -681,7 +681,7 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChanged).toHaveBeenCalledWith(cfg);
+    expect(notifyGatewayPluginMetadataChangedMock).toHaveBeenCalledWith(cfg);
     expectRestartNoticeLogged();
   });
 
@@ -749,7 +749,7 @@ describe("plugins cli update", () => {
       installRecords: nextRecords,
       reason: "source-changed",
     });
-    expect(notifyGatewayPluginMetadataChanged).not.toHaveBeenCalled();
+    expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
   });
 
   it("rolls back persisted install records when source config changes during a records-only update", async () => {
@@ -811,7 +811,7 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(notifyGatewayPluginMetadataChanged).not.toHaveBeenCalled();
+    expect(notifyGatewayPluginMetadataChangedMock).not.toHaveBeenCalled();
   });
 
   it("rolls back persisted install records when included config changes during a records-only update", async () => {
@@ -1216,7 +1216,7 @@ describe("plugins cli update", () => {
 
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
-    expect(runtimeLogs.at(-1)).toBe("No tracked plugins or hook packs to update.");
+    expect(pluginsCliRuntimeLogs.at(-1)).toBe("No tracked plugins or hook packs to update.");
   });
 
   it("passes dangerous force unsafe install to plugin updates", async () => {
@@ -1240,7 +1240,7 @@ describe("plugins cli update", () => {
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
     expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(
-      runtimeLogs.some((message) =>
+      pluginsCliRuntimeLogs.some((message) =>
         message.includes(
           "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates",
         ),
@@ -1536,7 +1536,7 @@ describe("plugins cli update", () => {
       installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
-    expect(runtimeLogs).toContain("Failed to update beta: registry timeout");
+    expect(pluginsCliRuntimeLogs).toContain("Failed to update beta: registry timeout");
   });
 
   it("exits non-zero when a ClawHub update is skipped for missing risk acknowledgement", async () => {
@@ -1596,7 +1596,9 @@ describe("plugins cli update", () => {
     );
 
     expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(runtimeLogs).toContain('Failed to update hook pack "demo-hooks": registry timeout');
+    expect(pluginsCliRuntimeLogs).toContain(
+      'Failed to update hook pack "demo-hooks": registry timeout',
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

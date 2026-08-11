@@ -127,6 +127,7 @@ describe("navigationIconForRoute", () => {
       "memory-import": "download",
       notifications: "bell",
       security: "shieldCheck",
+      secrets: "key",
       advanced: "fileCode",
       debug: "bug",
       logs: "scrollText",
@@ -248,6 +249,7 @@ describe("titleForRoute", () => {
       "memory-import": "Import Memory",
       notifications: "Notifications",
       security: "Privacy & Security",
+      secrets: "Secrets",
       advanced: "Advanced",
       debug: "Debug",
       logs: "Logs",
@@ -297,6 +299,7 @@ describe("subtitleForRoute", () => {
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
+      secrets: "Secret values are hidden after saving. Env var values stay visible here.",
       advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
@@ -316,6 +319,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
+    expect(pathForRoute("secrets")).toBe("/settings/secrets");
   });
 
   it("prepends base path", () => {
@@ -543,6 +547,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "memory",
       "automation",
       "security",
+      "secrets",
       "approvals",
       "infrastructure",
       "advanced",

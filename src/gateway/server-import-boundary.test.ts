@@ -24,7 +24,7 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
-  it("keeps heavy cron and doctor legacy paths out of the server.impl import graph", () => {
+  it("keeps heavy cron and doctor legacy paths out of the server-start import graph", () => {
     const serverImpl = readServerImplementation();
     const validation = readSource("src/config/validation.ts");
 
@@ -78,7 +78,7 @@ describe("gateway startup import boundaries", () => {
       expect(workerStartup).toContain(`import("./worker-environments/${workerModule}.js")`);
     }
     expect(serverImpl).not.toContain('from "../plugins/worker-provider-registry.js"');
-    expect(readSource("src/gateway/server-restart-readiness.ts")).toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).toContain(
       'import("../state/openclaw-database-preflight.js")',
     );
     expect(workerStartup).toContain('import("../plugins/worker-provider-registry.js")');
@@ -90,11 +90,18 @@ describe("gateway startup import boundaries", () => {
     );
   });
 
+  it("keeps channel startup maintenance on the loaded-only registry", () => {
+    const lifecycleStartup = readSource("src/channels/plugins/lifecycle-startup.ts");
+
+    expect(lifecycleStartup).toContain('from "./registry-loaded.js"');
+    expect(lifecycleStartup).not.toContain('from "./registry.js"');
+  });
+
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
     const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
-    const serverStart = serverImpl.indexOf("export async function startGatewayServer");
+    const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
     const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
 

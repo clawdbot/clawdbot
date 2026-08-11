@@ -1272,7 +1272,7 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("provider-catalog-shared", {
       mentions: ["buildSingleProviderApiKeyCatalog", "buildPairedProviderApiKeyCatalog"],
-      omits: ["buildDeepSeekProvider", "buildOpenAICodexProvider", "buildVeniceProvider"],
+      omits: ["buildDeepSeekProvider", "buildVeniceProvider"],
     });
 
     expectSourceMentions("setup", [

@@ -271,25 +271,39 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("shows explicit dmScope config command for multi-user DMs", async () => {
+  it("renders the structured non-default-account DM collision guidance", async () => {
     pluginRegistry.list = [
       {
         id: "test-channel",
         meta: { label: "Test Channel" },
         config: {
-          listAccountIds: () => ["default"],
-          inspectAccount: () => ({ enabled: true, configured: true }),
-          resolveAccount: () => ({}),
+          listAccountIds: () => ["default", "secondary"],
+          defaultAccountId: () => "default",
+          inspectAccount: (_cfg: OpenClawConfig, accountId: string) => ({
+            accountId,
+            enabled: true,
+            configured: true,
+          }),
+          resolveAccount: (_cfg: OpenClawConfig, accountId: string) => ({ accountId }),
           isEnabled: () => true,
           isConfigured: () => true,
         },
         security: {
-          resolveDmPolicy: () => ({
+          resolveDmPolicy: ({ accountId }: { accountId?: string | null }) => ({
             policy: "allowlist",
-            allowFrom: ["alice", "bob"],
-            allowFromPath: "channels.whatsapp.",
+            allowFrom: accountId === "secondary" ? ["alice", "bob"] : ["owner"],
+            allowFromPath: `channels.test-channel.accounts.${accountId}.`,
             approveHint: "approve",
           }),
+          collectWarnings: () => ["- plugin warning remains visible"],
+          collectAuditFindings: () => [
+            {
+              checkId: "channels.test-channel.audit_only",
+              severity: "warn",
+              title: "audit-only plugin finding",
+              detail: "must not appear in Doctor",
+            },
+          ],
         },
       },
     ];
@@ -300,7 +314,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
       includeSetupFallbackPlugins: true,
     });
     const message = lastMessage();
-    expect(message).toContain('config set session.dmScope "per-channel-peer"');
+    expect(message).toContain("matching binding or session.dmScope");
+    expect(message).toContain("secondary");
+    expect(message).toContain("plugin warning remains visible");
+    expect(message).not.toContain("audit-only plugin finding");
   });
 
   it("clarifies approvals.exec forwarding-only behavior", async () => {

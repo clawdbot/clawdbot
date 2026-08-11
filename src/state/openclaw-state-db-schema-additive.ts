@@ -13,8 +13,29 @@ import {
   repairLegacyTaskDeliveryStatuses,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
+  repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const SECRET_STORE_SCHEMA_START = "CREATE TABLE IF NOT EXISTS secret_store_entries (";
+const SECRET_STORE_SCHEMA_END =
+  "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;";
+
+function secretStoreSchemaSql(): string {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_END, start);
+  const hasBoundedSchema = start >= 0 && endMarkerStart >= start;
+  if (!hasBoundedSchema) {
+    throw new Error("OpenClaw secret store schema marker is missing.");
+  }
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + SECRET_STORE_SCHEMA_END.length);
+}
+
+/** Lazily install the additive secret store table and index on first write. */
+export function ensureSecretStoreSchema(database: DatabaseSync): void {
+  database.exec(secretStoreSchemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+}
 
 export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
   database.exec(`
@@ -347,6 +368,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
+  repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");

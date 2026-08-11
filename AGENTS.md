@@ -70,6 +70,14 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Verify the premise before fixing: restrictions and missing links are sometimes intentional design, and removed code often had a reason. Check history (`git log -p -S <symbol>`) and name the exact line where the reported bug manifests before treating a gap as unfinished work.
 - Won't-implement and out-of-scope closes are maintainer product judgment. Automated review may recommend with evidence but never executes that close on its own; when design intent is plausible, escalate instead of closing.
 - Doctrine-class findings are first-class: an action path that can end with no visible outcome and no recorded reason; a default-path regression; prompt/tool-description text that contradicts shipped behavior; multi-signal inference where a recorded fact belongs; a new default-off capability with no named enablement path.
+- `maturity:stable` is an issue-only attention signal for broken existing
+  behavior whose primary owner is an M4/M5 scorecard surface. Do not apply it
+  to feature requests, new configuration or policy choices, docs/support work,
+  or lower-maturity owners that merely pass through Gateway, CLI, hosting,
+  diagnostics, or another stable implementation surface. The review must name
+  the primary scorecard surface and matching category. The label raises triage
+  and release-audit visibility; it is not proof that a fix exists, approval to
+  backport, or a release blocker by itself.
 - Before landing any PR: read the latest ClawSweeper comment and its `Rank-up moves:` list. Apply each move, or state in the PR why it is skipped; never merge past them silently. A ClawSweeper review from the last 12 hours covers the PR even when the head moved afterward, provided every actionable finding from that review is addressed (or its skip stated in the PR) and exact-head CI is green. Request `@clawsweeper re-review` only when the latest review is older than 12 hours, still has unaddressed actionable findings, or the post-review pushes changed behavior beyond addressing findings and mechanical refreshes (rebase, format, merge-ref). A queued or late-publishing re-review refreshes the rating; never block landing on the review publisher.
 - Changelog findings: see Docs / Changelog.
 - Public ClawSweeper comments prefer `https://docs.openclaw.ai/...` when a public docs page exists; structured evidence still cites repo files, lines, SHAs.
@@ -116,6 +124,8 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Storage default: SQLite only. Do not add JSON/JSONL/TXT/sidecar files for OpenClaw-owned runtime state, caches, queues, registries, indexes, cursors, checkpoints, or plugin scratch data.
 - Any SQLite change requiring a schema-version bump needs explicit user discussion and acceptance before implementation. Agents must not advance SQLite schema versions autonomously.
 - Purely additive SQLite surface may stay at the same schema version only when downgraded readers remain safe: new tables, or explicitly compatible existing-table columns declared as exactly one bare nullable SQLite `STRICT` datatype (`ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`) with no suffix. Defaults, `NOT NULL`, keys, uniqueness, checks, references, collations, generated expressions, and other constraints on an existing-table addition require a schema-version bump or a companion table. Declare same-version surface in the canonical schema plus a one-time idempotent lazy ensure on first feature use; fold it into the migration path at the next natural bump.
+- Approval-linked execution identity is provenance, never authorization. The parent approval row remains the sole authorization owner. Persist identity only as an exact host-validated source-run binding behind its explicit collection opt-in; disabled and unbound paths must leave the lazy companion table absent.
+- Missing, deleted, or corrupt approval-identity provenance must not grant, deny, consume, or otherwise change approval decisions. No eager table creation, late binding, dual write, fallback reader, sidecar, or schema-version workaround. Changes require older-reader open/use plus candidate-reopen proof.
 - SQLite runtime access uses Kysely helpers, not raw SQL statement strings, except schema DDL, migrations, low-level DB bootstrap, or narrowly justified SQLite primitives.
 - SQLite write transactions are synchronous commit sections only. Finish async planning, filesystem access, plugin hooks, and predicates before `BEGIN`; then reread and validate authoritative rows before writing. Never return a Promise or execute `await` from a transaction callback.
 - Use the shared state DB (`state/openclaw.sqlite`) for global runtime state and plugin KV data. Use the per-agent DB (`agents/<agentId>/agent/openclaw-agent.sqlite`) for agent-scoped state/cache. Use a dedicated SQLite DB only when schema, volume, or lifecycle clearly does not fit those stores.
@@ -138,6 +148,8 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Portable command UI must use typed presentation actions, not raw string inference. Do not make channels guess that `value` starting with `/` means a native command; core/owner plugins declare command actions, channels map them when supported.
 - Raw callback data is transport/private. Approval, command, URL, web-app, and select actions must stay distinguishable before channel encoding so transport adapters do not special-case product strings.
 - Agent run terminal state: normalize/merge via `src/agents/agent-run-terminal-outcome.ts`; do not rederive timeout/cancel precedence in projections.
+- Delegated run authority is closure-bound, not bearer-bound. A signature, TTL, run ID, or copied token is correlation only. Every privileged use must revalidate the exact authoritative operational instance, lifecycle generation, and claim, including after awaited policy, approval, RPC, or recovery work. Terminal state, abort, replacement, claim loss, lifecycle rotation, restart, and stale copies fail closed; retained tools, preparers, and approval handles reject after closure.
+- Worker authority additionally requires the authoritative placement’s session/run identity, placement generation, environment, owner epoch, and turn claim. Workers missing the current execution-context dialect must be fenced, torn down, or reclaimed for reprovisioning—never resumed through a compatibility payload or local fallback. Active turn claims do not survive Gateway restart.
 - Hot paths should carry prepared facts forward: provider id, model ref, channel id, target, capability family, attachment class. Do not rediscover with broad plugin/provider/channel/capability loaders.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
 - Gateway/plugin metadata is process-stable: installs, manifests, catalogs, generated paths, bundled metadata. Changes require restart or explicit owner reload/install/doctor flow.
@@ -154,6 +166,15 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Guidance the model must apply in full (skills, playbooks, prompt instructions) is served whole: no offset/limit or windowed-read parameters on those tools. Given a window, the model treats the first window as the whole document.
 - Prompt-state mutations (skills/tools/memory) default to deferred cache invalidation — effect next session; immediate invalidation is an explicit opt-in.
 - Agent tool schema cleanup: remove stale args cleanly; no hidden compat for model-facing params just to avoid churn.
+
+## Execution Identity Audit
+
+- Execution identity is opt-in diagnostic provenance, never authorization or enforcement. Unknown facts stay unknown; record ingress or invoker facts only at their authoritative producer. Never infer identity from session keys, `runId`, or routing metadata.
+- Each outer admitted turn owns one immutable `executionId` and `contextId`; `runId` is non-unique correlation. Retries, fallbacks, and recovery reuse the original admission identity. Only byte-identical canonical replay is idempotent.
+- Admission may only validate, bound, freeze, and enqueue through the shared audit writer. No synchronous SQLite, schema, filesystem, HMAC-key, or readiness work. Audit failure never delays or aborts execution.
+- Raw identity references are transient worker-message data. Never persist, export, inspect, or log them. Public Plugin SDK ingress must strip private recovery/admission authority, including JavaScript extra and inherited properties.
+- Default or disabled collection creates and propagates no identity token and does not create optional storage. Existing-storage maintenance may continue. Reads enforce expiry before projection; missing or expired evidence never proves no run occurred.
+- `audit.run.inspect` intentionally uses `operator.read` within one trusted Gateway domain. Reader isolation requires separate domains. Ask before changing this scope, default-off behavior, retained fields, 30-day cutoff, maintenance/row bounds, or schema/protocol contract.
 
 ## Commands
 

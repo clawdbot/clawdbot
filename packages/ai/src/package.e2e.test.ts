@@ -128,7 +128,6 @@ const compatibility = {
       "reconcileOpenAICompletionsToolChoice",
       "findOpenAIStrictSchemaViolations",
       "normalizeOpenAIStrictCompatSchema",
-      "clearOpenAIToolSchemaCacheForTest",
       "normalizeStrictOpenAIJsonSchema",
       "normalizeOpenAIStrictToolParameters",
       "isStrictOpenAIJsonSchemaCompatible",

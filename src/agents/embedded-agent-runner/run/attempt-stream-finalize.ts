@@ -1,7 +1,7 @@
 /** Settles the provider stream and completes the post-turn lifecycle phase. */
 import { log } from "../logger.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
-import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
+import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 
 type StreamSettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];

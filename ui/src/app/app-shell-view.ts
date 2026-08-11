@@ -40,6 +40,7 @@ import {
 } from "./settings.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
+const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
@@ -100,6 +101,9 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedOutboxes = outboxStoreRuntime
     ? outboxStoreRuntime.summarizeStoredChatOutboxes(outboxScopeHost)
     : null;
+  const storedDraftScopeKeys = outboxStoreRuntime
+    ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
+    : null;
   const outboxCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -108,6 +112,14 @@ export function renderApplicationShell(host: ShellViewHost) {
         );
       }
     : EMPTY_OUTBOX_COUNT_FOR_SESSION;
+  const hasSessionDraft = outboxStoreRuntime
+    ? (sessionKey: string) => {
+        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
+        return (
+          storedDraftScopeKeys?.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) === true
+        );
+      }
+    : EMPTY_SESSION_HAS_DRAFT;
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const terminalAvailable = isTerminalAvailable(
@@ -125,7 +137,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       ? pluginTabRefFromSearch(host.routeState.location?.search ?? "")
       : null;
   const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
-  const settingsTakeover = isSettingsNavigationRoute(activeRoute);
+  // Onboarding renders without any navigation chrome, so the settings takeover
+  // must not reserve its fixed sidebar column (the grid would stay off-center).
+  const settingsTakeover = isSettingsNavigationRoute(activeRoute) && !host.onboardingMode;
   const runtimeConfig = context.runtimeConfig.state;
   const settingsSearchBlocks = findSettingsSearchBlocks({
     query: host.settingsSearchQuery,
@@ -198,6 +212,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
       outboxCountForSession,
+      hasSessionDraft,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
@@ -466,6 +481,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .available=${terminalAvailable}
         .suppressed=${settingsTakeover}
         .themeMode=${resolveTerminalThemeMode()}
+        .basePath=${context.basePath}
       ></openclaw-terminal-panel>
       <openclaw-browser-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}

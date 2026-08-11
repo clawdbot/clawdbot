@@ -11,7 +11,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -83,7 +83,7 @@ function createInitializationContext(): ApplicationContext {
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
     initialUserMessage: createInitialUserMessageHandoff(),
-    browserAnnotationHandoff: createBrowserAnnotationHandoff(),
+    chatAttachmentHandoff: createChatAttachmentHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
 }
@@ -97,6 +97,34 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
 }
 
 describe("chat pane header state", () => {
+  it("forks through the shared session organizer flow and selects the new session", async () => {
+    const create = vi.fn(async () => "agent:main:forked");
+    const sessions = {
+      create,
+      state: { error: null },
+    } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    Object.assign(pane.context.gateway.snapshot.hello?.features ?? {}, {
+      methods: ["sessions.patch", "sessions.create"],
+    });
+    const onPaneSessionChange = vi.fn();
+    pane.onPaneSessionChange = onPaneSessionChange;
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+
+    await pane.handleHeaderSessionAction({ kind: "fork" }, session);
+
+    expect(create).toHaveBeenCalledWith({
+      parentSessionKey: session.key,
+      fork: true,
+      agentId: "main",
+    });
+    expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
+  });
+
   it("commits a trimmed label and clears with null", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;
@@ -483,10 +511,16 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     pane.sessionKey = "main";
     state.sessionKey = canonicalSessionKey;
+    state.settings = {
+      sessionKey: canonicalSessionKey,
+      lastActiveSessionKey: canonicalSessionKey,
+    } as ChatPageHost["settings"];
     state.hello = hello;
     state.loadAssistantIdentity = vi.fn(async () => {});
     pane.connectedClient = null;
     pane.onPaneSessionChange = navigate;
+    pane.active = true;
+    pane.presented = true;
 
     pane.applyGatewaySnapshot(snapshot);
 
@@ -527,11 +561,6 @@ describe("chat pane initialization", () => {
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
     pane.sessionKey = canonicalSessionKey;
-    const switchPaneSession = vi.spyOn(pane, "switchPaneSession").mockImplementation((next) => {
-      state.sessionKey = next;
-      state.chatRunId = null;
-      state.chatStream = null;
-    });
 
     (
       pane as TestChatPane & {
@@ -540,7 +569,6 @@ describe("chat pane initialization", () => {
     ).willUpdate(new Map([["sessionKey", "main"]]));
 
     expect(state.sessionKey).toBe(canonicalSessionKey);
-    expect(switchPaneSession).not.toHaveBeenCalled();
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBe("The response survived navigation.");
   });

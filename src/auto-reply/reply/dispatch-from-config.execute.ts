@@ -230,8 +230,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
                     const forceToolResultProgress =
                       params.replyOptions?.forceToolResultProgress === true;
-                    const requiresDurableToolResult =
-                      forceToolResultProgress && requiresDurableToolResultDelivery(payload);
+                    const durableToolResult = requiresDurableToolResultDelivery(payload);
+                    const requiresDurableToolResult = forceToolResultProgress && durableToolResult;
+                    if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
+                      return;
+                    }
                     const shouldForwardToolResultProgress = isFastModeAutoProgress
                       ? shouldForwardProgressCallback({
                           forwardWhenSourceDeliverySuppressed: true,
@@ -678,6 +681,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   originatingThreadId: state.routeReplyThreadId,
                   originatingChatType: replyRoute.chatType,
                   shouldSendToolSummaries: state.shouldSendToolSummaries,
+                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
                   sendPolicy: state.sendPolicy,
                   isTailDispatch: true,
                 }),

@@ -7,22 +7,19 @@ import {
 } from "../../infra/event-session-routing.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import {
-  createCliJsonlStreamingParser,
-  extractCliErrorMessage,
-  parseCliOutput,
-  type CliOutput,
-} from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
+import { extractCliErrorMessage, parseCliOutput } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { runClaudeLiveSessionTurn } from "./claude-live-session.js";
+import { runClaudeTurn } from "./claude-live-session.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import {
   createCliAbortError,
   executeNodeClaudeRun,
-  type resolveNodeClaudePlacement,
+  type resolveNodeClaudeTarget,
 } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -69,7 +66,7 @@ export async function executeCliProcess(params: {
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudePlacement>;
+  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
@@ -114,7 +111,7 @@ export async function executeCliProcess(params: {
       backend: context.backendResolved.id,
     });
     params.claimFallbackCleanup();
-    const liveResult = await runClaudeLiveSessionTurn({
+    const liveResult = await runClaudeTurn({
       context,
       args: params.executionArgs,
       executableCommand: params.executionCommand,
@@ -171,7 +168,6 @@ export async function executeCliProcess(params: {
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
-        onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
         onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
@@ -328,7 +324,7 @@ export async function executeCliProcess(params: {
     nodeRunTruncated &&
     result.exitCode === 0 &&
     !result.timedOut &&
-    !streamingParser?.getOutput()
+    !streamingParser?.hasTerminalResult()
   ) {
     throw new FailoverError(
       "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",

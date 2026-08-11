@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../../agents/failover/user-copy.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -14,7 +18,6 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
-import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -22,10 +25,6 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "./agent-runner-failure-copy.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   clearSessionQueues,
@@ -1002,21 +1001,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(runState.admission).toEqual({ status: "owned" });
   });
 
-  it("keeps heartbeat mechanics while isolating commitment bootstrap context", async () => {
-    const { run } = createMinimalRun({
-      opts: {
-        isHeartbeat: true,
-        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
-      },
-    });
-
-    await run();
-
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).trigger).toBe("heartbeat");
-    expect((call as AgentRunParams).bootstrapContextRunKind).toBe("commitment-only");
-  });
-
   it("runs visible turns with the session id returned by admission", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
@@ -1604,14 +1588,82 @@ describe("runReplyAgent pending final delivery capture", () => {
       kind: "replayable",
       text: "visible final",
       intentId: expect.any(String),
+      deliveries: [{ id: expect.any(String), state: "prepared" }],
     });
     const visiblePayload = (Array.isArray(result) ? result : [result]).find(
       (payload) => payload?.text === "visible final",
     );
     expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored.pendingFinalDelivery?.intentId,
-      pendingFinalDeliveryRetryText: "visible final",
+      pendingFinalDeliveryCompletion: {
+        deliveryId: stored.pendingFinalDelivery?.deliveries?.[0]?.id,
+        intentId: stored.pendingFinalDelivery?.intentId,
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      },
     });
+  });
+
+  it("owns a media-only final with its complete replay directive", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "https://example.test/final.png" }],
+      meta: {},
+    });
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    const result = await run();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "MEDIA:https://example.test/final.png",
+      intentId: expect.any(String),
+      deliveries: [{ id: expect.any(String), state: "prepared" }],
+    });
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
+      pendingFinalDeliveryCompletion: {
+        deliveryId: stored.pendingFinalDelivery?.deliveries?.[0]?.id,
+        intentId: stored.pendingFinalDelivery?.intentId,
+      },
+    });
+  });
+
+  it("owns mixed text and media finals without replaying a partial aggregate", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "visible text" }, { mediaUrl: "https://example.test/final.png" }],
+      meta: {},
+    });
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toMatchObject({
+      kind: "transport-only",
+      deliveries: [
+        { id: expect.any(String), state: "prepared" },
+        { id: expect.any(String), state: "prepared" },
+      ],
+    });
+    expect(stored.pendingFinalDelivery).not.toHaveProperty("text");
+    expect(
+      payloads.map(
+        (payload) =>
+          getReplyPayloadMetadata(payload ?? {})?.pendingFinalDeliveryCompletion?.deliveryId,
+      ),
+    ).toEqual(stored.pendingFinalDelivery?.deliveries?.map(({ id }) => id));
   });
 
   it("persists canonical SQLite pending final delivery after its intent commits", async () => {
@@ -1636,13 +1688,19 @@ describe("runReplyAgent pending final delivery capture", () => {
         kind: "replayable",
         intentId: expect.any(String),
         text: "visible canonical final",
+        deliveries: [{ id: expect.any(String), state: "prepared" }],
       },
       sessionId: "session",
     });
     const visiblePayload = Array.isArray(result) ? result[0] : result;
     expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored?.pendingFinalDelivery?.intentId,
-      pendingFinalDeliveryRetryText: "visible canonical final",
+      pendingFinalDeliveryCompletion: {
+        deliveryId: stored?.pendingFinalDelivery?.deliveries?.[0]?.id,
+        intentId: stored?.pendingFinalDelivery?.intentId,
+        sessionId: "session",
+        sessionKey,
+        storePath,
+      },
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
@@ -2873,11 +2931,17 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.pendingFinalDelivery).toMatchObject({
       kind: "replayable",
       text: longRemainder,
+      deliveries: [{ id: expect.any(String), state: "prepared" }],
     });
     const payload = Array.isArray(result) ? result[0] : result;
     expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
-      pendingFinalDeliveryIntentId: stored.pendingFinalDelivery?.intentId,
-      pendingFinalDeliveryRetryText: longRemainder,
+      pendingFinalDeliveryCompletion: {
+        deliveryId: stored.pendingFinalDelivery?.deliveries?.[0]?.id,
+        intentId: stored.pendingFinalDelivery?.intentId,
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      },
     });
   });
 });

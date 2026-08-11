@@ -19,7 +19,7 @@ import {
 } from "../shared/number-coercion.js";
 import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 const log = createSubsystemLogger("session-suspension");
 

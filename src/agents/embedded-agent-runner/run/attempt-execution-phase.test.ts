@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./attempt-stream-runtime-prepare.js", () => ({
   prepareEmbeddedAttemptStreamRuntime: mocks.prepareStreamRuntime,
 }));
-vi.mock("./attempt-execution-settle.js", () => ({
+vi.mock("./attempt-settle.js", () => ({
   runEmbeddedAttemptSettledPhase: mocks.runSettledPhase,
 }));
 
@@ -26,7 +26,6 @@ function createFixture() {
   const result = { messages: [] };
   const preparedStreamRuntime = { stream: { queueHandle: { kind: "embedded" } } };
   const state = {
-    beforeAgentRunBlocked: false,
     beforeAgentRunBlockedBy: undefined,
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,

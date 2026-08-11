@@ -31,7 +31,7 @@ describe("audit-seams cron seam classification", () => {
 
   it("detects scheduler-state seams in cron service orchestration", () => {
     const source = `
-      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs.js";
+      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs-scheduling.js";
       import { ensureLoaded, persist } from "./store.js";
       import { armTimer, runMissedJobs } from "./timer.js";
 
@@ -52,11 +52,11 @@ describe("audit-seams cron seam classification", () => {
 });
 
 describe("audit-seams subagent seam classification", () => {
-  it("detects subagent spawn and cleanup handoff boundaries", () => {
+  it("detects relocated native spawn executor seams", () => {
     const source = `
       import { callGateway } from "../../../gateway/call.js";
-      import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
       import { registerSubagentRun } from "../../subagent-registry.js";
+      import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
 
       export async function spawnSubagentDirect() {
         const response = await callGateway({ method: "agent.run", params: { task: "do it" } });
@@ -77,7 +77,7 @@ describe("audit-seams subagent seam classification", () => {
   it("detects subagent lifecycle registry and announce delivery seams", () => {
     const source = `
       import { resolveContextEngine } from "../context-engine/registry.js";
-      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "./subagent-announce.js";
+      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
       import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
       import { persistSubagentRunsToDisk } from "./subagent-registry-state.js";
 
@@ -90,10 +90,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
-      "subagent-announce-delivery",
-      "subagent-lifecycle-registry",
-    ]);
+    expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual(
+      ["subagent-announce-delivery", "subagent-lifecycle-registry"],
+    );
   });
 
   it("detects the shared delivery-context announce seam", () => {
@@ -105,9 +104,9 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
-      "subagent-announce-delivery",
-    ]);
+    expect(
+      describeSeamKinds("src/agents/subagents/announce/subagent-announce-origin.ts", source),
+    ).toEqual(["subagent-announce-delivery"]);
   });
 
   it("detects parent-stream seams for ACP spawn relays", () => {

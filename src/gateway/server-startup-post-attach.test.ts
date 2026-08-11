@@ -119,15 +119,15 @@ vi.mock("../agents/session-dirs.js", () => ({
   resolveAgentSessionDirs: vi.fn(async () => []),
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
 }));
 
-vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markStartupOrphanedMainSessionsForRecovery: hoisted.markStartupOrphanedMainSessionsForRecovery,
 }));
 
-vi.mock("../agents/main-session-restart-recovery.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
 }));
 
@@ -171,6 +171,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => ({
     reconcilePendingSessionIdentities: hoisted.reconcilePendingSessionIdentities,
   })),
+}));
+
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
+  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
 }));
 
 vi.mock("../acp/runtime/registry.js", () => ({

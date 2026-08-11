@@ -6,6 +6,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
@@ -16,6 +17,10 @@ import {
   getAgentEventLifecycleGeneration,
   type AgentEventPayload,
 } from "../infra/agent-events.js";
+import {
+  releaseAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
@@ -37,6 +42,10 @@ export type ChatAbortControllerEntry = {
   sessionId: string;
   sessionKey: string;
   lifecycleGeneration?: string;
+  /** Exact operational instance created by this controller registration. */
+  operationalRunInstance?: OperationalRunInstanceRef;
+  /** Exact approval lease captured when this controller's execution was admitted. */
+  agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
   agentId?: string;
   startedAtMs: number;
   expiresAtMs: number;
@@ -104,6 +113,7 @@ type RegisteredChatAbortController = {
   registered: boolean;
   entry?: ChatAbortControllerEntry;
   markExecutionStarted: () => void;
+  bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: (opts?: { force?: boolean }) => void;
 };
 
@@ -184,10 +194,25 @@ export function registerChatAbortController(params: {
   kind?: ChatAbortControllerEntry["kind"];
   turnKind?: ChatAbortControllerEntry["turnKind"];
   lifecycleGeneration?: string;
+  operationalRunInstance?: OperationalRunInstanceRef;
   now?: number;
   expiresAtMs?: number;
 }): RegisteredChatAbortController {
   const controller = new AbortController();
+  const bindAgentRunDelegatedAuthority = (authority: AgentRunDelegatedAuthority) => {
+    const entry = params.chatAbortControllers.get(params.runId);
+    if (
+      entry?.controller !== controller ||
+      !entry.operationalRunInstance ||
+      authority.operationalRunInstance !== entry.operationalRunInstance
+    ) {
+      throw new Error("agent run authority does not belong to this controller registration");
+    }
+    if (entry.agentRunDelegatedAuthority && entry.agentRunDelegatedAuthority !== authority) {
+      throw new Error("agent run controller already owns a different authority");
+    }
+    entry.agentRunDelegatedAuthority = authority;
+  };
   let executionStarted = false;
   const markExecutionStarted = () => {
     if (executionStarted) {
@@ -210,6 +235,11 @@ export function registerChatAbortController(params: {
   const cleanup = (opts?: { force?: boolean }) => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
+      // This registration carries the exact operational instance. Close its
+      // capability before terminal cleanup can observe a same-run successor.
+      if (entry.agentRunDelegatedAuthority) {
+        releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
+      }
       if (opts?.force === true) {
         removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
         return;
@@ -242,7 +272,13 @@ export function registerChatAbortController(params: {
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
     // Duplicate run ids keep their fresh controller for caller cancellation, but
     // do not replace the registered entry that owns active-run projection.
-    return { controller, registered: false, markExecutionStarted, cleanup };
+    return {
+      controller,
+      registered: false,
+      markExecutionStarted,
+      bindAgentRunDelegatedAuthority,
+      cleanup,
+    };
   }
 
   const rawNow = params.now ?? Date.now();
@@ -254,6 +290,7 @@ export function registerChatAbortController(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     lifecycleGeneration: params.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+    operationalRunInstance: params.operationalRunInstance,
     agentId: normalizeActiveAgentId(params.agentId),
     startedAtMs: now,
     expiresAtMs:
@@ -271,7 +308,14 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
-  return { controller, registered: true, entry, markExecutionStarted, cleanup };
+  return {
+    controller,
+    registered: true,
+    entry,
+    markExecutionStarted,
+    bindAgentRunDelegatedAuthority,
+    cleanup,
+  };
 }
 
 function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
@@ -608,6 +652,9 @@ export function abortChatRunById(
   active.registrationCleanupRequested = true;
   // Approval cancellation and run abort share this owner so authorization
   // cannot outlive the active run whose controller is about to terminate.
+  if (active.agentRunDelegatedAuthority) {
+    releaseAgentRunDelegatedAuthority(active.agentRunDelegatedAuthority);
+  }
   try {
     ops.onRunAborted?.(runId);
   } catch {

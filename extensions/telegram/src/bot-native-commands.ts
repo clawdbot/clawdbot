@@ -40,6 +40,11 @@ import type {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createPluginCommandRuntime,
+  PLUGIN_COMMAND_DISPATCH,
+  type PluginCommandCatalogDecision,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -124,6 +129,9 @@ import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js"
 export { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({
+  kind: "non-plugin",
+}) satisfies PluginCommandCatalogDecision;
 const activeTelegramCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
 
 type TelegramNativeCommandContext = Context & { match?: string };
@@ -257,15 +265,6 @@ function resolveTelegramCommandSessionFile(params: {
     sessionId: params.sessionId,
     storePath: params.storePath,
   });
-}
-
-function resolveTelegramProgressPlaceholder(command: {
-  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
-}): string | null {
-  const text =
-    command.nativeProgressMessages?.telegram?.trim() ??
-    command.nativeProgressMessages?.default?.trim();
-  return text ? text : null;
 }
 
 async function resolveTelegramCommandTranscriptContext(params: {
@@ -819,10 +818,14 @@ async function resolveTelegramCommandAuth(params: {
   });
   if (!baseAccess.allowed) {
     if (baseAccess.reason === "group-disabled") {
-      return await sendAuthMessage("This group is disabled.");
+      logVerbose(`Blocked telegram command in group ${chatId} (group disabled)`);
+      return null;
     }
     if (baseAccess.reason === "topic-disabled") {
-      return await sendAuthMessage("This topic is disabled.");
+      logVerbose(
+        `Blocked telegram command in topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+      );
+      return null;
     }
     return await rejectNotAuthorized();
   }
@@ -839,7 +842,6 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     resolveGroupPolicy,
     enforcePolicy: true,
-    useTopicAndGroupOverrides: false,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
@@ -847,7 +849,8 @@ async function resolveTelegramCommandAuth(params: {
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {
-      return await sendAuthMessage("Telegram group commands are disabled.");
+      logVerbose("Blocked telegram command (groupPolicy: disabled)");
+      return null;
     }
     if (
       policyAccess.reason === "group-policy-allowlist-no-sender" ||
@@ -856,7 +859,8 @@ async function resolveTelegramCommandAuth(params: {
       return await rejectNotAuthorized();
     }
     if (policyAccess.reason === "group-chat-not-allowed") {
-      return await sendAuthMessage("This group is not allowed.");
+      logVerbose(`Blocked telegram command in group ${chatId} (group not allowed)`);
+      return null;
     }
   }
 
@@ -937,10 +941,8 @@ export const registerTelegramNativeCommands = ({
           agentIds: [boundRoute.agentId],
         })
       : [];
-  const pluginCommandSpecs =
-    (
-      telegramDeps.getPluginCommandSpecs ?? defaultTelegramNativeCommandDeps.getPluginCommandSpecs
-    )?.("telegram", { config: cfg }) ?? [];
+  const pluginCommandRuntime = createPluginCommandRuntime();
+  const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "telegram" })
     : [];
@@ -1207,7 +1209,7 @@ export const registerTelegramNativeCommands = ({
         rawText: string,
       ) => Promise<boolean>)
     | undefined;
-  if (nativeCommandsToHandle.length > 0 || pluginCatalog.commands.length > 0) {
+  if (nativeCommandsToHandle.length > 0 || pluginCatalog.selectedCommands.length > 0) {
     for (const command of nativeCommandsToHandle) {
       const normalizedCommandName = normalizeTelegramCommandName(command.name);
       const commandDefinition = findCommandByNativeName(command.name, "telegram");
@@ -1775,7 +1777,7 @@ export const registerTelegramNativeCommands = ({
             },
           },
           delivery: {
-            deliverWithProviderMessageSending: async (payload) => {
+            deliverWithProviderMessageSending: async (payload, info) => {
               if (
                 shouldSuppressLocalTelegramExecApprovalPrompt({
                   cfg: runtimeCfg,
@@ -1800,6 +1802,7 @@ export const registerTelegramNativeCommands = ({
                 ],
                 ...deliveryBaseOptions,
                 silent: runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
+                onPlatformSendDispatch: info.onPlatformSendDispatch,
               });
               if (result.delivered) {
                 deliveryState.delivered = true;
@@ -1842,6 +1845,7 @@ export const registerTelegramNativeCommands = ({
           replyOptions: {
             skillFilter,
             disableBlockStreaming,
+            [PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH,
           },
         };
         const turnResult = await (
@@ -1884,7 +1888,7 @@ export const registerTelegramNativeCommands = ({
       }
     }
 
-    for (const pluginCommand of pluginCatalog.commands) {
+    for (const pluginCommand of pluginCatalog.selectedCommands) {
       bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
         const msg = ctx.message;
         if (!msg) {
@@ -1905,9 +1909,9 @@ export const registerTelegramNativeCommands = ({
         const { threadParams } = await resolveTelegramNativeCommandThreadContext({ msg, bot });
         const rawText = ctx.match?.trim() ?? "";
         const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
-        const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
-        const match = nativeCommandRuntime.matchPluginCommand(commandBody);
-        if (!match) {
+        const candidate = pluginCommand.spec;
+        const pluginCommandDispatch = candidate.prepareDispatch(rawText);
+        if (pluginCommandDispatch.kind === "non-plugin") {
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
@@ -1915,6 +1919,7 @@ export const registerTelegramNativeCommands = ({
           });
           return;
         }
+        const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
         const auth = await resolveTelegramCommandAuth({
           msg,
           bot,
@@ -1926,7 +1931,7 @@ export const registerTelegramNativeCommands = ({
           groupAllowFrom: turnSettings.groupAllowFrom,
           resolveGroupPolicy,
           resolveTelegramGroupConfig,
-          requireAuth: match.command.requireAuth !== false,
+          requireAuth: candidate.requireAuth,
         });
         if (!auth) {
           return;
@@ -1985,7 +1990,7 @@ export const registerTelegramNativeCommands = ({
         const { deliverReplies, emitTelegramMessageSentHooks } =
           await loadTelegramNativeCommandDeliveryRuntime();
         let progressMessageId: number | undefined;
-        const progressPlaceholder = resolveTelegramProgressPlaceholder(match.command);
+        const progressPlaceholder = candidate.progressMessage;
 
         if (progressPlaceholder) {
           try {
@@ -2016,9 +2021,7 @@ export const registerTelegramNativeCommands = ({
         });
 
         const result = normalizeTelegramNativeReplyPayload(
-          await nativeCommandRuntime.executePluginCommand({
-            command: match.command,
-            args: match.args,
+          await pluginCommandDispatch.execute({
             senderId,
             channel: "telegram",
             isAuthorizedSender: commandAuthorized,
@@ -2110,6 +2113,9 @@ export const registerTelegramNativeCommands = ({
             runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,
         });
       });
+    }
+    if (pluginCatalog.selectedCommands.length > 0) {
+      pluginCommandRuntime.retainNativeCatalog("telegram");
     }
   }
 

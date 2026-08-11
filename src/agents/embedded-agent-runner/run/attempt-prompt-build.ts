@@ -29,7 +29,7 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   leasePendingAgentSteeringItems,
   prependAgentSteeringPrompt,
-} from "../../subagent-registry.js";
+} from "../../subagents/registry/subagent-registry.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
@@ -51,19 +51,19 @@ import {
   toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
-import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
-import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForCurrentPromptBoundary,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
+import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
-} from "./attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
   buildCurrentInboundPrompt,
@@ -330,12 +330,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   }
 
   let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
-  if (
-    attempt.sessionKey &&
-    !input.isRawModelRun &&
-    !isSettledTurnFinalization &&
-    attempt.bootstrapContextRunKind !== "commitment-only"
-  ) {
+  if (attempt.sessionKey && !input.isRawModelRun && !isSettledTurnFinalization) {
     const leaseId = `${attempt.runId}:agent-steering`;
     const leased = leasePendingAgentSteeringItems({
       requesterSessionKey: attempt.sessionKey,

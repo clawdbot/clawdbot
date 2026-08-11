@@ -16,7 +16,7 @@ import {
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
-import type { ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
   enqueueChatMessage,
@@ -56,6 +56,7 @@ import {
   resetChatInputHistoryNavigation,
 } from "./input-history.ts";
 import { controlUiNowMs } from "./performance.ts";
+import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
   hasAbortableSessionRun,
@@ -207,7 +208,7 @@ export async function handleSendChat(
   const userMessage = (messageOverride ?? host.chatMessage).trim();
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+  let expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
   const attachmentsToSend =
     messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
@@ -419,6 +420,14 @@ export async function handleSendChat(
     skillWorkshopRevision,
   );
   await withChatSubmitGuard(host, submitKey, async () => {
+    if (host.chatLoading) {
+      // A terminal event can render before its authoritative leaf arrives.
+      // Reuse the in-flight history request before fencing the follow-up send.
+      if (!(await loadChatHistory(host as unknown as ChatState))) {
+        return;
+      }
+      expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
+    }
     if (host.sessionKey !== submittedSessionKey) {
       return;
     }
@@ -437,6 +446,9 @@ export async function handleSendChat(
 
     const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
     const waitingForSettings = Boolean(pendingSettings);
+    // The edited row hands its place to the replacement and is retired by the same
+    // store write, so a rejected write leaves the original queued and editable.
+    const resumedEdit = activeQueuedMessageEdit(host);
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,
@@ -446,13 +458,23 @@ export async function handleSendChat(
       waitingForSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
       skillWorkshopRevision,
       replyToId,
+      resumedEdit?.orderKey,
     );
     if (!queued) {
       return;
     }
-    const admittedDurably = admitQueuedMessageForSession(host, submittedSessionKey, queued);
+    const admittedDurably = admitQueuedMessageForSession(
+      host,
+      submittedSessionKey,
+      queued,
+      resumedEdit?.id,
+    );
+    retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments);
     const canSendFromMemory =
       !admittedDurably &&
+      // A still-open edit means its stored source outlived the rejected write;
+      // sending the replacement from memory would strand the original as a duplicate.
+      !activeQueuedMessageEdit(host) &&
       (skillWorkshopRevision
         ? isSkillWorkshopRevisionConnectionCurrent(host, queued)
         : !waitingForSettings && canSendVolatileQueueItem(host, queued, submittedSessionKey));

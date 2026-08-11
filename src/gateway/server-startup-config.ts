@@ -80,6 +80,8 @@ type RuntimeSecretsActivationParams = {
   runtimeSourceConfig?: OpenClawConfig;
   /** Defer degradation/recovery publication until a larger transaction can no longer roll back. */
   deferStatePublication?: boolean;
+  /** SecretRefs that must not retain last-known-good values during this reload. */
+  forceColdRefKeys?: ReadonlySet<string>;
 };
 
 type DeferredSecretsStateTransition = {
@@ -423,6 +425,7 @@ export function createRuntimeSecretsActivator(params: {
               allowUnavailableSecretOwners,
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
+              forceColdRefKeys: activationParams.forceColdRefKeys,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
               ...(params.pluginMetadataSnapshot
                 ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }

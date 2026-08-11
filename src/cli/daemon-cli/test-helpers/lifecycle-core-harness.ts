@@ -5,7 +5,7 @@ import type { MockFn } from "../../../test-utils/vitest-mock-fn.js";
 import { createCliRuntimeCapture } from "../../test-runtime-capture.js";
 
 const lifecycleRuntimeCapture = createCliRuntimeCapture();
-export const runtimeLogs = lifecycleRuntimeCapture.runtimeLogs;
+export const lifecycleRuntimeLogs = lifecycleRuntimeCapture.runtimeLogs;
 type LifecycleRuntimeHarness = typeof lifecycleRuntimeCapture.defaultRuntime;
 
 type LifecycleServiceHarness = GatewayService & {

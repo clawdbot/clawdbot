@@ -29,6 +29,7 @@ export const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 export const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 export const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
 export const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
+export const taskActivityByTaskId = taskRegistryProcessState.taskActivityByTaskId;
 type TaskRegistryRestoreState =
   | { status: "uninitialized" }
   | { status: "restoring" }
@@ -249,6 +250,12 @@ export function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boo
 
 export function clearTaskRegistryMemory(): void {
   clearTaskFlowSyncRetries();
+  for (const activity of taskActivityByTaskId.values()) {
+    if (activity.flushTimer) {
+      clearTimeout(activity.flushTimer);
+    }
+  }
+  taskActivityByTaskId.clear();
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();

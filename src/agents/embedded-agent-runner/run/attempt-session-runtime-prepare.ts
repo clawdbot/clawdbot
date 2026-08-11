@@ -5,14 +5,14 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import type { AgentSession } from "../../sessions/index.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
-import type { createEmbeddedAttemptExternalAbortController } from "./attempt-abort.js";
-import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
+import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
 import {
   prepareEmbeddedAttemptAgentSession,
   prepareEmbeddedAttemptSessionBoundary,
   prepareEmbeddedAttemptSessionManager,
 } from "./attempt-session-prepare.js";
 import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
+import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";

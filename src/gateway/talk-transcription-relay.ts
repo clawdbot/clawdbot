@@ -507,25 +507,3 @@ export function stopTalkTranscriptionRelaySession(params: {
     throw error;
   }
 }
-
-/** Cancels the active transcription turn and closes the relay. */
-export function cancelTalkTranscriptionRelayTurn(params: {
-  transcriptionSessionId: string;
-  connId: string;
-  reason?: string;
-}): void {
-  const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
-  const turnId = ensureTranscriptionTurn(session);
-  const cancelled = session.talk.cancelTurn({
-    turnId,
-    payload: { reason: params.reason ?? "client-cancelled" },
-  });
-  broadcastToOwner(session.context, session.connId, {
-    transcriptionSessionId: session.id,
-    type: "transcript",
-    text: "",
-    final: true,
-    talkEvent: cancelled.ok ? cancelled.event : undefined,
-  });
-  closeTranscriptionSession(session, "completed");
-}

@@ -11,7 +11,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
+import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
@@ -25,13 +25,13 @@ import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
-} from "./attempt.llm-boundary.js";
+} from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
-} from "./attempt.sessions-yield.js";
+} from "./attempt-sessions-yield.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";

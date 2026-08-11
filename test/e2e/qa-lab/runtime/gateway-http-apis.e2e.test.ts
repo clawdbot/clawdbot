@@ -10,7 +10,7 @@ import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "../../../../src/gateway/test-helpers.js";
 import { peekSystemEventEntries } from "../../../../src/infra/system-events.js";
@@ -86,7 +86,7 @@ async function fetchJson(port: number, pathname: string, init?: RequestInit) {
 describe("Gateway HTTP API product proof", () => {
   it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", async () => {
     const embeddingFixture = await startEmbeddingFixture();
-    let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
 
     try {
       const configPath = createConfigIO().configPath;
@@ -123,7 +123,7 @@ describe("Gateway HTTP API product proof", () => {
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
 
       const port = await getFreePort();
-      gateway = await startGatewayServer(port, {
+      gateway = await startTestGatewayServer(port, {
         host: "127.0.0.1",
         auth: { mode: "token", token: GATEWAY_TOKEN },
         controlUiEnabled: false,

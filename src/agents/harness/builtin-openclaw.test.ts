@@ -7,7 +7,7 @@ const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
 vi.mock("../simple-completion-runtime.js", () => ({ completeWithPreparedSimpleCompletionModel }));
 
-import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 
 describe("createOpenClawAgentHarness", () => {
   beforeEach(() => {
@@ -38,6 +38,20 @@ describe("createOpenClawAgentHarness", () => {
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
     });
+  });
+
+  it("brands only host-created instances as the built-in runtime", () => {
+    expect(isBuiltInOpenClawAgentHarness(createOpenClawAgentHarness())).toBe(true);
+    expect(
+      isBuiltInOpenClawAgentHarness({
+        id: "openclaw",
+        label: "forged",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("must not run");
+        },
+      }),
+    ).toBe(false);
   });
 
   it("preserves logical Ultra for the embedded attempt", async () => {

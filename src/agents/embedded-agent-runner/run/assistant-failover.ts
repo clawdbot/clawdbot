@@ -4,7 +4,6 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { classifyRateLimitWindow } from "../../../llm/utils/rate-limit-window.js";
 import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
@@ -17,6 +16,7 @@ import {
   type FailoverReason,
 } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
 import {
   mergeRetryFailoverReason,
   resolveRunFailoverDecision,

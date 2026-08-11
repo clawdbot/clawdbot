@@ -9,8 +9,9 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   isJsonObject,
@@ -138,6 +139,7 @@ export function createCodexUserInputBridge(params: {
             intro: "Codex needs input:",
           }).catch((error: unknown) => {
             embeddedAgentLog.warn("failed to deliver secret codex user input prompt", { error });
+            resolveSecretIfCurrent(current, emptyUserInputResponse());
           });
         });
       }
@@ -311,11 +313,6 @@ function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonO
 
 function emptyUserInputResponse(): JsonObject {
   return emptyAgentHarnessUserInputAnswers() as unknown as JsonObject;
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function readRequestId(record: JsonObject): string | number | undefined {

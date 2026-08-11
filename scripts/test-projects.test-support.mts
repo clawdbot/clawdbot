@@ -390,9 +390,12 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
+const PACKAGE_DOCKER_VITEST_CONFIG = "test/vitest/vitest.package-docker.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const PACKAGE_DOCKER_TEST_TARGET =
+  "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
@@ -439,6 +442,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   daemon: DAEMON_VITEST_CONFIG,
   media: MEDIA_VITEST_CONFIG,
   logging: LOGGING_VITEST_CONFIG,
+  packageDocker: PACKAGE_DOCKER_VITEST_CONFIG,
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   pluginSdk: PLUGIN_SDK_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
@@ -538,6 +542,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ],
   ],
 ]);
+const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];
 const RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS = [
   ...RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS,
@@ -696,7 +701,10 @@ const SOURCE_TEST_TARGETS = new Map([
     "src/commitments/model-selection.runtime.ts",
     ["src/commitments/runtime.test.ts", "src/agents/model-selection.test.ts"],
   ],
-  ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/agents/test-helpers/live-model-turn-probes.ts",
+    ["src/agents/live-model-turn-probes.test.ts"],
+  ],
   [
     "src/plugins/provider-auth-choice.ts",
     ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
@@ -2475,12 +2483,18 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, "plugin-clawhub-new-workflow"],
   ],
   [
+    new RegExp(
+      [
+        "^(?:scripts\\/materialize-vercel-cli\\.sh|",
+        "\\.github\\/release\\/vercel-cli\\/package(?:-lock)?\\.json)$",
+      ].join(""),
+      "u",
+    ),
+    ["test/scripts/vercel-container-registry-publish.test.ts"],
+  ],
+  [
     /^scripts\/lib\/generated-text-asset\.mts$/u,
-    [
-      "extensions/browser/scripts/build-copilot-runtime.test.ts",
-      "build-diffs-viewer-runtime",
-      "bundled-plugin-assets",
-    ],
+    ["build-diffs-viewer-runtime", "bundled-plugin-assets"],
   ],
   [/^scripts\/check-plugin-npm-runtime-builds\.mts$/u, ["plugin-npm-runtime-build-args"]],
   [
@@ -2519,7 +2533,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
     new RegExp(
       [
-        "^scripts\\/e2e\\/(?!(?:commitments-safety|config-reload-source|",
+        "^scripts\\/e2e\\/(?!(?:config-reload-source|",
         "kitchen-sink-(?:plugin|rpc)|npm-telegram-live|onboard|openai-chat-tools|",
         "plugin-lifecycle-matrix|release-media-memory|session-runtime-context|",
         "update-corrupt-plugin)-docker\\.sh$).+-docker\\.sh$",
@@ -2537,10 +2551,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/e2e\/codex-media-path-docker\.sh$/u, ["codex-media-path-client"]],
   [/^scripts\/e2e\/live-plugin-tool-docker\.sh$/u, ["live-plugin-tool-assertions"]],
-  [
-    /^scripts\/e2e\/commitments-safety-docker\.sh$/u,
-    [dockerE2e, "src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
-  ],
   [/^scripts\/e2e\/onboard-docker\.sh$/u, [dockerBuild, "openclaw-test-state"]],
   [
     new RegExp(
@@ -2628,10 +2638,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/system-agent/operations.test.ts",
       "src/system-agent/audit.test.ts",
     ],
-  ],
-  [
-    /^scripts\/e2e\/commitments-safety-docker(?:-client)?\.(?:sh|ts)$/u,
-    ["src/commitments/runtime.test.ts", "src/commitments/store.test.ts"],
   ],
   [
     /^scripts\/e2e\/session-runtime-context-docker(?:-client)?\.(?:sh|ts)$/u,
@@ -2954,6 +2960,9 @@ function resolvePreciseChangedTestTargets(
   const cwd = options.cwd ?? process.cwd();
   const mappedTargets =
     SOURCE_TEST_TARGETS.get(changedPath) ??
+    (/^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(changedPath)
+      ? [changedPath, DOCS_CONFIG_EXAMPLES_TEST_TARGET]
+      : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
     resolvePromptSnapshotFixtureTargets(changedPath);
@@ -3113,6 +3122,9 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
+  }
+  if (relative === PACKAGE_DOCKER_TEST_TARGET) {
+    return "packageDocker";
   }
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
@@ -3637,6 +3649,7 @@ export function buildVitestRunPlans(
     const config = VITEST_CONFIG_BY_KIND[kind] ?? DEFAULT_VITEST_CONFIG;
     const useCliTargetArgs =
       kind === "e2e" ||
+      kind === "packageDocker" ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>

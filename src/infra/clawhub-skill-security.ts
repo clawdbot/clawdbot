@@ -7,7 +7,7 @@ import {
   fetchClawHubSkillVerification,
   type ClawHubSkillSecurityVerdictItem,
   type ClawHubSkillVerificationResponse,
-} from "./clawhub.js";
+} from "./clawhub-skills.js";
 
 const MAX_SECURITY_VERDICT_BATCH_SIZE = 100;
 const OWNER_QUALIFIED_FALLBACK_CONCURRENCY = 6;

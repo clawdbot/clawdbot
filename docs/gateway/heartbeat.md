@@ -31,7 +31,7 @@ Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
     Store a tiny checklist in the heartbeat monitor's scratch with `openclaw cron scratch <jobId> --set "..."`.
   </Step>
   <Step title="Decide where heartbeat messages should go">
-    `target: "none"` is the default; set `target: "last"` to route to the last contact.
+    Heartbeat messages go to the last conversation by default. On a fresh install, message your bot once to establish that route.
   </Step>
   <Step title="Optional tuning">
     - Use lightweight bootstrap context if heartbeat runs only need the monitor scratch.
@@ -49,7 +49,7 @@ Example config:
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last", // explicit delivery to last contact (default is "none")
+        target: "last", // default: deliver to the last conversation
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: skip workspace bootstrap files for heartbeat runs
         isolatedSession: true, // optional: fresh session each run (no conversation history)
@@ -63,6 +63,7 @@ Example config:
 ## Defaults
 
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`; use `0m` to disable.
+- Delivery target: `last`. Until the agent has a last conversation route, polls skip with `reason=no-route`; message the bot once or set an explicit `target` and `to`. Set `target: "none"` for internal-only runs.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt automatically includes a "Heartbeats" section when cadence is enabled for the default agent; that guidance has no separate heartbeat toggle.
@@ -118,7 +119,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         model: "anthropic/claude-opus-4-6",
         lightContext: false, // default: false; true skips workspace bootstrap files for heartbeat runs
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-        target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "imessage")
+        target: "last", // default: last | options: none | <channel id> (core or plugin, e.g. "imessage")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
         prompt: "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
@@ -148,7 +149,7 @@ Example: two agents, only the second agent runs heartbeats.
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last", // explicit delivery to last contact (default is "none")
+        target: "last", // default: deliver to the last conversation
       },
     },
     entries: {
@@ -177,7 +178,7 @@ Restrict heartbeats to business hours in a specific timezone:
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last", // explicit delivery to last contact (default is "none")
+        target: "last", // default: deliver to the last conversation
         activeHours: {
           start: "09:00",
           end: "22:00",
@@ -254,9 +255,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 </ParamField>
 <ParamField path="target" type="string">
-- `last`: deliver to the last used external channel.
+- `last` (default): deliver to the last used external channel.
 - explicit channel: any configured channel or plugin id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
-- `none` (default): run the heartbeat but **do not deliver** externally.
+- `none`: run the heartbeat for internal state only; **do not deliver** externally.
 
 </ParamField>
 <ParamField path="directPolicy" type='"allow" | "block"' default="allow">
@@ -303,7 +304,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
     - To deliver to a specific channel/recipient, set `target` + `to`. With `target: "last"`, delivery uses the last external channel for that session.
     - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
     - Scheduled heartbeats are skipped and retried later when the main queue or automation work is busy, any reply or embedded run for the same agent is active, or the resolved target session has active or queued work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
-    - If `target` resolves to no external destination, the run still happens but no outbound message is sent.
+    - If `target: "last"` has no external destination yet, the poll is skipped as `reason=no-route` before the agent runs. Message the bot once to establish a route, or set an explicit `target` and `to`.
 
   </Accordion>
   <Accordion title="Visibility and skip behavior">
@@ -465,7 +466,7 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 - Use `lightContext: true` to skip workspace bootstrap files for heartbeat runs.
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
 - Keep the monitor scratch small.
-- Use `target: "none"` if you only want internal state updates.
+- Set `target: "none"` explicitly if you only want internal state updates.
 
 ## Context overflow after heartbeat
 

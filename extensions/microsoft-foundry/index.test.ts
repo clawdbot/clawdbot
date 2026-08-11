@@ -932,9 +932,10 @@ describe("microsoft-foundry plugin", () => {
       authMethod: "entra-id",
     });
 
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/mai-image-prod",
     });
+    expect(result.configPatch?.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(result.defaultModel).toBeUndefined();
     expect(requireFoundryProviderPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
   });
@@ -986,7 +987,7 @@ describe("microsoft-foundry plugin", () => {
       modelNameHint: "MAI-Image-2.5",
       api: "openai-completions",
     });
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/prod-image",
     });
     expect(result.defaultModel).toBeUndefined();
@@ -1150,7 +1151,7 @@ describe("microsoft-foundry plugin", () => {
       ],
     });
 
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/custom-image-prod",
     });
     expect(result.defaultModel).toBeUndefined();

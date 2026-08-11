@@ -46,6 +46,27 @@ openclaw-chat-pane {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
+.chat-pane-cache {
+  display: grid;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-pane-cache__pane {
+  opacity: 0;
+  grid-area: 1 / 1;
+}
+
+.chat-pane-cache__pane--visible {
+  opacity: 1;
+  z-index: 1;
+}
+
+.chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {
+  display: none;
+}
+
 .chat-split-view__pane {
   flex: 1 1 0;
   min-width: 0;
@@ -55,6 +76,12 @@ openclaw-chat-pane {
 
 .chat-split-view--narrow .chat-split-view__cell {
   min-height: 0;
+}
+
+.chat-split-view--narrow .chat-split-view__cell--narrow-hidden,
+.chat-split-view--narrow .chat-split-view__column--narrow-hidden,
+.chat-split-view--narrow resizable-divider {
+  display: none;
 }
 
 /* Narrow mode shows only the active pane; a focus ring is pure noise there. */
@@ -144,13 +171,15 @@ openclaw-chat-pane {
   overflow: hidden;
   color: var(--text);
   font-size: 12px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .chat-pane__session-title-button {
   display: block;
+  /* Hover padding is drawn outside the text box: the plain-span title (catalog
+     and rename-disabled panes) has none, and without the pull-back the same
+     title would start 5px further right the moment renaming is allowed. */
   padding: 3px 5px;
+  margin-inline: -5px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -162,6 +191,15 @@ openclaw-chat-pane {
 .chat-pane__session-title-button:focus-visible {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   outline: none;
+}
+
+.chat-pane__session-title-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Inter's visible ink sits 0.8px above its line-box center at this size. */
+  transform: translateY(1px);
 }
 
 .chat-pane__session-title-input {
@@ -242,7 +280,7 @@ openclaw-chat-pane {
 .chat-pane__gateway-chip {
   display: inline-flex;
   max-width: 170px;
-  height: 26px;
+  height: 28px;
   align-items: center;
   gap: 6px;
   padding: 0 8px;
@@ -320,7 +358,8 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
-.chat-pane__branches-trigger svg,
+/* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
+   row, so it keeps the shared 18px action glyph from .btn--icon svg. */
 .chat-pane__branch-active svg {
   width: 14px;
   height: 14px;
@@ -357,7 +396,9 @@ openclaw-chat-pane {
 .chat-pane__workspace-chip {
   display: inline-flex;
   max-width: 180px;
-  height: 26px;
+  /* Same 28px control height as .chat-icon-btn, so every hit/hover surface in
+     the row starts and ends on the same two lines. */
+  height: 28px;
   align-items: center;
   gap: 5px;
   padding: 0 8px;
@@ -398,6 +439,23 @@ openclaw-chat-pane {
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
   margin-left: auto;
+}
+
+/* One box model for every action, whatever wraps it. A custom element defaults
+   to display:inline, so as a flex child it blockifies but keeps a text line
+   box, and the descender space under its button drags the glyph off the row
+   centerline: the session menu measured 29.8px tall and 0.9px low against the
+   28px buttons beside it. Keep this selector at single-class specificity so the
+   container queries below can still hide individual actions. */
+.chat-pane__actions > * {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The tooltip wrapper stays out of the box tree so the button it wraps remains
+   the flex item that the rule above measures. */
+.chat-pane__actions > openclaw-tooltip {
+  display: contents;
 }
 
 .chat-pane__sharing-menu {
@@ -457,6 +515,22 @@ openclaw-chat-pane {
   .chat-pane__presence {
     display: none;
   }
+}
+
+.chat-header-session-menu--compact .session-menu__item {
+  min-height: 44px;
+}
+
+.chat-header-session-menu--compact .session-menu__section-label {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+}
+
+.chat-header-session-menu--compact::part(menu) {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
 }
 
 /* Plain web shell chrome overlays the first pane header. Expanded navigation

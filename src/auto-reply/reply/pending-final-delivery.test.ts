@@ -4,10 +4,10 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
-  buildPendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
   sanitizePendingFinalDeliveryText,
@@ -95,12 +95,12 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
     const rawPayloads = [{ text: "Rendered chart\nMEDIA:/tmp/chart.png" }];
 
     const recoveryPayloads = normalizePendingFinalRecoveryPayloads(rawPayloads);
-    expect(buildPendingFinalDeliveryText(recoveryPayloads)).toBe(
+    expect(recoveryPayloads.map((payload) => payload.text)).toEqual([
       "Rendered chart\nMEDIA:/tmp/chart.png",
-    );
+    ]);
 
     const deliveryPayloads = normalizePendingFinalDeliveryPayloads(rawPayloads);
-    expect(buildPendingFinalDeliveryText(deliveryPayloads)).toBe("Rendered chart");
+    expect(deliveryPayloads.map((payload) => payload.text)).toEqual(["Rendered chart"]);
   });
 
   it("keeps media-only directives as durable recovery text", () => {
@@ -108,7 +108,7 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
       { text: "MEDIA:/tmp/chart.png" },
     ]);
 
-    expect(buildPendingFinalDeliveryText(recoveryPayloads)).toBe("MEDIA:/tmp/chart.png");
+    expect(recoveryPayloads.map((payload) => payload.text)).toEqual(["MEDIA:/tmp/chart.png"]);
     expect(normalizePendingFinalDeliveryPayloads(recoveryPayloads)).toHaveLength(1);
   });
 
@@ -137,6 +137,18 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
     expect(
       buildRecoverablePendingFinalDeliveryText([{ text: "[[reply_to_current]] visible final" }]),
     ).toBeUndefined();
+  });
+
+  it("separates implicit delivery threading from explicit reply semantics", () => {
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        { text: "Visible final", replyToId: "source-message" },
+      ]),
+    ).toBe("Visible final");
+
+    const explicitReply = { text: "Visible final", replyToId: "source-message" };
+    setReplyPayloadMetadata(explicitReply, { replyToIdExplicit: true });
+    expect(buildRecoverablePendingFinalDeliveryText([explicitReply])).toBeUndefined();
   });
 
   it("refuses multi-payload media finals because text recovery loses payload boundaries", () => {

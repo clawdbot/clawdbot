@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feedback-reflection.js";
 
 const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
-const dispatchChannelInboundTurn = vi.hoisted(() => vi.fn());
+const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 const loadSessionEntry = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAt = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
@@ -15,7 +15,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntryReadOnly: loadSessionEntry,
   readSessionUpdatedAt,
 }));
-vi.mock("./turn/kernel.js", () => ({ dispatchChannelInboundTurn }));
+vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
 const cfg = {} as OpenClawConfig;
 
@@ -23,7 +23,7 @@ describe("channel feedback reflection", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("runs reflection in the original session and enforces cooldown", async () => {
-    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({
         text: JSON.stringify({
           learning: "Answer the direct question first.",
@@ -53,7 +53,7 @@ describe("channel feedback reflection", () => {
       userMessage: "Want a shorter version?",
       responseLength: 104,
     });
-    expect(dispatchChannelInboundTurn).toHaveBeenCalledWith(
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
         channel: "msteams",
@@ -62,11 +62,11 @@ describe("channel feedback reflection", () => {
       }),
     );
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({ status: "cooldown" });
-    expect(dispatchChannelInboundTurn).toHaveBeenCalledTimes(1);
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a plain-text reflection as internal learning", async () => {
-    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({ text: "Answer the direct question first." });
       return { admission: { kind: "dispatch" }, dispatched: true };
     });
@@ -92,7 +92,7 @@ describe("channel feedback reflection", () => {
   });
 
   it("does not treat structured follow-up values as directives", async () => {
-    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({
         text: JSON.stringify({ learning: "Be concise.", followUp: ["yes"] }),
       });

@@ -5,6 +5,33 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CLIInstallerTests {
+    @Test func `managed install locations follow the app profile`() {
+        let home = URL(fileURLWithPath: "/Users/Test User", isDirectory: true)
+        let cases = [
+            (AppProfile(environment: [:]), "/Users/Test User/.openclaw"),
+            (
+                AppProfile(environment: [
+                    "OPENCLAW_PROFILE": "onboardtest",
+                    "OPENCLAW_STATE_DIR": "/tmp/ignored-state",
+                ]),
+                "/Users/Test User/.openclaw-onboardtest"),
+        ]
+
+        for (profile, expectedPrefix) in cases {
+            let prefix = CLIInstaller.installPrefix(homeDirectory: home, profile: profile)
+            #expect(prefix == expectedPrefix)
+            #expect(CLIInstaller.managedExecutableLocation(homeDirectory: home, profile: profile) ==
+                "\(expectedPrefix)/bin/openclaw")
+
+            let command = CLIInstaller.installScriptCommand(
+                target: .exact("2026.7.3"),
+                prefix: prefix,
+                scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh")
+            let prefixIndex = command.firstIndex(of: "--prefix")
+            #expect(prefixIndex.map { command[$0 + 1] } == expectedPrefix)
+        }
+    }
+
     @Test func `installed location finds executable`() throws {
         let fm = FileManager()
         let root = fm.temporaryDirectory.appendingPathComponent(

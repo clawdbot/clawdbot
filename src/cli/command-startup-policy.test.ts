@@ -36,7 +36,6 @@ describe("command-startup-policy", () => {
       ["status"],
       ["agents", "bindings"],
       ["approvals", "pending"],
-      ["commitments"],
       ["skills"],
       ["skills", "list"],
       ["skills", "check"],
@@ -384,6 +383,13 @@ describe("command-startup-policy", () => {
 
   it("suppresses startup stdout for the mcp serve protocol", () => {
     expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("reserves stdout for the browser native-host protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.suppressDoctorStdout).toBe(true);
   });
 
   it("reserves stdout for the node worker protocol", () => {

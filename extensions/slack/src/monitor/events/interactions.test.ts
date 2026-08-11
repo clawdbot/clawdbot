@@ -1559,6 +1559,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1687,6 +1688,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123",
       channel: "slack",
+      accountId: "default",
     });
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
@@ -1890,6 +1892,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-always",
       senderId: "U123OWNER",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -1969,6 +1972,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U123OWNER",
       resolveMethod: "plugin",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
@@ -2042,6 +2046,7 @@ describe("registerSlackInteractionEvents", () => {
       decision: "allow-once",
       senderId: "U123OWNER",
       channel: "slack",
+      accountId: "default",
     };
     expect(resolveApprovalOverGatewayMock).toHaveBeenNthCalledWith(1, {
       ...expectedCommon,
@@ -2121,6 +2126,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U999EXEC",
       resolveMethod: "exec",
       channel: "slack",
+      accountId: "default",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import { failTransportStream, finalizeTransportStream } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
-import { resolveMainSessionResumePolicy } from "./main-session-restart-recovery-resume-policy.js";
+import { resolveMainSessionResumePolicy } from "./main-session-recovery/main-session-restart-recovery-resume-policy.js";
 import {
   createAssistantOutput,
   makeCompletionsModel,

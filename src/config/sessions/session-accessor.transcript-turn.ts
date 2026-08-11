@@ -14,7 +14,7 @@ import {
   rememberCommittedSqliteTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite.js";
+import { appendSqliteExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {
   SessionTranscriptWriteScope,

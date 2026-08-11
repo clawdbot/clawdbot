@@ -45,9 +45,35 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         let view = OnboardingView(
             state: state,
-            permissionMonitor: PermissionMonitor.shared,
             discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
         _ = view.body
+    }
+
+    @Test func `foreign local listener is not advertised as attachable`() {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        let foreign = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 1402,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let managed = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 2380,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let inactiveUnexpected = OnboardingView.LocalGatewayProbe(
+            port: 18789,
+            pid: 3301,
+            command: "python",
+            profile: AppProfile(environment: [:]),
+            managedServicePID: nil)
+
+        #expect(foreign.subtitle ==
+            "Port 55636 already in use (node pid 1402). Choose a different Gateway port for profile p2380.")
+        #expect(managed.subtitle == "Existing gateway detected (node pid 2380). Will attach.")
+        #expect(inactiveUnexpected.subtitle == "Port 18789 already in use (python pid 3301). Will attach.")
     }
 
     @Test func `onboarding window resizes vertically and gives the page the extra height`() {
@@ -80,25 +106,6 @@ struct OnboardingViewSmokeTests {
 
         #expect(short == 409)
         #expect(short < preferred)
-    }
-
-    @Test func `permissions page scrolls when the onboarding window is short`() throws {
-        let state = AppState(preview: true)
-        let view = OnboardingView(state: state)
-        let hosting = NSHostingView(rootView: view.permissionsPage())
-        let contentHeight = OnboardingView.contentHeight(
-            for: OnboardingView.minimumWindowHeight,
-            usesCompactHero: false)
-        hosting.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: OnboardingView.windowWidth,
-            height: contentHeight)
-        hosting.layoutSubtreeIfNeeded()
-
-        let scrollView = try #require(Self.firstDescendant(of: NSScrollView.self, in: hosting))
-        #expect(contentHeight == 303)
-        #expect(scrollView.documentView != nil)
     }
 
     @Test func `configured flows end at AI setup and hand off to the dashboard`() {
@@ -234,6 +241,29 @@ struct OnboardingViewSmokeTests {
             installing: true))
     }
 
+    @Test func `later gateway readiness revises a pinned CLI activation failure`() {
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .attachedExisting(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .failed("still unavailable"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: nil),
+            isLocal: false,
+            executableReady: true,
+            installed: false))
+    }
+
     @Test func `connection mode change restarts full page monitoring`() {
         let state = AppState(preview: true)
         let view = OnboardingView(state: state)
@@ -279,7 +309,6 @@ struct OnboardingViewSmokeTests {
             state.remoteTarget = "user@old-host:2222"
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Unresolved",
@@ -320,7 +349,6 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
             view.aiSetup.manualKey = "route-a-secret"
@@ -427,7 +455,6 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
             view.aiSetup.manualKey = "pending-secret"
@@ -519,13 +546,5 @@ struct OnboardingViewSmokeTests {
         #expect(Array(Capability.importanceOrdered.prefix(3))
             == [.appleScript, .accessibility, .screenRecording])
         #expect(Capability.importanceOrdered.last == Capability.location)
-    }
-
-    private static func firstDescendant<T: NSView>(of type: T.Type, in view: NSView) -> T? {
-        if let match = view as? T { return match }
-        for child in view.subviews {
-            if let match = self.firstDescendant(of: type, in: child) { return match }
-        }
-        return nil
     }
 }

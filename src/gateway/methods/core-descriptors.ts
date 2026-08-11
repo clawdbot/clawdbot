@@ -16,12 +16,13 @@ type CoreGatewayMethodSpec = {
   advertise?: false;
   startup?: true;
   controlPlaneWrite?: true;
+  compatibilityRestored?: true;
 };
 
 type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite"
+  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored"
 >;
 type CoreGatewayMethodSpecRow = readonly [
   name: string,
@@ -43,7 +44,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["doctor.memory.resetGroundedShortTerm", "doctor", "operator.write", "<=2026.7"],
   ["doctor.memory.repairDreamingArtifacts", "doctor", "operator.write", "<=2026.7"],
   ["doctor.memory.dedupeDreamDiary", "doctor", "operator.write", "<=2026.7"],
-  ["doctor.memory.remHarness", "doctor", "operator.read", "<=2026.7"],
   ["logs.tail", "logs", "operator.read", "<=2026.7"],
   ["channels.status", "channels", "operator.read", "<=2026.7"],
   ["channels.start", "channels", "operator.admin", "<=2026.7"],
@@ -109,11 +109,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.client.toolCall", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.steer", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.create", "talk", "operator.talk", "<=2026.7"],
-  ["talk.session.join", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.appendAudio", "talk", "operator.talk", "<=2026.7"],
-  ["talk.session.startTurn", "talk", "operator.talk", "<=2026.7"],
-  ["talk.session.endTurn", "talk", "operator.talk", "<=2026.7"],
-  ["talk.session.cancelTurn", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.cancelOutput", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.acknowledgeMark", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.submitToolResult", "talk", "operator.talk", "<=2026.7"],
@@ -167,9 +163,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
   ["worktrees.branches", "worktrees", "operator.write", "2026.7"],
-  // Arbitrary host-path directory listing backs the new-session folder picker;
-  // same trust bar as sessions.create with an explicit cwd.
-  ["fs.listDir", "fs", "operator.admin", "<=2026.7"],
+  // Params-aware: Gateway paths start at write scope and are containment-checked
+  // by the handler; node browsing remains admin-only.
+  ["fs.listDir", "fs", "dynamic", "<=2026.7"],
   ["worktrees.create", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.remove", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
   ["worktrees.restore", "worktrees", "operator.admin", "2026.7", { controlPlaneWrite: true }],
@@ -222,24 +218,22 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.reload", null, "operator.admin", "<=2026.7"],
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
-  ["voicewake.routing.set", "voicewake-routing", "operator.write", "<=2026.7"],
   ["sessions.list", "sessions-read", "operator.read", "<=2026.7", { startup: true }],
   ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
-  ["sessions.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.describe", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.compaction.list", "sessions-compaction-queries", "operator.read", "<=2026.7"],
-  ["sessions.compaction.get", "sessions-compaction-queries", "operator.read", "<=2026.7"],
   ["sessions.compaction.branch", "sessions-compaction-checkpoints", "operator.write", "<=2026.7"],
   ["sessions.compaction.restore", "sessions-compaction-checkpoints", "operator.admin", "<=2026.7"],
   ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
-  // Params-aware: explicit cwd can point at any host checkout and requires admin.
+  // Params-aware plus state-aware: the handler permits write-scoped cwd only
+  // inside configured agent workspaces; execNode and other privileged modes stay admin.
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
@@ -306,7 +300,15 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.run", "cron", "operator.admin", "<=2026.7"],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
-  ["gateway.restart.preflight", "restart", "operator.read", "<=2026.7"],
+  // Deprecated read-only compatibility preview; new restart flows request the
+  // restart directly, while atomic host suspension uses gateway.suspend.prepare.
+  [
+    "gateway.restart.preflight",
+    "restart",
+    "operator.read",
+    "<=2026.7",
+    { compatibilityRestored: true },
+  ],
   ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["system-presence", "system", "operator.read", "<=2026.7"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
@@ -361,7 +363,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // advertised method indices stay stable for older clients; new methods append.
   ["terminal.attach", "terminal", "operator.admin", "2026.7"],
   ["terminal.list", "terminal", "operator.admin", "2026.7"],
-  ["terminal.text", "terminal", "operator.admin", "2026.7"],
   ["controlUi.githubPreview", "control-ui", "operator.read", "<=2026.7"],
   // Additive discovery methods append here so older clients keep stable indices.
   ["system.info", "system", "operator.read", "<=2026.7"],
@@ -492,6 +493,15 @@ const CORE_GATEWAY_METHOD_SPECS = [
   // Additive catalog terminal start appends so older advertised indices stay stable.
   ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
   ["worker.desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
+  // First-class project RPCs append so every older advertised index remains stable.
+  ["projects.list", "projects", "operator.read", "2026.8"],
+  ["projects.register", "projects", "operator.admin", "2026.8"],
+  ["projects.remove", "projects", "operator.admin", "2026.8"],
+  ["worker.desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
+  // Store CRUD shares the auxiliary secrets runtime owner and appends for stable indices.
+  ["secrets.store.list", null, "operator.admin", "2026.8"],
+  ["secrets.store.set", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  ["secrets.store.delete", null, "operator.admin", "2026.8", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
@@ -511,6 +521,9 @@ const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
     }
     if (normalizedPolicy?.controlPlaneWrite === true) {
       spec.controlPlaneWrite = true;
+    }
+    if (normalizedPolicy?.compatibilityRestored === true) {
+      spec.compatibilityRestored = true;
     }
     return spec;
   });

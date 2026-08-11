@@ -828,6 +828,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
+  /** Synchronous caller-authority guard checked by the storage owner before commits. */
+  commitGuard?: () => void;
 };
 
 export type SessionPatchProjectionSnapshot = { store: Readonly<Record<string, SessionEntry>> };

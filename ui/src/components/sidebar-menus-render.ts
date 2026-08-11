@@ -1,8 +1,6 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
@@ -17,101 +15,18 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
+import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import type {
   SidebarMenusController,
   SidebarMenusControllerHost,
 } from "./sidebar-menus-controller.ts";
-
-function sessionMenuActionDisabledReasons(
-  snapshot: ApplicationContext<RouteId>["gateway"]["snapshot"] | undefined,
-  session: SidebarRecentSession,
-  batchRows: readonly SidebarRecentSession[] | null,
-): Partial<Record<SessionMenuAction["kind"], string>> {
-  const reason = (request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }) => {
-    const access = readSessionMethodAccess(snapshot, request);
-    return access.allowed ? undefined : access.reason;
-  };
-  const patchReason = reason({
-    method: "sessions.patch",
-    params: { key: session.key, label: null },
-  });
-  const batchPatchReason = (patch: Record<string, unknown>) => {
-    if (!batchRows) {
-      return patchReason;
-    }
-    const access = readSessionMethodAccess(snapshot, {
-      method: "sessions.patchMany",
-      params: {
-        targets: batchRows.map((row) => ({ key: row.key })),
-        patch,
-      },
-    });
-    if (access.allowed) {
-      return undefined;
-    }
-    return access.cause === "method-unavailable" ? patchReason : access.reason;
-  };
-  const unreadReason = batchPatchReason({ unread: true });
-  const categoryReason = batchPatchReason({ category: null });
-  const archiveReason = batchPatchReason({ archived: true });
-  const groupReason = reason({
-    method: "sessions.groups.put",
-    requiredScope: "operator.write",
-  });
-  const deleteRows = batchRows ?? [session];
-  const cloudWorkerStopReason = session.cloudWorkerStopAction
-    ? reason(session.cloudWorkerStopAction)
-    : undefined;
-  const deleteReason = deleteRows
-    .map((row) =>
-      reason({
-        method: "sessions.delete",
-        params: { key: row.key, ...(row.archived ? { archivedOnly: true } : {}) },
-      }),
-    )
-    .find((value): value is string => Boolean(value));
-  return {
-    ...(patchReason
-      ? {
-          "toggle-pin": patchReason,
-          "set-icon": patchReason,
-          rename: patchReason,
-        }
-      : {}),
-    ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
-    ...(categoryReason ? { "move-to-group": categoryReason } : {}),
-    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
-    ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
-    ...(deleteReason ? { delete: deleteReason } : {}),
-    ...(batchRows
-      ? {}
-      : {
-          ...(reason({
-            method: "sessions.create",
-            params: { parentSessionKey: session.key, fork: true },
-          })
-            ? {
-                fork: reason({
-                  method: "sessions.create",
-                  params: { parentSessionKey: session.key, fork: true },
-                }),
-              }
-            : {}),
-          ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
-        }),
-  };
-}
 
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
@@ -260,28 +175,27 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       <openclaw-session-menu
         .session=${{
           label: session.label,
-          icon: session.icon,
           pinned: session.pinned,
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
         }}
         .selectionCount=${rows.length}
-        .lastActive=${batchRows ? "" : session.meta}
+        .lastActive=${batchRows ? "" : formatSidebarTimestamp(session.updatedAt)}
         .anchor=${menu}
         .trigger=${controller.sessionMenuTrigger}
         .disabled=${!host.connected}
-        .actionDisabledReasons=${sessionMenuActionDisabledReasons(
-          context?.gateway.snapshot,
+        .actionDisabledReasons=${sessionMenuReasons({
+          snapshot: context?.gateway.snapshot,
           session,
           batchRows,
-        )}
+          cloudWorkerStopAction: session.cloudWorkerStopAction,
+        })}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
-        .canOpenChat=${true}
         .work=${batchRows ? null : controller.sessionMenuWork}
         .workboard=${null}
         .onClose=${() => {
@@ -295,9 +209,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             return;
           }
           switch (action.kind) {
-            case "open-chat":
-              host.selectSession(session.key);
-              break;
             case "open-pr":
               openExternalUrlSafe(action.url);
               break;
@@ -306,9 +217,6 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
-              break;
-            case "set-icon":
-              void host.sessionOrganizer.patchSession(session, { icon: action.icon });
               break;
             case "toggle-unread":
               void host.sessionOrganizer.patchSession(session, { unread: !session.unread });
@@ -405,9 +313,11 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     position,
     trigger: controller.sessionSortMenuTrigger,
     grouping: host.sessionsGrouping,
-    sortMode: host.sessionSortMode,
+    sortMode: host.effectiveSessionSortMode(),
+    peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
     showCron: host.sessionsShowCron,
+    showSystem: host.sessionsShowSystem,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
@@ -415,7 +325,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onSortModeChange: (mode) => {
-      host.sessionSortMode = mode;
+      host.setSessionSortMode(mode);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onStatusFilterChange: (statusFilter) => {
@@ -429,6 +339,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     },
     onShowCronChange: (show) => {
       host.sessionOrganizer.setSessionsShowCron(show);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
+    onShowSystemChange: (show) => {
+      host.sessionOrganizer.setSessionsShowSystem(show);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

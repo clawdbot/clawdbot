@@ -5,7 +5,6 @@
  * and compact AI snapshots with stable refs and duplicate tracking.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeString } from "../record-shared.js";
 import type { SnapshotAriaNode } from "./client.types.js";
 import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
@@ -19,6 +18,13 @@ export type ChromeMcpSnapshotNode = {
   description?: string;
   children?: ChromeMcpSnapshotNode[];
 };
+
+function normalizeSnapshotString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  return typeof value === "number" || typeof value === "boolean" ? String(value) : undefined;
+}
 
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
   const role = normalizeLowercaseStringOrEmpty(node.role);
@@ -94,14 +100,14 @@ export function flattenChromeMcpSnapshotToAriaNodes(
     if (out.length >= boundedLimit) {
       return;
     }
-    const ref = normalizeString(node.id);
+    const ref = normalizeSnapshotString(node.id);
     if (ref) {
       out.push({
         ref,
         role: normalizeRole(node),
-        name: normalizeString(node.name) ?? "",
-        value: normalizeString(node.value),
-        description: normalizeString(node.description),
+        name: normalizeSnapshotString(node.name) ?? "",
+        value: normalizeSnapshotString(node.value),
+        description: normalizeSnapshotString(node.description),
         depth,
       });
     }
@@ -131,9 +137,9 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
 
   const visit = (node: ChromeMcpSnapshotNode, depth: number) => {
     const role = normalizeRole(node);
-    const name = normalizeString(node.name);
-    const value = normalizeString(node.value);
-    const description = normalizeString(node.description);
+    const name = normalizeSnapshotString(node.name);
+    const value = normalizeSnapshotString(node.value);
+    const description = normalizeSnapshotString(node.description);
     const maxDepth = params.options?.maxDepth;
     if (maxDepth !== undefined && depth > maxDepth) {
       return;
@@ -145,7 +151,7 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
       if (name) {
         line += ` "${escapeQuoted(name)}"`;
       }
-      const ref = normalizeString(node.id);
+      const ref = normalizeSnapshotString(node.id);
       if (ref && shouldCreateRef(role, name)) {
         const nth = registerRef(tracker, ref, role, name);
         refs[ref] = nth === undefined ? { role, name } : { role, name, nth };

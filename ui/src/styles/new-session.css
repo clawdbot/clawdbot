@@ -66,24 +66,29 @@ openclaw-new-session-page {
   font: inherit;
   font-size: 11px;
   cursor: var(--cursor-action);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
-.new-session-page__visibility:hover:not(:disabled),
-.new-session-page__visibility--active {
+.new-session-page__visibility:hover:not(:disabled) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
 }
 
+.new-session-page__composer:hover .new-session-page__visibility,
+.new-session-page__composer:focus-within .new-session-page__visibility,
 .new-session-page__visibility--active {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
-  color: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
-  font-weight: 650;
+  opacity: 1;
+}
+
+/* Active mode stays readable without hover; inactive revealed pills keep the
+   muted resting color until directly hovered. */
+.new-session-page__visibility--active {
+  color: var(--text);
 }
 
 .new-session-page__visibility:disabled {
   cursor: default;
-  opacity: 0.55;
 }
 
 .new-session-page__visibility svg {
@@ -371,6 +376,7 @@ wa-dropdown.new-session-page__start-menu {
    controller measures content; this surface owns its ten-line visual cap. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  padding-left: var(--chat-box-inset);
   --scrollbar-size: 6px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
@@ -406,7 +412,8 @@ wa-dropdown.new-session-page__start-menu {
 
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__composer::after,
-  .new-session-page__composer > * {
+  .new-session-page__composer > *,
+  .new-session-page__visibility {
     transition-duration: 0ms;
   }
 }
@@ -522,6 +529,7 @@ wa-dropdown.new-session-page__start-menu {
 .new-session-page__browser-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
 }
@@ -590,6 +598,22 @@ wa-dropdown.new-session-page__start-menu {
   cursor: default;
 }
 
+.new-session-page__browser-register {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.new-session-page__browser-register:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Phones (and short landscape): match the chat thread's mobile inset, and
    anchor menus to the trigger row instead of their trigger — a near
    viewport-wide panel under a non-leftmost trigger would otherwise run past
@@ -604,17 +628,17 @@ wa-dropdown.new-session-page__start-menu {
     gap: 4px 2px;
   }
 
-  /* The shared chat footer becomes a three-column grid on mobile, but a new
-     session has visibility pills instead of the chat settings slot. Keep
-     those pills intrinsic and let the model picker use the remaining width. */
+  /* A new session has visibility pills instead of the chat settings cluster.
+     Keep those pills intrinsic and let the model picker use the remaining width. */
   .new-session-page__composer .agent-chat__composer-controls {
     display: flex;
-    gap: 4px;
+    gap: 2px;
   }
 
-  .new-session-page__composer .chat-composer-model-control {
+  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
     flex: 1 1 auto;
     width: auto;
+    min-width: 0;
     max-width: 100%;
     margin-left: auto;
   }

@@ -3,7 +3,11 @@
  *
  * Builds redacted labels and compact details from tool metadata without affecting execution semantics.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
@@ -103,6 +107,15 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
 export function isShellToolDisplayName(name: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return normalized === "bash" || normalized === "exec" || normalized === "shell";
+}
+
+/** Provider-defined tool names are not enough: namespaced tools can carry executable commands. */
+export function isCommandBearingToolCall(name: string | undefined, args?: unknown): boolean {
+  if (isShellToolDisplayName(name)) {
+    return true;
+  }
+  const command = asOptionalObjectRecord(args)?.command;
+  return typeof command === "string" && normalizeOptionalString(command) !== undefined;
 }
 
 /** Builds the compact one-line summary shown in transcripts and logs. */

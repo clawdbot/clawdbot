@@ -5,6 +5,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import type {
   QaEvidenceArtifactView,
@@ -564,10 +565,6 @@ async function buildArtifactView(params: {
   };
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -610,7 +607,7 @@ function readMatrixDimensionIds(params: {
       if (typeof entry === "string") {
         return entry;
       }
-      return readString(readRecord(entry)?.id);
+      return readStringValue(readRecord(entry)?.id) ?? null;
     }),
     params,
   );
@@ -667,9 +664,9 @@ function readMatrixCells(params: {
     : [];
   const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
   return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
-    const rawSurface = readString(cell.surface);
-    const rawStage = readString(cell.stage);
-    const rawStatus = readString(cell.status) ?? "proof-gap";
+    const rawSurface = readStringValue(cell.surface) ?? null;
+    const rawStage = readStringValue(cell.stage) ?? null;
+    const rawStatus = readStringValue(cell.status) ?? "proof-gap";
     if (!rawSurface || !rawStage) {
       return [];
     }
@@ -683,7 +680,7 @@ function readMatrixCells(params: {
         repoRoot: params.repoRoot,
       });
     const readRunnerString = (value: unknown) => {
-      const text = readString(value);
+      const text = readStringValue(value);
       return text ? sanitizeCellString(text) : null;
     };
     return [
@@ -795,8 +792,8 @@ async function buildProducerContext(params: {
   const matrix = await readJsonIfExists(matrixPath, allowedRoots);
   const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
   const run = readRecord(manifest?.run);
-  const runId = readString(run?.runId);
-  const runStatus = readString(run?.status);
+  const runId = readStringValue(run?.runId) ?? null;
+  const runStatus = readStringValue(run?.status) ?? null;
   const producerFiles = Object.fromEntries(
     await Promise.all(
       UX_MATRIX_PRODUCER_FILES.map(async (file) => [

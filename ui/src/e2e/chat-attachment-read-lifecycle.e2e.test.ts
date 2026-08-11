@@ -1,6 +1,10 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -94,7 +98,7 @@ suite.define(() => {
     );
   });
 
-  it("aborts a session's pending image before the pane adopts another session", async () => {
+  it("keeps a session's pending image isolated while another session is active", async () => {
     const firstSession = "agent:main:attachment-session-a";
     const secondSession = "agent:main:attachment-session-b";
     await suite.withPage(
@@ -122,16 +126,17 @@ suite.define(() => {
         });
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Private session A attachment");
-        await pastePng(composer);
+        const activeComposer = () =>
+          page.locator(
+            'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
+          );
+        await activeComposer().fill("Private session A attachment");
+        await pastePng(activeComposer());
         await expect
           .poll(() => page.getByRole("button", { name: "Send message" }).isDisabled())
           .toBe(true);
 
-        await page.locator("openclaw-chat-pane").evaluate((pane, sessionKey) => {
-          (pane as HTMLElement & { sessionKey: string }).sessionKey = sessionKey;
-        }, secondSession);
+        await navigateToControlUiSession(page, secondSession);
 
         await expect
           .poll(() =>
@@ -141,17 +146,36 @@ suite.define(() => {
                   .attachmentReadProof.aborts,
             ),
           )
-          .toBe(1);
-        await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
+          .toBe(0);
+        await expect
+          .poll(() =>
+            page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb').count(),
+          )
+          .toBe(0);
 
-        await composer.fill("Safe session B message");
-        await composer.press("Enter");
+        await activeComposer().fill("Safe session B message");
+        await activeComposer().press("Enter");
         const request = await gateway.waitForRequest("chat.send");
         expect(request.params).toMatchObject({
           message: "Safe session B message",
           sessionKey: secondSession,
         });
         expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
+
+        await navigateToControlUiSession(page, firstSession);
+        await page.evaluate(() => {
+          const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+            .attachmentReadProof;
+          if (!proof.finish) {
+            throw new Error("Pasted image read was not retained");
+          }
+          proof.finish();
+        });
+        await page
+          .locator(
+            'openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb img[alt="Attachment preview"]',
+          )
+          .waitFor();
       },
     );
   });

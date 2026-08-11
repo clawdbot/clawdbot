@@ -51,7 +51,7 @@ import {
 } from "./session-accessor.sqlite-maintenance.js";
 import {
   createFallbackSessionEntry,
-  normalizeSqliteNumber,
+  coerceSqliteNumber,
 } from "./session-accessor.sqlite-normalize.js";
 import {
   cloneSessionEntry,
@@ -76,6 +76,10 @@ import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWriterFence,
+} from "./transcript-write-context.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -293,7 +297,7 @@ export function countSqliteSessionEntryRowsReadOnly(scope: SessionEntryListScope
         .selectFrom("session_nodes")
         .select((expression) => expression.fn.countAll<number | bigint>().as("count")),
     );
-    return row ? normalizeSqliteNumber(row.count) : 0;
+    return row ? coerceSqliteNumber(row.count) : 0;
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : 0;
 }
@@ -407,7 +411,7 @@ export function readSqliteSessionUpdatedAt(scope: SessionAccessScope): number | 
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const row = readSessionEntryRow(database, resolved.sessionKey)?.row;
-  return row ? normalizeSqliteNumber(row.updated_at) : undefined;
+  return row ? coerceSqliteNumber(row.updated_at) : undefined;
 }
 
 /** Applies a partial entry update to the additive SQLite session store. */
@@ -455,7 +459,9 @@ export function ensureSqliteSessionEntrySync(
     Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
   entry: SessionEntry,
 ): boolean {
-  const resolved = resolveSqliteScope(scope);
+  // Every sync initializer inherits and enforces the admitted writer claim.
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteScope(fencedScope);
   assertCanonicalSessionWriteScope(resolved);
   let owned = false;
   let previous = new Map<string, SessionEntry>();
@@ -472,7 +478,7 @@ export function ensureSqliteSessionEntrySync(
       current = previous;
       return;
     }
-    if (scope.expectedWriterRunId !== undefined) {
+    if (fencedScope.expectedWriterRunId !== undefined) {
       current = previous;
       return;
     }
@@ -482,6 +488,9 @@ export function ensureSqliteSessionEntrySync(
   }, toDatabaseOptions(resolved));
   if (current.size !== previous.size || owned) {
     emitCommittedSessionIdentityDiff(previous, current);
+  }
+  if (fencedScope.expectedWriterRunId !== undefined && !owned) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
   }
   return owned;
 }

@@ -24,7 +24,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import {
   assertCronToolAgentFieldMatchesScope,
@@ -37,6 +37,7 @@ import {
   hasCronCreateSignal,
   isEmptyRecoveredCronPatch,
   recoverCronObjectFromFlatParams,
+  stripCronCreateNullClears,
 } from "./cron-tool-canonicalize.js";
 import {
   buildReminderContextLines,
@@ -75,7 +76,7 @@ function isMissingOrEmptyObject(value: unknown): boolean {
 }
 
 function readCronJobIdParam(params: Record<string, unknown>) {
-  return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+  return readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
 }
 
 const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
@@ -173,7 +174,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.
 
-ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
+ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
 ADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.
 
@@ -196,14 +197,14 @@ PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least on
 
 TRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call("exec",{command:"..."}).
 
-DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:"none". webhook posts finished-run event to URL in \`to\`.
+DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:"none". webhook posts finished-run event to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
 Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
     parameters: createCronToolSchema(),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
       const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
@@ -321,10 +322,12 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             if (!params.job || typeof params.job !== "object") {
               throw new Error("job required");
             }
-            const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
+            const canonicalJob = stripCronCreateNullClears(
+              canonicalizeCronToolObject(params.job as Record<string, unknown>),
+            );
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
-            assertCronPacingInput(canonicalJob.pacing, { nullableClears: false });
+            assertCronPacingInput(canonicalJob.pacing);
             if (
               typeof canonicalJob.declarationKey === "string" &&
               canonicalJob.declarationKey.trim().length === 0
@@ -491,25 +494,25 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               throw new Error("jobId required (id accepted for backward compatibility)");
             }
 
-            // Flat-params recovery for patch
+            // Flat-params recovery for update patches
             let recoveredFlatPatch = false;
-            if (isMissingOrEmptyObject(params.patch)) {
+            if (isMissingOrEmptyObject(params.job)) {
               const synthetic = recoverCronObjectFromFlatParams(params);
               if (synthetic.found) {
-                params.patch = synthetic.value;
+                params.job = synthetic.value;
                 recoveredFlatPatch = true;
               }
             }
 
-            if (!params.patch || typeof params.patch !== "object") {
-              throw new Error("patch required");
+            if (!params.job || typeof params.job !== "object") {
+              throw new Error("job required");
             }
             const canonicalPatch = canonicalizeCronToolObject(
-              params.patch as Record<string, unknown>,
+              params.job as Record<string, unknown>,
             );
             assertNoCronShellExecution(canonicalPatch);
             assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
-            assertCronPacingInput(canonicalPatch.pacing, { nullableClears: true });
+            assertCronPacingInput(canonicalPatch.pacing);
             if (
               typeof canonicalPatch.displayName === "string" &&
               canonicalPatch.displayName.trim().length === 0
@@ -518,7 +521,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
-              throw new Error("patch required");
+              throw new Error("job required");
             }
             if (callerScope && "agentId" in patch) {
               throw new Error("automation patch agentId cannot be changed by the automations tool");
@@ -593,7 +596,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             if (!jobId || !runId) {
               throw new Error("cron next_check is only available to the currently running job");
             }
-            const rawDuration = readStringParam(params, "in", { required: true });
+            const rawDuration = readToolStringParam(params, "in", { required: true });
             let delayMs: number;
             try {
               delayMs = parseDurationMs(rawDuration);
@@ -607,7 +610,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             return jsonResult({ ok: true, delayMs });
           }
           case "wake": {
-            const text = readStringParam(params, "text", { required: true });
+            const text = readToolStringParam(params, "text", { required: true });
             const mode =
               params.mode === "now" || params.mode === "next-heartbeat"
                 ? params.mode
@@ -624,8 +627,8 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             // calling agent.
             const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
-            const explicitSessionKey = readStringParam(params, "sessionKey");
-            const explicitAgentId = readStringParam(params, "agentId");
+            const explicitSessionKey = readToolStringParam(params, "sessionKey");
+            const explicitAgentId = readToolStringParam(params, "agentId");
             if (callerScope) {
               assertCronToolAgentFieldMatchesScope({
                 value: explicitAgentId,

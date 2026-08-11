@@ -13,7 +13,12 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   callInProcessGatewayTool,
   getInProcessGatewayToolContext,
@@ -120,7 +125,7 @@ function readShow(params: Record<string, unknown>): boolean {
   return value;
 }
 
-function readOptionalString(
+function readOptionalStringParam(
   params: Record<string, unknown>,
   key: "command" | "cwd",
   options: { trim?: boolean } = {},
@@ -131,11 +136,11 @@ function readOptionalString(
   if (typeof params[key] !== "string") {
     throw new ToolInputError(`${key} must be string`);
   }
-  return readStringParam(params, key, options);
+  return readToolStringParam(params, key, options);
 }
 
 function requireSessionId(params: Record<string, unknown>): string {
-  return readStringParam(params, "sessionId", { required: true });
+  return readToolStringParam(params, "sessionId", { required: true });
 }
 
 function launchBlockMessage(
@@ -166,7 +171,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
     outputSchema: TerminalToolOutputSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
       const params = rawArgs as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const agentSessionKey = opts.agentSessionKey?.trim();
       if (!agentSessionKey) {
         throw new ToolInputError("agent session required");
@@ -182,8 +187,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       }
 
       if (action === "open") {
-        const command = readOptionalString(params, "command", { trim: false });
-        const cwd = readOptionalString(params, "cwd");
+        const command = readOptionalStringParam(params, "command", { trim: false });
+        const cwd = readOptionalStringParam(params, "cwd");
         const cols = readDimension(params, "cols", DEFAULT_COLS);
         const rows = readDimension(params, "rows", DEFAULT_ROWS);
         const show = readShow(params);
@@ -293,7 +298,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         return jsonResult({ sessionId, text: renderTerminalBufferText(raw) });
       }
       if (action === "input") {
-        const data = readStringParam(params, "data", {
+        const data = readToolStringParam(params, "data", {
           required: true,
           trim: false,
           allowEmpty: true,

@@ -1,10 +1,16 @@
 import {
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
   type NormalizedUsage,
+  type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
-import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
+import {
+  resolveCodexLocalRuntimeAttribution,
+  type CodexLocalRuntimeAttributionParams,
+} from "./local-runtime-attribution.js";
+
+type CodexAssistantMessageParams = CodexLocalRuntimeAttributionParams &
+  Pick<AgentHarnessAttemptParamsV2, "modelId">;
 
 type CodexAssistantUsage = Usage & {
   // Codex is a managed runtime; keep reasoning telemetry private to managed consumers.
@@ -33,7 +39,7 @@ const ZERO_USAGE: Usage = {
 };
 
 export function createAssistantMessage(
-  params: EmbeddedRunAttemptParams,
+  params: CodexAssistantMessageParams,
   text: string,
   options: AssistantMessageOptions,
 ): AssistantMessage {
@@ -73,7 +79,7 @@ export function createAssistantMessage(
 }
 
 export function createAssistantCommentaryMessage(
-  params: EmbeddedRunAttemptParams,
+  params: CodexAssistantMessageParams,
   text: string,
   itemId: string,
   timestamp: number,
@@ -99,7 +105,7 @@ export function createAssistantCommentaryMessage(
 }
 
 export function createAssistantMirrorMessage(
-  params: EmbeddedRunAttemptParams,
+  params: CodexAssistantMessageParams,
   title: string,
   text: string,
 ): AssistantMessage {

@@ -106,13 +106,16 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       const openModelSelect = async () => {
-        const trigger = main.locator('[data-chat-model-select="true"]').first();
+        const trigger = main.locator(
+          'openclaw-chat-pane[aria-hidden="false"] [data-chat-model-select="true"]',
+        );
         await trigger.waitFor({ state: "visible", timeout: 10_000 });
         return trigger;
       };
       const selectModel = async (value: string) => {
-        await main.locator('[data-chat-model-select="true"]').click();
-        const option = main.locator(`[data-chat-model-option="${value}"]`);
+        const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+        await activePane.locator('[data-chat-model-select="true"]').click();
+        const option = activePane.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
       };
@@ -345,9 +348,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
-      const effortSelect = main.locator('[data-chat-thinking-select="true"]').first();
-      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+      const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const modelSelect = activePane.locator('[data-chat-model-select="true"]');
+      const effortSelect = activePane.locator('[data-chat-thinking-select="true"]');
+      const thinkingSlider = activePane.locator('[data-chat-thinking-slider="true"]');
       const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
 
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
@@ -355,7 +359,7 @@ suite.define(() => {
       expect(await modelSelect.textContent()).not.toContain("@openai:");
       await modelSelect.click();
       await expect
-        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
+        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
         .toBe(1);
       expect(
         (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
@@ -379,7 +383,7 @@ suite.define(() => {
       });
       await modelSelect.click();
       await expect
-        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
+        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
         .toBe(1);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))

@@ -447,6 +447,17 @@ CREATE INDEX IF NOT EXISTS idx_operator_approvals_runtime_pending
   ON operator_approvals(runtime_epoch, approval_id)
   WHERE status = 'pending';
 
+CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
+  approval_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  source_context_id TEXT NOT NULL CHECK (
+    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
+  ),
+  source_execution_id TEXT NOT NULL CHECK (
+    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
+  )
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,
@@ -1821,6 +1832,16 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   PRIMARY KEY (worktree_id, path, chunk_index)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT NOT NULL PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  origin_url TEXT,
+  source TEXT NOT NULL CHECK (source IN ('registered', 'cloned')),
+  created_at_ms INT NOT NULL,
+  updated_at_ms INT NOT NULL
+) STRICT;
+
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
 -- owns which groups exist and how operator UIs order them.
@@ -1942,6 +1963,8 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   state_changed_at_ms INTEGER NOT NULL,
+  terminal_reason TEXT,
+  terminal_at_ms INTEGER,
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL
@@ -2236,3 +2259,21 @@ CREATE TABLE IF NOT EXISTS model_catalog_remote (
   last_modified TEXT,
   checked_at INTEGER NOT NULL
 ) STRICT;
+
+-- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,
+-- which would allow duplicate team rows. This PK also avoids a rebuild for identity scope.
+CREATE TABLE IF NOT EXISTS secret_store_entries (
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('team', 'identity')),
+  scope_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('secret', 'env')),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  updated_by TEXT,
+  deleted_at_ms INTEGER,
+  CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
+  PRIMARY KEY (scope_kind, scope_id, name)
+) STRICT;
+CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
+  ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;

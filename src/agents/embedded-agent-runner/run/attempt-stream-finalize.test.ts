@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   settleStream: vi.fn(),
 }));
 
-vi.mock("./attempt-after-turn.js", () => ({
+vi.mock("./attempt-finalize.js", () => ({
   completeEmbeddedAttemptAfterTurn: mocks.completeAfterTurn,
 }));
 vi.mock("./attempt-stream-settle.js", () => ({

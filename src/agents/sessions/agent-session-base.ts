@@ -116,6 +116,7 @@ export abstract class AgentSessionBase {
   protected extensionShutdownHandler?: ShutdownHandler;
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
+  private readonly cleanupProviderSessionResourcesOnDispose: boolean;
 
   // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
@@ -152,6 +153,8 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.cleanupProviderSessionResourcesOnDispose =
+      config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
   /** Model registry for API key resolution and model discovery */
@@ -622,7 +625,9 @@ export abstract class AgentSessionBase {
     );
     this.disconnectFromAgent();
     this.eventListeners = [];
-    cleanupSessionResources(this.sessionId);
+    if (this.cleanupProviderSessionResourcesOnDispose) {
+      cleanupSessionResources(this.sessionId);
+    }
   }
 
   // =========================================================================

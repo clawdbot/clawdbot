@@ -100,6 +100,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       approvalKind: approvalCallback.approvalKind,
       decision: approvalCallback.decision,
       channel: "telegram",
+      accountId,
       senderId,
     })) as ApprovalResolveResult;
 
@@ -197,6 +198,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
           approvalId: approvalCallback.approvalId,
           decision: approvalCallback.decision,
           channel: "telegram",
+          accountId,
           senderId,
           resolveMethod: approvalKind,
         });

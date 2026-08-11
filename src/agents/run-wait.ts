@@ -34,7 +34,7 @@ import {
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
-import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -147,7 +147,7 @@ export function isRecoverableAgentWaitError(error: string | undefined): boolean 
   if (!message) {
     return false;
   }
-  if (message.includes("gateway timeout")) {
+  if (message.includes("gateway timeout") || message.includes("gateway request timeout")) {
     return false;
   }
   return (
@@ -197,7 +197,7 @@ function isWaitedReplyTurnBoundary(message: unknown): boolean {
 }
 
 function snapshotAssistantReply(message: unknown): AssistantReplySnapshot | undefined {
-  const text = extractAssistantText(message);
+  const text = extractStoredAssistantText(message);
   if (!text?.trim()) {
     return undefined;
   }
@@ -394,7 +394,10 @@ export async function waitForAgentRun(params: {
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
-      status: error.includes("gateway timeout") ? "timeout" : "error",
+      status:
+        error.includes("gateway timeout") || error.includes("gateway request timeout")
+          ? "timeout"
+          : "error",
       error,
     };
   }

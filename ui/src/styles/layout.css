@@ -284,7 +284,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 550;
   transition:
     background var(--duration-fast) ease,
@@ -324,8 +324,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--card) 70%, transparent);
   color: var(--muted);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-family: var(--mono);
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 550;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -334,7 +334,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__title {
   margin: 14px 0 0;
   padding: 0 9px;
-  font-size: 21px;
+  font-size: calc(21px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -401,7 +401,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   background: color-mix(in srgb, var(--card) 72%, transparent);
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   outline: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -425,7 +425,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 @media (hover: none) and (pointer: coarse) {
   .settings-sidebar__search-input {
-    font-size: 16px;
+    font-size: max(16px, calc(12.5px * var(--control-ui-text-scale)));
   }
 }
 
@@ -469,7 +469,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__empty {
   margin: 8px 9px 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
 }
 
@@ -482,11 +482,11 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__group-label {
   padding: 0 9px;
   margin: 0 0 4px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 76%, transparent);
+  color: var(--muted);
 }
 
 /* Settings rail entries are anchors but read as app chrome: default arrow,
@@ -559,7 +559,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__item-label {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -594,7 +594,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__subitem-label {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -608,7 +608,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   gap: 8px;
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -696,7 +696,7 @@ openclaw-settings-save-indicator {
   margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  color: var(--muted);
 }
 
 /* ===========================================
@@ -897,6 +897,9 @@ openclaw-settings-save-indicator {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  /* One rhythm for every group boundary in the sidebar (Pages, Pinned, and each
+     session section) so the column reads as separate shelves, not one list. */
+  --sidebar-group-gap: var(--space-4);
   --scrollbar-size: 6px;
   position: relative;
   display: flex;
@@ -1042,7 +1045,7 @@ openclaw-settings-save-indicator {
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
@@ -1217,7 +1220,7 @@ html.openclaw-native-macos
   background: var(--bg-elevated);
   color: var(--muted);
   cursor: var(--cursor-action);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1267,7 +1270,7 @@ html.openclaw-native-macos
   flex: 1 1 auto;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -1287,7 +1290,7 @@ html.openclaw-native-macos
 .sidebar-update-card__subtitle {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1333,7 +1336,7 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 8px;
   padding: 0 8px;
-  margin-top: 10px;
+  margin-top: var(--sidebar-group-gap);
   border-radius: var(--radius-md);
   transition:
     background var(--duration-fast) ease,
@@ -1348,7 +1351,7 @@ html.openclaw-native-macos
 .sidebar-session-error {
   flex: 0 0 auto;
   padding: 8px 10px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.35;
 }
 
@@ -1368,7 +1371,7 @@ html.openclaw-native-macos
 
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sidebar-group-gap);
   margin: 0 -8px;
   /* Sessions are app chrome, not hyperlinks: the whole region follows the
      base.css cursor policy so it tracks the window it is running in. */
@@ -1523,7 +1526,7 @@ html.openclaw-native-macos
 .sidebar-session-group-count {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
@@ -1562,7 +1565,7 @@ html.openclaw-native-macos
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-align: left;
 }
 
@@ -1717,12 +1720,11 @@ html.openclaw-native-macos
 
 .sidebar-recent-sessions__label-text,
 .sidebar-session-catalog-host__label {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  opacity: 0.85;
+  color: var(--muted);
 }
 
 .sidebar-session-group-toggle
@@ -1733,19 +1735,21 @@ html.openclaw-native-macos
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
-.sidebar-recent-sessions__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 12px;
-}
-
+.sidebar-recent-sessions__list,
 .sidebar-session-tree,
-.sidebar-session-tree__children {
+.sidebar-session-tree__children,
+.sidebar-session-tree__list,
+.sidebar-session-catalog-host__sessions,
+.sidebar-session-catalog-project,
+.sidebar-session-catalog-project__sessions {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.sidebar-recent-sessions__list {
+  min-height: 12px;
 }
 
 .sidebar-session-tree__children {
@@ -1757,7 +1761,7 @@ html.openclaw-native-macos
   min-height: 28px;
   padding: 6px var(--sidebar-lead);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session-tree__show-more {
@@ -1766,7 +1770,7 @@ html.openclaw-native-macos
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   text-align: left;
 }
@@ -1804,10 +1808,10 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-catalog-host__count {
-  width: 20px;
-  flex: 0 0 20px;
+  width: calc(20px * var(--control-ui-text-scale));
+  flex: 0 0 calc(20px * var(--control-ui-text-scale));
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.68;
   text-align: center;
@@ -1826,13 +1830,6 @@ html.openclaw-native-macos
   stroke: currentColor;
   fill: none;
   stroke-width: 1.8px;
-}
-
-.sidebar-session-catalog-host__sessions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 
 .sidebar-session-catalog-project__head {
@@ -1876,21 +1873,25 @@ html.openclaw-native-macos
   stroke-width: 1.8px;
 }
 
+/* Structural label, not content: at the session row's 13px/500 a group reads as
+   just another session. Type carries the whole split because the head color
+   stays near `--text` for readability; case stays as authored (project names). */
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 650;
+  letter-spacing: 0.03em;
 }
 
 .sidebar-session-catalog-project__count {
-  width: 20px;
-  flex: 0 0 20px;
+  width: calc(20px * var(--control-ui-text-scale));
+  flex: 0 0 calc(20px * var(--control-ui-text-scale));
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -1907,7 +1908,7 @@ html.openclaw-native-macos
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 18px;
 }
 
@@ -1920,7 +1921,7 @@ html.openclaw-native-macos
   display: block;
   padding: 4px 10px 10px var(--sidebar-lead);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session--archived {
@@ -1954,6 +1955,8 @@ html.openclaw-native-macos
 /* Every sidebar session source renders a thread. Keep density and text styling
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
+  --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
+
   display: flex;
   align-items: center;
   min-width: 0;
@@ -2012,9 +2015,9 @@ html.openclaw-native-macos
   align-items: center;
   justify-content: center;
   gap: 1px;
-  width: 31px;
+  width: var(--sidebar-child-session-toggle-width, 31px);
   height: 30px;
-  flex: 0 0 31px;
+  flex: 0 0 var(--sidebar-child-session-toggle-width, 31px);
   padding: 0 3px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -2074,7 +2077,7 @@ html.openclaw-native-macos
 
 .sidebar-child-session-toggle__count {
   min-width: 9px;
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -2214,7 +2217,7 @@ html.openclaw-native-macos
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   color: var(--text);
 }
@@ -2236,11 +2239,11 @@ html.openclaw-native-macos
 }
 
 .sidebar-recent-session--child .sidebar-recent-session__name {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-recent-session--child .session-row-trail {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .sidebar-child-session__status {
@@ -2294,7 +2297,7 @@ html.openclaw-native-macos
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: 35px;
+  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
 /* State-bearing rows reserve the larger state/action maximum throughout the
@@ -2448,8 +2451,8 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__title {
-  padding: 6px 10px 8px;
-  font-size: 11px;
+  padding: 6px 8px 8px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -2457,9 +2460,9 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__provenance {
-  margin: 0 10px 6px;
+  margin: 0 8px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.35;
 }
 
@@ -2468,7 +2471,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   padding: 7px 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2486,7 +2489,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
   /* More-menu route rows are anchors acting as chrome (see base.css cursor policy). */
   cursor: var(--cursor-action);
@@ -2495,6 +2498,21 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 
 .sidebar-customize-menu__item:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
+   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
+   that margin as the icon column instead of stacking into a ~17px gutter, and
+   keeps icon-less rows from inheriting a phantom leading indent. */
+wa-dropdown-item.sidebar-customize-menu__item {
+  gap: 0;
+}
+
+/* One leading column for the whole menu family: command glyphs centre inside
+   the agent avatar's box (.agent-select__option .agent-select__avatar) so
+   avatar rows and icon rows share a gutter and their labels start on one x. */
+.sidebar-customize-menu .nav-item__icon {
+  width: 24px;
 }
 
 .sidebar-customize-menu__item > a {
@@ -2511,13 +2529,20 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
    a -1.5em margin. Our compact `padding: 0 8px` above removes that inset, so
    rebuild the check column here or the checkmark lands outside the row edge. */
 .sidebar-pin-editor-menu .sidebar-customize-menu__item[checkbox-adjacent] {
-  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px flex gap */
+  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px gutter */
 }
 
 .sidebar-pin-editor-menu .sidebar-customize-menu__item::part(checkmark) {
   width: 14px;
   min-width: 14px;
-  margin-inline: -22px 0; /* pull back into the padding; the 8px flex gap spaces the icon */
+  margin-inline: -22px 8px; /* pull back into the padding; the end margin spaces the icon */
+}
+
+/* The agent switcher marks its selection in the trailing details rail
+   (.session-menu__check), so the native leading checkmark is layout-only: it
+   reserved a column that pushed avatar rows out of the command rows' gutter. */
+.sidebar-agent-menu .sidebar-customize-menu__item::part(checkmark) {
+  display: none;
 }
 
 .sidebar-customize-menu__text {
@@ -2614,7 +2639,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-session-sort-menu__title {
   padding: 4px 8px 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -2633,8 +2658,30 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
+}
+
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
+   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
+   that margin as the icon column instead of stacking into a ~17px gutter. */
+wa-dropdown-item.session-menu__item {
+  gap: 0;
+}
+
+/* The icon slot wrapper is a block-level flex item, so its inline child sits on
+   the row's text baseline ~2px above the label's optical centre. */
+wa-dropdown-item.session-menu__item::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+/* Web Awesome insets the submenu chevron 1em at its own font size, landing it
+   inside the shortcut column and heavier than the hints. Share their rail. */
+wa-dropdown-item.session-menu__item::part(submenu-icon) {
+  inset-inline-end: 8px;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .session-menu__item:hover:not(:disabled),
@@ -2651,6 +2698,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .session-menu__item--destructive {
   color: var(--danger);
+}
+
+/* Web Awesome renders checkbox marks before the label. Selection state in this
+   menu uses the trailing details rail, so keep the native semantics but hide its visual. */
+.sidebar-session-sort-menu__item::part(checkmark) {
+  display: none;
 }
 
 .session-menu__icon,
@@ -2695,144 +2748,33 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Keycap hint, not content: the app's quiet mono shortcut idiom (see
+   .chat-question-panel__option kbd), fixed-width so letters and digits share
+   one rail beside the labels. */
 .session-menu__shortcut {
   flex: 0 0 auto;
+  min-width: 12px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 550;
-  letter-spacing: 0.04em;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1;
+  text-align: center;
 }
 
 .session-menu__info {
   padding: 4px 8px 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .session-menu__separator {
-  margin: 6px 4px;
+  margin: 4px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-.session-menu__icon-picker {
-  width: 184px;
-  padding: 8px;
-}
-
-.session-menu__icon-picker-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 7px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.session-menu__icon-picker-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-}
-
-.session-menu__icon-picker-back:hover,
-.session-menu__icon-picker-back:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.session-menu__icon-picker-back svg {
-  width: 15px;
-  height: 15px;
-}
-
-.session-menu__icon-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 24px);
-  gap: 5px;
-}
-
-.session-menu__icon-choice {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-}
-
-.session-menu__icon-choice:hover,
-.session-menu__icon-choice[aria-checked="true"] {
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
-  color: var(--text-strong);
-}
-
-.session-menu__icon-choice svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-}
-
-.session-menu__emoji-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.session-menu__emoji-field input {
-  width: 58px;
-  min-width: 0;
-  margin-left: auto;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
-.session-menu__remove-icon {
-  width: 100%;
-  margin-top: 7px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  text-align: left;
-}
-
-.session-menu__remove-icon:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.session-menu__remove-icon:disabled,
-.session-menu__icon-choice:disabled {
-  opacity: 0.42;
 }
 
 /* Nav rail entries are anchors (for middle-click/new-tab) but read as app
@@ -2914,7 +2856,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .nav-item__text {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   white-space: nowrap;
 }
@@ -2966,7 +2908,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-zone-entry .sidebar-recent-session__name {
   color: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -2980,54 +2922,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
   border-color: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.sidebar-pinned-session__icon {
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
-  opacity: 0.72;
-  transition:
-    opacity var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-pinned-session__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.sidebar-pinned-session__icon .session-icon__named,
-.sidebar-pinned-session__icon .session-icon__svg {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-}
-
-.sidebar-pinned-session__icon .session-icon__named svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-pinned-session__icon .session-icon__emoji {
-  font-size: 15px;
-  line-height: 1;
-}
-
-.sidebar-zone-entry .sidebar-recent-session:hover .sidebar-pinned-session__icon,
-.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
-  opacity: 1;
-}
-
-.sidebar-zone-entry .sidebar-recent-session--active .sidebar-pinned-session__icon {
-  color: var(--accent);
 }
 
 .sidebar-zone-entry .sidebar-recent-session__aside {
@@ -3104,7 +2998,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   gap: 4px;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -3130,7 +3024,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-agent-card__subtitle {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3153,7 +3047,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--warn) 18%, transparent);
   color: var(--warn);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -3172,6 +3066,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-nav__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
+}
+
+/* Pinned sessions are their own group, so they take the sidebar's inter-group
+   rhythm instead of butting against the Pages list. */
+.sidebar-nav__head--pinned {
+  margin-top: var(--sidebar-group-gap);
 }
 
 .sidebar-nav__head-action {
@@ -3280,14 +3180,14 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-identity-card__name {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 1.2;
 }
 
 .sidebar-identity-card__subtitle {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
 }
 
@@ -3360,7 +3260,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   width: min(320px, calc(100vw - 44px));
   max-width: 100%;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   text-align: left;
 }
@@ -3373,7 +3273,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .sidebar-hover-card__heading {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3427,7 +3327,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__person-email {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-hover-card__divider {
@@ -3472,8 +3372,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__metadata-value--mono {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-footer-bar__status {
@@ -3488,7 +3388,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   color: var(--danger);
   cursor: var(--cursor-action);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   line-height: 1;
 }
@@ -3503,7 +3403,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-footer-bar__status-detail {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 500;
   opacity: 0.72;
 }
@@ -3552,7 +3452,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 24px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
 }
 
@@ -3568,12 +3468,18 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   background: var(--bg);
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .sidebar-agent-menu__filter input {
+    font-size: max(16px, var(--control-ui-text-sm));
+  }
 }
 
 .sidebar-agent-menu__empty {
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 6px 8px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
@@ -3594,8 +3500,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
@@ -3619,8 +3525,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
-  font-size: 11px;
-  font-family: var(--font-mono);
+  font-size: var(--control-ui-text-xs);
+  font-family: var(--mono);
   color: var(--danger);
 }
 
@@ -4051,7 +3957,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
 }
 

@@ -155,6 +155,18 @@ data class WorkerDesktopObserveResult(
 )
 
 @Serializable
+data class WorkerDesktopLaunchParams(
+  val environmentId: String,
+  val app: String,
+)
+
+@Serializable
+data class WorkerDesktopLaunchResult(
+  val app: String,
+  val status: String = "ready",
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -178,7 +190,6 @@ enum class GatewayMethod(
   DoctorMemoryResetGroundedShortTerm("doctor.memory.resetGroundedShortTerm"),
   DoctorMemoryRepairDreamingArtifacts("doctor.memory.repairDreamingArtifacts"),
   DoctorMemoryDedupeDreamDiary("doctor.memory.dedupeDreamDiary"),
-  DoctorMemoryRemHarness("doctor.memory.remHarness"),
   LogsTail("logs.tail"),
   ChannelsStatus("channels.status"),
   ChannelsStart("channels.start"),
@@ -241,11 +252,7 @@ enum class GatewayMethod(
   TalkClientToolCall("talk.client.toolCall"),
   TalkClientSteer("talk.client.steer"),
   TalkSessionCreate("talk.session.create"),
-  TalkSessionJoin("talk.session.join"),
   TalkSessionAppendAudio("talk.session.appendAudio"),
-  TalkSessionStartTurn("talk.session.startTurn"),
-  TalkSessionEndTurn("talk.session.endTurn"),
-  TalkSessionCancelTurn("talk.session.cancelTurn"),
   TalkSessionCancelOutput("talk.session.cancelOutput"),
   TalkSessionAcknowledgeMark("talk.session.acknowledgeMark"),
   TalkSessionSubmitToolResult("talk.session.submitToolResult"),
@@ -343,17 +350,14 @@ enum class GatewayMethod(
   SecretsReload("secrets.reload"),
   SecretsResolve("secrets.resolve"),
   VoicewakeRoutingGet("voicewake.routing.get"),
-  VoicewakeRoutingSet("voicewake.routing.set"),
   SessionsList("sessions.list"),
   SessionsSubscribe("sessions.subscribe"),
-  SessionsUnsubscribe("sessions.unsubscribe"),
   SessionsMessagesSubscribe("sessions.messages.subscribe"),
   SessionsMessagesUnsubscribe("sessions.messages.unsubscribe"),
   SessionsViewersSet("sessions.viewers.set"),
   SessionsPreview("sessions.preview"),
   SessionsDescribe("sessions.describe"),
   SessionsCompactionList("sessions.compaction.list"),
-  SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),
   SessionsCompactionRestore("sessions.compaction.restore"),
   SessionsBranchesList("sessions.branches.list"),
@@ -461,7 +465,6 @@ enum class GatewayMethod(
   WebLoginWait("web.login.wait"),
   TerminalAttach("terminal.attach"),
   TerminalList("terminal.list"),
-  TerminalText("terminal.text"),
   ControlUiGithubPreview("controlUi.githubPreview"),
   SystemInfo("system.info"),
   AgentsWorkspaceList("agents.workspace.list"),
@@ -527,6 +530,13 @@ enum class GatewayMethod(
   UpdateHold("update.hold"),
   SessionsCatalogStartTerminal("sessions.catalog.startTerminal"),
   WorkerDesktopObserve("worker.desktop.observe"),
+  ProjectsList("projects.list"),
+  ProjectsRegister("projects.register"),
+  ProjectsRemove("projects.remove"),
+  WorkerDesktopLaunch("worker.desktop.launch"),
+  SecretsStoreList("secrets.store.list"),
+  SecretsStoreSet("secrets.store.set"),
+  SecretsStoreDelete("secrets.store.delete"),
 }
 
 enum class GatewayEvent(

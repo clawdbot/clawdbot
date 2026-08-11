@@ -3597,37 +3597,26 @@ surfaces:
         features:
           - name: Heartbeat scheduling
             coverageIds: [automation.heartbeat-scheduling]
-            description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Active hours
             coverageIds: [automation.active-hours]
-            description: Covers Active hours across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Active hours across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Wake and cooldown handling
             coverageIds: [automation.wake-and-cooldown-handling]
-            description: Covers Wake and cooldown handling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Wake and cooldown handling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Due-only heartbeat tasks
             coverageIds: [automation.due-only-heartbeat-tasks]
-            description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
-          - name: "Commitment check-ins — Heartbeat target none"
-            coverageIds: [automation.commitment-check-ins-heartbeat-target-none]
-            description: "Exact coverage for heartbeat target none within Commitment check-ins."
-          - name: "Commitment check-ins — Scope"
-            coverageIds: [automation.commitment-check-ins-scope]
-            description: "Exact coverage for scope within Commitment check-ins."
-          - name: "Commitment check-ins — Delivery"
-            coverageIds: [automation.commitment-check-ins-delivery]
-            description: "Exact coverage for delivery within Commitment check-ins."
+            description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
         docs:
           - docs/automation/index.md
           - docs/gateway/heartbeat.md
-          - docs/concepts/commitments.md
         search_anchors:
           - Heartbeat scheduling
           - Active hours
           - Wake and cooldown handling
           - Due-only heartbeat tasks
-          - Commitment check-ins
           - openclaw cron
-        category_note: heartbeat-commitments.md
+        category_note: heartbeat.md
         human_lts_override: false
       - name: Polling Controls
         id: polling-controls

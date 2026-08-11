@@ -91,6 +91,8 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
+    sessionRailAction: nothing,
+    sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -238,6 +240,54 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
+  it("places the session menu last in the header action row", () => {
+    const { container } = mount({
+      mergedChrome: true,
+      onClosePane: vi.fn(),
+      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+    });
+    const actions = container.querySelector(".chat-pane__actions");
+
+    expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
+    expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
+    expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
+  });
+
+  it("moves session panel shortcuts out of a narrow header while keeping shell actions", () => {
+    const { container } = mount({
+      narrow: true,
+      mergedChrome: true,
+      panelActions: html`<button data-action="terminal"></button>`,
+      discussionAction: html`<button data-action="discussion"></button>`,
+      diffAction: html`<button data-action="diff"></button>`,
+      backgroundTasksAction: html`<button data-action="tasks"></button>`,
+      workspaceAction: html`<button data-action="workspace"></button>`,
+      sessionRailAction: html`<button data-action="rail"></button>`,
+      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+    });
+
+    expect(container.querySelector('[data-action="terminal"]')).toBeNull();
+    expect(container.querySelector('[data-action="discussion"]')).toBeNull();
+    expect(container.querySelector('[data-action="diff"]')).toBeNull();
+    expect(container.querySelector('[data-action="tasks"]')).toBeNull();
+    expect(container.querySelector('[data-action="workspace"]')).toBeNull();
+    expect(container.querySelector('[data-action="rail"]')).toBeNull();
+    expect(container.querySelector('[data-action="session-menu"]')).not.toBeNull();
+    expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__palette-open")).not.toBeNull();
+  });
+
+  it("keeps narrow catalog panel shortcuts visible without a session menu", () => {
+    const { container } = mount({
+      narrow: true,
+      catalog: true,
+      session: undefined,
+      panelActions: html`<button data-action="terminal"></button>`,
+    });
+
+    expect(container.querySelector('[data-action="terminal"]')).not.toBeNull();
+  });
+
   it("renders an editable title and workspace chip", () => {
     const { container, props } = mount();
     const title = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button");
@@ -317,6 +367,7 @@ describe("chat pane header", () => {
       diffAction: html`<span data-action="diff"></span>`,
       backgroundTasksAction: html`<span data-action="tasks"></span>`,
       workspaceAction: html`<span data-action="workspace"></span>`,
+      sessionRailAction: html`<span data-action="rail"></span>`,
     });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
@@ -327,6 +378,7 @@ describe("chat pane header", () => {
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
     expect(container.querySelector('[data-action="workspace"]')).toBeNull();
+    expect(container.querySelector('[data-action="rail"]')).toBeNull();
   });
 
   it("keeps read-only gateway session titles static", () => {

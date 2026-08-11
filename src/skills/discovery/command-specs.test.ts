@@ -26,9 +26,9 @@ vi.mock("../../plugins/bundle-commands.js", () => ({
   loadEnabledClaudeBundleCommands: () => bundleCommandState.entries,
 }));
 
-vi.mock("../loading/workspace.js", () => ({
-  filterWorkspaceSkillEntriesWithOptions: (entries: SkillEntry[]) => entries,
-  loadVisibleWorkspaceSkillEntries: () => [],
+vi.mock("../loading/workspace-skill-loader.js", () => ({
+  filterWorkspaceSkills: (entries: SkillEntry[]) => entries,
+  loadVisibleSkills: () => [],
 }));
 
 beforeEach(() => {

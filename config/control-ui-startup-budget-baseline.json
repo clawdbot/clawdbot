@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324626,
-  "reason": "task-suggestion card feature (PR #121259) on top of accumulated main drift; CI-measured QA-profile bytes",
-  "updatedAt": "2026-08-09"
+  "startupJsGzipBytes": 325675,
+  "reason": "fullscreen terminal route and toolbar open action (PR #121451); CI-measured QA-profile bytes",
+  "updatedAt": "2026-08-10"
 }

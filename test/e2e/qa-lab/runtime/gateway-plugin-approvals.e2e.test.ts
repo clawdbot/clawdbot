@@ -11,7 +11,7 @@ import {
 import {
   getFreePort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { setLoggerOverride } from "../../../../src/logging.js";
@@ -80,7 +80,7 @@ describe("gateway plugin approvals QA", () => {
       const port = await getFreePort();
       const token = "gateway-plugin-approvals-qa-token";
       const url = `ws://127.0.0.1:${port}`;
-      const server = await startGatewayServer(port, {
+      const server = await startTestGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,

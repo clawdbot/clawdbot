@@ -6,7 +6,7 @@ import {
 } from "../../agents/agent-run-terminal-outcome.js";
 import { runWithCronCreatorAuthority } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-store.js";
+import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
@@ -299,6 +299,7 @@ export function dispatchAgentRunFromGateway(params: {
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
+      Object.defineProperty(error, "cause", { value: err });
       const payload = {
         runId: params.runId,
         status: responseStatus,

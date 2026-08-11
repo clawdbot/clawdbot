@@ -1214,14 +1214,22 @@ describe("update-startup", () => {
     });
   });
 
-  it("continues automatic dev campaigns from receipt-backed detached HEAD", async () => {
+  it.each([
+    { name: "successful install", status: "ok", reason: undefined },
+    {
+      name: "failed handoff",
+      status: "error",
+      reason: "managed-service-handoff-failed",
+    },
+  ] as const)("continues automatic dev campaigns from a $name receipt", async (testCase) => {
     runOpenClawStateWriteTransaction(({ db }) => {
       writeUpdateInstallReceiptRowSync(db, {
         kind: "update",
-        status: "ok",
+        status: testCase.status,
         ts: Date.now() - 60_000,
         stats: {
           mode: "git",
+          ...(testCase.reason ? { reason: testCase.reason } : {}),
           root: "/opt/openclaw",
           after: {
             sha: "current-sha",
@@ -1417,7 +1425,7 @@ describe("update-startup", () => {
     expect(getUpdateSchedule()?.install?.git?.status).not.toBe("current");
   });
 
-  it("resets a busy dev campaign and forces it at the deadline", async () => {
+  it("keeps a dev campaign countdown stable when active work begins", async () => {
     mockDevGitStatus();
     let busy = 1;
     const log = { info: vi.fn() };
@@ -1457,12 +1465,15 @@ describe("update-startup", () => {
         applyAtMs: expect.any(Number),
       }),
     );
+    const applyAtMs = getUpdateSchedule()?.campaign?.applyAtMs;
     busy = 1;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "waiting-for-idle" });
-    expect(getUpdateSchedule()?.campaign?.applyAtMs).toBeUndefined();
+    expect(getUpdateSchedule()?.campaign).toMatchObject({
+      state: "countdown",
+      applyAtMs,
+    });
 
-    await vi.advanceTimersByTimeAsync(14 * 60_000 + 50_000);
+    await vi.advanceTimersByTimeAsync(55_000);
     expect(getUpdateSchedule()?.campaign?.state).toBe("applying");
     expect(runAutoUpdate).toHaveBeenCalledOnce();
     expect(log.info).toHaveBeenCalledWith(
@@ -1470,7 +1481,7 @@ describe("update-startup", () => {
       expect.objectContaining({
         channel: "dev",
         version: "upstream-sha",
-        forced: true,
+        forced: false,
       }),
     );
   });

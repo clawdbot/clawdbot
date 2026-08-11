@@ -59,7 +59,26 @@ struct AppProfileSourceInvariantTests {
         let gatewayManager = try String(
             contentsOf: sourceRoot.appendingPathComponent("GatewayProcessManager.swift"),
             encoding: .utf8)
-        #expect(gatewayManager.components(separatedBy: "profileOwnsGateway(").count - 1 >= 5)
+        let publisherStart = try #require(gatewayManager.range(
+            of: "private func publishGatewayReadinessTerminal"))
+        let ownershipGuardStart = try #require(gatewayManager.range(
+            of: "private func canPublishGatewayReadiness",
+            range: publisherStart.lowerBound..<gatewayManager.endIndex))
+        let probeStart = try #require(gatewayManager.range(
+            of: "private func probeGatewayHealth",
+            range: ownershipGuardStart.lowerBound..<gatewayManager.endIndex))
+        let publisher = gatewayManager[publisherStart.lowerBound..<ownershipGuardStart.lowerBound]
+        #expect(publisher.components(separatedBy: "canPublishGatewayReadiness(").count - 1 == 2)
+        let ownershipGuard = gatewayManager[ownershipGuardStart.lowerBound..<probeStart.lowerBound]
+        let initialCurrent = try #require(ownershipGuard.range(of: "guard self.isCurrentGatewayReadiness"))
+        let profileOwnership = try #require(ownershipGuard.range(
+            of: "profileOwnsGateway(",
+            range: initialCurrent.upperBound..<ownershipGuard.endIndex))
+        let finalCurrent = try #require(ownershipGuard.range(
+            of: "return self.isCurrentGatewayReadiness",
+            range: profileOwnership.upperBound..<ownershipGuard.endIndex))
+        #expect(initialCurrent.lowerBound < profileOwnership.lowerBound)
+        #expect(profileOwnership.lowerBound < finalCurrent.lowerBound)
 
         let portGuardian = try String(
             contentsOf: sourceRoot.appendingPathComponent("PortGuardian.swift"),

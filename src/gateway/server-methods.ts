@@ -2,6 +2,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -45,9 +46,11 @@ import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
 import type {
+  GatewayRequestContext,
   GatewayRequestHandler,
   GatewayRequestHandlers,
   GatewayRequestOptions,
+  SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import {
   resolveSessionMutationAuthorization,
@@ -115,11 +118,14 @@ const CORE_GATEWAY_HANDLER_MODULES = {
       (module) => module.nativeHookRelayHandlers,
     ),
   "nodes-pending": () =>
-    import("./server-methods/nodes-pending.js").then((module) => module.nodePendingHandlers),
+    import("./server-methods/nodes.pending-work.js").then(
+      (module) => module.nodePendingWorkHandlers,
+    ),
   nodes: () => import("./server-methods/nodes.js").then((module) => module.nodeHandlers),
   "plugin-host-hooks": () =>
     import("./server-methods/plugin-host-hooks.js").then((module) => module.pluginHostHookHandlers),
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
+  projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
@@ -289,7 +295,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
 );
 
 /** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
-function createRequestGatewayMethodRegistry(
+export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
   // Attached gateway methods must not be shadowed by agent-scoped registry loads.
@@ -330,6 +336,68 @@ function createRequestGatewayMethodRegistry(
     ],
     gatewayPluginRegistry ?? undefined,
   );
+}
+
+/** Applies the router-owned authorization fence before any transport or typed dispatch. */
+export async function authorizeGatewayRequestPreDispatch(params: {
+  method: string;
+  requestParams: unknown;
+  client: GatewayRequestOptions["client"];
+  context: GatewayRequestContext;
+  methodRegistry: GatewayMethodRegistry;
+}): Promise<{
+  error: ErrorShape | null;
+  sessionMutationAuthorization?: SessionMutationAuthorization;
+}> {
+  const authError = authorizeGatewayMethod(
+    params.method,
+    params.client,
+    params.requestParams,
+    params.methodRegistry,
+  );
+  if (authError) {
+    return { error: authError };
+  }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: params.client ?? null,
+    method: params.method,
+    requestParams: params.requestParams,
+    context: params.context,
+  });
+  if (sessionMutation.error) {
+    return { error: sessionMutation.error };
+  }
+  if (
+    params.client?.connect.role === "node" &&
+    (!params.client.connId ||
+      !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
+  ) {
+    return {
+      error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    };
+  }
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
+  return {
+    error: null,
+    ...(sessionMutation.authorization
+      ? { sessionMutationAuthorization: sessionMutation.authorization }
+      : {}),
+  };
 }
 
 type GatewayRequestEnvelopeOptions<T> = Pick<
@@ -468,47 +536,15 @@ export async function handleGatewayRequest(
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
-  const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
-  if (authError) {
-    respond(false, undefined, authError);
-    return;
-  }
-  const sessionMutation = resolveSessionMutationAuthorization({
-    client: client ?? null,
+  const authorization = await authorizeGatewayRequestPreDispatch({
     method: req.method,
     requestParams: req.params,
+    client,
     context,
+    methodRegistry,
   });
-  if (sessionMutation.error) {
-    respond(false, undefined, sessionMutation.error);
-    return;
-  }
-  if (
-    client?.connect.role === "node" &&
-    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-        retryable: true,
-        details: { code: "PAIRING_CHANGED" },
-      }),
-    );
-    return;
-  }
-  if (context.unavailableGatewayMethods?.has(req.method)) {
-    // During startup, methods can be listed before their runtime is ready. Return the protocol
-    // retry shape so clients can back off without treating startup as a permanent unknown method.
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-        details: { ...gatewayStartupUnavailableDetails(), method: req.method },
-      }),
-    );
+  if (authorization.error) {
+    respond(false, undefined, authorization.error);
     return;
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
@@ -529,8 +565,8 @@ export async function handleGatewayRequest(
       respond,
       context,
       ...(signal ? { signal } : {}),
-      ...(sessionMutation.authorization
-        ? { sessionMutationAuthorization: sessionMutation.authorization }
+      ...(authorization.sessionMutationAuthorization
+        ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
         : {}),
     });
   await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {

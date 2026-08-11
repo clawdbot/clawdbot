@@ -52,6 +52,7 @@ import {
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
+  resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import {
   buildOpenAIChatGPTAuthMethods,
@@ -429,28 +430,17 @@ function resolveCodexModelInput(
   return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
 }
 
-function normalizeOpenAICodexCatalogModel(
-  model: ModelDefinitionConfig,
-): ModelDefinitionConfig | undefined {
+function normalizeOpenAICodexCatalogModel(model: ModelDefinitionConfig): ModelDefinitionConfig {
   const modelId = normalizeLowercaseStringOrEmpty(model.id);
-  if (modelId === OPENAI_GPT_56_MODEL_ID) {
-    return undefined;
-  }
   if (
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
-    const supportsNativeUltra =
-      modelId === OPENAI_GPT_56_SOL_MODEL_ID || modelId === OPENAI_GPT_56_TERRA_MODEL_ID;
-    const supportedReasoningEfforts = model.compat?.supportedReasoningEfforts
-      ? [
-          ...new Set([
-            ...model.compat.supportedReasoningEfforts.filter((effort) => effort !== "none"),
-            ...(supportsNativeUltra ? (["ultra"] as const) : []),
-          ]),
-        ]
-      : undefined;
+    const supportedReasoningEfforts = resolveOpenAICodexReasoningEfforts(
+      modelId,
+      model.compat?.supportedReasoningEfforts?.filter((effort) => effort !== "none"),
+    );
     return {
       ...model,
       contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
@@ -483,6 +473,9 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   }
   const modelId = readCodexModelString(row, "slug") ?? readCodexModelString(row, "id");
   if (!modelId) {
+    return undefined;
+  }
+  if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
     return undefined;
   }
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
@@ -528,7 +521,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     ...(reasoningLevels?.includes("max") ? { max: "max" as const } : {}),
   };
 
-  return {
+  return normalizeOpenAICodexCatalogModel({
     id: modelId,
     name: readCodexModelString(row, "display_name") ?? fallback?.name ?? modelId,
     api: "openai-chatgpt-responses",
@@ -544,7 +537,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     ...(fallback?.mediaInput ? { mediaInput: fallback.mediaInput } : {}),
     ...(compat ? { compat } : {}),
     ...(Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
-  };
+  });
 }
 
 function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
@@ -554,13 +547,15 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
       const modelId = normalizeLowercaseStringOrEmpty(model.id);
+      if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
+        return [];
+      }
       // Static OAuth rows are offline hints, not entitlement claims. Keep only
       // the proven GPT-5.6 subscription route; live discovery may add others.
       if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
         return [];
       }
-      const normalized = normalizeOpenAICodexCatalogModel(model);
-      return normalized ? [normalized] : [];
+      return [normalizeOpenAICodexCatalogModel(model)];
     }),
   };
 }
@@ -887,7 +882,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
 
 export function buildOpenAIProvider(): ProviderPlugin {
   const codexHooks = buildOpenAICodexProviderHooks();
-  const codexResponsesHooks = buildOpenAIResponsesProviderHooks();
+  const nativeResponsesHooks = buildOpenAIResponsesProviderHooks();
   const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
   return {
     id: PROVIDER_ID,
@@ -1039,7 +1034,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
           (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
           resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
-      return (useCodexTransport ? codexResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
+      const responsesBaseUrl = ctx.model?.baseUrl ?? providerConfig?.baseUrl;
+      const useNativeResponsesTransport =
+        useCodexTransport || !responsesBaseUrl || isOpenAIHttpsApiBaseUrl(responsesBaseUrl);
+      return (
+        useNativeResponsesTransport ? nativeResponsesHooks : responsesHooks
+      ).prepareExtraParams?.(ctx);
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,

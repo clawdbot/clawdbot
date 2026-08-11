@@ -11,11 +11,9 @@ import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
   isUnclassifiedNoBodyHttpSignal,
-  type FailoverClassification,
-  type FailoverSignal,
-} from "./embedded-agent-helpers/errors.js";
-import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+  isTimeoutErrorMessage,
+} from "./failover/classify.js";
+import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -29,6 +27,14 @@ export type CliTimeoutContext = {
   observedActivity: boolean;
   activeToolCount: number;
   backgroundTaskCount: number;
+};
+
+export type FallbackAttemptRecord = {
+  provider: string;
+  model: string;
+  reason: FailoverReason;
+  status?: number;
+  error?: string;
 };
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
@@ -50,6 +56,8 @@ export class FailoverError extends Error {
   readonly lane?: string;
   readonly suspend?: boolean;
   readonly cliTimeout?: CliTimeoutContext;
+  readonly attempts?: readonly FallbackAttemptRecord[];
+  readonly soonestCooldownExpiry?: number | null;
 
   constructor(
     message: string,
@@ -68,6 +76,8 @@ export class FailoverError extends Error {
       cause?: unknown;
       suspend?: boolean;
       cliTimeout?: CliTimeoutContext;
+      attempts?: readonly FallbackAttemptRecord[];
+      soonestCooldownExpiry?: number | null;
     },
   ) {
     super(message, { cause: params.cause });
@@ -85,6 +95,8 @@ export class FailoverError extends Error {
     this.lane = params.lane;
     this.suspend = params.suspend;
     this.cliTimeout = params.cliTimeout;
+    this.attempts = params.attempts;
+    this.soonestCooldownExpiry = params.soonestCooldownExpiry;
   }
 }
 
@@ -421,7 +433,7 @@ function readField(value: unknown, key: string): unknown {
   return (value as Record<string, unknown>)[key];
 }
 
-function readStringField(value: unknown, key: string): string | undefined {
+function readErrorStringField(value: unknown, key: string): string | undefined {
   const field = readField(value, key);
   return typeof field === "string" ? field : undefined;
 }
@@ -440,17 +452,17 @@ function readMissingToolResultMarker(err: unknown): true | undefined {
     return true;
   }
   for (const key of ["code", "reason", "status"] as const) {
-    const value = readStringField(err, key);
+    const value = readErrorStringField(err, key);
     if (value && isMissingToolResultMarker(value)) {
       return true;
     }
   }
-  const output = readStringField(err, "output");
+  const output = readErrorStringField(err, "output");
   if (output && isMissingToolResultMessage(output)) {
     return true;
   }
-  const resultReason = readStringField(readField(err, "result"), "reason");
-  const detailReason = readStringField(readField(err, "detail"), "reason");
+  const resultReason = readErrorStringField(readField(err, "result"), "reason");
+  const detailReason = readErrorStringField(readField(err, "detail"), "reason");
   if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
     return true;
   }
@@ -824,6 +836,9 @@ export function coerceToFailoverError(
         lane: sourceError.lane,
         cause: sourceError.cause,
         suspend: sourceError.suspend,
+        cliTimeout: sourceError.cliTimeout,
+        attempts: sourceError.attempts,
+        soonestCooldownExpiry: sourceError.soonestCooldownExpiry,
       });
     }
     return sourceError;

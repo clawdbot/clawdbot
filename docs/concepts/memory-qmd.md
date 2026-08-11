@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "QMD memory backend removal and migration"
 read_when:
   - Migrating an installation that used the QMD memory backend
@@ -9,11 +10,5 @@ title: "QMD memory backend removal"
 
 The optional QMD memory backend has been removed. Builtin memory is now the only memory engine.
 
-Run `openclaw doctor --fix` to remove retired `memory.backend`, `memory.qmd.*`, and
-`memory.search.qmd.*` settings, including agent-scoped variants. Your Markdown memory sources are
-indexed by the builtin engine on its next sync. Doctor preserves configured QMD paths and extra
-collections in the corresponding `memory.search.extraPaths` setting, including root-relative glob
-patterns. QMD indexes, exported session Markdown, downloaded models, and collection metadata are
-derived state and do not require migration.
-
-See [Memory](/concepts/memory) for the current architecture and configuration.
+See [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd) for the
+automatic Doctor migration, builtin feature coverage, and remaining gaps.

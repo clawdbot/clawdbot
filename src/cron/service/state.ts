@@ -403,5 +403,10 @@ export type CronUpdateOptions = {
   /** Synchronous Gateway-owned guard consumed immediately before mutation. */
   commitGuard?: () => void;
 };
+
+export type CronCommitGuardOptions = {
+  /** Synchronous Gateway-owned guard consumed at the mutation owner. */
+  commitGuard?: () => void;
+};
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

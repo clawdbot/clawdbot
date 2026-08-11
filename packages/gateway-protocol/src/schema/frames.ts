@@ -9,6 +9,7 @@ import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 export const GATEWAY_SERVER_CAPS = {
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
 } as const;
@@ -121,6 +122,8 @@ export const HelloOkSchema = closedObject({
   ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
+    recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
+    recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

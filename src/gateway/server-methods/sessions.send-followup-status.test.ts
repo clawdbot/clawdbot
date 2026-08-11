@@ -65,10 +65,10 @@ vi.mock("../session-transcript-readers.js", async () => {
   };
 });
 
-vi.mock("../../agents/subagent-registry-read.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/subagent-registry-read.js")>(
-    "../../agents/subagent-registry-read.js",
-  );
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >("../../agents/subagents/registry/subagent-registry-read.js");
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
@@ -76,7 +76,7 @@ vi.mock("../../agents/subagent-registry-read.js", async () => {
   };
 });
 
-vi.mock("../../agents/subagent-registry-runtime.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
 }));
 

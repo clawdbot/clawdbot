@@ -25,10 +25,7 @@ import {
   markDiagnosticRunProgress,
 } from "./diagnostic-run-activity.js";
 import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
-import {
-  testing as recoveryTesting,
-  recoverStuckDiagnosticSession,
-} from "./diagnostic-stuck-session-recovery.runtime.js";
+import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import {
   logSessionStateChange,
   resetDiagnosticStateForTest,
@@ -53,7 +50,6 @@ async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promi
 
 describe("stuck session recovery integration", () => {
   afterEach(() => {
-    recoveryTesting.resetRecoveriesInFlight();
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
