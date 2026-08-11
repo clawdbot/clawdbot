@@ -212,12 +212,12 @@ CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
 
 function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
   const binding = input.executionIdentityToken;
-  const sourceRunId = normalizeString(input.source?.runId);
-  if (!binding || normalizeString(binding.runId) !== sourceRunId) {
+  const sourceRunId = normalizeNullableString(input.source?.runId);
+  if (!binding || normalizeNullableString(binding.runId) !== sourceRunId) {
     return undefined;
   }
-  const sourceContextId = normalizeString(binding.contextId);
-  const sourceExecutionId = normalizeString(binding.executionId);
+  const sourceContextId = normalizeNullableString(binding.contextId);
+  const sourceExecutionId = normalizeNullableString(binding.executionId);
   if (
     !sourceContextId ||
     !sourceExecutionId ||
