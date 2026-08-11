@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "areas": [
+    {
+      "id": "wizard-core",
+      "namespace": "wizard",
+      "source": "src/wizard/i18n/catalogs/en.json",
+      "targets": [
+        {
+          "locale": "zh-CN",
+          "path": "src/wizard/i18n/catalogs/generated/zh-CN.json"
+        },
+        {
+          "locale": "zh-TW",
+          "path": "src/wizard/i18n/catalogs/generated/zh-TW.json"
+        }
+      ],
+      "protectedLiterals": [
+        "Shell",
+        "source"
+      ]
+    }
+  ]
+}

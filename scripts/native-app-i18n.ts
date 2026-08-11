@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { translateCatalogEntries } from "./control-ui-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -40,7 +40,7 @@ export type NativeI18nQualityFinding = {
   translated: string;
   words?: string[];
 };
-type NativeTranslator = typeof translateNativeEntries;
+type NativeTranslator = typeof translateCatalogEntries;
 type NativeLocaleSyncOptions = {
   glossary?: Array<{ source: string; target: string }>;
   translate?: NativeTranslator;
@@ -1585,7 +1585,7 @@ export async function syncNativeLocale(
       sourcePath: entry.path,
     }));
   const translated = pending.length
-    ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
+    ? await (options.translate ?? translateCatalogEntries)(pending, locale, glossary)
     : new Map<string, string>();
   const artifact: NativeTranslationArtifact = {
     version: 1,

@@ -52,9 +52,13 @@ the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
 
 ## Locale
 
-The wizard localizes fixed onboarding copy. It uses the first nonblank value from
-`OPENCLAW_LOCALE`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, in that order, then
-falls back to English. Supported locales: `en`, `zh-CN`, `zh-TW`.
+The wizard localizes fixed onboarding copy. A nonblank `OPENCLAW_LOCALE` is an
+explicit override: a supported value selects that locale, while an unsupported
+value falls back directly to English. Without an explicit override, the wizard
+checks `LC_ALL`, `LC_MESSAGES`, and `LANG` in order, then checks the runtime
+platform locale reported by `navigator` or `Intl` when available. It skips blank
+or unsupported inferred values and falls back to English only when none select
+a supported locale. Supported locales: `en`, `zh-CN`, `zh-TW`.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard

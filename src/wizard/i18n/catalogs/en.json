@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "area": "wizard-core",
+  "messages": {
+    "wizard.completion.cacheFailed": "Failed to generate completion cache. Run `{command}` later.",
+    "wizard.completion.enable": "Enable {shell} shell completion for {cli}?",
+    "wizard.completion.installed": "Shell completion installed. {reloadHint}",
+    "wizard.completion.reloadPowerShell": "Restart your shell or run: {command}",
+    "wizard.completion.reloadShell": "Restart your shell or run: source {profile}",
+    "wizard.completion.title": "Shell completion"
+  }
+}

@@ -2138,8 +2138,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "check-workflows",
       "plugin-contract-test-plan",
       pluginPrerelease,
+      "localization-catalog-workflow",
       "verify-pr-hosted-gates",
     ],
+  ],
+  [
+    /^\.github\/workflows\/localization-catalog-refresh\.yml$/u,
+    ["localization-catalog-workflow"],
   ],
   [
     /^\.github\/workflows\/ci-check-testbox\.yml$/u,
