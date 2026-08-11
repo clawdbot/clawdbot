@@ -98,7 +98,7 @@ describe("SQLite audit record store", () => {
     });
   });
 
-  it("updates a retained key without consuming another bounded entry", async () => {
+  it("keeps keyed mutations atomic without changing insertion age", async () => {
     await withTempDir({ prefix: "openclaw-audit-store-upsert-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({
         scope: "upsert-test",
@@ -109,11 +109,39 @@ describe("SQLite audit record store", () => {
       store.register("one", { value: 1 }, 1);
       store.register("two", { value: 2 }, 2);
       store.upsert("one", { value: 3 }, 3);
+      expect(store.latest({ limit: 2 })).toEqual([
+        { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
+        { key: "one", value: { value: 3 }, createdAt: 3, sequence: 1 },
+      ]);
 
-      expect(store.size()).toBe(2);
-      expect(store.entries()).toEqual([
-        { key: "one", value: { value: 3 }, createdAt: 3 },
-        { key: "two", value: { value: 2 }, createdAt: 2 },
+      expect(store.compareAndSet("one", { value: 3 }, { value: 4 }, 4)).toBe(true);
+      expect(store.latest({ limit: 2 })).toEqual([
+        { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
+        { key: "one", value: { value: 4 }, createdAt: 4, sequence: 1 },
+      ]);
+
+      expect(store.compareAndSet("one", { value: 999 }, null)).toBe(false);
+      expect(store.latest({ limit: 2 })).toEqual([
+        { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
+        { key: "one", value: { value: 4 }, createdAt: 4, sequence: 1 },
+      ]);
+
+      expect(store.compareAndSet("one", { value: 4 }, null)).toBe(true);
+      expect(store.compareAndSet("three", null, { value: 5 }, 5)).toBe(true);
+      expect(store.latest({ limit: 2 })).toEqual([
+        { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
+        { key: "two", value: { value: 2 }, createdAt: 2, sequence: 2 },
+      ]);
+
+      expect(store.compareAndSet("four", null, { value: 6 }, 6)).toBe(true);
+      expect(store.latest({ limit: 2 })).toEqual([
+        { key: "four", value: { value: 6 }, createdAt: 6, sequence: 4 },
+        { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
+      ]);
+
+      store.delete("four");
+      expect(store.latest({ limit: 2 })).toEqual([
+        { key: "three", value: { value: 5 }, createdAt: 5, sequence: 3 },
       ]);
     });
   });

@@ -799,6 +799,21 @@ wa-dropdown-item[disabled] {
   cursor: not-allowed;
 }
 
+/* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
+wa-dropdown-item[checkbox-adjacent] {
+  padding-inline-start: 1em;
+}
+
+wa-dropdown-item[type="checkbox"]::part(checkmark) {
+  order: 1;
+  margin-inline: 0.75em 0;
+}
+
+wa-dropdown-item[type="checkbox"] {
+  display: flex;
+  align-items: center;
+}
+
 button,
 input,
 textarea,

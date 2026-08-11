@@ -107,8 +107,7 @@ function prependPreviousSummaryForRedistill(params: {
 }
 
 function coerceTimestamp(value: unknown): number {
-  const timestamp = typeof value === "string" ? Date.parse(value) : value;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0;
+  return parseDateFirstTimestampMs(value) ?? 0;
 }
 
 function sessionBranchEntryToMessage(entry: Record<string, unknown>): unknown {
@@ -1283,3 +1282,4 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     testing;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

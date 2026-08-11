@@ -4767,9 +4767,18 @@ export const en: TranslationMap = {
     compaction: {
       label: "Compacted history",
       savedTokens: "saved {count} tokens",
-      description:
-        "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      description: "The compacted transcript is preserved as a checkpoint.",
       openCheckpoints: "Open checkpoints",
+    },
+    systemNotice: {
+      restartRecovery: {
+        label: "System · restart recovery",
+        summary:
+          "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      },
+      gatewayRestarted: {
+        label: "System · gateway restarted",
+      },
     },
     progressLabels: {
       shelling: "Shelling",

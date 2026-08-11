@@ -9,7 +9,7 @@ import type {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumber,
-  asOptionalObjectRecord,
+  asRecord,
   normalizeOptionalString,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,6 +17,10 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
 type XaiRealtimeReasoningEffort = "high" | "none";
+
+function readXaiObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" ? asRecord(value) : undefined;
+}
 
 type XaiRealtimeVoiceProviderConfig = {
   apiKey?: string;
@@ -146,9 +150,9 @@ export function serializeXaiRealtimeToolResult(result: unknown): string {
 }
 
 function readNestedXaiConfig(rawConfig: RealtimeVoiceProviderConfig) {
-  const raw = asOptionalObjectRecord(rawConfig);
-  const providers = asOptionalObjectRecord(raw?.providers);
-  return asOptionalObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
+  const raw = readXaiObjectRecord(rawConfig);
+  const providers = readXaiObjectRecord(raw?.providers);
+  return readXaiObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
 }
 
 export function normalizeXaiRealtimeBaseUrl(value?: string): string {
@@ -214,7 +218,7 @@ export function readXaiRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
   }
-  const record = asOptionalObjectRecord(error);
+  const record = readXaiObjectRecord(error);
   return (
     normalizeOptionalString(record?.message) ??
     normalizeOptionalString(record?.code) ??

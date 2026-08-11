@@ -1,6 +1,7 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
@@ -908,20 +909,6 @@ export async function invokeAgentIdentityGet(
     isWebchatConnect: () => false,
   });
   return respond;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 /**

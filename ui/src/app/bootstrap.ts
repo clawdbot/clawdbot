@@ -13,7 +13,7 @@ import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
-import { createRuntimeConfigCapability } from "../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";

@@ -803,7 +803,7 @@ describe("collapseCompletedTurnWork", () => {
         toolResult("call-1", 2_000),
         assistantMessage("First done.", 3_000),
         userMessage("[System] Continue the interrupted turn.", 4_000, {
-          provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
         }),
         toolResult("call-2", 5_000),
         assistantMessage("Recovery done.", 6_000),
@@ -1556,22 +1556,50 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("renders internal system user messages as labeled notices without changing search visibility", () => {
+  it("maps known system notices and preserves the generic fallback and search visibility", () => {
     const messages = [
       userMessage("before", 999),
       userMessage("[System] Continue the interrupted turn.", 1000, {
-        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
       }),
-      userMessage("after", 1001),
+      userMessage("[System] Gateway restarted during update 2026.8.2 -> 2026.8.3.", 1001, {
+        provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      }),
+      userMessage("[System] Keep the raw fallback copy.", 1002, {
+        provenance: { kind: "internal_system", sourceTool: "session-companion" },
+      }),
+      userMessage("after", 1003),
     ];
     const items = buildCachedChatItems(createProps({ messages }));
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "notice",
+      "notice",
+      "notice",
+      "group",
+    ]);
     expect(items[1]).toMatchObject({
       kind: "notice",
-      label: "System",
-      text: "Continue the interrupted turn.",
+      icon: "cpu",
+      label: "System · restart recovery",
+      text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
       timestamp: 1000,
+    });
+    // Summary-less kinds keep the producer's informative text under the label.
+    expect(items[2]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System · gateway restarted",
+      text: "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
+      timestamp: 1001,
+    });
+    expect(items[3]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System",
+      text: "Keep the raw fallback copy.",
+      timestamp: 1002,
     });
 
     const filtered = buildCachedChatItems(
@@ -3169,7 +3197,7 @@ describe("buildCachedChatItems", () => {
           userMessage("Interrupted request", 1_000),
           assistantMessage("Interrupted reply", 2_000),
           userMessage("[System] Continue the interrupted turn.", 3_000, {
-            provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
           }),
         ],
         toolMessages: [mcpAppResult("mcp-app-recovery", "call-recovery", 3_001)],
@@ -3451,9 +3479,8 @@ describe("buildCachedChatItems", () => {
     const divider = requireRecord(items[0]);
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Compacted history");
-    expect(divider.description).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
-    );
+    expect(divider.icon).toBe("foldVertical");
+    expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
     expect(action.label).toBe("Open checkpoints");
@@ -4333,7 +4360,7 @@ describe("tool turn outcome annotation (#89683)", () => {
     const tools = toolGroups([
       failedTool(1),
       userMessage("[System] Continue the interrupted turn.", 2, {
-        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
       }),
       failedTool(3),
       assistantReply("Recovered on the next turn.", 4),

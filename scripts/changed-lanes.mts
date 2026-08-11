@@ -4,15 +4,11 @@ import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
-
-// The CLI is invoked from temporary Git repositories, outside workspace package resolution.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // Source files knip's production scan reads. Any edit to one of these can orphan
 // an export -- including an import-only edit that drops a barrel re-export's last
