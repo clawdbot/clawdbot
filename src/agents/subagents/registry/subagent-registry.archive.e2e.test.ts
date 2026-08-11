@@ -91,7 +91,7 @@ vi.mock("../../../config/config.js", async () => {
 });
 
 vi.mock("../announce/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(async () => true),
+  runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
 }));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
@@ -244,7 +244,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
     setRegistryTestDeps({
       captureSubagentCompletionReply: vi.fn(async () => "completed result"),
-      runSubagentAnnounceFlow: vi.fn(async () => false),
+      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
     });
 
     mod.registerSubagentRun({

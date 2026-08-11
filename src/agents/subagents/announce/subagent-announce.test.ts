@@ -341,7 +341,7 @@ describe("subagent announce seam flow", () => {
       roundOneReply: "  ANNOUNCE_SKIP  ",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).not.toHaveBeenCalled();
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
     expect(sessionsDeleteSpy).toHaveBeenCalledWith({
@@ -372,7 +372,7 @@ describe("subagent announce seam flow", () => {
       onBeforeDeleteChildSession: () => false,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
@@ -393,7 +393,7 @@ describe("subagent announce seam flow", () => {
       isCompletionDeliveryAllowed: () => true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
@@ -414,7 +414,7 @@ describe("subagent announce seam flow", () => {
       isCompletionDeliveryAllowed: () => false,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("intentional_non_delivery");
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
@@ -436,7 +436,7 @@ describe("subagent announce seam flow", () => {
       roundOneReply: "ANNOUNCE_SKIP",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining("cron job completion for session=agent:main:cron:daily-report"),
     );
@@ -463,7 +463,7 @@ describe("subagent announce seam flow", () => {
       fallbackReply: "an actual fallback result",
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(logSpy).not.toHaveBeenCalled();
     logSpy.mockRestore();
   });
@@ -492,7 +492,7 @@ describe("subagent announce seam flow", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
     expect(sessionsDeleteSpy).toHaveBeenCalledWith({
       method: "sessions.delete",
@@ -551,7 +551,7 @@ describe("subagent announce seam flow", () => {
       outcome: { status: "ok" },
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     const queuedCall = requireQueuedMessageCall();
     expect(queuedCall?.[0]).toBe("session-origin-provider-steer");
     expect(queuedCall?.[1]).toContain("[Internal task completion event]");
@@ -583,7 +583,7 @@ describe("subagent announce seam flow", () => {
       bestEffortDeliver: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const agentCall = requireAgentCall();
     expect(agentCall.method).toBe("agent");
@@ -616,7 +616,7 @@ describe("subagent announce seam flow", () => {
       bestEffortDeliver: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const params = requireAgentCall().params ?? {};
     expect(params.sessionKey).toBe("agent:main:subagent:orchestrator");
@@ -660,7 +660,7 @@ describe("subagent announce seam flow", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const agentCall = requireAgentCall();
     expect(agentCall.params?.deliver).toBe(true);
@@ -693,7 +693,7 @@ describe("subagent announce seam flow", () => {
       expectsCompletionMessage: true,
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("retryable");
     expect(logSpy).toHaveBeenCalledWith(
       "[warn] Subagent completion direct announce failed for run run-direct-failure-log: Outbound not configured for slack",
     );
@@ -738,7 +738,7 @@ describe("subagent announce seam flow", () => {
       },
     });
 
-    expect(didAnnounce).toBe(false);
+    expect(didAnnounce).toBe("ambiguous");
     expect(deliveryResult).toMatchObject({
       delivered: false,
       path: "direct",

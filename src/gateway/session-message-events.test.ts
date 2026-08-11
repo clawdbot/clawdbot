@@ -665,7 +665,7 @@ describe("session.message websocket events", () => {
       resumeSubagentRun: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
-      runSubagentAnnounceFlow: vi.fn(async () => false),
+      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
       warn: vi.fn(),
     });

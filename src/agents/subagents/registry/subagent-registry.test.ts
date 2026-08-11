@@ -176,7 +176,7 @@ const mocks = vi.hoisted(() => ({
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-  runSubagentAnnounceFlow: vi.fn(async () => true),
+  runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
     async (wakeParams: {
       settledEntry: { runId: string };
@@ -462,7 +462,7 @@ describe("subagent registry seam flow", () => {
     mocks.persistSubagentRunsToDisk.mockReset();
     mocks.persistSubagentRunsToDiskOrThrow.mockReset();
     mocks.restoreSubagentRunsFromDisk.mockReset().mockReturnValue(0);
-    mocks.runSubagentAnnounceFlow.mockReset().mockResolvedValue(true);
+    mocks.runSubagentAnnounceFlow.mockReset().mockResolvedValue("delivered");
     mocks.maybeWakeRequesterAfterAllChildrenSettled
       .mockReset()
       .mockImplementation(async (params) => {
@@ -2061,7 +2061,7 @@ describe("subagent registry seam flow", () => {
     });
     mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
       await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
-      return true;
+      return "delivered";
     });
 
     await withOwnedSessionTranscriptWrites(
@@ -2494,7 +2494,7 @@ describe("subagent registry seam flow", () => {
   it("refreshes unpublished timeout delivery payloads after lifecycle correction", async () => {
     const createdAt = Date.parse("2026-03-24T11:59:00Z");
     mockPendingAgentWait();
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce(false);
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("retryable");
     mod.registerSubagentRun({
       runId: "run-refresh-pending-timeout-payload",
       task: "pending timeout payload should refresh",
@@ -5616,7 +5616,7 @@ describe("subagent registry seam flow", () => {
   });
 
   it("retains delete-mode successful completions through the delivery deadline", async () => {
-    mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
+    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({
       status: "ok",

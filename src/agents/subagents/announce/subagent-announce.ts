@@ -94,6 +94,9 @@ export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
+export type SubagentAnnounceFlowOutcome = NonNullable<
+  SubagentAnnounceDeliveryResult["disposition"]
+>;
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -181,8 +184,8 @@ export async function runSubagentAnnounceFlow(params: {
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   onBeforeDeleteChildSession?: () => boolean;
-}): Promise<boolean> {
-  let didAnnounce = false;
+}): Promise<SubagentAnnounceFlowOutcome> {
+  let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
@@ -217,7 +220,7 @@ export async function runSubagentAnnounceFlow(params: {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
         if (outcome?.status !== "timeout" || params.cleanup === "delete") {
-          return false;
+          return "retryable";
         }
       }
     }
@@ -260,7 +263,7 @@ export async function runSubagentAnnounceFlow(params: {
           targetRequesterSessionKey,
         )
       ) {
-        return true;
+        return "delivered";
       }
 
       const pendingChildDescendantRuns = !childSessionEffectsAllowed()
@@ -268,7 +271,7 @@ export async function runSubagentAnnounceFlow(params: {
         : Math.max(0, subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey));
       if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
         shouldDeleteChildSession = false;
-        return false;
+        return "retryable";
       }
 
       if (
@@ -325,7 +328,7 @@ export async function runSubagentAnnounceFlow(params: {
       });
       if (woke) {
         shouldDeleteChildSession = false;
-        return true;
+        return "delivered";
       }
     }
 
@@ -342,7 +345,7 @@ export async function runSubagentAnnounceFlow(params: {
     if (!childCompletionFindings) {
       if (params.terminalReply?.disposition === "silent") {
         if (!hasVisibleFallback && (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)) {
-          return true;
+          return "delivered";
         }
         reply = cleanedFallbackReply;
       }
@@ -415,14 +418,14 @@ export async function runSubagentAnnounceFlow(params: {
               !expectsCompletionMessage ||
               hasVisibleFallback
             ) {
-              return true;
+              return "delivered";
             }
             reply = undefined;
           }
         } else if (reply) {
           reply = stripAndClassifyReply(reply) ?? cleanedFallbackReply;
           if (!reply) {
-            return true;
+            return "delivered";
           }
         }
       }
@@ -470,7 +473,7 @@ export async function runSubagentAnnounceFlow(params: {
       } = subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
       if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
         if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
-          return true;
+          return "delivered";
         }
         const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
         const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);
@@ -479,7 +482,7 @@ export async function runSubagentAnnounceFlow(params: {
           const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
           if (!fallback?.requesterSessionKey) {
             shouldDeleteChildSession = false;
-            return false;
+            return "retryable";
           }
           targetRequesterSessionKey = fallback.requesterSessionKey;
           targetRequesterOrigin =
@@ -581,7 +584,7 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     reportDeliveryResult(delivery);
-    didAnnounce = delivery.delivered || delivery.disposition === "intentional_non_delivery";
+    announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
@@ -607,7 +610,7 @@ export async function runSubagentAnnounceFlow(params: {
       });
     }
   }
-  return didAnnounce;
+  return announceOutcome;
 }
 
 export const testing = {
