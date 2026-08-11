@@ -398,6 +398,17 @@ export async function getStatusSummary(
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
+  const candidateCache = new Map<string, SessionCandidate[]>();
+  const loadSessionCandidates = (storePath: string, agentId?: string) => {
+    const cacheKey = `${storePath}\0${agentId ?? ""}`;
+    const cached = candidateCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const candidates = listSessionCandidates(storePath, agentId);
+    candidateCache.set(cacheKey, candidates);
+    return candidates;
+  };
   const buildSessionRows = async (
     candidates: SessionCandidate[],
     opts: { agentIdOverride?: string } = {},
@@ -538,7 +549,7 @@ export async function getStatusSummary(
   const byAgent = await Promise.all(
     agentList.agents.map(async (agent) => {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-      const candidates = listSessionCandidates(storePath, agent.id);
+      const candidates = loadSessionCandidates(storePath, agent.id);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
         { agentIdOverride: agent.id },
@@ -557,7 +568,7 @@ export async function getStatusSummary(
       return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
     })
     .flatMap((source) =>
-      listSessionCandidates(
+      loadSessionCandidates(
         source.storePath,
         pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
       ),
