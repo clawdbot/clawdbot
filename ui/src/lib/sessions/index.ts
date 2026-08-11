@@ -367,11 +367,29 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (decoratedResult !== state.result) {
       publish({ ...state, result: decoratedResult });
     }
+    const eventInfo = readSessionChangedEvent(event.payload);
+    const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
+    const archivesSelectedSession =
+      eventInfo?.archived === true &&
+      Boolean(
+        selectedSessionKey &&
+        uiSessionEventMatches(
+          {
+            assistantAgentId: gateway.snapshot.assistantAgentId,
+            hello: gateway.snapshot.hello,
+            sessionKey: selectedSessionKey,
+          },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      );
     const reconciled = reconcileSessionChanged(state.result, event.payload, {
       resultAgentId: state.agentId,
-      archivedFilter: roster.lastOptions().archivedFilter,
+      // The active roster normally removes archived rows immediately. Keep the
+      // currently routed row until navigation changes so its title and other
+      // presentation metadata remain stable throughout the archive transition.
+      archivedFilter: archivesSelectedSession ? "all" : roster.lastOptions().archivedFilter,
     });
-    const eventInfo = readSessionChangedEvent(event.payload);
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {

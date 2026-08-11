@@ -14,7 +14,7 @@ import {
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   collectKnownSessionRows,
@@ -64,6 +64,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   failedChildSessionKeys: ReadonlySet<string> = new Set();
   loadingChildSessionKeys: ReadonlySet<string> = new Set();
   activeSessionLineageRoot: GatewaySessionRow | null = null;
+  activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
   sessionsScrollState: SidebarSessionsScrollState = "none";
   sessionMutationError: string | null = null;
   presencePayload: PresencePayload | undefined;
@@ -397,14 +398,24 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
   }
 
-  private resetChildSessionState(): void {
+  private resetChildSessionState(options: { preserveActiveLineage?: boolean } = {}): void {
+    const activeSessionLineageRoot = options.preserveActiveLineage
+      ? this.activeSessionLineageRoot
+      : null;
+    const activeSessionLineageRouteKey = options.preserveActiveLineage
+      ? this.activeSessionLineageRouteKey
+      : null;
+    const activeSessionLineageSelectedRow = options.preserveActiveLineage
+      ? this.activeSessionLineageSelectedRow
+      : null;
     this.childSessionGeneration += 1;
     this.childSessionRowsByParent = {};
     this.loadedChildSessionKeys = new Set();
     this.failedChildSessionKeys = new Set();
     this.loadingChildSessionKeys = new Set();
-    this.activeSessionLineageRoot = null;
-    this.activeSessionLineageRouteKey = null;
+    this.activeSessionLineageRoot = activeSessionLineageRoot;
+    this.activeSessionLineageSelectedRow = activeSessionLineageSelectedRow;
+    this.activeSessionLineageRouteKey = activeSessionLineageRouteKey;
     this.activeSessionLineageLoaded = false;
     this.activeSessionLineageRequestToken = null;
     if (this.activeSessionLineageRetryTimer) {
@@ -416,9 +427,20 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private readonly updateSessions = (sessions: SessionCapability) => {
     if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
       this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
+      const routeKey = this.activeSessionLineageRouteKey;
+      const routedRow = routeKey
+        ? this.sessionsResult?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, routeKey))
+        : undefined;
+      if (routedRow) {
+        // A canonical active-list refresh can remove the selected row before
+        // its archived descriptor is reloaded. Keep the enriched pre-refresh
+        // row as the routed presentation baseline so no intermediate render
+        // falls back to the raw session key or "New session".
+        this.activeSessionLineageSelectedRow = routedRow;
+      }
       // The canonical root list advances after session events, but excludes hidden children.
       // Drop child snapshots so expanded parents refetch live terminal state.
-      this.resetChildSessionState();
+      this.resetChildSessionState({ preserveActiveLineage: true });
       this.notify();
     }
     const snapshot = sessions.state;
@@ -619,12 +641,16 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   async loadActiveSessionLineage(sessionKey: string): Promise<void> {
     const normalizedKey = sessionKey.trim();
-    if (normalizedKey !== this.activeSessionLineageRouteKey) {
+    if (
+      !this.activeSessionLineageRouteKey ||
+      !areUiSessionKeysEquivalent(normalizedKey, this.activeSessionLineageRouteKey)
+    ) {
       evictArchivedSessionLineage(this, this.activeSessionLineageRouteKey);
       this.activeSessionLineageRouteKey = normalizedKey;
       this.activeSessionLineageLoaded = false;
       this.activeSessionLineageRequestToken = null;
       this.activeSessionLineageRoot = null;
+      this.activeSessionLineageSelectedRow = null;
       if (this.activeSessionLineageRetryTimer) {
         globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
         this.activeSessionLineageRetryTimer = null;

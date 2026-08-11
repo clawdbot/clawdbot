@@ -262,6 +262,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
 
   private activeLineageRow(sessionKey: string): GatewaySessionRow | undefined {
     return [
+      this.sessionData.activeSessionLineageSelectedRow,
       this.sessionData.activeSessionLineageRoot,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
     ].find(

@@ -319,7 +319,11 @@ async function refreshChat(
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
-      archivedFilter: host.sessionsArchivedFilter,
+      // The routed chat remains visible after archive even though the active
+      // roster excludes it. Keep its descriptor in shared session state until
+      // navigation changes; otherwise the pane briefly falls back to the raw
+      // key while the sidebar lineage reload catches up.
+      archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
     const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
     if (reconciled) {
