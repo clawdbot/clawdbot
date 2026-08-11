@@ -938,24 +938,25 @@ export function normalizePlanSnapshot(
   };
 }
 
-function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload) {
+function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   // Plan snapshots are run-owned: a stale or spawned-run event in the same
   // session must not overwrite (or clear) the active run's checklist. Mirrors
   // the compaction/fallback acceptance policy (session-scoped when idle).
   if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
-    return;
+    return false;
   }
   const data = payload.data ?? {};
   if (data.phase !== "update") {
-    return;
+    return false;
   }
   host.planStatus = normalizePlanSnapshot(data, payload.runId);
   host.requestUpdate?.();
+  return false;
 }
 
-export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
+export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
   if (!payload) {
-    return;
+    return false;
   }
 
   // Filter the shared activity stream by session first. Chat-linked events use
@@ -963,13 +964,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // active chat run; individual run-owned projections apply their own match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
-    return;
+    return false;
   }
   // History can replay an older active-run snapshot after newer live activity.
   // Fence each tool/preamble identity by Gateway sequence so restore fills gaps
   // without regressing a result or newer progress already rendered by this pane.
   if (!acceptActivityEvent(host, payload)) {
-    return;
+    return false;
   }
   if (payload.stream === "lifecycle" || payload.stream === "tool") {
     const runId = toTrimmedString(payload.runId);
@@ -979,13 +980,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handleUsageEvent(host, payload)) {
-    return;
+    return true;
   }
 
   // Handle compaction events
   if (payload.stream === "compaction") {
     handleCompactionEvent(host as CompactionHost, payload);
-    return;
+    return true;
   }
 
   if (payload.stream === "lifecycle") {
@@ -999,35 +1000,34 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatRunUsageById = usageByRun;
     }
     if (handleLifecycleApprovalEvent(host, payload)) {
-      return;
+      return true;
     }
     handleLifecycleCompactionEvent(host as CompactionHost, payload);
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
-    return;
+    return true;
   }
 
   if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
-    return;
+    return true;
   }
 
   if (handlePreambleProgressEvent(host, payload)) {
-    return;
+    return true;
   }
 
   if (payload.stream === "plan") {
-    handlePlanEvent(host, payload);
-    return;
+    return handlePlanEvent(host, payload);
   }
 
   if (payload.stream !== "tool") {
-    return;
+    return false;
   }
 
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
   if (!toolCallId) {
-    return;
+    return false;
   }
   const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
   let entry = host.toolStreamById.get(toolStreamIdentity);
@@ -1119,5 +1119,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
+  return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

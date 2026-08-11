@@ -641,6 +641,7 @@ const config = {
     "packages/media-core": {
       entry: [
         "src/index.ts!",
+        "src/attachment-classify.ts!",
         "src/base64.ts!",
         "src/constants.ts!",
         "src/content-length.ts!",

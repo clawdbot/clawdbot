@@ -5906,10 +5906,11 @@ class ChatController internal constructor(
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
       subagentActivityExpiryJobs.remove(taskId)?.cancel()
       if (!activity.isWorking) {
+        val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
+        val expiryDelayMs = (expiresAt - now).coerceAtLeast(0L)
         subagentActivityExpiryJobs[taskId] =
           scope.launch {
-            val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
-            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(0L))
+            delay(expiryDelayMs)
             synchronized(subagentActivityLock) {
               if (_subagentActivities.value[taskId] == activity) {
                 _subagentActivities.value = _subagentActivities.value - taskId

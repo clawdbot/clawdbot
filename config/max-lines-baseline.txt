@@ -732,8 +732,6 @@ src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
 src/gateway/worker-environments/inference-runtime.ts
-src/gateway/worker-environments/service.test.ts
-src/gateway/worker-environments/service.ts
 src/gateway/worker-environments/store.ts
 src/gateway/worker-environments/worker-turn-launcher.test.ts
 src/hooks/install.ts

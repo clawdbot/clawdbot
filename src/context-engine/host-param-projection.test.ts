@@ -211,7 +211,6 @@ describe("context-engine host parameter projection", () => {
         activeMessagePosition: 1,
       },
       messages: [message],
-      prePromptMessageCount: 1,
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionTarget: { agentId: "main", sessionId: "session-1" },

@@ -108,6 +108,9 @@
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
       "@openclaw/media-core": ["./packages/media-core/src/index.ts"],
+      "@openclaw/media-core/attachment-classify": [
+        "./packages/media-core/src/attachment-classify.ts"
+      ],
       "@openclaw/media-core/base64": ["./packages/media-core/src/base64.ts"],
       "@openclaw/media-core/constants": ["./packages/media-core/src/constants.ts"],
       "@openclaw/media-core/content-length": ["./packages/media-core/src/content-length.ts"],

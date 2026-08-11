@@ -44,7 +44,7 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
       - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol` through the Codex runtime.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
-      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains supported and resolves to the same tier.
     - Adding or reauthenticating OpenAI preserves an existing explicit primary model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade the model.
     - **xAI OAuth**: device-code browser sign-in with no localhost callback required, so it works over SSH/Docker/VPS too (`--auth-choice xai-oauth`).
     - **xAI API key**: prompts for `XAI_API_KEY` (`--auth-choice xai-api-key`).
