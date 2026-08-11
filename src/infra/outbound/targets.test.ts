@@ -576,7 +576,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("target-none");
   });
 
-  it("delivers to the last session route with unset heartbeat config", () => {
+  it("delivers to the last session route when explicitly configured", () => {
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
       entry: {
@@ -585,9 +585,175 @@ describe("resolveSessionDeliveryTarget", () => {
         lastChannel: "alpha",
         lastTo: "chat:one",
       },
+      heartbeat: { target: "last" },
     });
     expect(resolved.channel).toBe("alpha");
     expect(resolved.to).toBe("chat:one");
+  });
+
+  it("never reuses a group route for implicit owner delivery", () => {
+    const forum = createForumTargetTestPlugin();
+    forum.config = {
+      ...forum.config,
+      resolveAllowFrom: () => ["dm:operator"],
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([forum]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: { channels: { forum: { allowFrom: ["dm:operator"] } } } as OpenClawConfig,
+      entry: {
+        sessionId: "sess-owner-group",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        chatType: "group",
+      },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("dm:operator");
+    expect(resolved.chatType).toBe("direct");
+  });
+
+  it("prefers commands.ownerAllowFrom over channel allowFrom", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["user:channel-owner"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["user:global-owner"] },
+        channels: { alpha: { allowFrom: ["user:channel-owner"] } },
+      } as OpenClawConfig,
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user:global-owner",
+      chatType: "direct",
+    });
+  });
+
+  it("falls back to the channel allowFrom owner", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["", "*", "user:channel-owner"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: { channels: { alpha: { allowFrom: ["user:channel-owner"] } } } as OpenClawConfig,
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user:channel-owner",
+      chatType: "direct",
+    });
+  });
+
+  it("reports no route for wildcard-only owner allowlists", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["", "*"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["", "*"] },
+        channels: { alpha: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("picks the first configured channel in deterministic registry order", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["user:alpha-owner"] };
+    const beta = createGenericTargetTestPlugin("beta", "Beta");
+    beta.config = { ...beta.config, resolveAllowFrom: () => ["user:beta-owner"] };
+    setActivePluginRegistry(createTargetsTestRegistry([beta, alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        channels: {
+          alpha: { allowFrom: ["user:alpha-owner"] },
+          beta: { allowFrom: ["user:beta-owner"] },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(resolved).toMatchObject({ channel: "alpha", to: "user:alpha-owner" });
+  });
+
+  it("reuses an exact direct owner route with its account and thread", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: { commands: { ownerAllowFrom: ["alpha:user:owner"] } },
+      entry: {
+        sessionId: "sess-owner-direct",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "user:owner",
+        lastAccountId: "work",
+        lastThreadId: "thread-7",
+        chatType: "direct",
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user:owner",
+      accountId: "work",
+      threadId: "thread-7",
+      chatType: "direct",
+    });
+  });
+
+  it("rejects an owner id that resolves to a group", () => {
+    const forum = createForumTargetTestPlugin();
+    forum.config = { ...forum.config, resolveAllowFrom: () => ["room:operators"] };
+    setActivePluginRegistry(createTargetsTestRegistry([forum]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: { channels: { forum: { allowFrom: ["room:operators"] } } } as OpenClawConfig,
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it.each([undefined, "owner"])(
+    "uses a turn-source origin before owner discovery for target %s",
+    (target) => {
+      const resolved = resolveHeartbeatDeliveryTarget({
+        cfg: {},
+        heartbeat: target ? { target } : undefined,
+        turnSource: { channel: "beta", to: "group:event", threadId: "77" },
+      });
+
+      expect(resolved).toMatchObject({
+        channel: "beta",
+        to: "group:event",
+        threadId: "77",
+      });
+    },
+  );
+
+  it.each([undefined, "owner"])("ignores heartbeat.to for target %s", (target) => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["user:owner"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+    const heartbeat = { ...(target ? { target } : {}), to: "group:wrong" };
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: { channels: { alpha: { allowFrom: ["user:owner"] } } } as OpenClawConfig,
+      heartbeat,
+    });
+
+    expect(resolved).toMatchObject({ channel: "alpha", to: "user:owner" });
   });
 
   it("reports no route when unset heartbeat config has no session route", () => {
@@ -1103,6 +1269,47 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.channel).toBe("telegram");
     expect(resolved.to).toBe("@public_group");
     expect(resolved.chatType).toBe("group");
+  });
+
+  it("rejects an owner destination whose canonical session route is a group", async () => {
+    const alpha = createTestChannelPlugin({
+      id: "alpha",
+      label: "Alpha",
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        targetResolver: {
+          resolveTarget: async ({ normalized }) => ({
+            to: normalized,
+            kind: "user",
+            source: "directory",
+          }),
+        },
+        resolveOutboundSessionRoute: ({ target }) => ({
+          sessionKey: `main:alpha:group:${target}`,
+          baseSessionKey: `main:alpha:group:${target}`,
+          peer: { kind: "group", id: target },
+          chatType: "group",
+          from: `alpha:group:${target}`,
+          to: target,
+        }),
+      },
+    });
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["operator"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: { channels: { alpha: { allowFrom: ["operator"] } } } as OpenClawConfig,
+      agentId: "main",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
   });
 
   it("uses an activation-aware external plugin when canonicalizing heartbeat routes", async () => {

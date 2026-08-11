@@ -41,6 +41,9 @@ const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDelivery: undefined,
 } as const;
 
+const FIRST_HEARTBEAT_ALERT_PREAMBLE =
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
+
 // Clear pending-final only when this run produced it: the agent run stamps
 // createdAt during the run, so createdAt >= run start means we own it. An older
 // final (e.g. one a message_tool_only run never refreshed) must keep its recovery path.
@@ -335,7 +338,11 @@ export async function finalizeHeartbeatOutcome(params: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
 
-  const previewText = normalized.text;
+  const deliveryText =
+    delivery.implicitDefaultRoute && prevHeartbeatAt === undefined
+      ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${normalized.text}`
+      : normalized.text;
+  const previewText = deliveryText;
   if (delivery.channel === "none" || !delivery.to) {
     emitHeartbeatEvent({
       status: "skipped",
@@ -401,7 +408,7 @@ export async function finalizeHeartbeatOutcome(params: {
     payloads: [
       copyReplyPayloadMetadata(replyPayload ?? {}, {
         ...replyPayload,
-        text: normalized.text,
+        text: deliveryText,
         mediaUrls,
       }),
     ],
@@ -413,7 +420,7 @@ export async function finalizeHeartbeatOutcome(params: {
   }
   const visibleSendSucceeded = send.status === "sent";
   if (visibleSendSucceeded) {
-    const hasHeartbeatText = Boolean(normalized.text.trim());
+    const hasHeartbeatText = Boolean(deliveryText.trim());
     await patchSessionEntry(
       { storePath, sessionKey },
       (current, context) => {
