@@ -79,7 +79,12 @@ describe("pending-final delivery completion", () => {
     });
     await expect(
       commitMainSessionRecovery({
-        command: { kind: "fail_recovery", now: Date.now(), observation },
+        command: {
+          kind: "tombstone",
+          now: Date.now(),
+          observation,
+          reason: "stale delivery decision",
+        },
         requireWriteSuccess: true,
         target: { sessionKey, storePath },
       }),
