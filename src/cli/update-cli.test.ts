@@ -3437,6 +3437,50 @@ describe("update-cli", () => {
     );
   });
 
+  it("localizes update dry-run output while preserving operational values", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
+    vi.mocked(defaultRuntime.log).mockClear();
+
+    try {
+      await updateCommand({ dryRun: true, channel: "beta", restart: false });
+
+      const output = vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("更新试运行");
+      expect(output).toContain("未应用任何更改");
+      expect(output).toContain("计划操作：");
+      expect(output).toContain("安装类型: git");
+      expect(output).toContain("更新通道: beta");
+      expect(output).toContain("软件包管理器");
+      expect(output).toContain("openclaw@");
+      expect(output).toContain("--no-restart");
+      expect(output).not.toContain("Update dry-run");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps update dry-run JSON unchanged under a localized process locale", async () => {
+    await updateCommand({ dryRun: true, json: true, channel: "beta", restart: false });
+    const englishOutput = structuredClone(
+      requireValue(lastWriteJsonCall(), "English update dry-run JSON output"),
+    );
+
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
+    try {
+      await updateCommand({ dryRun: true, json: true, channel: "beta", restart: false });
+
+      expect(requireValue(lastWriteJsonCall(), "localized update dry-run JSON output")).toEqual(
+        englishOutput,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("refuses an incompatible package target before service stop or install", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-refusal"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
@@ -3521,7 +3565,7 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toContain("openclaw@9999.0.0");
   });
 
-  it("reports an incompatible package target during dry-run", async () => {
+  it("localizes an incompatible package target during dry-run", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-schema-dry-run"));
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "9999.0.0",
@@ -3540,15 +3584,23 @@ describe("update-cli", () => {
       ],
       indeterminate: [],
     });
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
 
-    await updateCommand({ dryRun: true });
+    try {
+      await updateCommand({ dryRun: true });
 
-    const logs = getLogOutput();
-    expect(logs).toContain("Would refuse update: state database");
-    expect(logs).toContain("https://docs.openclaw.ai/reference/database-schemas");
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeUndefined();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      const logs = getLogOutput();
+      expect(logs).toContain("将拒绝更新");
+      expect(logs).toContain("state");
+      expect(logs).toContain("/tmp/openclaw/state/openclaw.sqlite");
+      expect(logs).toContain("https://docs.openclaw.ai/reference/database-schemas");
+      expect(logs).not.toContain("Would refuse update");
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("refuses an incompatible git target before stopping the service", async () => {
@@ -5629,7 +5681,7 @@ describe("update-cli", () => {
     );
   });
 
-  it("warns when a package update targets a managed service root outside the shell root", async () => {
+  it("localizes a managed service root redirect during dry-run", async () => {
     const shellRoot = createCaseDir("openclaw-shell-root");
     const serviceRoot = await createTrackedTempDir("openclaw-service-root-");
     const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
@@ -5641,16 +5693,22 @@ describe("update-cli", () => {
     );
     mockPackageInstallStatus(shellRoot);
     primeServiceCommand([serviceNode, path.join(serviceRoot, "dist", "index.js"), "gateway"]);
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
 
-    await updateCommand({ dryRun: true });
+    try {
+      await updateCommand({ dryRun: true });
 
-    const logs = getLogOutput();
-    expect(logs).toContain(`Targeting managed gateway service package root: ${serviceRoot}`);
-    expect(logs).toContain(
-      `Shell OpenClaw root differs from the managed gateway service root: ${shellRoot}`,
-    );
-    expect(logs).toContain("make sure `openclaw` on PATH resolves to the managed service root");
-    expect(logs).toContain(`Managed gateway service Node: ${serviceNode}`);
+      const logs = getLogOutput();
+      expect(logs).toContain(`以托管网关服务软件包根目录为目标`);
+      expect(logs).toContain(serviceRoot);
+      expect(logs).toContain(shellRoot);
+      expect(logs).toContain(serviceNode);
+      expect(logs).toContain("请确保 PATH 中的");
+      expect(logs).not.toContain("Targeting managed gateway service package root");
+      expect(logs).not.toContain("Shell OpenClaw root differs");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("blocks a stale managed service Node before a no-restart package update", async () => {
@@ -5757,25 +5815,27 @@ describe("update-cli", () => {
     expect(serviceInstallCall?.[0][0]).toBe(serviceNode);
   });
 
-  it("uses the managed service Node when package roots match but node binaries differ", async () => {
+  it("localizes a managed service Node mismatch during dry-run", async () => {
     const root = createCaseDir("openclaw-same-root");
-    // Service is baked with a different node than the current process.execPath.
     const serviceNode = "/opt/other-node/bin/node";
     const entrypoint = path.join(root, "dist", "index.js");
     mockPackageInstallStatus(root);
     primeServiceCommand([serviceNode, entrypoint, "gateway"]);
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
 
-    await updateCommand({ dryRun: true });
+    try {
+      await updateCommand({ dryRun: true });
 
-    const logs = getLogOutput();
-    // Should NOT log root redirect messages since the package root is the same.
-    expect(logs).not.toContain("Targeting managed gateway service package root");
-    // Should warn about the node binary mismatch.
-    expect(logs).toContain("differs from the managed gateway service Node");
-    expect(logs).toContain(serviceNode);
-    expect(logs).toContain(
-      "Using the managed service Node for this update so the gateway can start after the upgrade",
-    );
+      const logs = getLogOutput();
+      expect(logs).not.toContain("Targeting managed gateway service package root");
+      expect(logs).toContain("与托管网关服务 Node");
+      expect(logs).toContain(process.execPath);
+      expect(logs).toContain(serviceNode);
+      expect(logs).toContain("此次更新将使用托管服务 Node");
+      expect(logs).not.toContain("Using the managed service Node for this update");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("refreshes the managed service to current Node when its baked Node cannot run the target", async () => {

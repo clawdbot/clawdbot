@@ -203,12 +203,13 @@ export async function setupAppRecommendations(params: {
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
     const scanPhaseMessage = (phase: SetupAppScanPhase): string => {
       if (phase.kind === "candidates") {
-        return t(
-          phase.appCount === 1
-            ? "wizard.appRecommendations.scanningCandidate"
-            : "wizard.appRecommendations.scanningCandidates",
-          { count: phase.appCount, sample: phase.sampleLabels.join(", ") },
-        );
+        const sample = phase.sampleLabels.join(", ");
+        return phase.appCount === 1
+          ? t("wizard.appRecommendations.scanningCandidate", { sample })
+          : t("wizard.appRecommendations.scanningCandidates", {
+              count: phase.appCount,
+              sample,
+            });
       }
       return t("wizard.appRecommendations.scanningMatch");
     };

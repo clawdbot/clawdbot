@@ -314,7 +314,7 @@ async function updateCommandInternal(
     if (managedServiceRootRedirect) {
       root = managedServiceRootRedirect.root;
       managedServiceNodeRunner = managedServiceRootRedirect.nodeRunner;
-      if (!opts.json) {
+      if (!opts.json && !opts.dryRun) {
         defaultRuntime.log(
           theme.muted(
             `Targeting managed gateway service package root: ${managedServiceRootRedirect.root}`,
@@ -340,7 +340,7 @@ async function updateCommandInternal(
       // Roots match but the node binary may still differ (e.g. user switched
       // nvm/fnm/brew node after gateway install).
       managedServiceNodeRunner = await resolveManagedServiceNodeRunnerOverride();
-      if (managedServiceNodeRunner && !opts.json) {
+      if (managedServiceNodeRunner && !opts.json && !opts.dryRun) {
         defaultRuntime.log(
           theme.warn(
             `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${managedServiceNodeRunner}).`,
@@ -503,6 +503,9 @@ async function updateCommandInternal(
       packageAlreadyCurrent,
       fallbackToLatest,
       managedServiceRootRedirect,
+      managedServiceNodeRunner,
+      currentNodeRunner: resolveNodeRunner(),
+      cliName: CLI_NAME,
       explicitTag,
       packageSchemaPreflight,
       timeoutMs: updateStepTimeoutMs,
