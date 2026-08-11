@@ -372,33 +372,36 @@ export async function buildTelegramInboundContextPayload(params: {
   const visibleReplyTargetEntry = visibleReplyTarget
     ? replyTargetToChainEntry(visibleReplyTarget)
     : undefined;
-  // Copied, not aliased: the batch append below must not mutate the caller's
-  // resolved reply chain.
-  const rawReplyChain = [
-    ...(replyChain.length > 0
-      ? replyChain
-      : visibleReplyTargetEntry
-        ? [visibleReplyTargetEntry]
-        : []),
-  ];
   // A batch carries one reply target per buffered message, but the synthetic
-  // message inherits only the first one. Append the targets the merge dropped,
-  // keyed by id so a re-quoted source is not listed twice, and stop at the
-  // canonical chain depth -- a debounce window has no item cap of its own, so
-  // an unbounded append here would grow model-visible context without limit.
-  const seenReplyMessageIds = new Set(rawReplyChain.map((entry) => entry.messageId));
-  for (const debouncedMessage of hasMultiMessageDebounceBatch
-    ? (options?.inboundDebounceMessages ?? [])
-    : []) {
+  // message inherits only the first one, so collect each buffered message's own
+  // target here.
+  const directBatchReplyEntries = hasMultiMessageDebounceBatch
+    ? (options?.inboundDebounceMessages ?? []).flatMap((debouncedMessage) => {
+        const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
+        const entry = visible ? replyTargetToChainEntry(visible) : undefined;
+        // Needs an id to dedupe against the inherited chain below.
+        return entry?.messageId === undefined ? [] : [entry];
+      })
+    : [];
+  const inheritedReplyChain =
+    replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
+  // One bounded pass owns the whole chain. Direct targets from this batch are
+  // nearer than the first message's inherited ancestry, so they claim slots
+  // first: otherwise a deep ancestry on the first message would fill the cap and
+  // suppress exactly the later quote this path exists to recover. The cap itself
+  // is required because a debounce window has no per-item limit of its own.
+  const seenReplyMessageIds = new Set<string>();
+  const rawReplyChain: TelegramReplyChainEntry[] = [];
+  for (const entry of [...directBatchReplyEntries, ...inheritedReplyChain]) {
     if (rawReplyChain.length >= TELEGRAM_REPLY_CHAIN_MAX_DEPTH) {
       break;
     }
-    const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
-    const entry = visible ? replyTargetToChainEntry(visible) : undefined;
-    if (entry?.messageId === undefined || seenReplyMessageIds.has(entry.messageId)) {
-      continue;
+    if (entry.messageId !== undefined) {
+      if (seenReplyMessageIds.has(entry.messageId)) {
+        continue;
+      }
+      seenReplyMessageIds.add(entry.messageId);
     }
-    seenReplyMessageIds.add(entry.messageId);
     rawReplyChain.push(entry);
   }
   const visibleReplyChain = rawReplyChain.flatMap((entry) => {

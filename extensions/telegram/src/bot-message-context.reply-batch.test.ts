@@ -93,6 +93,27 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     expect(body.split(QUOTED_LINE).length - 1).toBe(1);
   });
 
+  // The cap must not spend all its slots on the first message's inherited
+  // ancestry, or it suppresses exactly the later quote this path recovers.
+  it("keeps a later quote when the first message already has a full reply ancestry", async () => {
+    const ancestry = Array.from({ length: TELEGRAM_REPLY_CHAIN_MAX_DEPTH }, (_, i) => ({
+      messageId: String(900 + i),
+      sender: "Bob",
+      body: `ancestor ${i}`,
+    }));
+    const context = await buildTelegramMessageContextForTest({
+      message: plainMessage(2, "plain note\nquoting note"),
+      replyChain: ancestry,
+      options: {
+        inboundDebounceMessages: [plainMessage(1, "plain note"), quotingMessage(2, "quoting note")],
+      },
+    });
+
+    const body = context?.ctxPayload.Body ?? "";
+    expect(body).toContain(QUOTED_LINE);
+    expect(countReplyChainEntries(body)).toBeLessThanOrEqual(TELEGRAM_REPLY_CHAIN_MAX_DEPTH);
+  });
+
   // A debounce window has no per-item cap of its own, so without a bound here a
   // burst of distinct quote-replies would grow model-visible context without limit.
   it("caps batch-derived reply targets at the canonical chain depth", async () => {
