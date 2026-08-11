@@ -125,7 +125,7 @@ export async function createAttachedBrowserToolRuntime(
       if (!adapterRetirement) {
         adapterRetirement = retirePlaywrightBrowserConnectionExact({ cdpUrl });
       } else {
-        adapterRetirement.refresh();
+        adapterRetirement.refresh?.();
       }
       if (adapterRetirement.retired) {
         await adapterRetirement.close();
