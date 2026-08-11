@@ -19,6 +19,7 @@ vi.mock("../build-info.ts", () => ({
     Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
   reloadControlUiIfStale: vi.fn(),
 }));
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
   peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
 }));

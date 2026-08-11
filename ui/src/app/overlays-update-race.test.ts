@@ -12,6 +12,8 @@ import {
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
+
 const UNKNOWN_OUTCOME_TEXT =
   "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.";
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
