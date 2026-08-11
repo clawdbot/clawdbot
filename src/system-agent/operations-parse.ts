@@ -60,6 +60,7 @@ export type SystemAgentCommandDeps = {
     historyLimit?: number;
     message?: string;
   }) => Promise<TuiResult | void>;
+  readActiveGatewayLockIdentity?: typeof import("../infra/gateway-lock.js").readActiveGatewayLockIdentity;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
