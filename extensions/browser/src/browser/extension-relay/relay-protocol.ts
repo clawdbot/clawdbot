@@ -24,10 +24,7 @@ type ExtensionHelloMessage = {
 };
 
 /** Full refresh of accessible tabs; sent on any access-policy or tab change. */
-type ExtensionTabsMessage = {
-  type: "tabs";
-  tabs: RelayTabInfo[];
-};
+type ExtensionTabsMessage = { type: "tabs"; tabs: RelayTabInfo[] };
 
 /** CDP event emitted by an attached tab (child sessions carry sessionId). */
 type ExtensionCdpEventMessage = {
@@ -39,30 +36,16 @@ type ExtensionCdpEventMessage = {
 };
 
 /** Successful response to a relay command (cdp/attach/createTab/...). */
-type ExtensionResultMessage = {
-  type: "result";
-  seq: number;
-  result?: unknown;
-};
+type ExtensionResultMessage = { type: "result"; seq: number; result?: unknown };
 
 /** Failed response to a relay command. */
-type ExtensionErrorMessage = {
-  type: "error";
-  seq: number;
-  message: string;
-};
+type ExtensionErrorMessage = { type: "error"; seq: number; message: string };
 
 /** chrome.debugger detached outside relay control (infobar cancel, tab gone). */
-type ExtensionDetachedMessage = {
-  type: "detached";
-  tabId: number;
-  reason: string;
-};
+type ExtensionDetachedMessage = { type: "detached"; tabId: number; reason: string };
 
 /** Keepalive reply; message traffic keeps the MV3 service worker alive. */
-type ExtensionPongMessage = {
-  type: "pong";
-};
+type ExtensionPongMessage = { type: "pong" };
 
 export type ExtensionToRelayMessage =
   | ExtensionHelloMessage
@@ -97,6 +80,8 @@ type RelayPingMessage = {
 };
 
 export type RelayToExtensionMessage = (RelayCommandBody & { seq: number }) | RelayPingMessage;
+
+type RelayFrame = Record<string, unknown>;
 
 function hasExactOwnKeys(value: object, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
@@ -140,7 +125,7 @@ function isExtensionHelloMessage(value: object): value is ExtensionHelloMessage 
   ) {
     return false;
   }
-  const hello = value as Record<string, unknown>;
+  const hello = value as RelayFrame;
   if (
     hello.type !== "hello" ||
     typeof hello.userAgent !== "string" ||
@@ -159,6 +144,45 @@ function isExtensionHelloMessage(value: object): value is ExtensionHelloMessage 
   return true;
 }
 
+function isExtensionTabsMessage(msg: RelayFrame): msg is RelayFrame & ExtensionTabsMessage {
+  return msg.type === "tabs" && isRelayTabInfoArray(msg.tabs);
+}
+
+function isExtensionCdpEventMessage(
+  msg: RelayFrame,
+): msg is RelayFrame & ExtensionCdpEventMessage {
+  return (
+    msg.type === "cdpEvent" &&
+    isNonNegativeSafeInteger(msg.tabId) &&
+    (msg.sessionId === undefined || typeof msg.sessionId === "string") &&
+    typeof msg.method === "string"
+  );
+}
+
+function isExtensionResultMessage(msg: RelayFrame): msg is RelayFrame & ExtensionResultMessage {
+  return msg.type === "result" && isNonNegativeSafeInteger(msg.seq);
+}
+
+function isExtensionErrorMessage(msg: RelayFrame): msg is RelayFrame & ExtensionErrorMessage {
+  return (
+    msg.type === "error" &&
+    isNonNegativeSafeInteger(msg.seq) &&
+    typeof msg.message === "string"
+  );
+}
+
+function isExtensionDetachedMessage(msg: RelayFrame): msg is RelayFrame & ExtensionDetachedMessage {
+  return (
+    msg.type === "detached" &&
+    isNonNegativeSafeInteger(msg.tabId) &&
+    typeof msg.reason === "string"
+  );
+}
+
+function isExtensionPongMessage(msg: RelayFrame): msg is RelayFrame & ExtensionPongMessage {
+  return msg.type === "pong";
+}
+
 /** Parse one extension frame; returns null for malformed input. */
 export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | null {
   let parsed: unknown;
@@ -170,50 +194,26 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
   if (!parsed || typeof parsed !== "object") {
     return null;
   }
-  const type = (parsed as { type?: unknown }).type;
-  if (typeof type !== "string") {
-    return null;
-  }
-  const msg = parsed as Record<string, unknown>;
+  const msg = parsed as RelayFrame;
   // Validate the fields the bridge dereferences per frame type. Anything else
   // is dropped as malformed: bindSocket invokes the handler without try/catch,
   // so a bad frame reaching the bridge would escape as an uncaughtException.
   switch (msg.type) {
     case "hello":
-      return isExtensionHelloMessage(parsed) ? parsed : null;
+      return isExtensionHelloMessage(msg) ? msg : null;
     case "tabs":
-      if (!isRelayTabInfoArray(msg.tabs)) {
-        return null;
-      }
-      break;
+      return isExtensionTabsMessage(msg) ? msg : null;
     case "cdpEvent":
-      if (
-        !isNonNegativeSafeInteger(msg.tabId) ||
-        (msg.sessionId !== undefined && typeof msg.sessionId !== "string") ||
-        typeof msg.method !== "string"
-      ) {
-        return null;
-      }
-      break;
+      return isExtensionCdpEventMessage(msg) ? msg : null;
     case "result":
-      if (!isNonNegativeSafeInteger(msg.seq)) {
-        return null;
-      }
-      break;
+      return isExtensionResultMessage(msg) ? msg : null;
     case "error":
-      if (!isNonNegativeSafeInteger(msg.seq) || typeof msg.message !== "string") {
-        return null;
-      }
-      break;
+      return isExtensionErrorMessage(msg) ? msg : null;
     case "detached":
-      if (!isNonNegativeSafeInteger(msg.tabId) || typeof msg.reason !== "string") {
-        return null;
-      }
-      break;
+      return isExtensionDetachedMessage(msg) ? msg : null;
     case "pong":
-      return parsed as ExtensionToRelayMessage;
+      return isExtensionPongMessage(msg) ? msg : null;
     default:
       return null;
   }
-  return parsed as ExtensionToRelayMessage;
 }
