@@ -2425,6 +2425,9 @@ importers:
       '@openclaw/libterminal':
         specifier: 0.3.2
         version: 0.3.2
+      '@openclaw/localization-core':
+        specifier: workspace:*
+        version: link:../packages/localization-core
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core

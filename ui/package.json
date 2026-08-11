@@ -25,6 +25,7 @@
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/libterminal": "0.3.2",
+    "@openclaw/localization-core": "workspace:*",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/net-policy": "workspace:*",
