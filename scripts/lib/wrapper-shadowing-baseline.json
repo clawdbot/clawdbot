@@ -219,11 +219,6 @@
     "wrapper": "src/plugins/runtime/runtime-web-channel-plugin.ts"
   },
   {
-    "name": "persistSessionEntry",
-    "wrapped": "src/agents/command/attempt-execution.shared.ts",
-    "wrapper": "src/agents/command/session-helpers.ts"
-  },
-  {
     "name": "pruneStaleCommandPolls",
     "wrapped": "src/agents/command-poll-backoff.ts",
     "wrapper": "src/agents/command-poll-backoff.runtime.ts"
