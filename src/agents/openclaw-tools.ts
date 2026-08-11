@@ -490,6 +490,7 @@ export function createOpenClawTools(
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
+            config: options?.config,
             currentDeliveryContext: {
               channel: options?.agentChannel,
               to: options?.currentChannelId ?? options?.agentTo,
