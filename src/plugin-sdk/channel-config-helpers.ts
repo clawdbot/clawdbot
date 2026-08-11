@@ -18,6 +18,7 @@ import {
 } from "../channels/plugins/config-write-policy-shared.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
+import { normalizeManifestChannelId } from "../config/channel-claimant-plugins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
@@ -357,17 +358,36 @@ export function createScopedChannelConfigAdapter<
   });
 }
 
+/**
+ * The authored key holding a channel's config section. Validation admits any declared spelling
+ * of a channel (case variant, built-in alias) against the canonical identity, so a plugin
+ * reading its declared section key must resolve through the same identity — an exact-key read
+ * silently ignores settings validation accepted under another admitted spelling, and a write
+ * must land on the authored key instead of splitting the section across two spellings.
+ */
+function resolveChannelSectionKey(cfg: OpenClawConfig, sectionKey: string): string {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  if (!channels || Object.hasOwn(channels, sectionKey)) {
+    return sectionKey;
+  }
+  const canonical = normalizeManifestChannelId(sectionKey);
+  return (
+    Object.keys(channels).find((key) => normalizeManifestChannelId(key) === canonical) ?? sectionKey
+  );
+}
+
 function setTopLevelChannelEnabledInConfigSection<Config extends OpenClawConfig>(params: {
   cfg: Config;
   sectionKey: string;
   enabled: boolean;
 }): Config {
-  const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
+  const sectionKey = resolveChannelSectionKey(params.cfg, params.sectionKey);
+  const section = params.cfg.channels?.[sectionKey] as Record<string, unknown> | undefined;
   return {
     ...params.cfg,
     channels: {
       ...params.cfg.channels,
-      [params.sectionKey]: {
+      [sectionKey]: {
         ...section,
         enabled: params.enabled,
       },
@@ -380,7 +400,7 @@ function removeTopLevelChannelConfigSection<Config extends OpenClawConfig>(param
   sectionKey: string;
 }): Config {
   const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
-  delete nextChannels[params.sectionKey];
+  delete nextChannels[resolveChannelSectionKey(params.cfg, params.sectionKey)];
   const nextCfg = { ...params.cfg };
   if (Object.keys(nextChannels).length > 0) {
     nextCfg.channels = nextChannels as Config["channels"];
@@ -395,7 +415,8 @@ function clearTopLevelChannelConfigFields<Config extends OpenClawConfig>(params:
   sectionKey: string;
   clearBaseFields: string[];
 }): Config {
-  const section = params.cfg.channels?.[params.sectionKey] as Record<string, unknown> | undefined;
+  const sectionKey = resolveChannelSectionKey(params.cfg, params.sectionKey);
+  const section = params.cfg.channels?.[sectionKey] as Record<string, unknown> | undefined;
   if (!section) {
     return params.cfg;
   }
@@ -407,7 +428,7 @@ function clearTopLevelChannelConfigFields<Config extends OpenClawConfig>(params:
     ...params.cfg,
     channels: {
       ...params.cfg.channels,
-      [params.sectionKey]: nextSection,
+      [sectionKey]: nextSection,
     },
   } as Config;
 }

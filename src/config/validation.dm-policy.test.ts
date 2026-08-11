@@ -119,6 +119,42 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
     }
   });
 
+  // #120332 round 58 (P2): one plugin's alias-equivalent spellings share a canonical record —
+  // the package-channel mode survives the same-rank channels/channelConfigs writes that carry
+  // no mode (their raw spelling differs from the package id), or the channel defaults back to
+  // topOnly and emits false warnings.
+  it("keeps the package-channel DM mode beside alias-equivalent claim spellings", () => {
+    const result = validateConfigObjectWithPlugins(
+      { channels: { clickclack: { dmPolicy: "open" } } },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            diagnostics: [],
+            plugins: [
+              createPluginManifestRecord({
+                id: "clickclack-alias-modes",
+                origin: "global",
+                channels: ["ClickClack"],
+                packageChannel: {
+                  id: "clickclack",
+                  doctorCapabilities: { dmAllowFromMode: "nestedOnly" },
+                },
+                channelConfigs: { ClickClack: { schema: { type: "object" } } },
+              }),
+            ],
+          },
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(
+        result.warnings.filter((warning) => warning.path.startsWith("channels.clickclack")),
+      ).toEqual([]);
+    }
+  });
+
   it("uses manifest metadata to skip nested-only DM config shapes", () => {
     const result = validateConfigObjectWithPlugins(
       {

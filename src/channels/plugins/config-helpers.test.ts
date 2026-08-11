@@ -1,6 +1,7 @@
 // Config helper tests cover channel plugin config merge and selection helpers.
 import { describe, expect, it } from "vitest";
-import { clearAccountEntryFields } from "./config-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAccountEntryFields, setAccountEnabledInConfigSection } from "./config-helpers.js";
 
 describe("clearAccountEntryFields", () => {
   it("clears configured values and removes empty account entries", () => {
@@ -107,5 +108,28 @@ describe("clearAccountEntryFields", () => {
       changed: false,
       cleared: false,
     });
+  });
+});
+
+// #120332 round 58 (P1): section reads and writes resolve the AUTHORED key through canonical
+// channel identity. Validation admits any declared spelling; an exact-key write would split
+// the section across two spellings and an exact-key read would ignore accepted settings.
+describe("section keys resolve through canonical channel identity", () => {
+  it("writes through the authored variant spelling of the section key", () => {
+    const cfg: OpenClawConfig = {
+      channels: { qqbot: { accounts: { work: { enabled: true } } } },
+    } as OpenClawConfig;
+
+    const next = setAccountEnabledInConfigSection({
+      cfg,
+      sectionKey: "QQBot",
+      accountId: "work",
+      enabled: false,
+    });
+
+    const channels = next.channels as Record<string, unknown>;
+    expect(Object.keys(channels)).toEqual(["qqbot"]);
+    const section = channels.qqbot as { accounts: Record<string, { enabled?: boolean }> };
+    expect(section.accounts.work?.enabled).toBe(false);
   });
 });

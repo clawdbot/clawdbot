@@ -1,8 +1,10 @@
 import { isNixMode } from "../config/paths.js";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeAmbientEnvTriggers,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
+  setRuntimeAmbientEnvTriggers,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -143,6 +145,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   const priorRegistryWorkspaceDir = getActivePluginRegistryWorkspaceDir();
   const priorSnapshot = getRuntimeConfigSnapshot();
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
+  const priorAmbientEnvTriggers = getRuntimeAmbientEnvTriggers();
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -228,6 +231,13 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
           if (priorSnapshot) {
             setRuntimeConfigSnapshot(priorSnapshot, priorSourceSnapshot ?? undefined);
           }
+        }
+        // The ambient env-trigger slot travels with the snapshot family: bootstrap can
+        // overwrite it even when the snapshot itself is reused, and clearing resets it — a
+        // surviving embedded Gateway's schema and validation projections must keep honoring
+        // the policy its loader actually applied.
+        if (priorAmbientEnvTriggers && getRuntimeAmbientEnvTriggers() !== priorAmbientEnvTriggers) {
+          setRuntimeAmbientEnvTriggers(priorAmbientEnvTriggers);
         }
       }
     }

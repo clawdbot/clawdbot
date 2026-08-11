@@ -12,6 +12,19 @@ import {
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
 
 describe("restoreRedactedValues", () => {
+  // #120332 round 58 (P1): the restore walk canonicalizes the channel segment exactly like the
+  // redaction walk — a sentinel written under an authored variant spelling must restore
+  // through the same canonical hint that redacted it, or a no-op Control UI write is rejected.
+  it("restores a sentinel under an authored variant channel spelling", () => {
+    const hints: ConfigUiHints = { "channels.qqbot.accountCode": { sensitive: true } };
+    const original = { channels: { QQBot: { accountCode: "s3cret-code" } } };
+    const incoming = { channels: { QQBot: { accountCode: REDACTED_SENTINEL } } };
+
+    const restored = restoreRedactedValues(incoming, original, hints);
+
+    expect(restored.channels.QQBot.accountCode).toBe("s3cret-code");
+  });
+
   it("restores redacted URL endpoint fields on round-trip", () => {
     const incoming = {
       models: {

@@ -40,6 +40,7 @@ import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-c
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import {
   collectPluginIdsForConfiguredChannel,
+  resolvePluginKeyThroughRegistryAliases,
   collectPluginSelectionPolicyIds,
   createChannelClaimantResolution,
   isPluginPolicyDenied,
@@ -1057,21 +1058,29 @@ function materializeConfiguredPluginEntryAllowlist(params: {
     left.localeCompare(right),
   )) {
     const entry = entries[pluginId];
-    const selectionIds = collectPluginSelectionPolicyIds(params.manifestRegistry, pluginId);
+    // The raw authored key may be a legacy alias or case variant: runtime normalization folds
+    // the entry onto the CURRENT plugin id, so the repair's known-plugin and allow-membership
+    // checks must run against that fold — a raw-alias lookup treats the key as unknown, skips
+    // the repair, and leaves the configured plugin excluded by the very allowlist it maintains.
+    const resolvedPluginId = resolvePluginKeyThroughRegistryAliases(
+      pluginId,
+      params.manifestRegistry,
+    );
+    const selectionIds = collectPluginSelectionPolicyIds(params.manifestRegistry, resolvedPluginId);
     if (
       !hasMaterialPluginEntryConfig(entry) ||
-      isPluginPolicyDenied(next, pluginId, params.manifestRegistry) ||
-      isPluginPolicyDisabled(next, pluginId, params.manifestRegistry) ||
+      isPluginPolicyDenied(next, resolvedPluginId, params.manifestRegistry) ||
+      isPluginPolicyDisabled(next, resolvedPluginId, params.manifestRegistry) ||
       // Loading compares allow entries through the plugin's selection policy ids — legacy
       // aliases included — so a case-variant or legacy allow entry already admits this plugin;
       // appending the entry key would only duplicate it.
       allow.some((allowedId) => selectionIds.has(normalizePluginPolicyId(allowedId))) ||
-      !isKnownPluginId(pluginId, params.manifestRegistry)
+      !isKnownPluginId(resolvedPluginId, params.manifestRegistry)
     ) {
       continue;
     }
-    next = ensurePluginAllowlisted(next, pluginId);
-    params.changes.push(`${pluginId} plugin config present, added to plugin allowlist.`);
+    next = ensurePluginAllowlisted(next, resolvedPluginId);
+    params.changes.push(`${resolvedPluginId} plugin config present, added to plugin allowlist.`);
   }
 
   return next;

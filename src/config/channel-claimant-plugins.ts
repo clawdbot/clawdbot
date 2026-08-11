@@ -204,6 +204,14 @@ function createRegistryPluginKeyResolver(registry: PluginManifestRegistry): (id:
   };
 }
 
+/** Resolves a raw authored plugin key (case variant, legacy alias) to the current plugin id. */
+export function resolvePluginKeyThroughRegistryAliases(
+  id: string,
+  registry: PluginManifestRegistry,
+): string {
+  return createRegistryPluginKeyResolver(registry)(id);
+}
+
 /**
  * Canonical plugins-config normalization through the registry's legacy-alias folds. Every
  * planner or projection read of a COMPLETED config's activation state must use this form: the

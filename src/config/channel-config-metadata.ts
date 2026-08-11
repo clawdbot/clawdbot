@@ -835,9 +835,15 @@ export function collectChannelDmPolicyMetadata(
     if (current && current.originRank < originRank) {
       return;
     }
+    // Alias-equivalent writes share one canonical record: an equal-rank write carrying no mode
+    // (a channels/channelConfigs spelling beside the package channel) must not strip the mode a
+    // sibling write already recorded.
+    const mode =
+      dmAllowFromMode ??
+      (current && current.originRank === originRank ? current.dmAllowFromMode : undefined);
     byChannelId.set(id, {
       id,
-      ...(dmAllowFromMode ? { dmAllowFromMode } : {}),
+      ...(mode ? { dmAllowFromMode: mode } : {}),
       originRank,
     });
   };

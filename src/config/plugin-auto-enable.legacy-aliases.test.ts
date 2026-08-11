@@ -337,3 +337,33 @@ describe("legacy aliases never capture another installed plugin's id", () => {
     });
   });
 });
+
+// #120332 round 58 (P1): allowlist repair folds raw entry keys through the registry aliases.
+// A material entry under a documented legacy id is the operator configuring the CURRENT
+// plugin; treating the raw alias as unknown skips the repair and leaves the configured plugin
+// excluded by the very allowlist the pass maintains.
+describe("allowlist repair folds legacy entry keys", () => {
+  const CURRENT_WITH_LEGACY: RegistryPlugins[number] = {
+    id: "acme-current",
+    origin: "global",
+    channels: ["acme-lc"],
+    channelConfigs: { "acme-lc": { schema: { type: "object" } } },
+    legacyPluginIds: ["acme-old"],
+  };
+
+  it("adds the current plugin id for a legacy-keyed material entry", () => {
+    const registry = makeRegistry([CURRENT_WITH_LEGACY]);
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["existing"],
+          entries: { "acme-old": { config: { token: "x" } } },
+        },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: registry,
+    });
+
+    expect(result.config.plugins?.allow).toContain("acme-current");
+  });
+});

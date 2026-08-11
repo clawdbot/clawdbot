@@ -639,7 +639,11 @@ function restoreRedactedValue(
   const result: Record<string, unknown> = {};
   const fallbackContext = withoutRedactionLookup(context);
   for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
-    const path = prefix ? `${prefix}.${key}` : key;
+    // Mirrors the redaction walk: the channel segment canonicalizes for hint lookups so a
+    // sentinel written under an authored variant spelling restores through the same canonical
+    // hint that redacted it.
+    const lookupKey = prefix === "channels" ? normalizeManifestChannelId(key) : key;
+    const path = prefix ? `${prefix}.${lookupKey}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
       ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))

@@ -6,9 +6,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeAmbientEnvTriggers,
   getRuntimeConfigSnapshot,
+  setRuntimeAmbientEnvTriggers,
+  setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
@@ -100,6 +109,60 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
         teardownOrder.calls.lastIndexOf("secrets"),
       );
     } finally {
+      await state.cleanup();
+    }
+  });
+
+  // #120332 round 58 (P2): the ambient env-trigger slot travels with the snapshot family. A
+  // surviving embedded Gateway's projections must keep honoring the policy its loader applied
+  // even when the failed attempt's bootstrap overwrote the slot.
+  it("restores the prior ambient env-trigger policy", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-ambient-restore",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-ambient-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    // The surviving embedded gateway's state: registry + snapshot + suppress policy.
+    setActivePluginRegistry(createEmptyPluginRegistry(), "embedded-prior-ambient");
+    const runningConfig: OpenClawConfig = { channels: {} };
+    setRuntimeConfigSnapshot(runningConfig, runningConfig);
+    setRuntimeAmbientEnvTriggers("suppress");
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("fixture pre-lifecycle failure");
+      expect(getRuntimeAmbientEnvTriggers()).toBe("suppress");
+    } finally {
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
       await state.cleanup();
     }
   });

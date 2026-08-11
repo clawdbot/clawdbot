@@ -5,6 +5,25 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { normalizeChatChannelId } from "../ids.js";
+
+// Validation admits any declared spelling of a channel (case variant, built-in alias) against
+// the canonical identity; section reads and writes must resolve the AUTHORED key through the
+// same identity, or a plugin's declared section key silently ignores accepted settings and a
+// write splits the section across two spellings.
+function resolveAuthoredSectionKey(
+  channels: Record<string, unknown> | undefined,
+  sectionKey: string,
+): string {
+  if (!channels || Object.hasOwn(channels, sectionKey)) {
+    return sectionKey;
+  }
+  const canonical = normalizeChatChannelId(sectionKey) ?? sectionKey;
+  return (
+    Object.keys(channels).find((key) => (normalizeChatChannelId(key) ?? key) === canonical) ??
+    sectionKey
+  );
+}
 
 type ChannelSection = {
   accounts?: Record<string, Record<string, unknown>>;
@@ -30,7 +49,8 @@ export function setAccountEnabledInConfigSection(params: {
 }): OpenClawConfig {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const sectionKey = resolveAuthoredSectionKey(channels, params.sectionKey);
+  const base = channels?.[sectionKey] as ChannelSection | undefined;
   const hasAccounts = Boolean(base?.accounts);
   if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
     // Legacy single-account sections store enabled at the channel root until accounts exist.
@@ -38,7 +58,7 @@ export function setAccountEnabledInConfigSection(params: {
       ...params.cfg,
       channels: {
         ...params.cfg.channels,
-        [params.sectionKey]: {
+        [sectionKey]: {
           ...base,
           enabled: params.enabled,
         },
@@ -52,7 +72,7 @@ export function setAccountEnabledInConfigSection(params: {
     ...params.cfg,
     channels: {
       ...params.cfg.channels,
-      [params.sectionKey]: {
+      [sectionKey]: {
         ...base,
         accounts: {
           ...baseAccounts,
@@ -77,7 +97,8 @@ export function deleteAccountFromConfigSection(params: {
 }): OpenClawConfig {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const sectionKey = resolveAuthoredSectionKey(channels, params.sectionKey);
+  const base = channels?.[sectionKey] as ChannelSection | undefined;
   if (!base) {
     return params.cfg;
   }
@@ -92,7 +113,7 @@ export function deleteAccountFromConfigSection(params: {
       ...params.cfg,
       channels: {
         ...params.cfg.channels,
-        [params.sectionKey]: {
+        [sectionKey]: {
           ...base,
           accounts: Object.keys(accounts).length ? accounts : undefined,
         },
@@ -114,7 +135,7 @@ export function deleteAccountFromConfigSection(params: {
       ...params.cfg,
       channels: {
         ...params.cfg.channels,
-        [params.sectionKey]: {
+        [sectionKey]: {
           ...baseRecord,
           accounts: Object.keys(baseAccounts).length ? baseAccounts : undefined,
         },
@@ -123,7 +144,7 @@ export function deleteAccountFromConfigSection(params: {
   }
 
   const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
-  delete nextChannels[params.sectionKey];
+  delete nextChannels[sectionKey];
   const nextCfg = { ...params.cfg } as OpenClawConfig;
   if (Object.keys(nextChannels).length > 0) {
     nextCfg.channels = nextChannels as OpenClawConfig["channels"];
