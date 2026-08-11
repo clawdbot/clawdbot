@@ -62,11 +62,7 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
       pids = [{ pid, startTime: getProcessStartTime(pid) }];
     } else {
       const cached = treeSnapshotCache.get(pid);
-      if (
-        !cached ||
-        cached.rootStartTime === undefined ||
-        getProcessStartTime(pid) !== cached.rootStartTime
-      ) {
+      if (!cached) {
         treeSnapshotCache.delete(pid);
         return;
       }
@@ -327,7 +323,7 @@ function signalProcessTreeUnix(
     }
   } else if (signal === "SIGKILL") {
     const cached = treeSnapshotCache.get(pid);
-    if (cached && cached.rootStartTime === rootStartTime) {
+    if (cached) {
       pidsToSignal = cached.pids;
     } else {
       pidsToSignal = getUnixProcessTreePids(pid);

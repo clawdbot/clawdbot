@@ -336,6 +336,56 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Unix force-kills descendants when detached:false even if the root PID exits (#121108)", async () => {
+    readdirSyncMock.mockReturnValue(["5555", "5556", "5557"]);
+    let is5555Dead = false;
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      // Simulate root PID 5555 exiting immediately on SIGTERM (ESRCH later)
+      if (pid === 5555 && signal === "SIGTERM") {
+        is5555Dead = true;
+        return true;
+      }
+      if (pid === 5555 && signal === 0 && is5555Dead) {
+        throw new Error("ESRCH");
+      }
+      if ((pid === 5556 || pid === 5557) && signal === 0) {
+        return true;
+      }
+      return true;
+    }) as typeof process.kill);
+
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5555/stat") {
+        if (is5555Dead) throw new Error("ENOENT");
+        return "5555 (root) S 1 5555 5555 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12345";
+      }
+      if (filePath === "/proc/5556/stat") {
+        return "5556 (subshell) S 5555 5555 5555 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12346";
+      }
+      if (filePath === "/proc/5557/stat") {
+        return "5557 (grandchild) S 5556 5555 5555 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12347";
+      }
+      throw new Error("ENOENT");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5555, { graceMs: 10, detached: false });
+      
+      // The tree snapshot happens synchronously on SIGTERM.
+      expect(killSpy).toHaveBeenCalledWith(5557, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(5556, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
+
+      // Advance timers to trigger escalation (SIGKILL)
+      await vi.advanceTimersByTimeAsync(10);
+
+      // Root exited, so no SIGKILL for it, but surviving descendants get SIGKILL
+      expect(killSpy).toHaveBeenCalledWith(5557, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(5556, "SIGKILL");
+      expect(killSpy).not.toHaveBeenCalledWith(5555, "SIGKILL");
+    });
+  });
+
   it("on Unix uses group kill when the omitted option resolves to a group leader", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (pid === -6666 && signal === 0) {
