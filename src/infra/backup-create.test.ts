@@ -731,6 +731,34 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("creates a verifiable archive for highly compressible sparse state", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-sparse-state-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const sparsePath = state.statePath("sparse-state.bin");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(sparsePath, "");
+        await fs.truncate(sparsePath, 256 * 1024 * 1024);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 10, 0),
+        });
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    );
+  });
+
   it("replaces legacy audit raw archives with sanitized restorable snapshots", async () => {
     await withOpenClawTestState(
       {
