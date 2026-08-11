@@ -174,7 +174,7 @@ openclaw secrets configure --agent ops
 openclaw secrets configure --json
 ```
 
-Flow: provider setup first (add/edit/remove `secrets.providers` aliases), then credential mapping (select fields, assign `{source, provider, id}` refs), then preflight and optional apply.
+Flow: provider setup first (add/edit/remove `secrets.providers` aliases), then credential mapping (select fields, assign `{source, provider, id}` refs), then preflight and optional apply. Only custom aliases need a `secrets.providers` entry; `env` and `store` refs on the [effective default alias](/gateway/secrets#effective-default-alias) resolve without one.
 
 Flags:
 
