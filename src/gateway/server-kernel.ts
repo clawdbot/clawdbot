@@ -1,9 +1,20 @@
 import { isNixMode } from "../config/paths.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  clearActivePluginRegistry,
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRegistryWorkspaceDir,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -124,6 +135,14 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
   ensureOpenClawCliOnPath();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
+  // Pre-lifecycle failure cleanup is scoped to state THIS attempt published: an embedded
+  // process can already run a Gateway whose registry and config snapshot these globals hold,
+  // and a second kernel attempt failing during preflight must not strip them from it.
+  const priorRegistry = getActivePluginRegistry();
+  const priorRegistryKey = getActivePluginRegistryKey();
+  const priorRegistryWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+  const priorSnapshot = getRuntimeConfigSnapshot();
+  const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -182,18 +201,34 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
       // Kernel state prep activates the process-global plugin registry and pins the runtime
-      // config snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear both,
-      // or later validation (and a same-process retry) treats registrations from a Gateway
-      // that never started as LANDED channel owners and applies stale schemas. The registry
-      // retires FIRST — plugin-host cleanup still reads the runtime config and secrets
-      // snapshots, exactly as normal shutdown orders it — and the snapshots scrub afterwards
-      // even when that cleanup throws.
+      // config snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear what
+      // THIS attempt published — or later validation (and a same-process retry) treats
+      // registrations from a Gateway that never started as LANDED channel owners — while a
+      // still-running embedded Gateway's state is preserved or restored. The registry retires
+      // FIRST — plugin-host cleanup still reads the runtime config and secrets snapshots,
+      // exactly as normal shutdown orders it — and the snapshots scrub afterwards even when
+      // that cleanup throws.
       try {
-        await clearActivePluginRegistry();
+        if (getActivePluginRegistry() !== priorRegistry) {
+          await clearActivePluginRegistry();
+          if (priorRegistry) {
+            setActivePluginRegistry(
+              priorRegistry,
+              priorRegistryKey ?? undefined,
+              "default",
+              priorRegistryWorkspaceDir,
+            );
+          }
+        }
       } finally {
         clearSecretsRuntimeSnapshotState();
         clearPluginMetadataLifecycleCaches();
-        clearRuntimeConfigSnapshot();
+        if (getRuntimeConfigSnapshot() !== priorSnapshot) {
+          clearRuntimeConfigSnapshot();
+          if (priorSnapshot) {
+            setRuntimeConfigSnapshot(priorSnapshot, priorSourceSnapshot ?? undefined);
+          }
+        }
       }
     }
     throw error;

@@ -489,14 +489,23 @@ function resolvePlannedActive(
 function selectChannelSchemaOwner(claims: readonly ChannelSchemaClaim[]): ChannelSchemaClaim {
   let eligible = keepHighestRanked(claims, (claim) => (claim.suppliesSchema ? 1 : 0));
   eligible = keepHighestRanked(eligible, (claim) => (claim.plannedActive ? 1 : 0));
+  const coActiveOf = (set: readonly ChannelSchemaClaim[]): boolean =>
+    set.length > 1 && set.every((claim) => claim.plannedActive && claim.planDecided);
+  // EXPLICITLY KEPT co-active claims mirror the runtime winner before any predictive tier —
+  // origin closeness included: the keep contract registers every explicitly selected claim
+  // and first-wins registration decides, so a bundled incumbent discovered first defeats a
+  // closer-origin replacement the operator also kept. Implicit co-actives resolve below,
+  // after origin precedence, exactly as before.
+  if (coActiveOf(eligible) && eligible.every((claim) => claim.explicitlySelected)) {
+    const owners = keepHighestRanked(eligible, (claim) => -claim.discoveryIndex);
+    return expectDefined(owners.at(-1), "channel schema owner");
+  }
   eligible = keepHighestRanked(eligible, (claim) => -claim.originRank);
   // Simultaneously active claims mirror the runtime winner regardless of explicit selection:
   // registration is first-wins in load order and consults neither operator intent nor
   // preferOver once both plugins stay loaded. Undecided survivors keep the predictive tiers —
   // see planDecided.
-  const coActive =
-    eligible.length > 1 && eligible.every((claim) => claim.plannedActive && claim.planDecided);
-  if (coActive) {
+  if (coActiveOf(eligible)) {
     const owners = keepHighestRanked(eligible, (claim) => -claim.discoveryIndex);
     return expectDefined(owners.at(-1), "channel schema owner");
   }

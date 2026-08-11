@@ -501,6 +501,40 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     });
   }
 
+  // #120332 round 56 (P1): fully accounted co-active claims resolve by DISCOVERY order before
+  // any predictive tier — origin closeness included. A bundled incumbent discovered first
+  // defeats a closer-origin replacement the operator also kept: registration is first-wins,
+  // and filtering the bundled claim out on origin rank validated the replacement's schema for
+  // a channel the incumbent serves.
+  const GLOBAL_REPLACEMENT_OF_BUNDLED = createChannelPlugin({
+    id: "acme-slack-thread-guard",
+    origin: "global",
+    extraProperty: "threadGuard",
+    preferOver: ["slack"],
+  });
+  const CO_ACTIVE_CROSS_ORIGIN_CONFIG = {
+    channels: { slack: { botToken: "x" } },
+    plugins: {
+      entries: {
+        slack: { enabled: true },
+        "acme-slack-thread-guard": { enabled: true },
+      },
+    },
+  } as OpenClawConfig;
+  for (const [order, plugins, expected] of [
+    ["bundled first", [BUNDLED_SLACK, GLOBAL_REPLACEMENT_OF_BUNDLED], "slack"],
+    [
+      "replacement first",
+      [GLOBAL_REPLACEMENT_OF_BUNDLED, BUNDLED_SLACK],
+      "acme-slack-thread-guard",
+    ],
+  ] as const) {
+    it(`keeps the first-discovered co-active claimant across origins (${order})`, () => {
+      const owner = selectSlackSchemaOwner([...plugins], CO_ACTIVE_CROSS_ORIGIN_CONFIG);
+      expect(owner.schemaPluginId).toBe(expected);
+    });
+  }
+
   it("lets an equal-origin losing claim fill presentation the schema owner leaves empty", () => {
     expect(selectSlackSchemaOwner([REPLACEMENT_SLACK, LABELED_REPLACED_SLACK])).toMatchObject({
       schemaPluginId: "acme-slack-thread-guard",

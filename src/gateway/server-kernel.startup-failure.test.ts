@@ -4,8 +4,11 @@
 // (or a same-process retry) treats registrations from a Gateway that never started as landed
 // channel owners and applies stale schemas.
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
@@ -75,6 +78,11 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
       },
     });
     state.applyEnv();
+    // Start from a clean slate so the attempt PUBLISHES its own registry and snapshot: this
+    // test pins that a failed attempt's own publications are fully cleared (the embedded
+    // prior-state preservation is pinned in server-kernel.startup-failure-early.test.ts).
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
     try {
       await expect(
         createGatewayKernel(port, {
