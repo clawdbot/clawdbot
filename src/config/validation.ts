@@ -10,10 +10,12 @@ import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-sta
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveActiveRuntimeChannelOwners } from "../plugins/runtime-channel-owners.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
+import { normalizeManifestChannelId } from "./channel-claimant-plugins.js";
 import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
@@ -309,36 +311,91 @@ function validateConfigObjectWithPluginsBase(
     return info.normalizedPlugins;
   };
 
+  const buildChannelSchemas = (
+    planConfig: OpenClawConfig,
+  ): Map<string, { schema?: Record<string, unknown>; pluginId?: string }> => {
+    const info = ensureRegistry();
+    const schemas = new Map<string, { schema?: Record<string, unknown>; pluginId?: string }>(
+      GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+        (entry) => [entry.channelId, { schema: entry.schema }] as const,
+      ),
+    );
+    const ambientEnvTriggers = getRuntimeAmbientEnvTriggers();
+    // Landed channel registrations outrank prediction: after a planned replacement fails and
+    // the suppressed incumbent is restored, validation must rank schemas by the plugin that
+    // actually serves the channel. Outside a gateway process no registry is active and the
+    // projection stays predictive.
+    const runtimeChannelOwners = resolveActiveRuntimeChannelOwners();
+    for (const entry of collectChannelSchemaMetadataWithOwnership(
+      info.registry,
+      planConfig,
+      opts.env,
+      {
+        // Ownership planning honors the gateway's ambient env-trigger policy, so an env-only
+        // channel startup excludes cannot decide claimant fates validation ranks schemas by.
+        ...(ambientEnvTriggers ? { ambientEnvTriggers } : {}),
+        ...(runtimeChannelOwners ? { runtimeChannelOwners } : {}),
+      },
+    )) {
+      const current = schemas.get(entry.id);
+      if (entry.configSchema) {
+        schemas.set(entry.id, {
+          schema: entry.configSchema,
+          pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
+        });
+      } else if (!current) {
+        schemas.set(entry.id, {});
+      }
+    }
+    return schemas;
+  };
+
   const ensureChannelSchemas = (): Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string }
   > => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
-      info.channelSchemas = new Map(
-        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
-          (entry) => [entry.channelId, { schema: entry.schema }] as const,
-        ),
-      );
-      const ambientEnvTriggers = getRuntimeAmbientEnvTriggers();
-      for (const entry of collectChannelSchemaMetadataWithOwnership(
-        info.registry,
-        ensureCompatConfig(),
-        opts.env,
-        // Ownership planning honors the gateway's ambient env-trigger policy, so an env-only
-        // channel startup excludes cannot decide claimant fates validation ranks schemas by.
-        ambientEnvTriggers ? { ambientEnvTriggers } : undefined,
-      )) {
-        const current = info.channelSchemas.get(entry.id);
-        if (entry.configSchema) {
-          info.channelSchemas.set(entry.id, {
-            schema: entry.configSchema,
-            pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
+      const planBaseConfig = ensureCompatConfig();
+      let schemas = buildChannelSchemas(planBaseConfig);
+      // Schema defaults can make an authored `{}` channel meaningfully configured, and gateway
+      // auto-enable consumes the DEFAULTED config: replan ownership from it, or a claimant the
+      // defaults activate supersedes another channel's owner only at runtime while validation
+      // ranked that channel by a plan the runtime never runs. One reconciliation pass — a
+      // default that exists only under the post-default owner's schema is a second-order
+      // fixpoint the runtime's single auto-enable pass never reaches either.
+      const channelsRecord = isRecord(config.channels) ? config.channels : undefined;
+      if (channelsRecord) {
+        const compatChannels = isRecord(planBaseConfig.channels) ? planBaseConfig.channels : {};
+        const defaultedChannels: Record<string, unknown> = { ...compatChannels };
+        let defaultsChanged = false;
+        for (const [key, value] of Object.entries(channelsRecord)) {
+          const trimmed = key.trim();
+          const schema = trimmed
+            ? schemas.get(normalizeManifestChannelId(trimmed))?.schema
+            : undefined;
+          if (!schema) {
+            continue;
+          }
+          const result = validateJsonSchemaValue({
+            schema,
+            cacheKey: `channel:${trimmed}`,
+            value,
+            applyDefaults: true,
           });
-        } else if (!current) {
-          info.channelSchemas.set(entry.id, {});
+          if (result.ok && JSON.stringify(result.value) !== JSON.stringify(value)) {
+            defaultedChannels[key] = result.value;
+            defaultsChanged = true;
+          }
+        }
+        if (defaultsChanged) {
+          schemas = buildChannelSchemas({
+            ...planBaseConfig,
+            channels: defaultedChannels,
+          } as OpenClawConfig);
         }
       }
+      info.channelSchemas = schemas;
     }
     return info.channelSchemas;
   };
@@ -585,6 +642,9 @@ function validateConfigObjectWithPluginsBase(
         for (const record of ensureRegistry().registry.plugins) {
           for (const channelId of record.channels) {
             allowedChannels.add(channelId);
+            // A variant manifest spelling (built-in alias, case variant) admits the canonical
+            // key too — the runtime normalizes both onto one channel identity.
+            allowedChannels.add(normalizeManifestChannelId(channelId));
           }
         }
       }
@@ -600,7 +660,9 @@ function validateConfigObjectWithPluginsBase(
         }
         continue;
       }
-      const channelSchema = ensureChannelSchemas().get(trimmed);
+      // Schema metadata is keyed by canonical channel identity; the authored key may be a
+      // declared variant spelling. Issue paths and the cache key keep the authored spelling.
+      const channelSchema = ensureChannelSchemas().get(normalizeManifestChannelId(trimmed));
       if (!channelSchema?.schema) {
         continue;
       }

@@ -641,6 +641,33 @@ describe("exact plans survive unrelated plugin entries", () => {
     expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
   });
 
+  // #120332 round 48 (P1): a setup-capable plugin whose manifest facts already yield a
+  // candidate is categorically removed from setup probing (`manifestMatchedPluginIds`), so its
+  // material entry can never produce a probe-derived candidate either — the plan stays exact.
+  it("keeps the plan exact beside a manifest-matched setup plugin's entry", () => {
+    const SETUP_MATCHED_U: RegistryPlugins[number] = {
+      id: "acme-u-matched",
+      origin: "global",
+      channels: ["acme-q"],
+      channelConfigs: { "acme-q": { schema: { type: "object" } } },
+      setup: {},
+      autoEnableWhenConfiguredProviders: ["acme-prov"],
+    };
+    const registry = makeRegistry([PLAIN_C2, EDGE_A3, EDGE_B3, SETUP_MATCHED_U]);
+    const config: OpenClawConfig = {
+      channels: { "acme-x": { token: "x" } },
+      auth: { profiles: { "acme-prov:default": { provider: "acme-prov", mode: "api_key" } } },
+      plugins: { entries: { "acme-u-matched": { config: { extra: true } } } },
+    };
+    const env = makeIsolatedEnv();
+    applyPluginAutoEnable({ config, env, manifestRegistry: registry });
+
+    const owner = collectChannelSchemaMetadataWithOwnership(registry, config, env).find(
+      (entry) => entry.id === "acme-x",
+    );
+    expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
+  });
+
   // #120332 round 43 (P1): a runtime-disabled setup descriptor (`setup.requiresRuntime: false`)
   // is categorically skipped before any probe resolves, so a configured entry for such a plugin
   // can no more produce a probe-derived candidate than a setup-less one — the plan stays exact.

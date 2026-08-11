@@ -1,4 +1,5 @@
 // Builds runtime config schema defaults from agent and workspace state.
+import { resolveActiveRuntimeChannelOwners } from "../plugins/runtime-channel-owners.js";
 import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
@@ -13,11 +14,19 @@ import {
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
 // The gateway's ambient env-trigger policy scopes ownership planning to the channels loader
-// suppression actually plans for; outside a gateway process the slot is unset and the
-// projection keeps the default policy.
+// suppression actually plans for, and landed channel registrations outrank prediction — a
+// restored incumbent after a replacement's load failure must be the advertised schema owner.
+// Outside a gateway process both facts are absent and the projection stays predictive.
 function runtimeAmbientOwnershipOptions() {
   const ambientEnvTriggers = getRuntimeAmbientEnvTriggers();
-  return ambientEnvTriggers ? { ambientEnvTriggers } : undefined;
+  const runtimeChannelOwners = resolveActiveRuntimeChannelOwners();
+  if (!ambientEnvTriggers && !runtimeChannelOwners) {
+    return undefined;
+  }
+  return {
+    ...(ambientEnvTriggers ? { ambientEnvTriggers } : {}),
+    ...(runtimeChannelOwners ? { runtimeChannelOwners } : {}),
+  };
 }
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.

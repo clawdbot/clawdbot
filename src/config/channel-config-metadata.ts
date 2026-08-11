@@ -8,7 +8,10 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { declaresPluginPreferenceOver } from "../plugins/plugin-policy-id.js";
+import {
+  declaresPluginPreferenceOver,
+  normalizePluginPolicyId,
+} from "../plugins/plugin-policy-id.js";
 import {
   collectPluginIdsForConfiguredChannel,
   isPluginSelectedWithAliases,
@@ -31,13 +34,15 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginOrigin?: PluginOrigin;
 };
 
-type ChannelPresentationField = "label" | "description" | "configUiHints";
+type ChannelPresentationField = "label" | "description";
 
 type ChannelPresentationWrite = { rank: number; pluginId: string };
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   /** Rank and writer of each presentation field; an unwritten field carries none. */
   presentationRanks: Partial<Record<ChannelPresentationField, ChannelPresentationWrite>>;
+  /** Rank and writer per config UI hint key; hints merge per key, not map-wide. */
+  hintKeyRanks?: Record<string, ChannelPresentationWrite>;
 };
 
 // Per-field origin precedence: each presentation field belongs to the closest claim that
@@ -69,26 +74,13 @@ function writeChannelPresentationField<Field extends ChannelPresentationField>(
   }
 }
 
-// Config UI hints merge per key instead of replacing the map: a closer losing claim's
-// presentation hints must not strip the schema owner's — dropping a `sensitive` hint would
-// render a credential in Control UI raw-config diffs. Rank decides precedence per PROPERTY
-// within a conflicting key too: the winner's properties overwrite, and every property only one
-// side supplies survives — a closer claim's label on the owner's key must not drop the owner's
-// `sensitive: true` beneath it.
-function mergeChannelConfigUiHintMaps(
-  preferred: NonNullable<ChannelMetadataRecord["configUiHints"]>,
-  other: ChannelMetadataRecord["configUiHints"],
-): NonNullable<ChannelMetadataRecord["configUiHints"]> {
-  const merged = { ...other, ...preferred };
-  for (const [key, preferredHint] of Object.entries(preferred)) {
-    const otherHint = other?.[key];
-    if (isRecord(preferredHint) && isRecord(otherHint)) {
-      merged[key] = { ...otherHint, ...preferredHint };
-    }
-  }
-  return merged;
-}
-
+// Config UI hints track precedence per hint KEY — one map-wide rank would let whichever claim
+// wrote first (on any key) hold every later key against a claim that should win it. Within a
+// key, rank decides per PROPERTY: the key winner's properties overwrite, properties only one
+// side supplies survive — a closer claim's label on the owner's key must not drop the owner's
+// `sensitive: true` beneath it. The schema owner's `sensitive: true` is additionally
+// authoritative regardless of rank: redaction is fail-safe, and Control UI raw-config diffs
+// reveal any field whose flattened hint loses it.
 function mergeChannelConfigUiHints(
   record: ChannelMetadataRecord,
   value: ChannelMetadataRecord["configUiHints"],
@@ -99,17 +91,32 @@ function mergeChannelConfigUiHints(
   if (value === undefined) {
     return;
   }
-  const current = record.presentationRanks.configUiHints;
-  if (
-    current === undefined ||
-    rank < current.rank ||
-    (rank === current.rank && (ownerTieBreak || current.pluginId === pluginId))
-  ) {
-    record.configUiHints = mergeChannelConfigUiHintMaps(value, record.configUiHints);
-    record.presentationRanks.configUiHints = { rank, pluginId };
-    return;
+  const ranks = (record.hintKeyRanks ??= {});
+  const merged = { ...record.configUiHints };
+  for (const [key, hint] of Object.entries(value)) {
+    const current = ranks[key];
+    const wins =
+      current === undefined ||
+      rank < current.rank ||
+      (rank === current.rank && (ownerTieBreak || current.pluginId === pluginId));
+    const existing = merged[key];
+    merged[key] =
+      isRecord(hint) && isRecord(existing)
+        ? wins
+          ? { ...existing, ...hint }
+          : { ...hint, ...existing }
+        : wins
+          ? hint
+          : (existing ?? hint);
+    if (wins) {
+      ranks[key] = { rank, pluginId };
+    }
+    const mergedHint = merged[key];
+    if (ownerTieBreak && isRecord(hint) && hint.sensitive === true && isRecord(mergedHint)) {
+      merged[key] = { ...mergedHint, sensitive: true };
+    }
   }
-  record.configUiHints = mergeChannelConfigUiHintMaps(record.configUiHints ?? {}, value);
+  record.configUiHints = merged;
 }
 
 /** One plugin's claim on a channel id, with the policy facts that decide ownership. */
@@ -363,7 +370,7 @@ function planChannelClaimantDecisions(params: {
           decisions: planned,
           completedActivation: baseActivation,
           claimantLive: plan.isClaimantLive,
-          planExact: !hasRelevantSetupCandidateConfig(params.config, params.registry),
+          planExact: !hasRelevantSetupCandidateConfig(params.config, params.registry, candidates),
         };
       }
       const cached = replayViews.get(channelId);
@@ -395,13 +402,14 @@ function planChannelClaimantDecisions(params: {
               channels: { ...channelsRecord, [rawChannelId]: { ...channelEntry, enabled: true } },
             }
           : params.config;
+      const replayClaims = [
+        ...candidates.filter((entry) => entry.kind === "channel-configured"),
+        ...hypotheticalClaims,
+        ...candidates.filter((entry) => entry.kind !== "channel-configured"),
+      ];
       const replay = planPluginAutoEnable({
         config: replayConfig,
-        candidates: [
-          ...candidates.filter((entry) => entry.kind === "channel-configured"),
-          ...hypotheticalClaims,
-          ...candidates.filter((entry) => entry.kind !== "channel-configured"),
-        ],
+        candidates: replayClaims,
         env: params.env,
         manifestRegistry: params.registry,
       });
@@ -412,7 +420,9 @@ function planChannelClaimantDecisions(params: {
         decisions: replay.channelDecisions.get(channelId) ?? emptyDecisions,
         completedActivation: activationOf(replay.config),
         claimantLive: replay.isClaimantLive,
-        planExact: !hasRelevantSetupCandidateConfig(replayConfig, params.registry),
+        // The replay's candidate list carries the hypothetical claims too: with the channel
+        // really configured, those manifest facts would match the plugin out of setup probing.
+        planExact: !hasRelevantSetupCandidateConfig(replayConfig, params.registry, replayClaims),
       };
       replayViews.set(channelId, view);
       return view;
@@ -583,6 +593,22 @@ function selectChannelSchemaOwners(
             view.decisions.has(claim.record.id) ||
             view.claimantLive(claim.record.id)),
       }));
+      // A LANDED registration outranks every predictive tier: a planned replacement can fail
+      // import, validation, or registration, and the restored incumbent then serves the channel
+      // — validating or advertising the failed replacement's schema rejects the serving
+      // plugin's keys. Prediction remains for channels without a landed owner claim.
+      const runtimeOwnerId = options?.runtimeChannelOwners?.get(channelId);
+      if (runtimeOwnerId !== undefined) {
+        const landedPolicyId = normalizePluginPolicyId(runtimeOwnerId);
+        const landedClaims = planned.filter(
+          (claim) => normalizePluginPolicyId(claim.record.id) === landedPolicyId,
+        );
+        const landedOwner =
+          landedClaims.findLast((claim) => claim.suppliesSchema) ?? landedClaims.at(-1);
+        if (landedOwner) {
+          return [channelId, landedOwner];
+        }
+      }
       return [channelId, selectChannelSchemaOwner(planned)];
     }),
   );
@@ -626,6 +652,8 @@ export function collectPluginSchemaMetadataCore(
 type ChannelSchemaOwnershipOptions = {
   /** Ambient env-trigger policy of the plan being mirrored; env-only channels obey it. */
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  /** Landed registrations (canonical channel id → plugin id); they outrank prediction. */
+  runtimeChannelOwners?: ReadonlyMap<string, string>;
 };
 
 export function collectChannelSchemaMetadataWithOwnership(
@@ -744,7 +772,9 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ presentationRanks: _presentationRanks, ...entry }) => entry);
+    .map(
+      ({ presentationRanks: _presentationRanks, hintKeyRanks: _hintKeyRanks, ...entry }) => entry,
+    );
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */

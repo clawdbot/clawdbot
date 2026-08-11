@@ -617,6 +617,39 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     }
   });
 
+  // #120332 round 48 (P2): a landed channel registration outranks prediction. When a planned
+  // replacement fails to load and the suppressed incumbent is restored, the advertised schema
+  // must follow the plugin actually serving the channel — not the failed replacement's plan.
+  it("advertises the landed channel owner's schema over the planned replacement", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        makeAcmeChatPlugin({ id: "openclaw-acmechat", extraProperty: "legacyOption" }),
+        makeAcmeChatPlugin({
+          id: "acme-chat-thread-guard",
+          extraProperty: "threadGuard",
+          preferOver: ["openclaw-acmechat"],
+        }),
+      ],
+    });
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      channels: { acmechat: { token: "x" } },
+    });
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.channels.push({
+      pluginId: "openclaw-acmechat",
+      plugin: { id: "acmechat" },
+    } as (typeof activeRegistry.channels)[number]);
+    setActivePluginRegistry(activeRegistry, "landed-owner-registry");
+
+    const result = loadGatewayRuntimeConfigSchema();
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+
+    expect(JSON.stringify(channels.properties?.acmechat)).toContain("legacyOption");
+  });
+
   it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {
     // Each MCP connection triggers a config.schema / config.get gateway request which calls
     // loadGatewayRuntimeConfigSchema. The original bug caused a fresh full plugin registry to

@@ -456,6 +456,29 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     });
   }
 
+  // #120332 round 48 (P1): hint precedence is tracked per KEY, and the owner's `sensitive: true`
+  // is authoritative regardless of rank. With one map-wide rank, a closest claim's unrelated
+  // hint held the whole map, so a farther claim's `sensitive: false` filled the owner's key and
+  // the owner's later `sensitive: true` could never replace it — Control UI raw-config diffs
+  // would render the credential.
+  const FALSE_HINT_SLACK = createChannelPlugin({
+    id: "openclaw-slack-false-hint",
+    origin: "global",
+    omitSchema: true,
+    uiHints: { botToken: { sensitive: false } },
+  });
+  for (const [order, plugins] of [
+    ["owner last", [CLOSER_HINTS_ONLY_SLACK, FALSE_HINT_SLACK, SENSITIVE_HINTED_OWNER_SLACK]],
+    ["owner first", [SENSITIVE_HINTED_OWNER_SLACK, CLOSER_HINTS_ONLY_SLACK, FALSE_HINT_SLACK]],
+  ] as const) {
+    it(`keeps the owner's sensitive flag over a farther claim's false on the same key (${order})`, () => {
+      const owner = selectSlackSchemaOwner([...plugins]);
+      expect(owner.configUiHints).toMatchObject({
+        botToken: { label: "Operator Token", sensitive: true },
+      });
+    });
+  }
+
   it("lets an equal-origin losing claim fill presentation the schema owner leaves empty", () => {
     expect(selectSlackSchemaOwner([REPLACEMENT_SLACK, LABELED_REPLACED_SLACK])).toMatchObject({
       schemaPluginId: "acme-slack-thread-guard",

@@ -481,6 +481,7 @@ function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
 export function hasRelevantSetupCandidateConfig(
   cfg: OpenClawConfig,
   registry: PluginManifestRegistry,
+  manifestCandidates?: readonly PluginAutoEnableCandidate[],
 ): boolean {
   if (
     hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
@@ -493,6 +494,13 @@ export function hasRelevantSetupCandidateConfig(
   if (!entries) {
     return false;
   }
+  // A plugin whose manifest facts already yield a candidate is categorically removed from setup
+  // probing (`manifestMatchedPluginIds` in the detector), so its material entry can never yield
+  // a probe-derived candidate a probe-skipping plan would miss. Policy-id space like the gate's
+  // other compares.
+  const manifestMatchedPolicyIds = new Set(
+    (manifestCandidates ?? []).map((candidate) => normalizePluginPolicyId(candidate.pluginId)),
+  );
   const entryPolicyIds = new Set(
     Object.keys(entries)
       // An explicitly disabled entry is categorically excluded from setup candidacy
@@ -509,6 +517,7 @@ export function hasRelevantSetupCandidateConfig(
       // (setup-registry), so it can never yield a probe-derived candidate a probe-skipping
       // plan would miss — treating it as relevant hands ownership back to predictive tiers.
       record.setup?.requiresRuntime !== false &&
+      !manifestMatchedPolicyIds.has(normalizePluginPolicyId(record.id)) &&
       entryPolicyIds.has(normalizePluginPolicyId(record.id)),
   );
 }
