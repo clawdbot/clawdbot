@@ -13,7 +13,6 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
@@ -29,6 +28,7 @@ vi.mock("../lib/nodes/index.ts", () => ({
 
 const HANDOFF_POLL_MS = 1_000;
 const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {

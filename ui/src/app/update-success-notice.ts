@@ -9,7 +9,7 @@ import { getSafeSessionStorage } from "../local-storage.ts";
 
 const UPDATE_SUCCESS_NOTICE_KEY = "openclaw:control-ui:update-succeeded:v1";
 
-export type UpdateInstallIdentity = { version: string | null; sha: string | null };
+type UpdateInstallIdentity = { version: string | null; sha: string | null };
 
 function formatUpdateSuccess(identity: UpdateInstallIdentity): string {
   // A git install keeps its version across commits, so the commit is the only

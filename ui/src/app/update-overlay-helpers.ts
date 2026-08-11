@@ -8,7 +8,7 @@ export type ApplicationStatusBanner = {
   text: string;
 };
 
-export const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
 const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
@@ -71,7 +71,7 @@ export type UpdateRestartStatusResponse = {
   schedule?: UpdateScheduleState;
 };
 
-export type UpdateFailureCause = { step: string; detail: string };
+type UpdateFailureCause = { step: string; detail: string };
 
 function lastLogLine(tail: string | null | undefined): string | null {
   const lines = (tail ?? "")
@@ -87,7 +87,7 @@ function lastLogLine(tail: string | null | undefined): string | null {
  * output — in the restart sentinel. Read that recorded fact instead of making
  * the operator reconstruct a disk-full or build failure from a reason slug.
  */
-export function readUpdateFailureCause(
+function readUpdateFailureCause(
   sentinel: UpdateRestartStatusResponse["sentinel"],
 ): UpdateFailureCause | null {
   const steps = sentinel?.stats?.steps;
