@@ -1,5 +1,4 @@
 import path from "node:path";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
@@ -15,6 +14,7 @@ import {
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   emitPluginAuditSecurityEvent,

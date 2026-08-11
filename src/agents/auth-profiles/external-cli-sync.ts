@@ -16,10 +16,10 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -359,7 +359,7 @@ export function resolveExternalCliAuthProfiles(
       if (
         existingOAuth &&
         !providerConfig.bootstrapOnly &&
-        hasUsableOAuthCredential(existingOAuth, now)
+        hasUsableOAuthCredential(existingOAuth, { now })
       ) {
         // Profiles synced before identity capture carry no email; backfill the
         // non-secret metadata once the CLI read proves it is the same login.

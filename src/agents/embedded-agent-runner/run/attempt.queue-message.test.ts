@@ -6,7 +6,7 @@ import {
   reportSteeringMessagePersistenceFailure,
   setSteeringMessageIdentity,
 } from "../../sessions/steering-message-identity.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
 
 type EmbeddedAgentActiveSessionSteerTarget = Parameters<
   typeof steerActiveSessionWithOptionalDeliveryWait

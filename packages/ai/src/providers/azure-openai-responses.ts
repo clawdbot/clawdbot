@@ -36,22 +36,6 @@ function resolveDeploymentName(
   });
 }
 
-function formatAzureOpenAIError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
-    const statusCode = typeof status === "number" ? status : undefined;
-    if (statusCode !== undefined) {
-      return `Azure OpenAI API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
 // Azure OpenAI Responses-specific options
 interface AzureOpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -98,7 +82,6 @@ export const streamAzureOpenAIResponses: StreamFunction<
         resolveDeploymentName(model, options),
         replayMode,
       ),
-    formatError: formatAzureOpenAIError,
   });
 
   return stream;

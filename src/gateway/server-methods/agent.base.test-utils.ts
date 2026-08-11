@@ -347,6 +347,27 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
+  it("clears a sessionless reservation when content validation fails", async () => {
+    const runId = "sessionless-invalid-reply-channel";
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        replyChannel: "unknown-channel",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      message: "invalid agent params: unknown channel: unknown-channel",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
   it("clears pending dedupe when the routed recipient session is unavailable", async () => {
     const sessionKey = "agent:ops:whatsapp:direct:+15551234567";
     const runId = "recipient-session-route-archived";

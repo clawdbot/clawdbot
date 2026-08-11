@@ -22,15 +22,17 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./auth-profiles/runtime-snapshots.js";
+import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   getRuntimeAuthProfileStoreSnapshotRevision,
-  replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";

@@ -1908,6 +1908,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-release-pretag-pack-check.test.ts",
       ],
       "scripts/plan-release-workflow-matrix.mjs": [
+        "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/release-workflow-matrix-plan.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
       ],
@@ -1922,7 +1923,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
       ],
       "scripts/lib/generated-text-asset.mts": [
-        "extensions/browser/scripts/build-copilot-runtime.test.ts",
         "test/scripts/build-diffs-viewer-runtime.test.ts",
         "test/scripts/bundled-plugin-assets.test.ts",
       ],
@@ -1944,6 +1944,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/repo-root.mjs": [
         "test/scripts/ts-guard-utils.test.ts",
         "test/scripts/android-release-signing.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
       "scripts/lib/ts-guard-utils.mts": ["test/scripts/ts-guard-utils.test.ts"],
       "scripts/lib/tsgo-sparse-guard.mts": [
@@ -3011,7 +3012,7 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       title: "routes changed source files to sibling tests when present",
-      changedPath: "src/agents/live-model-turn-probes.ts",
+      changedPath: "src/agents/test-helpers/live-model-turn-probes.ts",
       config: "test/vitest/vitest.unit-fast.config.ts",
       testPath: "src/agents/live-model-turn-probes.test.ts",
     },

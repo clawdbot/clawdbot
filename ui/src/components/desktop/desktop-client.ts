@@ -8,7 +8,8 @@ type DesktopSecurityFailureDetail = {
   status?: number;
 };
 
-export type DesktopConnectOptions = {
+type DesktopConnectOptions = {
+  background?: string;
   gatewayUrl?: string;
   onConnect?: () => void;
   onDisconnect?: (detail: DesktopDisconnectDetail) => void;
@@ -24,6 +25,7 @@ export type DesktopConnectionHandle = {
 };
 
 type RfbClient = EventTarget & {
+  background: string;
   disconnect(): void;
   scaleViewport: boolean;
   viewOnly: boolean;
@@ -85,6 +87,7 @@ export class DesktopClient {
       socket,
       options.password ? { credentials: { password: options.password } } : undefined,
     );
+    rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.scaleViewport = true;
     rfb.addEventListener("connect", () => options.onConnect?.());

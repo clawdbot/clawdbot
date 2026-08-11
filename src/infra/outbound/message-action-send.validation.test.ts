@@ -10,7 +10,7 @@ import {
   runDrySend,
   workspaceConfig,
   workspaceTestPlugin,
-} from "./message-action-runner.test-helpers.js";
+} from "./message-action-test-fixtures.js";
 
 const emptyConfig = {} as OpenClawConfig;
 const portableLocation = { latitude: 48.858844, longitude: 2.294351 };

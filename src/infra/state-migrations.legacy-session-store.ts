@@ -67,7 +67,6 @@ export type LegacySessionStoreLoadOptions = {
 
 export type LegacySessionStoreSaveOptions = {
   skipMaintenance?: boolean;
-  skipSerializeForUnchangedStore?: boolean;
   takeCacheOwnership?: boolean;
   activeSessionKey?: string;
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;

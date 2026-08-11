@@ -1,7 +1,7 @@
 import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -19,6 +19,7 @@ import {
   itemOutputText,
   itemToolArgs,
   itemToolError,
+  isCommandBearingToolItem,
   nativeToolActionFingerprint,
 } from "./event-projector-tool-items.js";
 import {
@@ -40,7 +41,10 @@ import type {
   CodexThreadItem,
   JsonObject,
 } from "./protocol.js";
-import { resolveCodexToolProgressDetailMode } from "./tool-progress-normalization.js";
+import {
+  isCodexCommandBearingToolCall,
+  resolveCodexToolProgressDetailMode,
+} from "./tool-progress-normalization.js";
 
 const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "message",
@@ -304,13 +308,18 @@ export class CodexToolProgressProjection {
       return;
     }
     const toolName = itemName(item);
-    if (!toolName || !shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
+    const args = itemToolArgs(item);
+    if (!toolName || !shouldEmitTranscriptToolProgress(toolName, args)) {
       return;
     }
     this.resultSummaryItemIds.add(item.id);
+    const meta =
+      this.shouldEmitToolOutput() || !isCommandBearingToolItem(item, args)
+        ? itemMeta(item, this.toolProgressDetailMode())
+        : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolSummary(toolName, itemMeta(item, this.toolProgressDetailMode())),
+      text: formatToolSummary(toolName, meta),
     });
   }
 
@@ -460,9 +469,12 @@ export class CodexToolProgressProjection {
     }
     this.transcriptProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
-    const meta = inferToolMetaFromArgs(params.name, args, {
-      detailMode: this.toolProgressDetailMode(),
-    });
+    const meta =
+      this.shouldEmitToolOutput() || !isCodexCommandBearingToolCall(params.name, args)
+        ? inferToolMetaFromArgs(params.name, args, {
+            detailMode: this.toolProgressDetailMode(),
+          })
+        : undefined;
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||

@@ -18,8 +18,8 @@ import {
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
 import { log } from "../logger.js";
+import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
-import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {

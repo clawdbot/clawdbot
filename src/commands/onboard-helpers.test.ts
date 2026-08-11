@@ -93,6 +93,13 @@ const mocks = vi.hoisted(() => ({
   probeGateway: vi.fn(),
   deleteWorkspaceState: vi.fn(),
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
+  prepareLegacyWorkspaceStateReset: vi.fn(() => ({ candidates: [] })),
+  removeLegacyWorkspaceStateForReset: vi.fn(
+    async (): Promise<{ removedPaths: string[]; warnings: string[] }> => ({
+      removedPaths: [],
+      warnings: [],
+    }),
+  ),
 }));
 
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
@@ -124,8 +131,18 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
   prepareWorkspaceStateDeletion: mocks.prepareWorkspaceStateDeletion,
 }));
 
+vi.mock("../agents/workspace-legacy-state.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/workspace-legacy-state.js")>(
+    "../agents/workspace-legacy-state.js",
+  )),
+  prepareLegacyWorkspaceStateReset: mocks.prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset: mocks.removeLegacyWorkspaceStateForReset,
+}));
+
 afterEach(() => {
   vi.clearAllMocks();
+  mocks.movePathToTrash.mockReset();
+  mocks.movePathToTrash.mockImplementation(async (targetPath: string) => `${targetPath}.trashed`);
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -235,6 +252,204 @@ describe("handleReset", () => {
     expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
+  it("rejects a config-only reset when the existing config cannot be trashed", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-config-failure-");
+    const configPath = path.join(homeDir, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n");
+    mocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await withEnvAsync(
+      { HOME: homeDir, OPENCLAW_HOME: homeDir, OPENCLAW_CONFIG_PATH: configPath },
+      async () => {
+        await expect(handleReset("config", "unused", runtime)).rejects.toThrow(configPath);
+      },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Failed to move to Trash \(manual delete\): .*openclaw\.json$/),
+    );
+  });
+
+  it("reports config, credentials, and session failures together", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-state-failures-");
+    const stateDir = path.join(homeDir, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const credentialsDir = path.join(stateDir, "credentials");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    fs.mkdirSync(credentialsDir, { recursive: true });
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(configPath, "{}\n");
+    mocks.movePathToTrash.mockRejectedValue(new Error("trash unavailable"));
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+      async () => {
+        await expect(handleReset("config+creds+sessions", "unused", runtime)).rejects.toThrow(
+          new RegExp(
+            [configPath, credentialsDir, sessionsDir]
+              .map((targetPath) => targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+              .join("[\\s\\S]*"),
+          ),
+        );
+      },
+    );
+  });
+
+  it("deduplicates unreadable session state while still attempting workspace removal", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-session-enumeration-");
+    const stateDir = path.join(homeDir, ".openclaw");
+    const workspaceDir = path.join(stateDir, "agents");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const inspectError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const readdir = vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(inspectError);
+    mocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        },
+        async () => {
+          const failure = await handleReset("full", workspaceDir, runtime).catch(
+            (error: unknown) => error,
+          );
+          expect(failure).toEqual(
+            new Error(`Reset failed to remove required state:\n${workspaceDir}`),
+          );
+        },
+      );
+    } finally {
+      readdir.mockRestore();
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(expectedTrashSourcePath(workspaceDir), {
+      allowedRoots: [path.dirname(expectedTrashSourcePath(workspaceDir))],
+    });
+    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+  });
+
+  it("attempts workspace removal even when state deletion planning fails", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-workspace-plan-");
+    const stateDir = path.join(homeDir, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    mocks.prepareWorkspaceStateDeletion.mockImplementationOnce(() => {
+      throw new Error("workspace state unavailable");
+    });
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () => {
+        await expect(
+          handleReset("full", workspaceDir, { log: vi.fn() } as unknown as RuntimeEnv),
+        ).rejects.toThrow(`${workspaceDir} (workspace state)`);
+      },
+    );
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(expectedTrashSourcePath(workspaceDir), {
+      allowedRoots: [path.dirname(expectedTrashSourcePath(workspaceDir))],
+    });
+    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+  });
+
+  it("fails closed after attempting workspace state cleanup when retired state remains", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-retired-state-");
+    const stateDir = path.join(homeDir, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const warning = `Could not remove retired workspace state at ${workspaceDir}.attested`;
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    mocks.removeLegacyWorkspaceStateForReset.mockResolvedValueOnce({
+      removedPaths: [],
+      warnings: [warning],
+    });
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () => {
+        await expect(handleReset("full", workspaceDir, runtime)).rejects.toThrow(warning);
+      },
+    );
+
+    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
+    expect(runtime.log).toHaveBeenCalledWith(warning);
+  });
+
+  it("reports rejected retired and workspace state cleanup after attempting both", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-state-cleanup-rejections-");
+    const stateDir = path.join(homeDir, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    mocks.removeLegacyWorkspaceStateForReset.mockRejectedValueOnce(
+      new Error("retired state unavailable"),
+    );
+    mocks.deleteWorkspaceState.mockImplementationOnce(() => {
+      throw new Error("state database unavailable");
+    });
+
+    const reset = withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () =>
+        await handleReset("full", workspaceDir, {
+          log: vi.fn(),
+        } as unknown as RuntimeEnv),
+    );
+
+    await expect(reset).rejects.toThrow(`${workspaceDir} (retired workspace state)`);
+    await expect(reset).rejects.toThrow(`${workspaceDir} (workspace state)`);
+    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
+  });
+
+  it("reports a workspace state deletion failure after trash succeeds", async () => {
+    const homeDir = tempDirs.make("openclaw-reset-state-delete-");
+    const stateDir = path.join(homeDir, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    mocks.deleteWorkspaceState.mockImplementationOnce(() => {
+      throw new Error("state database unavailable");
+    });
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () => {
+        await expect(
+          handleReset("full", workspaceDir, { log: vi.fn() } as unknown as RuntimeEnv),
+        ).rejects.toThrow(`${workspaceDir} (workspace state)`);
+      },
+    );
+  });
+
   it("retains workspace state when workspace removal fails", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
     const profileStateDir = path.join(homeDir, ".openclaw-work");
@@ -264,13 +479,18 @@ describe("handleReset", () => {
           OPENCLAW_STATE_DIR: profileStateDir,
           OPENCLAW_CONFIG_PATH: profileConfigPath,
         },
-        async () => await handleReset("full", workspaceDir, runtime),
+        async () => {
+          await expect(handleReset("full", workspaceDir, runtime)).rejects.toThrow(workspaceDir);
+        },
       );
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
 
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Failed to move to Trash \(manual delete\): .*workspace$/),
+    );
   });
 });
 

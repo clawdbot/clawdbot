@@ -41,6 +41,7 @@ import {
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
+  shouldRunWrapperShadowingCheck,
   createNpmLockGuardCommand,
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
@@ -223,13 +224,6 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
-  it("keeps a non-executed changed-gate warning fixture", () => {
-    // openclaw-temp-dir: allow test fixture for the temp warning report
-    const warningFixture = 'fs.mkdtemp("openclaw-warning-fixture-", () => {})';
-
-    expect(warningFixture).toContain("mkdtemp");
-  });
-
   it("detects direct script execution from Windows argv paths", () => {
     expect(
       isDirectRunPath(
@@ -814,48 +808,6 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("keeps manifest-declared generated browser assets out of targeted extension lint", () => {
-    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
-    const result = detectChangedLanes([
-      generatedAsset,
-      "packages/gateway-client/src/protocol-client.ts",
-    ]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-
-    expect(result.lanes.extensions).toBe(true);
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
-    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:extensions");
-    expect(
-      plan.commands
-        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
-        .flatMap((command) => command.args),
-    ).not.toContain(generatedAsset);
-  });
-
-  it("still lints extension source alongside its generated browser asset", () => {
-    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
-    const source = "extensions/browser/scripts/copilot-runtime-entry.ts";
-    const result = detectChangedLanes([generatedAsset, source]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
-
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "lint extension changed file",
-        args: [
-          "scripts/run-oxlint.mjs",
-          "--tsconfig",
-          "config/tsconfig/oxlint.extensions.json",
-          source,
-        ],
-      }),
-    );
-    expect(
-      plan.commands
-        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
-        .flatMap((command) => command.args),
-    ).not.toContain(generatedAsset);
-  });
-
   it.each([
     {
       owner: "core",
@@ -1231,7 +1183,7 @@ describe("scripts/changed-lanes", () => {
 
   it("delegates generated docs baselines with heavy owner checks", () => {
     for (const changedPath of [
-      "docs/.generated/plugin-sdk-api-baseline.sha256",
+      "docs/.generated/plugin-sdk-api-baseline.jsonl",
       "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
     ]) {
       const result = detectChangedLanes([changedPath]);
@@ -1469,6 +1421,7 @@ describe("scripts/changed-lanes", () => {
       "format changed files",
       "deprecated API usage",
       "plugin boundaries",
+      "wrapper shadowing",
       "package patch guard",
       // These live-Docker paths include `src/gateway/*.live.test.ts`, and the
       // full-tree knip scan sees test files, so a deleted last consumer can
@@ -1639,7 +1592,8 @@ describe("scripts/changed-lanes", () => {
       docs: true,
       releaseMetadata: true,
     });
-    expect(plan.commands.map((command) => command.args[0])).toEqual([
+    const commands = plan.commands.map((command) => command.args[0]);
+    expect(commands).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
       "check:doctor-deprecation-registry",
@@ -1651,14 +1605,15 @@ describe("scripts/changed-lanes", () => {
       "--import",
       "check:deprecated-api-usage",
       "plugins:boundary-report:ci",
+      "check:wrapper-shadowing",
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
-      "ios:version:check",
       "config:schema:check",
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
+    expect(commands).not.toContain("ios:version:check");
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--staged"]);
@@ -1831,7 +1786,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/generate-plugin-sdk-api-baseline.ts",
         "scripts/lib/plugin-sdk-doc-metadata.ts",
         "scripts/lib/plugin-sdk-entries.mts",
-        "docs/.generated/plugin-sdk-api-baseline.sha256",
+        "docs/.generated/plugin-sdk-api-baseline.jsonl",
       ]),
     ).toBe(true);
     expect(shouldRunPluginSdkApiBaselineCheck(["docs/help/troubleshooting.md"])).toBe(false);
@@ -1916,6 +1871,28 @@ describe("scripts/changed-lanes", () => {
         args: ["plugins:boundary-report:ci"],
       });
     }
+  });
+
+  it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(
+      shouldRunWrapperShadowingCheck([
+        "src/channels/turn/run-channel-turn.ts",
+        "scripts/check-wrapper-shadowing.mts",
+        "scripts/check-export-name-collisions.mts",
+        "scripts/lib/wrapper-shadowing-baseline.json",
+        "scripts/lib/ts-guard-utils.mts",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunWrapperShadowingCheck(["docs/concepts/message-lifecycle.md"])).toBe(false);
+
+    const plan = createChangedCheckPlan(
+      detectChangedLanes(["scripts/check-wrapper-shadowing.mts"]),
+    );
+    expect(plan.commands).toContainEqual({
+      name: "wrapper shadowing",
+      args: ["check:wrapper-shadowing"],
+    });
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

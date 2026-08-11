@@ -36,7 +36,6 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { formatProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -452,16 +451,6 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
     }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
     assignTransportErrorDetails(output, failure, options?.signal);
-    const formattedError = formatProviderError(failure);
-    const status = failure instanceof Error && "status" in failure ? failure.status : undefined;
-    if (typeof status === "number" && Number.isFinite(status)) {
-      output.errorCode ||= String(status);
-      output.errorMessage = formattedError.startsWith(`${status}:`)
-        ? formattedError
-        : `${status}: ${formattedError}`;
-    } else {
-      output.errorMessage = formattedError;
-    }
     stream.push({
       type: "error",
       reason: output.stopReason === "aborted" ? "aborted" : "error",

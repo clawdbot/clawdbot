@@ -444,6 +444,11 @@ describe("tasks gateway handlers", () => {
       progressSummary:
         "Bundling output\nOpenClaw runtime context (internal): Keep internal details private.",
     });
+    emitAgentEvent({
+      runId: "run-sanitized",
+      stream: "assistant",
+      data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
+    });
     markTaskTerminalById({
       taskId: task.taskId,
       status: "failed",
@@ -458,6 +463,7 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Compile artifact");
     expect(payload?.task?.terminalSummary).toBe("Failed after build");
     expect(payload?.task?.error).toBe("Tool failed");
+    expect(payload?.task).not.toHaveProperty("lastActivity");
     expect(payload?.task?.prompt).toBe("Compile artifact");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
   });
@@ -489,6 +495,148 @@ describe("tasks gateway handlers", () => {
 
     expect(payload?.task?.toolUseCount).toBe(2);
     expect(payload?.task?.lastToolName).toBe("exec");
+  });
+
+  it("projects isolated live subagent activity and best-effort diff stats", async () => {
+    const primary = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:primary",
+      runId: "run-live-primary",
+      task: "Implement task activity",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      progressSummary: "Milestone remains authoritative",
+    });
+    const secondary = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:secondary",
+      runId: "run-live-secondary",
+      task: "Review task activity",
+      status: "running",
+      deliveryStatus: "not_applicable",
+    });
+    const longLastLine = `Updating   files ${"x".repeat(220)}`;
+
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "thinking",
+      data: { text: "Inspecting the fold\nThinking fallback" },
+    });
+    emitAgentEvent({
+      runId: secondary.runId!,
+      stream: "thinking",
+      data: { text: "Checking isolation\n  Thinking-only   progress  " },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "assistant",
+      data: { text: `Earlier line\n\n${longLastLine}` },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "thinking",
+      data: { text: "Later thinking must not replace assistant activity" },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "edit",
+        toolCallId: "edit-1",
+        args: {
+          path: "src/a.ts",
+          edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
+        },
+      },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: { phase: "result", name: "edit", toolCallId: "edit-1", isError: false },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "write",
+        toolCallId: "write-1",
+        args: { file_path: "src/b.ts", content: "alpha\nbeta" },
+      },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "apply_patch",
+        toolCallId: "patch-1",
+        args: {
+          input: [
+            "*** Begin Patch",
+            "*** Update File: src/a.ts",
+            "@@",
+            "-old",
+            "+new",
+            "+newer",
+            "*** Delete File: src/c.ts",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: { phase: "result", name: "apply_patch", toolCallId: "patch-1", isError: false },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "write",
+        toolCallId: "write-failed",
+        args: { path: "src/ignored.ts", content: "not\ncounted" },
+      },
+    });
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "tool",
+      data: { phase: "result", name: "write", toolCallId: "write-failed", isError: true },
+    });
+
+    const primaryGet = await getTaskPayload(primary.taskId);
+    const secondaryGet = await getTaskPayload(secondary.taskId);
+    const listed = await runTaskHandler("tasks.list", {});
+    const listedPrimary = listed.payload?.tasks?.find((task) => task.id === primary.taskId);
+
+    expect(primaryGet.payload?.task?.lastActivity).toMatch(/^Updating files x+…$/);
+    expect(String(primaryGet.payload?.task?.lastActivity).length).toBeLessThanOrEqual(200);
+    expect(primaryGet.payload?.task?.diffStat).toEqual({ files: 3, added: 7, removed: 3 });
+    expect(primaryGet.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
+    expect(secondaryGet.payload?.task?.lastActivity).toBe("Thinking-only progress");
+    expect(secondaryGet.payload?.task).not.toHaveProperty("diffStat");
+    expect(listedPrimary?.lastActivity).toBe(primaryGet.payload?.task?.lastActivity);
+    expect(listedPrimary?.diffStat).toEqual(primaryGet.payload?.task?.diffStat);
+
+    markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
+    const terminal = await getTaskPayload(primary.taskId);
+    expect(terminal.payload?.task).not.toHaveProperty("lastActivity");
+    expect(terminal.payload?.task).not.toHaveProperty("diffStat");
+    expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
   it("cancels running task records and returns the updated task", async () => {

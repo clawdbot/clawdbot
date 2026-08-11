@@ -346,6 +346,9 @@ function buildExecRunOverlay(params: {
         ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
         : {}),
     },
+    // This process exits after one turn, so live skill invalidation cannot be
+    // observed and would leave Chokidar retaining the otherwise-finished CLI.
+    skills: { load: { watch: false } },
     ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
   } as OpenClawConfig;
 }

@@ -7,7 +7,12 @@ import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import { resolveSandboxContext } from "../../sandbox/context.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
@@ -200,7 +205,19 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
+  const pluginSandbox = control.pluginHarnessOwnsTransport
+    ? await resolveSandboxContext({
+        config: params.config,
+        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        workspaceDir: runtime.workspaceDir,
+      })
+    : undefined;
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
   const attemptParams: EmbeddedRunAttemptParams = {
+    admittedRunContext: params.admittedRunContext,
+    ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
@@ -268,6 +285,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     finalizePromptForResolvedTools:
       pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    // The outer run-loop owns the begun lease; the inner attempt reports only
+    // the accepted candidate boundary to that owner.
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
@@ -427,7 +447,18 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   };
-  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attemptParams.admittedRunContext,
+    agentId: runtime.agentId,
+    sessionKey: runtime.sessionKey,
+    turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+    turnSourceAccountId: params.agentAccountId,
+    turnSourceThreadId: params.currentThreadTs,
+  });
+  const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
+    runEmbeddedAttemptWithBackend(attemptParams),
+  )
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })

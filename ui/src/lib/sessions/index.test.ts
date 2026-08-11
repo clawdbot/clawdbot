@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -8,11 +9,7 @@ import {
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
-import {
-  createGatewayHarness,
-  deferred,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 
 function sessionChangedEvent(key: string): GatewayEventFrame {
   return {
@@ -152,7 +149,7 @@ describe("createSessionCapability", () => {
   });
 
   it("reports a group rename as stale after a same-client reconnect", async () => {
-    const renamed = deferred<{ groups: Array<{ name: string }> }>();
+    const renamed = createDeferred<{ groups: Array<{ name: string }> }>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.rename") {
         return await renamed.promise;
@@ -180,7 +177,7 @@ describe("createSessionCapability", () => {
   });
 
   it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
-    const replaced = deferred<{ groups: Array<{ name: string }> }>();
+    const replaced = createDeferred<{ groups: Array<{ name: string }> }>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.put") {
         return await replaced.promise;
@@ -211,7 +208,7 @@ describe("createSessionCapability", () => {
   it.each(["rename", "delete"] as const)(
     "keeps a confirmed group %s completed when its row refresh outlives the connection",
     async (operation) => {
-      const refreshed = deferred<SessionsListResult>();
+      const refreshed = createDeferred<SessionsListResult>();
       const method = operation === "rename" ? "sessions.groups.rename" : "sessions.groups.delete";
       const request = vi.fn(async (requestedMethod: string) => {
         if (requestedMethod === method) {
@@ -256,8 +253,8 @@ describe("createSessionCapability", () => {
   });
 
   it("ignores an older group load failure after an event-driven load succeeds", async () => {
-    const firstGroups = deferred<{ groups: Array<{ name: string }> }>();
-    const currentGroups = deferred<{ groups: Array<{ name: string }> }>();
+    const firstGroups = createDeferred<{ groups: Array<{ name: string }> }>();
+    const currentGroups = createDeferred<{ groups: Array<{ name: string }> }>();
     let groupsCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.list") {
@@ -377,8 +374,8 @@ describe("createSessionCapability", () => {
   });
 
   it("starts a fresh list epoch when the same client reconnects", async () => {
-    const staleList = deferred<SessionsListResult>();
-    const currentList = deferred<SessionsListResult>();
+    const staleList = createDeferred<SessionsListResult>();
+    const currentList = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.subscribe") {
@@ -409,7 +406,7 @@ describe("createSessionCapability", () => {
   });
 
   it("does not publish a created session from a retired same-client epoch", async () => {
-    const staleCreate = deferred<{ key: string }>();
+    const staleCreate = createDeferred<{ key: string }>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {
         return await staleCreate.promise;
@@ -439,7 +436,7 @@ describe("createSessionCapability", () => {
   });
 
   it("creates a session while a list refresh is in flight", async () => {
-    const pendingList = deferred<SessionsListResult>();
+    const pendingList = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const key = "agent:main:created";
     const request = vi.fn(async (method: string) => {
@@ -510,7 +507,7 @@ describe("createSessionCapability", () => {
   });
 
   it("reports a reset as stale when its connection epoch retires", async () => {
-    const staleReset = deferred<unknown>();
+    const staleReset = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.reset") {
         return await staleReset.promise;
@@ -559,7 +556,7 @@ describe("createSessionCapability", () => {
   });
 
   it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
-    const stalePatch = deferred<unknown>();
+    const stalePatch = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
         return await stalePatch.promise;
@@ -594,7 +591,7 @@ describe("createSessionCapability", () => {
   });
 
   it("does not dispatch a queued patch on a replacement connection", async () => {
-    const priorPatch = deferred<void>();
+    const priorPatch = createDeferred();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
         return { ok: true, path: "", key: "agent:main:main", entry: {} };
@@ -670,7 +667,7 @@ describe("createSessionCapability", () => {
   });
 
   it("keeps background hydration non-blocking and retains an omitted selected row", async () => {
-    const secondList = deferred<SessionsListResult>();
+    const secondList = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method !== "sessions.list") {
@@ -862,7 +859,7 @@ describe("createSessionCapability", () => {
   it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
-    const refreshed = deferred<SessionsListResult>();
+    const refreshed = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -908,7 +905,7 @@ describe("createSessionCapability", () => {
 
   it("publishes remote deletion before refreshing the canonical list", async () => {
     const visibleKey = "agent:main:main";
-    const refreshed = deferred<SessionsListResult>();
+    const refreshed = createDeferred<SessionsListResult>();
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {

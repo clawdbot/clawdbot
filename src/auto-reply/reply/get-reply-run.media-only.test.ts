@@ -19,7 +19,6 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
-import { applySessionHints } from "./body.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
@@ -426,6 +425,54 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "mention",
+      ctx: { WasMentioned: true },
+    },
+    {
+      name: "native command",
+      ctx: {
+        CommandTurn: {
+          kind: "native" as const,
+          source: "native" as const,
+          authorized: true,
+          commandName: "status",
+          body: "/status",
+        },
+      },
+    },
+  ])("keeps empty-assistant silence disabled for a directed group $name", async ({ ctx }) => {
+    await runPrepared({
+      ctx: {
+        ...baseParams().ctx,
+        ...ctx,
+      },
+    });
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it("keeps empty-assistant silence available for ambient room events", async () => {
+    const defaults = baseParams();
+    await runPrepared({
+      ctx: {
+        ...defaults.ctx,
+        InboundEventKind: "room_event",
+        WasMentioned: true,
+      },
+      sessionCtx: {
+        ...defaults.sessionCtx,
+        InboundEventKind: "room_event",
+        WasMentioned: true,
+      },
+    });
+
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 

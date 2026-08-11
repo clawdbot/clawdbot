@@ -1183,6 +1183,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       },
       lobsterPetVisits: this.settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       setLobsterPetVisits: (enabled) => this.applySettings({ lobsterPetVisits: enabled }),
+      sessionDeleteConfirm:
+        this.settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
+      setSessionDeleteConfirm: (enabled) => this.applySettings({ sessionDeleteConfirm: enabled }),
       lobsterPetSounds: this.settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
       setLobsterPetSounds: (enabled) => this.applySettings({ lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),

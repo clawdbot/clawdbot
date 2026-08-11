@@ -334,7 +334,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: true,
     buildProgressEventLine: (input, options) =>
-      input.event === "tool" || input.event === "item"
+      input.event === "tool" || input.event === "item" || input.event === "command-output"
         ? buildChannelProgressDraftLineForEntry(account.config, input, options)
         : buildChannelProgressDraftLine(input, options),
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,

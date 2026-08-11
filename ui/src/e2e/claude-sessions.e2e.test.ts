@@ -629,7 +629,8 @@ suite.define(() => {
     await page.getByText("Older remote review", { exact: true }).waitFor();
     await page.getByText("Remote architecture review", { exact: true }).click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
-    const thread = page.locator(".chat-thread");
+    const catalogPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    const thread = catalogPane.locator(".chat-thread");
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
       .toBe(true);
@@ -645,37 +646,40 @@ suite.define(() => {
       element.dispatchEvent(new Event("scroll"));
     });
     await page.clock.runFor(100);
-    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
+    await catalogPane
+      .locator('.chat-virtual-row:not([data-virtual-row-key="history"])')
+      .first()
+      .waitFor();
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
-    await page.locator(".chat-history-loading").waitFor();
-    expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    await catalogPane.locator(".chat-history-loading").waitFor();
+    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
     await gateway.resolveDeferred("sessions.catalog.read");
     await expect
       .poll(() =>
-        page
-          .locator("openclaw-chat-pane")
-          .evaluate(
-            (element) =>
-              (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
-          ),
+        catalogPane.evaluate(
+          (element) =>
+            (element as HTMLElement & { catalogMessages: unknown[] }).catalogMessages.length,
+        ),
       )
       .toBe(41);
     await page.clock.runFor(100);
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
-    expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
+    expect(
+      await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
+    ).toBe(true);
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {
       const [workbenchBox, threadBox, composerBox] = await Promise.all([
-        page.locator(".chat-workbench").boundingBox(),
-        page.locator(".chat-thread-inner").boundingBox(),
-        page.locator(".agent-chat__composer-shell").boundingBox(),
+        catalogPane.locator(".chat-workbench").boundingBox(),
+        catalogPane.locator(".chat-thread-inner").boundingBox(),
+        catalogPane.locator(".agent-chat__composer-shell").boundingBox(),
       ]);
       expect(workbenchBox).not.toBeNull();
       expect(threadBox).not.toBeNull();
@@ -709,8 +713,8 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
-    expect(await page.locator(".chat-history-loading").count()).toBe(0);
-    expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
+    expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
   });

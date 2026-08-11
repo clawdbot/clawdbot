@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
+  chatWarn: vi.fn(),
   sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
@@ -64,6 +65,17 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      subsystem === "system-agent/chat-engine"
+        ? ({ warn: mocks.chatWarn } as unknown as ReturnType<typeof actual.createSubsystemLogger>)
+        : actual.createSubsystemLogger(subsystem),
+  };
+});
 
 vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
@@ -174,7 +186,9 @@ function testHarnessBinding(route: SystemAgentConfiguredRoute) {
     return { auth: {}, deps: {} };
   }
   const agentHarnessId =
-    route.agentHarnessRuntimeOverride === "auto" ? "openclaw" : route.agentHarnessRuntimeOverride;
+    route.agentHarnessRuntimeOverride === "auto"
+      ? "openclaw"
+      : (route.agentHarnessRuntimeOverride ?? "codex");
   if (agentHarnessId === "openclaw") {
     return { auth: { agentHarnessId }, deps: {} };
   }
@@ -893,7 +907,6 @@ describe("SystemAgentChatEngine", () => {
       {
         allowConfigSizeDrop: false,
         baseHash: "skills-base-hash",
-        migrationBaseConfig: baseConfig,
       },
     );
     expect(appendAuditEntry).toHaveBeenCalledWith(
@@ -1354,7 +1367,6 @@ describe("SystemAgentChatEngine", () => {
       {
         allowConfigSizeDrop: false,
         baseHash: "gateway-base-hash",
-        migrationBaseConfig: baseConfig,
         afterWrite: {
           mode: "none",
           reason: "Gateway setup defers runtime apply until explicit restart",
@@ -1806,7 +1818,6 @@ describe("SystemAgentChatEngine", () => {
       }),
       expect.objectContaining({
         baseHash: "base-hash",
-        migrationBaseConfig: baseConfig,
       }),
     );
     expect(currentConfig).toEqual(concurrentConfig);
@@ -3151,13 +3162,15 @@ describe("SystemAgentChatEngine", () => {
   it("fails closed when neither inference path is usable", async () => {
     const planner = vi.fn(async () => null);
     const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
+      runAgentTurn: async () => {
+        throw new Error("workspace owner openclaw is missing from the roster");
+      },
       planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await expect(engine.handle("please make everything nice")).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
+    await expect(engine.handle("please make everything nice")).rejects.toThrow(
+      "workspace owner openclaw is missing from the roster",
     );
   });
 });
@@ -3275,6 +3288,7 @@ describe("OpenClaw agent loop backends", () => {
 
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(reply.text).toContain("planner fallback reply");
+    expect(mocks.chatWarn).toHaveBeenCalledWith(expect.stringContaining("claude exploded"));
   });
 });
 
@@ -3493,6 +3507,93 @@ describe("OpenClaw chat wizard step payload", () => {
 
     expect(selected).toBe("beta");
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Beta" });
+  });
+
+  it("cancels the current hosted wizard through a typed direct action", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(cancelled.step).toBeUndefined();
+    expect(cancelled.wizardInputPending).toBeUndefined();
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Cancel" });
+  });
+
+  it("cancels the local hosted wizard after its inference binding drifts", async () => {
+    useTempStateDir();
+    const baseConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const changedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig: OpenClawConfig = baseConfig;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        loadOverview: fakeOverviewLoader(),
+      },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    currentConfig = changedConfig;
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(cancelled.step).toBeUndefined();
+  });
+
+  it("rejects a stale typed cancel without changing the active step", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    await expect(engine.cancelWizard({ stepId: "stale-step" })).rejects.toBeInstanceOf(
+      SystemAgentWizardAnswerError,
+    );
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
   });
 
   it("rejects a stale structured answer without changing the active step", async () => {

@@ -63,7 +63,12 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  buildAfterTurnRuntimeContext,
+  resolveAttemptFsWorkspaceOnly,
+} from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
@@ -71,11 +76,6 @@ import {
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
-import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  buildAfterTurnRuntimeContext,
-  resolveAttemptFsWorkspaceOnly,
-} from "./attempt.prompt-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -98,6 +98,7 @@ type AttemptWorkspaceParams = Pick<
   | "sandboxSessionKey"
   | "sessionId"
   | "sessionKey"
+  | "skillWorkshopCollectionReconcile"
   | "skillsSnapshot"
   | "workspaceDir"
 >;
@@ -108,13 +109,17 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir: resolvedWorkspace,
-  });
+  // Collection review is a host-owned maintenance run with one restricted tool.
+  // Sandboxing would hide that tool or redirect it to a disposable workspace.
+  const sandbox = params.skillWorkshopCollectionReconcile
+    ? null
+    : await resolveSandboxContext({
+        config: params.config,
+        execOverrides: params.execOverrides,
+        sessionKey: sandboxSessionKey,
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: resolvedWorkspace,
+      });
   const effectiveWorkspace =
     sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;

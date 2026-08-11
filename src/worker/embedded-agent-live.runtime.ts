@@ -1,4 +1,5 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -38,6 +39,11 @@ function boundLiveValue(value: unknown): unknown {
   } catch {
     return { truncated: true, preview: "[unserializable live payload]" };
   }
+}
+
+function redactLiveText(value: string): string {
+  const redacted = redactAgentDiagnosticPayload(value);
+  return truncateLiveText(typeof redacted === "string" ? redacted : "[unreadable diagnostic text]");
 }
 
 function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
@@ -274,7 +280,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "start",
           name: event.toolName,
           toolCallId: event.toolCallId,
-          args: event.args,
+          args: redactAgentDiagnosticPayload(event.args),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -287,7 +293,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "update",
           name: event.toolName,
           toolCallId: event.toolCallId,
-          partialResult: event.partialResult,
+          partialResult: redactAgentDiagnosticPayload(event.partialResult),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -301,7 +307,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           name: event.toolName,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: event.result,
+          result: redactAgentDiagnosticPayload(event.result),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -321,7 +327,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "finishing",
           ...terminal,
           ...(lastAssistant?.stopReason === "error"
-            ? { error: lastAssistant.errorMessage ?? "Worker inference failed." }
+            ? { error: redactLiveText(lastAssistant.errorMessage ?? "Worker inference failed.") }
             : {}),
           ...(lastAssistant?.stopReason === "aborted" ? { aborted: true } : {}),
         },
@@ -340,7 +346,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         endedAt: Date.now(),
         ...(failure.aborted
           ? { stopReason: "aborted", aborted: true }
-          : { error: failure.error.message }),
+          : { error: redactLiveText(failure.error.message) }),
       },
     };
   };

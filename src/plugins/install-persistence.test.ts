@@ -14,7 +14,7 @@ import {
   replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
-  runtimeLogs,
+  pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecordsWithLease,
@@ -37,7 +37,7 @@ function requireMockCallArg(
 }
 
 function expectRuntimeLogIncludes(fragment: string) {
-  expect(runtimeLogs.join("\n")).toContain(fragment);
+  expect(pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
 }
 
 function createManifestRecord(
@@ -285,7 +285,7 @@ describe("persistPluginInstall", () => {
       applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     const refreshOrder = refreshPluginRegistry.mock.invocationCallOrder[0] ?? 0;
     expect(cleanupOrder).toBeLessThan(refreshOrder);
-    expect(runtimeLogs.join("\n")).toContain(
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       "Removed previous plugin install directory: /tmp/openclaw/extensions/codex",
     );
   });
@@ -480,16 +480,16 @@ describe("persistPluginInstall", () => {
       effectiveOnly: true,
       onlyPluginIds: ["discord"],
     });
-    expect(runtimeLogs.join("\n")).toContain(
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       'Warning: installed plugin "discord" is not the active source',
     );
-    expect(runtimeLogs.join("\n")).toContain(
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       "active config source: /tmp/openclaw-upstream/extensions/discord/index.ts",
     );
-    expect(runtimeLogs.join("\n")).toContain(
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
       "installed npm source: /tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts",
     );
-    expect(runtimeLogs.join("\n")).toContain("openclaw plugins doctor");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("openclaw plugins doctor");
   });
 
   it("does not warn when the config-selected source is inside the npm install path", async () => {
@@ -533,7 +533,7 @@ describe("persistPluginInstall", () => {
       },
     });
 
-    expect(runtimeLogs.join("\n")).not.toContain("is not the active source");
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("is not the active source");
   });
 
   it("invalidates runtime cache even when registry refresh fails", async () => {

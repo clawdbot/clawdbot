@@ -1,11 +1,17 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
+import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { findJobOrThrow, isJobEnabled, nextWakeAtMs, resolveJobLastRunStatus } from "./jobs.js";
+import {
+  findJobOrThrow,
+  isJobEnabled,
+  nextWakeAtMs,
+  resolveJobLastRunStatus,
+} from "./jobs-scheduling.js";
 import { sortCronJobs } from "./list-page-sort.js";
 import type {
   CronJobsEnabledFilter,
@@ -79,11 +85,17 @@ export async function readScratch(state: CronServiceState, id: string) {
 export async function writeScratch(
   state: CronServiceState,
   id: string,
-  params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+  params: {
+    content: string | null;
+    expectedRevision?: number;
+    sourceSha256?: string;
+    commitGuard?: () => void;
+  },
 ) {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     findJobOrThrow(state, id);
+    params.commitGuard?.();
     return writeCronJobScratch({
       storePath: state.deps.storePath,
       jobId: id,
@@ -113,6 +125,7 @@ export async function recordExternalFailure(
     const postPersistNotifications: DeferredCronNotifications = [];
     const now = state.deps.nowMs();
     const sourceIdentity = job.state.streamSourceIdentity;
+    assertCronJobStateTimestamps(statePatch);
     Object.assign(job.state, statePatch);
     job.state.streamSourceIdentity = sourceIdentity;
     // Source restarts are counted separately, but terminal exhaustion should

@@ -13,9 +13,31 @@ import {
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
 } from "../lib/nodes/index.ts";
 import * as nodes from "../lib/nodes/index.ts";
+import {
+  readCloudSessionRecovery,
+  writeCloudSessionRecovery,
+} from "../lib/sessions/cloud-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const recoveryMigrationRuntimeLoad = vi.hoisted(() => {
+  let release = () => {};
+  let markStarted = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { markStarted, pending, release, started };
+});
+
+vi.mock("../lib/sessions/cloud-recovery-migration.runtime.ts", async (importOriginal) => {
+  recoveryMigrationRuntimeLoad.markStarted();
+  await recoveryMigrationRuntimeLoad.pending;
+  return await importOriginal();
+});
+
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEFAULT_DEVICE_AUTH_STORAGE_KEY = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:${DEFAULT_GATEWAY_URL}`;
@@ -1030,6 +1052,137 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
+  it("does not let a stale hello runtime import publish or migrate recovery", async () => {
+    useNodeFakeTimers();
+    const sessionStorage = createStorageMock();
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    const recovery = {
+      sessionKey: "agent:cloud:stale",
+      messageId: "message-stale",
+      message: "keep the current connection",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      recoveryScope: legacyScope,
+      phase: "sending" as const,
+    };
+    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+    firstWs.emitMessage({
+      type: "res",
+      id: firstConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: [],
+          deviceToken: STORED_CRED,
+          recoveryMigrationAllowed: true,
+          recoveryScope: "server-stale",
+        },
+      },
+    });
+    await recoveryMigrationRuntimeLoad.started;
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+
+    firstWs.emitClose(1006, "socket lost");
+    await vi.advanceTimersByTimeAsync(800);
+    const secondWs = getLatestWebSocket();
+    const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-current");
+    secondWs.emitMessage({
+      type: "res",
+      id: secondConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: [],
+          deviceToken: STORED_CRED,
+          recoveryMigrationAllowed: true,
+          recoveryScope: "server-current",
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+
+    recoveryMigrationRuntimeLoad.release();
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe("server-current");
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
+    ).toEqual({ ...recovery, recoveryScope: "server-current" });
+    client.stop();
+  });
+
+  it("keeps stale credential recovery isolated across a shared-browser principal switch", async () => {
+    const sessionStorage = createStorageMock();
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    const principalScope = "principal-recovery-scope";
+    const recovery = {
+      sessionKey: "agent:cloud:shared-browser",
+      messageId: "message-shared-browser",
+      message: "keep this task with its credential owner",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      recoveryScope: legacyScope,
+      phase: "sending" as const,
+    };
+    expect(writeCloudSessionRecovery(recovery)).toBe(true);
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          recoveryScope: principalScope,
+        },
+      },
+    });
+    recoveryMigrationRuntimeLoad.release();
+
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe(principalScope);
+    expect(readCloudSessionRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey)).toEqual(
+      recovery,
+    );
+    expect(
+      readCloudSessionRecovery(DEFAULT_GATEWAY_URL, principalScope, recovery.sessionKey),
+    ).toBeNull();
+    client.stop();
+  });
+
   it("publishes a credential-scoped recovery identity after hello", async () => {
     const onRecoveryScopeChange = vi.fn();
     const client = new GatewayBrowserClient({
@@ -1050,19 +1203,82 @@ describe("GatewayBrowserClient", () => {
           role: "operator",
           scopes: ["operator.read"],
           deviceToken: "stored-device-token",
+          recoveryScope: "device-recovery-scope",
         },
       },
     });
 
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScopeReady).toBe(true);
-    expect(client.recoveryScope).toBe(
-      createHash("sha256").update("stored-device-token").digest("hex"),
-    );
+    expect(client.recoveryScope).toBe("device-recovery-scope");
     expect(client.recoveryScope).not.toContain("stored-device-token");
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.scopes).toEqual(
       [...CONTROL_UI_OPERATOR_SCOPES].toSorted(),
     );
+    client.stop();
+  });
+
+  it("keeps the shipped credential scope for an older v4 Gateway", async () => {
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          deviceToken: STORED_CRED,
+        },
+      },
+    });
+
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe(legacyScope);
+    expect(client.recoveryScopeReady).toBe(true);
+    client.stop();
+  });
+
+  it("uses a Gateway-owned recovery scope without browser crypto or client credentials", async () => {
+    localStorage.clear();
+    stubInsecureCrypto();
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          recoveryScope: "gateway-recovery-scope",
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(connectFrame.params?.auth).toBeUndefined();
+    expect(connectFrame.params?.device).toBeUndefined();
+    expect(client.recoveryScope).toBe("gateway-recovery-scope");
+    expect(client.recoveryScopeReady).toBe(true);
     client.stop();
   });
 

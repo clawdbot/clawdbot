@@ -692,6 +692,7 @@ export class ManagedWorktreeService {
       throw commandError("git show-ref --verify", branchExists);
     }
     const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    params.commitGuard?.();
     await fs.mkdir(root, { recursive: true });
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
@@ -725,6 +726,7 @@ export class ManagedWorktreeService {
       if (runRepositorySetup) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
+      params.commitGuard?.();
     } catch (error) {
       try {
         await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
@@ -768,6 +770,11 @@ export class ManagedWorktreeService {
     ownerId: string,
   ): ManagedWorktreeRecord | undefined {
     return findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
+  }
+
+  findLiveById(id: string): ManagedWorktreeRecord | undefined {
+    const record = getRegistryWorktree(this.env, id);
+    return record?.removedAt === undefined ? record : undefined;
   }
 
   /** Resolves the canonical registry root and the caller's own checkout root. */

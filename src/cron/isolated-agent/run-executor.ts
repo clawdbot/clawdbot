@@ -1,6 +1,10 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
@@ -78,14 +82,6 @@ const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
 const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentRegistryRuntime>(
   () => import("./run-subagent-registry.runtime.js"),
 );
-
-async function loadCronEmbeddedRuntime() {
-  return await cronEmbeddedRuntimeLoader.load();
-}
-
-async function loadCronSubagentRegistryRuntime() {
-  return await cronSubagentRegistryRuntimeLoader.load();
-}
 
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
@@ -366,12 +362,22 @@ function createCronPromptExecutor(params: {
       workspaceDir: params.workspaceDir,
     });
     let acceptedContextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
+    const runId = params.cronSession.sessionEntry.sessionId;
+    const preparedRunAdmission = prepareAgentRunAdmission({
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      cfg: params.cfgWithAgentDefaults,
+      facts: {
+        runId,
+        agentId: params.agentId,
+        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+      },
+    });
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
       requestedRouteResolution: "resolved",
-      runId: params.cronSession.sessionEntry.sessionId,
+      runId,
       sessionId: params.cronSession.sessionEntry.sessionId,
       lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
@@ -509,7 +515,6 @@ function createCronPromptExecutor(params: {
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
-          const runId = params.cronSession.sessionEntry.sessionId;
           const result = await withLocalSessionPlacementTurnAdmission(
             {
               sessionId: params.cronSession.sessionEntry.sessionId,
@@ -517,8 +522,9 @@ function createCronPromptExecutor(params: {
               agentId: params.agentId,
               runId,
             },
-            () =>
-              runCliAgent({
+            async () =>
+              await runCliAgent({
+                preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
                 sessionEntry: params.cronSession.sessionEntry,
@@ -582,7 +588,7 @@ function createCronPromptExecutor(params: {
           acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
           return result;
         }
-        const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         const promptCacheKey = resolveIsolatedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
@@ -598,6 +604,7 @@ function createCronPromptExecutor(params: {
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
+          preparedRunAdmission,
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
           sessionTarget: {
@@ -700,10 +707,12 @@ function createCronPromptExecutor(params: {
         acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
         return result;
       },
-    }).catch(async (error: unknown) => {
-      await contextEngineLogicalTurnLease.dispose();
-      throw error;
-    });
+    })
+      .catch(async (error: unknown) => {
+        await contextEngineLogicalTurnLease.dispose();
+        throw error;
+      })
+      .finally(() => preparedRunAdmission.close());
     try {
       if (
         acceptedContextEngineTurnCandidate &&
@@ -929,7 +938,7 @@ export async function executeCronRun(params: {
     let hasActiveDescendants = false;
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
-        await loadCronSubagentRegistryRuntime();
+        await cronSubagentRegistryRuntimeLoader.load();
       hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) => {
         const descendantStartedAt =
           typeof entry.execution.startedAt === "number"

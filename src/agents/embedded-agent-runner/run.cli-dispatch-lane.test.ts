@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const runEmbeddedAgentViaCliBackendIfEligible = vi.hoisted(() => vi.fn());
@@ -32,6 +33,7 @@ const dispatchResult: EmbeddedAgentRunResult = {
 
 function laneRunParams() {
   return {
+    admittedRunContext: createTestAdmittedRunContext("run-cli-dispatch-lane-test"),
     sessionId: "recall-lane-session",
     sessionKey: "agent:main:recall-lane-test",
     agentId: "main",

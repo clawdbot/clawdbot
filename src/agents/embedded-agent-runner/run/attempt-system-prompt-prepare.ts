@@ -44,11 +44,11 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-disc
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
-import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
   resolvePromptModeForSession,
   shouldInjectHeartbeatPrompt,
-} from "./attempt.prompt-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;

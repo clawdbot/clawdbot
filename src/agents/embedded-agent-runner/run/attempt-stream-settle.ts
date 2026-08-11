@@ -44,25 +44,25 @@ import {
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
-  flushSessionManagerTranscript,
-  normalizeCompactionRecoveryTranscriptTail,
-} from "./attempt-transcript-helpers.js";
-import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type CompletionRequiredAsyncTaskWaitResult,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
-} from "./attempt.context-engine-helpers.js";
+} from "./attempt-context-engine-helpers.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
-} from "./attempt.run-decisions.js";
-import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
+} from "./attempt-run-decisions.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
+import {
+  flushSessionManagerTranscript,
+  normalizeCompactionRecoveryTranscriptTail,
+} from "./attempt-transcript-helpers.js";
 import {
   hasActiveCompactionRetryWork,
   waitForCompactionRetryWithAggregateTimeout,

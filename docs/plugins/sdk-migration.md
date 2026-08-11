@@ -873,6 +873,25 @@ timeline for current status.
 
   </Accordion>
 
+  <Accordion title="Agent harness attempt params -> V2 host-capability contract">
+    New or updated harness plugins should implement `AgentHarnessV2` and use
+    `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, or
+    `AgentHarnessSideQuestionParamsV2`. The V2 parameter types require
+    `hostCapabilities`, matching what core supplies at the selected-harness
+    boundary. A plugin that adopts these V2 contracts must declare
+    `openclaw.compat.pluginApi: ">=2026.8.1"` (or a newer floor) in its package
+    manifest so an older host rejects the plugin before loading it.
+
+    Existing plugins may continue implementing `AgentHarness` and constructing
+    the legacy `AgentHarnessAttemptParams`, `EmbeddedRunAttemptParams`, or
+    `AgentHarnessSideQuestionParams` types without that field through
+    2026-10-12. Those contracts keep the capability optional only for source
+    compatibility; they do not create a capability-free runtime path. Migrate
+    by changing the imported type name and binding tool or native-action surfaces through
+    `params.hostCapabilities`.
+
+  </Accordion>
+
   <Accordion title="runtime.tasks.flow -> runtime.tasks.managedFlows">
     **Old**: `runtime.tasks.flow` (singular) returned a live task-flow
     accessor.
@@ -1012,30 +1031,26 @@ The supported `talk.session.create` combinations are intentionally small:
 Method map for readers migrating from the older `talk.realtime.*` /
 `talk.transcription.*` / `talk.handoff.*` families (all removed):
 
-| Old                              | New                                                      |
-| -------------------------------- | -------------------------------------------------------- |
-| `talk.realtime.session`          | `talk.client.create`                                     |
-| `talk.realtime.toolCall`         | `talk.client.toolCall`                                   |
-| `talk.realtime.relayAudio`       | `talk.session.appendAudio`                               |
-| `talk.realtime.relayCancel`      | `talk.session.cancelOutput` or `talk.session.cancelTurn` |
-| `talk.realtime.relayToolResult`  | `talk.session.submitToolResult`                          |
-| `talk.realtime.relayStop`        | `talk.session.close`                                     |
-| `talk.transcription.session`     | `talk.session.create({ mode: "transcription" })`         |
-| `talk.transcription.relayAudio`  | `talk.session.appendAudio`                               |
-| `talk.transcription.relayCancel` | `talk.session.cancelTurn`                                |
-| `talk.transcription.relayStop`   | `talk.session.close`                                     |
-| `talk.handoff.create`            | `talk.session.create({ transport: "managed-room" })`     |
-| `talk.handoff.join`              | `talk.session.join`                                      |
-| `talk.handoff.revoke`            | `talk.session.close`                                     |
+| Old                              | New                                                  |
+| -------------------------------- | ---------------------------------------------------- |
+| `talk.realtime.session`          | `talk.client.create`                                 |
+| `talk.realtime.toolCall`         | `talk.client.toolCall`                               |
+| `talk.realtime.relayAudio`       | `talk.session.appendAudio`                           |
+| `talk.realtime.relayCancel`      | `talk.session.cancelOutput`                          |
+| `talk.realtime.relayToolResult`  | `talk.session.submitToolResult`                      |
+| `talk.realtime.relayStop`        | `talk.session.close`                                 |
+| `talk.transcription.session`     | `talk.session.create({ mode: "transcription" })`     |
+| `talk.transcription.relayAudio`  | `talk.session.appendAudio`                           |
+| `talk.transcription.relayCancel` | `talk.session.close`                                 |
+| `talk.transcription.relayStop`   | `talk.session.close`                                 |
+| `talk.handoff.create`            | `talk.session.create({ transport: "managed-room" })` |
+| `talk.handoff.revoke`            | `talk.session.close`                                 |
 
 The unified control vocabulary is also deliberately narrow:
 
 | Method                          | Applies to                                              | Contract                                                                                                                                                                                                                  |
 | ------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `talk.session.appendAudio`      | `realtime/gateway-relay`, `transcription/gateway-relay` | Append a base64 PCM audio chunk to the provider session owned by the same Gateway connection.                                                                                                                             |
-| `talk.session.startTurn`        | `stt-tts/managed-room`                                  | Start a managed-room user turn.                                                                                                                                                                                           |
-| `talk.session.endTurn`          | `stt-tts/managed-room`                                  | End the active turn after stale-turn validation.                                                                                                                                                                          |
-| `talk.session.cancelTurn`       | all Gateway-owned sessions                              | Cancel active capture/provider/agent/TTS work for a turn.                                                                                                                                                                 |
 | `talk.session.cancelOutput`     | `realtime/gateway-relay`                                | Stop assistant audio output without necessarily ending the user turn.                                                                                                                                                     |
 | `talk.session.submitToolResult` | `realtime/gateway-relay`                                | Complete a provider tool call after any asynchronous completion exposed by its bridge; pass `options.willContinue` for interim output or, when supported, `options.suppressResponse` to avoid another assistant response. |
 | `talk.session.steer`            | agent-backed Talk sessions                              | Send spoken `status`, `steer`, `cancel`, or `followup` control to the active embedded run resolved from the Talk session.                                                                                                 |

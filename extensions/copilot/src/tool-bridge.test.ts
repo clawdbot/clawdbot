@@ -18,9 +18,28 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCopilotToolBridge } from "./tool-bridge.js";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
+import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
 
-type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
+type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridgeImpl>[0];
+type CopilotToolBridgeAttemptParams = NonNullable<CopilotToolBridgeInput["attemptParams"]>;
+type CopilotToolBridgeTestInput = Omit<CopilotToolBridgeInput, "attemptParams"> & {
+  attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
+    Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
+};
+const testHostCapabilities = createCopilotTestHostCapabilities();
+
+function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
+  const { attemptParams, ...baseInput } = input;
+  const preparedInput: CopilotToolBridgeInput = {
+    ...baseInput,
+    attemptParams: {
+      ...attemptParams,
+      hostCapabilities: attemptParams?.hostCapabilities ?? testHostCapabilities,
+    },
+  };
+  return createCopilotToolBridgeImpl(preparedInput);
+}
 type ConvertToolOptions = Pick<
   CopilotToolBridgeInput,
   "abortSignal" | "beforeExecute" | "onToolCompleted"
@@ -111,6 +130,64 @@ afterEach(() => {
 });
 
 describe("createCopilotToolBridge", () => {
+  it("rejects a direct caller that omits the required host capability", async () => {
+    const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
+    await expect(
+      createCopilotToolBridgeImpl({
+        agentId: "agent-1",
+        attemptParams: {} as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-test",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      }),
+    ).rejects.toThrow("Copilot attempt tools require host-bound capabilities");
+    expect(createOpenClawCodingTools).not.toHaveBeenCalled();
+  });
+
+  it("binds every tool surface and retained source/SDK tools fail after capability closure", async () => {
+    let active = true;
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const bindToolSurface = vi.fn((tools: AnyAgentTool[], _options?: Readonly<{ cwd?: string }>) =>
+      tools.map((tool) => ({
+        ...tool,
+        execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
+          if (!active) {
+            throw new Error("agent harness host capability is no longer active");
+          }
+          return await tool.execute?.(...args);
+        },
+      })),
+    );
+    const bridge = await createCopilotToolBridge({
+      agentId: "agent-1",
+      cwd: "/tmp/copilot-native-cwd",
+      attemptParams: {
+        hostCapabilities: { ...testHostCapabilities, bindToolSurface },
+      },
+      createOpenClawCodingTools: async () => [makeTool({ execute })],
+      modelId: "gpt-test",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+    const source = expectDefined(bridge.sourceTools[0], "bound Copilot source tool");
+    const sdk = expectDefined(bridge.sdkTools[0], "bound Copilot SDK tool");
+    const copiedSourceExecute = source.execute;
+    const copiedSdkHandler = sdk.handler;
+    active = false;
+
+    await expect(copiedSourceExecute?.("call-1", {})).rejects.toThrow("no longer active");
+    await expect(copiedSdkHandler?.({}, makeInvocation())).resolves.toMatchObject({
+      resultType: "failure",
+      textResultForLlm: expect.stringContaining("no longer active"),
+    });
+    expect(bindToolSurface).toHaveBeenCalledTimes(1);
+    expect(bindToolSurface).toHaveBeenCalledWith(expect.any(Array), {
+      cwd: "/tmp/copilot-native-cwd",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("returns empty arrays for unsupported providers without calling the seam", async () => {
     const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
 
@@ -353,6 +430,71 @@ describe("createCopilotToolBridge", () => {
     expect(result.codeModeEngaged).toBe(true);
     expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+  });
+
+  it("binds retained code-mode source and SDK controls exactly once", async () => {
+    let active = true;
+    const hiddenExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const bindToolSurface = vi.fn((tools: AnyAgentTool[], _options?: Readonly<{ cwd?: string }>) =>
+      tools.map((tool) => {
+        const execute = tool.execute;
+        const bound = {
+          ...tool,
+          execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
+            if (!active) {
+              throw new Error("agent harness host capability is no longer active");
+            }
+            return await execute?.(...args);
+          },
+        } as AnyAgentTool;
+        return bound;
+      }),
+    );
+    const bridge = await createCopilotToolBridge({
+      agentId: "agent-1",
+      cwd: "/tmp/copilot-code-mode-cwd",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        hostCapabilities: { ...testHostCapabilities, bindToolSurface },
+        runId: "run-code-mode-bound",
+        sessionKey: "agent:main:main",
+      },
+      createOpenClawCodingTools: async () => [makeTool({ execute: hiddenExecute, name: "read" })],
+      modelId: "gpt-test",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+    const source = expectDefined(
+      bridge.sourceTools.find((tool) => tool.name === "exec"),
+      "bound code-mode source control",
+    );
+    const sdk = expectDefined(
+      bridge.sdkTools.find((tool) => tool.name === "exec"),
+      "bound code-mode SDK control",
+    );
+    const copiedSourceExecute = source.execute;
+    const copiedSdkHandler = sdk.handler;
+    active = false;
+
+    await expect(copiedSourceExecute?.("call-1", { code: "return 1" })).rejects.toThrow(
+      "no longer active",
+    );
+    await expect(copiedSdkHandler?.({ code: "return 1" }, makeInvocation())).resolves.toMatchObject(
+      {
+        resultType: "failure",
+        textResultForLlm: expect.stringContaining("no longer active"),
+      },
+    );
+    expect(bindToolSurface).toHaveBeenCalledTimes(2);
+    expect(bindToolSurface.mock.calls.map(([tools]) => tools.map((tool) => tool.name))).toEqual([
+      ["read"],
+      ["exec", "wait"],
+    ]);
+    expect(bindToolSurface.mock.calls.map(([, options]) => options)).toEqual([
+      { cwd: "/tmp/copilot-code-mode-cwd" },
+      { cwd: "/tmp/copilot-code-mode-cwd" },
+    ]);
+    expect(hiddenExecute).not.toHaveBeenCalled();
   });
 
   it("reports code mode as disengaged when the config leaves it off", async () => {

@@ -168,7 +168,7 @@ export async function resolveDurableChatClaim(params: {
     }
     try {
       const { retryRestartAbortedMainSessionRecovery } =
-        await import("../../agents/main-session-restart-recovery.js");
+        await import("../../agents/main-session-recovery/main-session-restart-recovery.js");
       await retryRestartAbortedMainSessionRecovery({
         canonicalSessionKey: params.canonicalSessionKey,
         cfg: params.cfg,

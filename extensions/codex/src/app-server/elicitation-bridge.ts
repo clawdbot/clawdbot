@@ -1,7 +1,7 @@
 // Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
@@ -648,7 +648,7 @@ async function requestPluginApprovalOutcome(params: {
 }): Promise<AppServerApprovalOutcome> {
   try {
     const requestResult = await requestPluginApproval({
-      paramsForRun: params.paramsForRun,
+      hostCapabilities: params.paramsForRun.hostCapabilities,
       title: params.title,
       description: params.description,
       severity: "warning",
@@ -663,7 +663,11 @@ async function requestPluginApprovalOutcome(params: {
 
     const decision = approvalRequestExplicitlyUnavailable(requestResult)
       ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
+      : await waitForPluginApprovalDecision({
+          hostCapabilities: params.paramsForRun.hostCapabilities,
+          approvalId,
+          signal: params.signal,
+        });
     return mapExecDecisionToOutcome(decision);
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";

@@ -8,7 +8,7 @@ import {
   formatErrorMessage,
   type AgentHarnessRuntimeArtifactBinding,
   type CodexBundleMcpThreadConfig,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {

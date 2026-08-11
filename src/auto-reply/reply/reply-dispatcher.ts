@@ -109,13 +109,6 @@ const beforeDeliverStagesByHook = new WeakMap<
   readonly ReplyDispatchBeforeDeliverStage[]
 >();
 
-class ReplyDispatchBeforeDeliverTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`beforeDeliver timed out after ${timeoutMs}ms`);
-    this.name = "ReplyDispatchBeforeDeliverTimeoutError";
-  }
-}
-
 function resolveReplyDispatchBeforeDeliverTimeoutMs(
   options: ReplyDispatchBeforeDeliverOptions | undefined,
 ): number {
@@ -140,7 +133,7 @@ async function runReplyDispatchBeforeDeliverStage(
   // delivery owner; Promise.race still observes any late rejection.
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new ReplyDispatchBeforeDeliverTimeoutError(timeoutMs)),
+      () => reject(new Error(`beforeDeliver timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
     timer.unref?.();

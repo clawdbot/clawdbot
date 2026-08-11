@@ -18,13 +18,18 @@ export function createCliOutputFailoverError(params: {
     runId: params.runId,
     sessionId: params.sessionId,
   });
-  const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
+  const syntheticNoResponse = params.output.terminalFailure?.reason === "synthetic_no_response";
+  const reason = syntheticNoResponse
+    ? "format"
+    : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
   const code =
     params.output.terminalFailure?.reason === "max_turns"
       ? "cli_max_turns"
-      : reason === "context_overflow"
-        ? "cli_context_overflow"
-        : undefined;
+      : syntheticNoResponse
+        ? "cli_synthetic_no_response"
+        : reason === "context_overflow"
+          ? "cli_context_overflow"
+          : undefined;
   return new FailoverError(message, {
     reason,
     provider: params.provider,

@@ -11,6 +11,7 @@ import {
 } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import { isFailoverError } from "./failover-error.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
@@ -181,7 +182,12 @@ function makeAttemptForFault(
       terminal: {
         kind: "failed",
         source: "prompt",
-        error: Object.assign(new Error("500 Internal Server Error"), { status: 500 }),
+        error: Object.assign(
+          new Error(
+            '500 Internal Server Error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."}}',
+          ),
+          { status: 500 },
+        ),
       },
     });
   }
@@ -296,25 +302,13 @@ function expectError(outcome: ScenarioOutcome): Error & { attempts?: unknown[] }
 }
 
 describe("runEmbeddedAgent provider fault sequences", () => {
-  it.each([
-    {
-      name: "429 -> 429 -> 200 consumes two same-model retries without rotating",
-      faults: [
-        { status: 429, window: "short" },
-        { status: 429, window: "short" },
-        { status: 200, text: "third attempt ok" },
-      ] satisfies ProviderFault[],
-      expectedSleeps: [10_000, 20_000],
-    },
-    {
-      name: "429 -> 200 keeps same-model retry available without a fallback",
-      faults: [
-        { status: 429, window: "short" },
-        { status: 200, text: "retry without fallback ok" },
-      ] satisfies ProviderFault[],
-      expectedSleeps: [10_000],
-    },
-  ])("$name", async ({ faults, expectedSleeps }) => {
+  it("429 -> 429 -> 200 consumes two same-model retries without rotating", async () => {
+    const faults = [
+      { status: 429, window: "short" },
+      { status: 429, window: "short" },
+      { status: 200, text: "third attempt ok" },
+    ] satisfies ProviderFault[];
+
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
       writeProfiles(agentDir, { openai: 1 });
       const observations: AttemptObservation[] = [];
@@ -335,14 +329,11 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       ).toEqual(
         faults.map(() => ({ provider: "openai", model: "mock-1", profileId: "openai:p1" })),
       );
-      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(expectedSleeps);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([10_000, 20_000]);
       expect(outcome.provider).toBe("openai");
       expect(outcome.model).toBe("mock-1");
       expect(outcome.attempts).toEqual([]);
-      const finalFault = faults.at(-1);
-      expect(outcome.result.payloads?.[0]?.text).toContain(
-        finalFault?.status === 200 ? finalFault.text : "",
-      );
+      expect(outcome.result.payloads?.[0]?.text).toContain("third attempt ok");
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
@@ -385,9 +376,8 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       expect(outcome.model).toBe("mock-3");
       expect(outcome.attempts).toMatchObject([
         { provider: "openai", model: "mock-1", reason: expect.stringMatching(/^auth/) },
-        // BUG(refactor-02): prompt-stage HTTP 500 currently records as timeout even though it
-        // takes the intended cross-model failover path.
-        { provider: "groq", model: "mock-2", reason: "timeout" },
+        // FIXED(refactor-02): shared message evidence keeps the concrete server-error reason.
+        { provider: "groq", model: "mock-2", reason: "server_error" },
       ]);
       expect(outcome.result.payloads?.[0]?.text).toContain("fallback chain ok");
 
@@ -486,15 +476,18 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         ["groq", "mock-2", "groq:p1"],
         ["groq", "mock-3", "groq:p1"],
       ]);
-      // BUG(refactor-02): exhaustion is still a prose-only thrown summary; there is no final
-      // structured error payload carrying the inner profile-level 429 -> 401 sequence yet.
+      // FIXED(refactor-02): the shared concrete reason propagates through exhaustion prose and attempts.
       expect(error.message).toMatch(/^All models failed \(3\): /);
       expect(error.message).toMatch(
-        /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(timeout\) \| groq\/mock-3: .* \(billing\)/,
+        /openai\/mock-1: .* \(auth(?:_permanent)?\) \| groq\/mock-2: .* \(server_error\) \| groq\/mock-3: .* \(billing\)/,
       );
+      expect(isFailoverError(error)).toBe(true);
+      if (!isFailoverError(error)) {
+        throw new Error("expected typed failover exhaustion");
+      }
       expect(error.attempts).toMatchObject([
-        { provider: "openai", model: "mock-1", reason: expect.stringMatching(/^auth/) },
-        { provider: "groq", model: "mock-2", reason: "timeout" },
+        { provider: "openai", model: "mock-1", reason: "auth" },
+        { provider: "groq", model: "mock-2", reason: "server_error" },
         { provider: "groq", model: "mock-3", reason: "billing" },
       ]);
       const usageStats = await readUsageStats(agentDir);

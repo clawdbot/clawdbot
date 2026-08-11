@@ -11,7 +11,7 @@ import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js
 import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
-} from "../agents/subagent-recovery-state.js";
+} from "../agents/subagents/registry/subagent-recovery-state.js";
 import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {

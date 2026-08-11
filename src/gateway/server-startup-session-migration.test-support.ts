@@ -27,9 +27,10 @@ function makeLog() {
 }
 
 function makeCfg() {
-  return { agents: { defaults: {} }, session: {} } as Parameters<
-    typeof runStartupSessionMigration
-  >[0]["cfg"];
+  return {
+    agents: { defaults: {} },
+    session: { store: "/tmp/{agentId}/sessions.json" },
+  } as Parameters<typeof runStartupSessionMigration>[0]["cfg"];
 }
 
 // Every test injects store-target and sweep mocks so startup never scans the
@@ -44,7 +45,7 @@ function makeDeps(
 ) {
   return {
     migrateOrphanedSessionKeys: migrate,
-    prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
+    prepareLegacySessionSurfaces: vi.fn(() => EMPTY_LEGACY_SESSION_SURFACES),
     resolveAllAgentSessionStoreTargetsSync: vi.fn<ResolveStoreTargets>().mockReturnValue([
       { agentId: "main", storePath: "/tmp/main/sessions.json" },
       { agentId: "ops", storePath: "/tmp/ops/sessions.json" },
@@ -97,6 +98,38 @@ function makeSessionSqliteImport(
 }
 
 describe("runStartupSessionMigration", () => {
+  it("skips legacy migration imports when no session stores exist", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const deps = makeDeps(migrate);
+    deps.sessionSqliteDatabaseExists.mockReturnValue(false);
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-empty-session-startup-"));
+    const env = { OPENCLAW_STATE_DIR: path.join(stateDir, "missing") };
+
+    try {
+      await runStartupSessionMigration({ cfg: { session: {} }, env, log, deps });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
+
+    expect(deps.resolveAllAgentSessionStoreTargetsSync).not.toHaveBeenCalled();
+    expect(migrate).not.toHaveBeenCalled();
+    expect(deps.prepareLegacySessionSurfaces).not.toHaveBeenCalled();
+    expect(deps.runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expect(deps.reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
+  });
+
+  it("keeps custom stores on the migration path when discovery is inconclusive", async () => {
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const deps = makeDeps(migrate);
+    deps.resolveAllAgentSessionStoreTargetsSync.mockReturnValue([]);
+
+    await runStartupSessionMigration({ cfg: makeCfg(), log: makeLog(), deps });
+
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(deps.runDoctorSessionSqlite).toHaveBeenCalledOnce();
+  });
+
   it("logs changes when orphaned keys are canonicalized", async () => {
     const log = makeLog();
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({
@@ -172,6 +205,8 @@ describe("runStartupSessionMigration", () => {
 
     await runStartupSessionMigration({ cfg: makeCfg(), log, deps });
 
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(deps.runDoctorSessionSqlite).toHaveBeenCalledOnce();
     expect(log.warn).toHaveBeenCalledOnce();
     const warning = firstLogMessage(log.warn, "startup cleanup failure warning");
     expect(warning).toContain("temp cleanup failed during startup");

@@ -29,15 +29,15 @@ import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import {
+  finalizeAttemptContextEngineTurn,
+  type buildContextEnginePromptCacheInfo,
+} from "./attempt-context-engine-helpers.js";
+import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
+import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
+import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
-import {
-  finalizeAttemptContextEngineTurn,
-  type buildContextEnginePromptCacheInfo,
-} from "./attempt.context-engine-helpers.js";
-import { buildAfterTurnRuntimeContextFromUsage } from "./attempt.prompt-helpers.js";
-import { shouldPersistCompletedBootstrapTurn } from "./attempt.thread-helpers.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {

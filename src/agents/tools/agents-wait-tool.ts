@@ -1,10 +1,10 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import { resolveSubagentCompletionResultText } from "../subagent-completion-result.js";
-import { onSubagentRegistryPersisted } from "../subagent-registry-state.js";
-import { getSubagentRunsByRunIds } from "../subagent-registry.js";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
+import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
+import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";

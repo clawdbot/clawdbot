@@ -292,6 +292,7 @@ describe("tool mutation helpers", () => {
     );
     expect(isReplaySafeToolCall("skill_workshop", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "inspect" })).toBe(true);
+    expect(isReplaySafeToolCall("skill_workshop", { action: "read" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "create" })).toBe(false);
     expect(isReplaySafeToolCall("transcripts", { action: "status" })).toBe(true);
     expect(isReplaySafeToolCall("transcripts", { action: "import" })).toBe(false);

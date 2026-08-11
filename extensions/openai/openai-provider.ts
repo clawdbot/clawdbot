@@ -887,7 +887,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
 
 export function buildOpenAIProvider(): ProviderPlugin {
   const codexHooks = buildOpenAICodexProviderHooks();
-  const codexResponsesHooks = buildOpenAIResponsesProviderHooks();
+  const nativeResponsesHooks = buildOpenAIResponsesProviderHooks();
   const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
   return {
     id: PROVIDER_ID,
@@ -1039,7 +1039,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
           (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
           resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
-      return (useCodexTransport ? codexResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
+      const responsesBaseUrl = ctx.model?.baseUrl ?? providerConfig?.baseUrl;
+      const useNativeResponsesTransport =
+        useCodexTransport || !responsesBaseUrl || isOpenAIHttpsApiBaseUrl(responsesBaseUrl);
+      return (
+        useNativeResponsesTransport ? nativeResponsesHooks : responsesHooks
+      ).prepareExtraParams?.(ctx);
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,

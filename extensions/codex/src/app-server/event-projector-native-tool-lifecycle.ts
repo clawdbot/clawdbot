@@ -1,6 +1,6 @@
 import type {
   BeforeToolCallFailureDisposition,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";

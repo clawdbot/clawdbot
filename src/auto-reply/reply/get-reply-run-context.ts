@@ -49,6 +49,7 @@ import {
   resolveBareResetBootstrapFileAccess,
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
+import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -177,7 +178,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     : "";
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
-  const allowEmptyAssistantReplyAsSilent = isGroupChat && silentReplySettings.policy === "allow";
+  const isDirectedTurn =
+    isExplicitSourceReplyCommand(ctx, cfg) ||
+    (inboundEventKind !== "room_event" && (isDirectChat || ctx.WasMentioned === true));
+  const allowEmptyAssistantReplyAsSilent =
+    isGroupChat && !isDirectedTurn && silentReplySettings.policy === "allow";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },

@@ -27,7 +27,7 @@ import {
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
-} from "./attempt.context-engine-helpers.js";
+} from "./attempt-context-engine-helpers.js";
 import {
   cleanupTempPaths,
   createDefaultEmbeddedSession,
@@ -37,11 +37,11 @@ import {
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-spawn-workspace.test-support.js";
 import {
   buildEmbeddedSubscriptionParams,
   cleanupEmbeddedAttemptResources,
-} from "./attempt.subscription-cleanup.js";
+} from "./attempt-subscription-cleanup.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();

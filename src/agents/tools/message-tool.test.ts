@@ -524,7 +524,7 @@ describe("message tool gateway timeout", () => {
     });
   });
 
-  it("does not advertise the Codex-only final delivery control", () => {
+  it("does not advertise source-reply finality on ordinary message tools", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
@@ -636,7 +636,16 @@ describe("completion source-reply authority", () => {
 
     expect(getActionEnum(properties)).toEqual(["send"]);
     expect(Object.keys(properties).toSorted()).toEqual(
-      ["accountId", "action", "channel", "message", "replyTo", "target", "threadId"].toSorted(),
+      [
+        "accountId",
+        "action",
+        "channel",
+        "final",
+        "message",
+        "replyTo",
+        "target",
+        "threadId",
+      ].toSorted(),
     );
     expectStringSchema(properties.message, {
       description: "Text to send to the current source conversation.",
@@ -778,7 +787,7 @@ describe("completion source-reply authority", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
-  it("allows Codex final controls and matched canonical source-thread text sends", async () => {
+  it("allows shared final controls and matched canonical source-thread text sends", async () => {
     mockSendResult({ channel: "discord", to: "channel:source" });
     const tool = createRestrictedTool();
 
@@ -1045,11 +1054,13 @@ describe("message tool secret scoping", () => {
     const defaultTool = createMessageTool();
 
     expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(getToolProperties(scopedTool).final).toMatchObject({ type: "boolean" });
     expect(scopedTool.description).toContain("target defaults current source");
     expect(scopedTool.description).toContain("Final answer private");
     expect(explicitTargetTool.description).toContain("send needs target");
     expect(explicitTargetTool.description).not.toContain("target defaults current source");
     expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
+    expect(getToolProperties(defaultTool)).not.toHaveProperty("final");
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -1059,6 +1070,7 @@ describe("message tool secret scoping", () => {
     }).find((candidate) => candidate.name === "message");
 
     expect(tool?.description).toContain('visible reply: action="send" + message');
+    expect(getToolProperties(tool!).final).toMatchObject({ type: "boolean" });
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {

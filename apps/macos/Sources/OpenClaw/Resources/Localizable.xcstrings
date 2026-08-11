@@ -10201,142 +10201,6 @@
         }
       }
     },
-    "Android": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Android"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Android"
-          }
-        }
-      }
-    },
     "Announce summary": {
       "localizations": {
         "en": {
@@ -11829,6 +11693,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Appsession"
+          }
+        }
+      }
+    },
+    "App updates are unavailable while a profile is active.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App updates are unavailable while a profile is active."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配置文件处于活动状态时，无法进行应用更新。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "當設定檔啟用時，無法進行應用程式更新。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As atualizações do app não estão disponíveis enquanto um perfil está ativo."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App-Updates sind nicht verfügbar, während ein Profil aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las actualizaciones de la aplicación no están disponibles mientras hay un perfil activo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイルがアクティブな間はアプリの更新を利用できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로필이 활성화된 동안에는 앱 업데이트를 사용할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les mises à jour de l’application ne sont pas disponibles lorsqu’un profil est actif."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "प्रोफ़ाइल सक्रिय होने पर ऐप अपडेट उपलब्ध नहीं हैं।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تحديثات التطبيق غير متوفرة أثناء نشاط ملف تعريف."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gli aggiornamenti dell'app non sono disponibili mentre è attivo un profilo."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir profil etkinken uygulama güncellemeleri kullanılamaz."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оновлення застосунку недоступні, поки активний профіль."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pembaruan aplikasi tidak tersedia saat profil aktif."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualizacje aplikacji są niedostępne, gdy profil jest aktywny."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถอัปเดตแอปได้ในขณะที่โปรไฟล์กำลังทำงานอยู่"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể cập nhật ứng dụng khi hồ sơ đang hoạt động."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App-updates zijn niet beschikbaar terwijl een profiel actief is."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "به‌روزرسانی‌های برنامه در زمان فعال بودن یک نمایه در دسترس نیستند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновления приложения недоступны, пока активен профиль."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appuppdateringar är inte tillgängliga när en profil är aktiv."
           }
         }
       }
@@ -23393,142 +23393,6 @@
         }
       }
     },
-    "Choose a different AI…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose a different AI…"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "选择其他 AI…"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "選擇其他 AI…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escolher uma IA diferente…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Andere KI auswählen…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elegir una IA diferente…"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "別のAIを選択…"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "다른 AI 선택…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choisir une autre IA…"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "कोई दूसरा AI चुनें…"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اختر ذكاءً اصطناعيًا مختلفًا…"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scegli un'altra IA…"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Farklı bir yapay zeka seç…"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Виберіть інший ШІ…"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pilih AI lain…"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wybierz inną AI…"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "เลือก AI อื่น…"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chọn AI khác…"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kies een andere AI…"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "انتخاب یک هوش مصنوعی دیگر…"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбрать другой ИИ…"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Välj en annan AI…"
-          }
-        }
-      }
-    },
     "Choose another app before pasting.": {
       "localizations": {
         "en": {
@@ -34137,142 +34001,6 @@
         }
       }
     },
-    "Copy setup details": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copy setup details"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "复制设置详情"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "複製設定詳細資訊"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copiar detalhes da configuração"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Einrichtungsdetails kopieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copiar detalles de configuración"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "セットアップの詳細をコピー"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "설정 세부 정보 복사"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copier les détails de configuration"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "सेटअप विवरण कॉपी करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "نسخ تفاصيل الإعداد"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copia i dettagli di configurazione"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kurulum ayrıntılarını kopyala"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скопіювати деталі налаштування"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Salin detail penyiapan"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kopiuj szczegóły konfiguracji"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "คัดลอกรายละเอียดการตั้งค่า"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sao chép chi tiết thiết lập"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installatiedetails kopiëren"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "کپی جزئیات راه‌اندازی"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скопировать параметры настройки"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kopiera konfigurationsdetaljer"
-          }
-        }
-      }
-    },
     "Cost: %@": {
       "localizations": {
         "en": {
@@ -36309,142 +36037,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kunde inte kontrollera denna Gateway för AI-konton"
-          }
-        }
-      }
-    },
-    "Couldn’t load skills from the Gateway.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t load skills from the Gateway."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法从 Gateway 加载 Skills。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無法從 Gateway 載入 Skills。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não foi possível carregar as skills do Gateway."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills konnten nicht von der Gateway geladen werden."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se pudieron cargar las Skills desde el Gateway."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway から Skills を読み込めませんでした。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway에서 Skills를 불러올 수 없습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impossible de charger les skills depuis le Gateway."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway से Skills लोड नहीं हो सकीं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تعذّر تحميل Skills من Gateway."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impossibile caricare le Skills dal Gateway."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills Gateway’den yüklenemedi."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не вдалося завантажити Skills із Gateway."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tidak dapat memuat skills dari Gateway."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nie udało się wczytać Skills z Gateway."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ไม่สามารถโหลด Skills จาก Gateway ได้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Không thể tải Skills từ Gateway."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kon skills niet laden vanuit de Gateway."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills از Gateway بارگیری نشد."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось загрузить Skills из Gateway."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kunde inte läsa in Skills från Gateway."
           }
         }
       }
@@ -52089,142 +51681,6 @@
         }
       }
     },
-    "Finish opens the chat — say hi to your new agent.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish opens the chat — say hi to your new agent."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "完成后将打开聊天 — 向你的新 agent 打个招呼。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "完成後會開啟聊天 — 向你的新代理打聲招呼吧。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Concluir abre o chat — diga oi para seu novo agente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "„Fertigstellen“ öffnet den Chat — sagen Sie Ihrem neuen Agenten Hallo."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finalizar abre el chat — saluda a tu nuevo agente."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish でチャットが開きます — 新しいエージェントにあいさつしてみましょう。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "마침을 누르면 채팅이 열립니다 — 새 에이전트에게 인사해 보세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Terminer ouvre le chat — dites bonjour à votre nouvel agent."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish chat खोलता है — अपने नए agent को hi कहें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يفتح زر إنهاء الدردشة — قل مرحبًا لوكيلك الجديد."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fine apre la chat — saluta il tuo nuovo agente."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bitir, sohbeti açar — yeni aracınıza merhaba deyin."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish відкриє чат — привітайтеся зі своїм новим агентом."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selesai akan membuka obrolan — sapa agen baru Anda."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish otwiera czat — przywitaj się ze swoim nowym agentem."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish จะเปิดแชท — ทักทายตัวแทนใหม่ของคุณได้เลย"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hoàn tất sẽ mở cuộc trò chuyện — hãy chào agent mới của bạn."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voltooien opent de chat — zeg hallo tegen je nieuwe agent."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish چت را باز می‌کند — به عامل جدیدتان سلام کنید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finish откроет чат — поздоровайтесь со своим новым агентом."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Slutför öppnar chatten — säg hej till din nya agent."
-          }
-        }
-      }
-    },
     "Finish voice note": {
       "localizations": {
         "en": {
@@ -58205,142 +57661,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bevilja åtkomst"
-          }
-        }
-      }
-    },
-    "Grant permissions": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Grant permissions"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "授予权限"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "授予權限"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conceder permissões"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Berechtigungen erteilen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conceder permisos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "権限を付与"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "권한 부여"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Accorder les autorisations"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अनुमतियाँ दें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "منح الأذونات"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Concedi autorizzazioni"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İzinleri ver"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Надати дозволи"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Berikan izin"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Przyznaj uprawnienia"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ให้สิทธิ์"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cấp quyền"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Machtigingen verlenen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اعطای مجوزها"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Предоставить разрешения"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ge behörigheter"
           }
         }
       }
@@ -65281,6 +64601,142 @@
         }
       }
     },
+    "Launch at login is unavailable while an app profile is active.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Launch at login is unavailable while an app profile is active."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用配置文件处于活动状态时，无法开机自动启动。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "當應用程式設定檔啟用時，無法設定登入時啟動。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A inicialização ao entrar não está disponível enquanto um perfil do app está ativo."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beim Anmelden starten ist nicht verfügbar, während ein App-Profil aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El inicio automático al iniciar sesión no está disponible mientras hay un perfil de aplicación activo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アプリプロファイルがアクティブな間はログイン時の起動を利用できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앱 프로필이 활성화된 동안에는 로그인 시 실행을 사용할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le lancement à la connexion n’est pas disponible lorsqu’un profil d’application est actif."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ऐप प्रोफ़ाइल सक्रिय होने पर लॉगिन पर लॉन्च उपलब्ध नहीं है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التشغيل عند تسجيل الدخول غير متوفر أثناء نشاط ملف تعريف التطبيق."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'avvio all'accesso non è disponibile mentre è attivo un profilo dell'app."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir uygulama profili etkinken oturum açıldığında başlatma kullanılamaz."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запуск під час входу недоступний, поки активний профіль застосунку."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Luncurkan saat login tidak tersedia saat profil aplikasi aktif."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uruchamianie przy logowaniu jest niedostępne, gdy profil aplikacji jest aktywny."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถเปิดใช้งานตอนล็อกอินได้ในขณะที่โปรไฟล์แอปกำลังทำงานอยู่"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể khởi chạy khi đăng nhập khi hồ sơ ứng dụng đang hoạt động."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starten bij inloggen is niet beschikbaar terwijl een app-profiel actief is."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اجرا هنگام ورود در زمان فعال بودن نمایه برنامه در دسترس نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запуск при входе недоступен, пока активен профиль приложения."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starta vid inloggning är inte tillgängligt när en appprofil är aktiv."
+          }
+        }
+      }
+    },
     "Legacy pane — this now lives in the Dashboard": {
       "localizations": {
         "en": {
@@ -70037,6 +69493,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Utloggad och autentiseringsuppgifter rensade."
+          }
+        }
+      }
+    },
+    "Login-agent restart is unavailable under a profile.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login-agent restart is unavailable under a profile."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配置文件下无法重启登录代理。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在設定檔下無法重新啟動 login-agent。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A reinicialização do login-agent não está disponível em um perfil."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neustart des Login-Agents ist unter einem Profil nicht verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El reinicio del agente de inicio de sesión no está disponible con un perfil."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイル使用中はログインエージェントの再起動を利用できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로필에서는 로그인 에이전트 재시작을 사용할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le redémarrage de l’agent de connexion n’est pas disponible sous un profil."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "प्रोफ़ाइल के अंतर्गत Login-agent पुनरारंभ उपलब्ध नहीं है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إعادة تشغيل وكيل تسجيل الدخول غير متوفرة ضمن ملف التعريف."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il riavvio dell'agente di accesso non è disponibile con un profilo."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profil altında login-agent yeniden başlatma kullanılamaz."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапуск агента входу недоступний під профілем."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart login-agent tidak tersedia di bawah profil."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ponowne uruchomienie agenta logowania jest niedostępne w ramach profilu."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถรีสตาร์ท login-agent ได้ภายใต้โปรไฟล์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể khởi động lại login-agent khi đang dùng hồ sơ."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herstart van login-agent is niet beschikbaar onder een profiel."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "راه‌اندازی مجدد login-agent تحت یک نمایه در دسترس نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перезапуск агента входа недоступен при активном профиле."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Omstart av inloggningsagent är inte tillgänglig under en profil."
           }
         }
       }
@@ -80649,142 +80241,6 @@
         }
       }
     },
-    "No skills reported yet.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No skills reported yet."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未报告任何 Skills。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未回報任何 Skills。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhuma skill informada ainda."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Noch keine Skills gemeldet."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aún no se han informado Skills."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "まだ Skills は報告されていません。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "아직 보고된 Skills가 없습니다."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucune skill signalée pour le moment."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अभी तक कोई Skills रिपोर्ट नहीं की गई हैं।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "لم يتم الإبلاغ عن أي Skills بعد."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessuna Skill segnalata ancora."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Henüz hiçbir Skills bildirilmedi."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Поки що немає повідомлених Skills."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Belum ada skills yang dilaporkan."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nie zgłoszono jeszcze żadnych Skills."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ยังไม่มีรายงาน Skills"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chưa có Skills nào được báo cáo."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Er zijn nog geen skills gemeld."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "هنوز هیچ Skillsی گزارش نشده است."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills пока не получены."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inga Skills har rapporterats än."
-          }
-        }
-      }
-    },
     "No threads found": {
       "localizations": {
         "en": {
@@ -84045,142 +83501,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "På den här Mac-datorn"
-          }
-        }
-      }
-    },
-    "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在你的 gateway 主机上：安装/更新 `openclaw` 软件包，并确保凭据存在\n（通常为 `~/.openclaw/credentials/oauth.json`）。然后在需要时重新连接。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在你的 Gateway 主機上：安裝/更新 `openclaw` 套件，並確認憑證存在\n（通常為 `~/.openclaw/credentials/oauth.json`）。如有需要，請再次連線。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No host do gateway: instale/atualize o pacote `openclaw` e confirme que as credenciais existem\n(normalmente `~/.openclaw/credentials/oauth.json`). Depois conecte novamente, se necessário."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auf deinem Gateway-Host: Installiere/aktualisiere das Paket `openclaw` und stelle sicher, dass Anmeldedaten vorhanden sind\n(üblicherweise `~/.openclaw/credentials/oauth.json`). Verbinde dich anschließend bei Bedarf erneut."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "En tu host de gateway: instala/actualiza el paquete `openclaw` y asegúrate de que existan las credenciales\n(normalmente `~/.openclaw/credentials/oauth.json`). Luego vuelve a conectar si es necesario."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ホスト上で: `openclaw` パッケージをインストール/更新し、認証情報が存在することを確認してください\n（通常は `~/.openclaw/credentials/oauth.json`）。必要に応じて再度接続してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "gateway host에서 `openclaw` 패키지를 설치/업데이트하고 자격 증명이 있는지 확인하세요\n(일반적으로 `~/.openclaw/credentials/oauth.json`). 그런 다음 필요한 경우 다시 연결하세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sur votre hôte gateway : installez/mettez à jour le package `openclaw` et assurez-vous que les identifiants existent\n(généralement `~/.openclaw/credentials/oauth.json`). Puis reconnectez-vous si nécessaire."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अपने gateway host पर: `openclaw` पैकेज इंस्टॉल/अपडेट करें और सुनिश्चित करें कि क्रेडेंशियल मौजूद हैं\n(आमतौर पर `~/.openclaw/credentials/oauth.json`)। फिर ज़रूरत पड़ने पर दोबारा कनेक्ट करें।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "على مضيف Gateway لديك: ثبّت/حدّث حزمة `openclaw` وتأكد من وجود بيانات الاعتماد\n(عادةً `~/.openclaw/credentials/oauth.json`). ثم اتصل مرة أخرى إذا لزم الأمر."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sul tuo host gateway: installa/aggiorna il pacchetto `openclaw` e assicurati che le credenziali esistano\n(in genere `~/.openclaw/credentials/oauth.json`). Poi connettiti di nuovo, se necessario."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway host’unuzda: `openclaw` paketini yükleyin/güncelleyin ve kimlik bilgilerinin mevcut olduğundan emin olun\n(genellikle `~/.openclaw/credentials/oauth.json`). Ardından gerekirse yeniden bağlanın."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "На хості вашого Gateway: установіть/оновіть пакет `openclaw` і переконайтеся, що облікові дані існують\n(зазвичай `~/.openclaw/credentials/oauth.json`). Потім підключіться знову, якщо потрібно."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Di host gateway Anda: instal/perbarui paket `openclaw` dan pastikan kredensial tersedia\n(biasanya `~/.openclaw/credentials/oauth.json`). Lalu hubungkan lagi jika diperlukan."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Na hoście gateway: zainstaluj/zaktualizuj pakiet `openclaw` i upewnij się, że istnieją dane logowania\n(zwykle `~/.openclaw/credentials/oauth.json`). Następnie połącz się ponownie, jeśli trzeba."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "บนโฮสต์ gateway ของคุณ: ติดตั้ง/อัปเดตแพ็กเกจ `openclaw` และตรวจสอบให้แน่ใจว่ามีข้อมูลประจำตัวอยู่\n(โดยทั่วไปคือ `~/.openclaw/credentials/oauth.json`) จากนั้นเชื่อมต่ออีกครั้งหากจำเป็น"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Trên máy chủ gateway của bạn: cài đặt/cập nhật gói `openclaw` và đảm bảo thông tin xác thực tồn tại\n(thường là `~/.openclaw/credentials/oauth.json`). Sau đó kết nối lại nếu cần."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Op je gateway-host: installeer/update het `openclaw`-pakket en zorg dat er inloggegevens bestaan\n(meestal `~/.openclaw/credentials/oauth.json`). Verbind daarna opnieuw indien nodig."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "روی میزبان Gateway خود: بستهٔ `openclaw` را نصب/به‌روزرسانی کنید و مطمئن شوید اعتبارنامه‌ها وجود دارند\n(معمولاً `~/.openclaw/credentials/oauth.json`). سپس در صورت نیاز دوباره متصل شوید."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "На хосте gateway: установите/обновите пакет `openclaw` и убедитесь, что учётные данные существуют\n(обычно `~/.openclaw/credentials/oauth.json`). Затем при необходимости подключитесь снова."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "På din gateway-värd: installera/uppdatera paketet `openclaw` och kontrollera att autentiseringsuppgifter finns\n(vanligtvis `~/.openclaw/credentials/oauth.json`). Anslut sedan igen vid behov."
           }
         }
       }
@@ -97241,6 +96561,142 @@
         }
       }
     },
+    "Persistent Mac node service unavailable under app profile; runtime node remains available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persistent Mac node service unavailable under app profile; runtime node remains available."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用配置文件下无法使用持久性 Mac 节点服务；运行时节点仍然可用。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在應用程式設定檔下無法使用持續性 Mac 節點服務；執行階段節點仍然可用。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O serviço de nó persistente do Mac não está disponível no perfil do app; o nó de runtime permanece disponível."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persistenter Mac-Node-Dienst unter App-Profil nicht verfügbar; Laufzeit-Node bleibt verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servicio de nodo persistente de Mac no está disponible con un perfil de aplicación; el nodo en tiempo de ejecución sigue disponible."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アプリプロファイル使用中は永続的なMacノードサービスを利用できません。ランタイムノードは引き続き利用可能です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앱 프로필에서는 영구 Mac 노드 서비스를 사용할 수 없습니다. 런타임 노드는 계속 사용할 수 있습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le service de nœud Mac persistant n’est pas disponible sous un profil d’application ; le nœud d’exécution reste disponible."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ऐप प्रोफ़ाइल के अंतर्गत स्थायी Mac नोड सेवा उपलब्ध नहीं है; रनटाइम नोड उपलब्ध रहता है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "خدمة عقدة Mac الدائمة غير متوفرة ضمن ملف تعريف التطبيق؛ تظل عقدة وقت التشغيل متاحة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il servizio del nodo Mac persistente non è disponibile con il profilo dell'app; il nodo runtime resta disponibile."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalıcı Mac düğüm hizmeti uygulama profili altında kullanılamaz; çalışma zamanı düğümü kullanılabilir kalır."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Постійна служба вузла Mac недоступна під профілем застосунку; вузол середовища виконання залишається доступним."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Layanan node Mac persisten tidak tersedia di bawah profil aplikasi; node runtime tetap tersedia."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trwała usługa węzła Mac jest niedostępna w ramach profilu aplikacji; węzeł środowiska uruchomieniowego pozostaje dostępny."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "บริการ Mac node แบบถาวรไม่พร้อมใช้งานภายใต้โปรไฟล์แอป; runtime node ยังคงพร้อมใช้งาน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dịch vụ node Mac liên tục không khả dụng dưới hồ sơ ứng dụng; node runtime vẫn khả dụng."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanente Mac-nodeservice niet beschikbaar onder app-profiel; runtime-node blijft beschikbaar."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "سرویس گره پایدار Mac تحت نمایه برنامه در دسترس نیست؛ گره زمان اجرا همچنان در دسترس است."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Постоянная служба узла Mac недоступна при профиле приложения; узел среды выполнения остаётся доступен."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beständig Mac-nodtjänst är inte tillgänglig under appprofil; körtidsnoden är fortfarande tillgänglig."
+          }
+        }
+      }
+    },
     "Photo Library": {
       "localizations": {
         "en": {
@@ -98325,142 +97781,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pino-logg"
-          }
-        }
-      }
-    },
-    "Plain": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Plain"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "普通"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "純文字"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Simples"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Einfach"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Simple"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Plain"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "일반"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Simple"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "सादा"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "عادي"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Semplice"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Düz"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Звичайний"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Polos"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zwykły"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ธรรมดา"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đơn giản"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Effen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ساده"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обычный"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enkel"
           }
         }
       }
@@ -107573,142 +106893,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fjärranslutning"
-          }
-        }
-      }
-    },
-    "Remote gateway checklist": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote gateway checklist"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "远程 gateway 检查清单"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "遠端 Gateway 檢查清單"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checklist do gateway remoto"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote-Gateway-Checkliste"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lista de comprobación de gateway remoto"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リモート Gateway チェックリスト"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote gateway 체크리스트"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liste de vérification du gateway distant"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote gateway चेकलिस्ट"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "قائمة تحقق Gateway البعيد"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checklist per il gateway remoto"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remote gateway kontrol listesi"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Контрольний список для віддаленого Gateway"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Daftar periksa gateway jarak jauh"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lista kontrolna zdalnego gateway"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "รายการตรวจสอบ Remote gateway"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Danh sách kiểm tra Gateway từ xa"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checklist voor Remote gateway"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "چک‌لیست Gateway راه دور"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Контрольный список для удалённого gateway"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checklista för fjärr-Gateway"
           }
         }
       }
@@ -124577,142 +123761,6 @@
         }
       }
     },
-    "Setup details": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Setup details"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "设置详情"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "設定詳細資訊"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Detalhes da configuração"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Einrichtungsdetails"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Detalles de configuración"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "セットアップの詳細"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "설정 세부 정보"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Détails de configuration"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "सेटअप विवरण"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تفاصيل الإعداد"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dettagli di configurazione"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kurulum ayrıntıları"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Деталі налаштування"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Detail penyiapan"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Szczegóły konfiguracji"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "รายละเอียดการตั้งค่า"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chi tiết thiết lập"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installatiedetails"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "جزئیات راه‌اندازی"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Параметры настройки"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Konfigurationsdetaljer"
-          }
-        }
-      }
-    },
     "Setup needed": {
       "localizations": {
         "en": {
@@ -129065,142 +128113,6 @@
         }
       }
     },
-    "Skills included": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills included"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已包含 Skills"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已包含 Skills"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills incluídas"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enthaltene Skills"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills incluidas"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "含まれる Skills"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "포함된 Skills"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills incluses"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "शामिल Skills"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills المضمّنة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills incluse"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dahil edilen Skills"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills включено"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills disertakan"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dołączone Skills"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills ที่รวมไว้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills đã bao gồm"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills inbegrepen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills شامل‌شده"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills включены"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skills ingår"
-          }
-        }
-      }
-    },
     "Skills section": {
       "localizations": {
         "en": {
@@ -130421,142 +129333,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ljud"
-          }
-        }
-      }
-    },
-    "Sparkles": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sparkles"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "闪光"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "閃爍"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Brilhos"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Funkeln"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Destellos"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Sparkles"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "반짝임"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Étincelles"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "चमक"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "بريق"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scintille"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parıltılar"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Блискітки"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kilauan"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Iskierki"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ประกาย"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lấp lánh"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprankelingen"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "درخشش‌ها"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Искры"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gnistor"
           }
         }
       }
@@ -164013,142 +162789,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Du"
-          }
-        }
-      }
-    },
-    "Your AI is ready": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your AI is ready"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你的 AI 已就绪"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "您的 AI 已就緒"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sua IA está pronta"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deine KI ist bereit"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tu IA está lista"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI の準備ができました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI가 준비되었습니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Votre IA est prête"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "आपका AI तैयार है"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "الذكاء الاصطناعي الخاص بك جاهز"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La tua AI è pronta"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI'nız hazır"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваш ШІ готовий"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI Anda siap"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Twoja AI jest gotowa"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI ของคุณพร้อมแล้ว"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI của bạn đã sẵn sàng"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je AI is klaar"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "هوش مصنوعی شما آماده است"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ваш AI готов"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Din AI är redo"
           }
         }
       }

@@ -9,7 +9,7 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
@@ -138,6 +138,7 @@ export function createCodexUserInputBridge(params: {
             intro: "Codex needs input:",
           }).catch((error: unknown) => {
             embeddedAgentLog.warn("failed to deliver secret codex user input prompt", { error });
+            resolveSecretIfCurrent(current, emptyUserInputResponse());
           });
         });
       }

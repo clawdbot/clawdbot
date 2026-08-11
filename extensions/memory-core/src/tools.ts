@@ -631,25 +631,6 @@ export function createMemorySearchTool(options: {
                 if (pausedIndexIdentityReason) {
                   return;
                 }
-                // Retry once after an empty result so the builtin index can finish bootstrap.
-                if (
-                  rawResults.length === 0 &&
-                  !runtimeDebug.some((entry) => entry.embeddingBootstrap) &&
-                  activeMemory.manager.sync
-                ) {
-                  await runWithDefaultDeadline(async () => {
-                    // Sync may join shared/background manager maintenance and has
-                    // no request-cancellation contract. Bound only this tool's wait.
-                    await activeMemory.manager.sync?.({ reason: "search", force: true });
-                  });
-                  rawResults = await searchActiveMemory();
-                  pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
-                    activeMemory.manager.status(),
-                  );
-                  if (pausedIndexIdentityReason) {
-                    return;
-                  }
-                }
                 rawResults = await runWithDefaultDeadline(
                   async () =>
                     await filterMemorySearchHitsBySessionVisibility({

@@ -25,7 +25,7 @@ export {
   readConnectChallengeNonce,
   rpcReq,
   startConnectedServerWithClient,
-  startGatewayServer,
+  startTestGatewayServer,
   startGatewayServerWithRetries,
   startServer,
   startServerWithClient,

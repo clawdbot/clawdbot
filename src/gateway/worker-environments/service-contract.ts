@@ -1,3 +1,4 @@
+import type { WorkerDesktopApp } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
@@ -17,6 +18,7 @@ export type WorkerEnvironmentServiceRecord = {
   idleSinceAtMs: number | null;
   attachedSessionIds: readonly string[];
   desktopAvailable: boolean;
+  desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
   error?: string;
 };
@@ -27,6 +29,11 @@ export type WorkerDesktopObserveResult = {
   expiresAtMs: number;
   control: boolean;
   vncPassword?: string;
+};
+
+export type WorkerDesktopLaunchResult = {
+  app: WorkerDesktopApp["id"];
+  status: "ready";
 };
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
@@ -40,6 +47,10 @@ export type WorkerEnvironmentServiceContract = {
     environmentId: string;
     control: boolean;
   }): Promise<WorkerDesktopObserveResult>;
+  launchDesktopApp(request: {
+    environmentId: string;
+    app: WorkerDesktopApp["id"];
+  }): Promise<WorkerDesktopLaunchResult>;
   startTunnel(request: WorkerTunnelRequest): Promise<WorkerTunnelHandle>;
   stopTunnel(environmentId: string, ownerEpoch?: number): Promise<void>;
 };

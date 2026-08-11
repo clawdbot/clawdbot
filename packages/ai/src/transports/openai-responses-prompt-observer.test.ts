@@ -416,6 +416,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       context: createContext(prompt, { tools: [tool("exec"), tool("wait")] as never }),
       options: {
         openclawCodeModeToolSurface: true,
+        openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
         onPayload: async () => {
           await Promise.resolve();
           return {
@@ -430,7 +431,13 @@ describe("OpenAI Responses provider prompt observer", () => {
                 content: [{ type: "input_image", image_url: "data:image/png;base64,invalid!" }],
               },
             ],
-            tools: [tool("exec"), tool("wait"), tool("rogue")],
+            tools: [
+              tool("exec"),
+              tool("wait"),
+              tool("rogue"),
+              { type: "web_search" },
+              { type: "file_search" },
+            ],
           };
         },
       },
@@ -439,7 +446,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.order).toEqual(["observe", "openai.create"]);
     expect(run.observations[0]?.matchesAssembledPrompt).toBe(true);
     expect(run.requests[0]?.metadata).toEqual({ caller: "kept", host: "added" });
-    expect(run.requests[0]?.tools).toEqual([tool("exec"), tool("wait")]);
+    expect(run.requests[0]?.tools).toEqual([tool("exec"), tool("wait"), { type: "web_search" }]);
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
 

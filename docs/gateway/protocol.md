@@ -226,7 +226,7 @@ a terminal handshake failure.
 
 When a device token is issued, `hello-ok.auth` adds it:
 
-```json
+```json validate=false
 {
   "auth": {
     "deviceToken": "…",
@@ -240,7 +240,7 @@ Built-in QR/setup-code bootstrap is a mobile handoff path. A successful
 baseline setup-code connect returns a primary node token plus one bounded
 operator token:
 
-```json
+```json validate=false
 {
   "auth": {
     "deviceToken": "…",
@@ -519,6 +519,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `system-event` appends a system event and can update/broadcast presence context.
     - `last-heartbeat` returns the latest persisted heartbeat event.
     - `set-heartbeats` toggles heartbeat processing on the gateway.
+    - `gateway.restart.preflight` is a deprecated, read-only compatibility preview of restart-specific active work. It does not close admission, create a suspension lease, or provide the atomic full-work fence of `gateway.suspend.prepare`; new restart flows should call `gateway.restart.request`.
     - `gateway.suspend.prepare` creates a short cooperative-suspension lease only when tracked Gateway work is idle. `gateway.suspend.status` checks that lease, and `gateway.suspend.resume` releases it after thaw or an aborted host operation.
 
   </Accordion>
@@ -529,7 +530,6 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
-    - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients, including workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates. Requires `operator.read`.
     - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one agent, or `agentScope: "all"` to list configured agents together.
       Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
@@ -569,7 +569,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `terminal.upload` accepts one base64 file up to 16 MiB, stages it in a private 24-hour temporary directory on the session's Gateway or paired-node host, and returns the absolute path. The caller must still paste or otherwise use that path; the RPC never writes terminal input or executes a command.
     - `terminal.data` and `terminal.exit` events stream to the connection owner and attached viewers. Task-owned agent terminals close when their authoritative task reaches a terminal state; ordinary conversation-owned agent terminals remain persistent.
     - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
-    - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
+    - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`).
     - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` is on by default and refuses every method when set to `false`. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
 
   </Accordion>
@@ -578,9 +578,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
     - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
-    - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` as needed, and returns room/session metadata plus recent Talk events, never the plaintext token or its hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
-    - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state clears.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions.
     - `talk.session.submitToolResult` completes a provider tool call emitted by a gateway-owned realtime relay session. The request waits for any asynchronous completion signal exposed by the provider bridge; failed submissions keep the linked run active and do not emit a successful tool-result event. Pass `options: { willContinue: true }` for interim tool output or `options: { suppressResponse: true }` when the provider bridge advertises suppression support and the result should not start another response.
     - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
@@ -635,7 +633,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
   <Accordion title="Session control">
     - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured. When cloud-worker placement is enabled or durable recovery state exists, session rows also include a closed `placement` state (`local`, `requested`, `provisioning`, `syncing`, `starting`, `active`, `draining`, `reconciling`, `reclaimed`, or `failed`) plus state-specific environment, owner-epoch, workspace, bundle, ACK-cursor, or recovery fields.
-    - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
+    - `sessions.subscribe` enables session change events for the current WebSocket client. The subscription ends when that client disconnects.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Pass `includeApprovals: true` to also receive sanitized `session.approval` lifecycle events for approvals whose persisted audience includes that exact session and whose reviewer binding authorizes the subscribing client. The subscribe response then includes a bounded pending `approvalReplay`; it is authoritative when `truncated` is false. The opt-in is per subscribe call, not sticky: re-subscribing to the same session without `includeApprovals: true` removes an existing approval subscription. In addition to normal session-read authority, this opt-in requires `operator.admin`, or `operator.approvals` on a paired device.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.

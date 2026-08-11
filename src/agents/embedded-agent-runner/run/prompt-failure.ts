@@ -268,7 +268,7 @@ export async function handleEmbeddedPromptFailure(input: {
     logFailoverDecision("fallback_model", { status });
     await input.maybeBackoffBeforeOverloadFailover(promptFailoverReason);
     throw (
-      normalizedPromptFailover ??
+      (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
       new FailoverError(errorText, {
         reason: fallbackReason,
         provider: input.provider,

@@ -195,6 +195,8 @@ export type TaskSummary = {
   startedAt?: RunTimestamp;
   endedAt?: RunTimestamp;
   progressSummary?: string;
+  lastActivity?: string;
+  diffStat?: { files: number; added: number; removed: number };
   terminalSummary?: string;
   error?: string;
 };

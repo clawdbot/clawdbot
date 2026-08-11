@@ -42,6 +42,9 @@ suite.define(() => {
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     await suite.withPage(
       {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
@@ -116,6 +119,23 @@ suite.define(() => {
         await expect
           .poll(async () => page.locator(".model-setup-success").textContent())
           .toContain("Verified in 73 ms");
+        await gateway.setMethodResponse("openclaw.setup.detect", {
+          candidates: [],
+          manualProviders: [{ id: "openai", label: "OpenAI" }],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: true,
+          configuredModel: "openai/gpt-5",
+        });
+        await page.getByRole("button", { name: "Stay in settings" }).click();
+        await page.getByRole("button", { name: "Continue setup" }).waitFor();
+        await page.reload();
+        await page.getByRole("button", { name: "Continue setup" }).waitFor();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            path: path.join(artifactDir, "model-setup-durable-continuation.png"),
+          });
+        }
         await page.getByRole("button", { name: "Continue setup" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
@@ -126,6 +146,11 @@ suite.define(() => {
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--onboarding");
         expect(await page.locator(".shell-nav").isVisible()).toBe(false);
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "custodian-onboarding-handoff.png"),
+          });
+        }
 
         const chatRequest = await gateway.waitForRequest("openclaw.chat");
         expect(chatRequest.params).toMatchObject({
@@ -133,7 +158,7 @@ suite.define(() => {
           welcomeVariant: "onboarding",
         });
         await page.getByRole("button", { name: "Skip for now" }).click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .not.toContain("shell--onboarding");
@@ -591,16 +616,14 @@ suite.define(() => {
 
         const providerPicker = page.locator(".model-setup-provider-select");
         const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
-        const manualProviderIsActive = (providerId: string) =>
+        const manualProviderHasFocus = (providerId: string) =>
           page
             .locator(`[data-manual-provider="${providerId}"]`)
-            .evaluate((element) => Reflect.get(element, "active") === true);
+            .evaluate((element) => element === document.activeElement);
         const manualProviderMenuReady = () =>
           page
             .locator("[data-manual-provider]")
-            .evaluateAll((options) =>
-              options.some((option) => Reflect.get(option, "active") === true),
-            );
+            .evaluateAll((options) => options.some((option) => option === document.activeElement));
         const waitForProviderHide = () =>
           providerPicker.evaluate(
             (element) =>
@@ -667,13 +690,14 @@ suite.define(() => {
           .toBe(true);
         await expect.poll(manualProviderMenuReady).toBe(true);
         await page.keyboard.press("Home");
-        await expect.poll(() => manualProviderIsActive(firstProviderId)).toBe(true);
+        await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
         await page.keyboard.press("End");
-        await expect.poll(() => manualProviderIsActive(lastProviderId)).toBe(true);
+        await expect.poll(() => manualProviderHasFocus(lastProviderId)).toBe(true);
         await page.keyboard.press("Home");
-        await expect.poll(() => manualProviderIsActive(firstProviderId)).toBe(true);
-        await page.keyboard.press("z");
-        await expect.poll(() => manualProviderIsActive("zai-cn")).toBe(true);
+        await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
         const zaiProviderHidden = waitForProviderHide();
         await page.keyboard.press("Enter");
         await zaiProviderHidden;

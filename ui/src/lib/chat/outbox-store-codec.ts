@@ -74,6 +74,9 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (typeof entry.orderKey === "number" && Number.isFinite(entry.orderKey)) {
+    item.orderKey = entry.orderKey;
+  }
   const sender = normalizeSenderIdentity(entry.sender as Record<string, unknown> | undefined);
   if (sender) {
     item.sender = sender;

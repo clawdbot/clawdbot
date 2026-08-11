@@ -30,9 +30,11 @@ type TestChatPane = HTMLElement & {
   context: ApplicationContext;
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
+  paneId: string;
+  sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
-  onFaceChange?: (face: "chat" | "dashboard") => void;
+  onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
@@ -76,6 +78,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   pane.state = {
     chatError: null,
     chatLoading: false,
+    chatMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -411,6 +414,18 @@ describe("chat pane board shell", () => {
       activeTabId: "research",
       face: "dashboard",
     });
+  });
+
+  it("routes face changes through the owning retained presentation", () => {
+    const pane = createTestPane();
+    pane.paneId = "pane-1";
+    pane.sessionKey = "agent:main:retained";
+    const onFaceChange = vi.fn();
+    pane.onFaceChange = onFaceChange;
+
+    pane.persistBoardSessionView({ face: "dashboard" });
+
+    expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
 
   it("uses in-memory tab preferences while the route owns the face", () => {

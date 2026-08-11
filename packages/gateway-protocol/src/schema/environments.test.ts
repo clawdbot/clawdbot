@@ -7,6 +7,8 @@ import {
   EnvironmentSummarySchema,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
+  validateWorkerDesktopLaunchParams,
+  validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
 } from "../index.js";
 
@@ -95,6 +97,43 @@ describe("worker environment protocol schemas", () => {
     expect(Value.Check(EnvironmentSummarySchema, requested)).toBe(true);
     expect(Value.Check(EnvironmentsCreateResultSchema, requested)).toBe(true);
     expect(Value.Check(EnvironmentsDestroyResultSchema, destroyed)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...workerSummary("ready", "available"),
+        worker: {
+          ...workerSummary("ready", "available").worker,
+          desktop: true,
+          desktopApps: ["browser", "terminal"],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps desktop app launch requests, results, and projected ids closed", () => {
+    expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "browser" })).toBe(
+      true,
+    );
+    expect(validateWorkerDesktopLaunchResult({ app: "terminal", status: "ready" })).toBe(true);
+    expect(validateWorkerDesktopLaunchParams({ environmentId: "worker:one", app: "editor" })).toBe(
+      false,
+    );
+    expect(
+      validateWorkerDesktopLaunchParams({
+        environmentId: "worker:one",
+        app: "browser",
+        args: ["--incognito"],
+      }),
+    ).toBe(false);
+    expect(validateWorkerDesktopLaunchResult({ app: "browser", status: "starting" })).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...workerSummary("ready", "available"),
+        worker: {
+          ...workerSummary("ready", "available").worker,
+          desktopApps: ["editor"],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("lists configured worker profiles without provider settings", () => {

@@ -2030,6 +2030,78 @@ openclaw-tooltip.chat-tasks-status__preview {
   }
 }
 
+.chat-subagent-activity {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0 3px;
+}
+
+.chat-subagent-activity__row {
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 22px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-subagent-activity__indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.chat-subagent-activity__indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-subagent-activity__indicator--finished {
+  color: var(--ok);
+}
+
+.chat-subagent-activity__indicator--failed {
+  color: var(--destructive);
+}
+
+.chat-subagent-activity__label {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-subagent-activity__snippet {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-activity__snippet--updated {
+  animation: chatSubagentSnippetUpdate 180ms ease-out both;
+}
+
+.chat-subagent-activity__overflow {
+  margin-left: 25px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+@keyframes chatSubagentSnippetUpdate {
+  from {
+    opacity: 0.35;
+    transform: translateY(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-subagent-activity__snippet--updated {
+    animation: none;
+  }
+}
+
 @media (pointer: coarse) {
   .chat-tool-msg-summary,
   .chat-activity-group__summary {

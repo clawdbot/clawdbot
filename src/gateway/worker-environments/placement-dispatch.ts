@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -79,15 +80,31 @@ function requireProvisionedEnvironment(
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
     !environment.bootstrapReceipt ||
-    environment.environmentId !== expectedEnvironmentId
+    environment.environmentId !== expectedEnvironmentId ||
+    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
-    throw new Error(`Worker environment is not dispatchable: ${environment.state}`);
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
   }
   return {
     environmentId: environment.environmentId,
     ownerEpoch: environment.ownerEpoch,
     bundleHash: environment.bootstrapReceipt.bundleHash,
   };
+}
+
+function isExactAttachedEnvironment(
+  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
+  placement: WorkerActiveDispatchPlacement,
+): boolean {
+  return (
+    environment?.environmentId === placement.environmentId &&
+    environment.state === "attached" &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId
+  );
 }
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
@@ -250,13 +267,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
         const environment = environments.get(current.environmentId);
-        if (
-          !environment ||
-          environment.state !== "attached" ||
-          environment.ownerEpoch !== current.activeOwnerEpoch ||
-          environment.attachedSessionIds.length !== 1 ||
-          environment.attachedSessionIds[0] !== current.sessionId
-        ) {
+        if (!isExactAttachedEnvironment(environment, current)) {
           throw new Error("Active cloud worker does not match its session placement");
         }
         const journalOwner = {
@@ -432,7 +443,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   },
                 });
               } finally {
-                if (!destroyed) {
+                if (
+                  !destroyed &&
+                  isExactAttachedEnvironment(environments.get(current.environmentId), current)
+                ) {
                   await quiescence.resume();
                 }
               }

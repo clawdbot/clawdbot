@@ -7,7 +7,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { WorkerSessionPlacementIdentity, WorkerSessionTurnClaim } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -143,7 +143,11 @@ describe("worker placement terminal persistence", () => {
 
   it("atomically fails a pending result and preserves its bounded reason across restart", () => {
     advanceToActive();
-    const { active, pending } = pendingResult();
+    const { active, claim, pending } = pendingResult();
+    const closedClaims: WorkerSessionTurnClaim[] = [];
+    const unregister = store.registerTurnClaimClosedHandler((closedClaim) => {
+      closedClaims.push(closedClaim);
+    });
     nowMs = 2_000;
     const disappearance = `cloud worker disappeared: ${"provider-detail ".repeat(100)}`;
 
@@ -158,6 +162,8 @@ describe("worker placement terminal persistence", () => {
     expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
     expect(failed.recoveryError).toBe(failed.terminalReason);
     expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(closedClaims).toEqual([claim]);
+    unregister();
 
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });

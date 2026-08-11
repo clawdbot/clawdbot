@@ -31,10 +31,8 @@ import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
-import {
-  collectConfiguredWorkerProviderIds,
-  listBundledWorkerProviderOwners,
-} from "../plugins/worker-provider-registry.js";
+import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
+import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {

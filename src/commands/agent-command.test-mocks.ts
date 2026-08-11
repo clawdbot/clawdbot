@@ -281,7 +281,7 @@ vi.mock("../agents/model-selection.js", () => {
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 

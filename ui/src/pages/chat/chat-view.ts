@@ -42,12 +42,13 @@ import type { BackgroundTasksProps } from "./components/chat-background-tasks.ty
 import type {
   CapabilityMenuProps,
   ChatComposerDisabledBanner,
+  ChatQueuedEditProps,
 } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import type { SessionRailMode } from "./components/chat-session-rail.ts";
+import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
   renderSessionWorkspaceRail,
@@ -111,11 +112,11 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     observerLastReadAt?: number;
     onObserverVisibilityChange?: (visible: boolean) => void;
     sessionRailCompanion?: ChatSessionCompanionThread;
-    sessionRailOpenRequest?: number;
-    sessionRailConsumedOpenRequest?: number;
+    sessionRailCommand?: SessionRailCommand | null;
+    sessionRailConsumedCommandGeneration?: number;
     sessionRailMode?: SessionRailMode;
     sessionRailDocked?: boolean;
-    onSessionRailOpenRequestConsumed?: (openRequest: number) => void;
+    onSessionRailCommandConsumed?: (generation: number) => void;
     onSessionRailSubmit?: (question: string) => void;
     onSessionRailDraftChange?: (draft: string) => void;
     onSessionRailClear?: () => void;
@@ -155,7 +156,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     gatewayClient?: GatewayBrowserClient | null;
     composerHoldToRecord?: boolean;
     suggestionComposer?: boolean;
-    typingLabel?: string | null;
+    typingActors?: readonly { id: string; label: string }[];
     onTypingChange?: (typing: boolean) => void;
     canSend: boolean;
     disabledReason: string | null;
@@ -231,6 +232,8 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onQueueRemove: (id: string) => void;
     onQueueRetry?: (id: string) => void;
     onQueueSteer?: (id: string) => void;
+    onQueueMove?: (id: string, toIndex: number) => void;
+    queuedEdit?: ChatQueuedEditProps;
     onGoalCommand?: (command: string) => void;
     onHistoryIntent?: (event: Event) => void;
     onCompanionQuestion?: (question: string) => void;
@@ -497,7 +500,7 @@ export function renderChat(props: ChatProps) {
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
     suggestionComposer: props.suggestionComposer,
-    typingLabel: props.typingLabel,
+    typingActors: props.typingActors,
     onTypingChange: props.onTypingChange,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
@@ -516,6 +519,8 @@ export function renderChat(props: ChatProps) {
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
+    onQueueMove: props.onQueueMove,
+    queuedEdit: props.queuedEdit,
     onGoalCommand: props.onGoalCommand,
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
@@ -685,9 +690,9 @@ export function renderChat(props: ChatProps) {
                       .pullRequests=${props.pullRequests ?? []}
                       .companion=${props.sessionRailCompanion}
                       .connected=${props.connected}
-                      .openRequest=${props.sessionRailOpenRequest ?? 0}
-                      .consumedOpenRequest=${props.sessionRailConsumedOpenRequest ?? 0}
-                      .onOpenRequestConsumed=${props.onSessionRailOpenRequestConsumed}
+                      .command=${props.sessionRailCommand ?? null}
+                      .consumedCommandGeneration=${props.sessionRailConsumedCommandGeneration ?? 0}
+                      .onCommandConsumed=${props.onSessionRailCommandConsumed}
                       .onSubmit=${props.onSessionRailSubmit}
                       .onDraftChange=${props.onSessionRailDraftChange}
                       .onClear=${props.onSessionRailClear}

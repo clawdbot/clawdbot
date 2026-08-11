@@ -408,7 +408,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     case "mobile_ui":
       return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":
-      return action === "list" || action === "inspect";
+      return action === "list" || action === "inspect" || action === "read";
     case "transcripts":
       return action === "status";
     case "gateway":

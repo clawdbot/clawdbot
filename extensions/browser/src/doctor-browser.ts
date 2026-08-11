@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseBrowserMajorVersion,
@@ -12,6 +13,10 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
+import {
+  browserExtensionStatus,
+  repairOwnedChromeExtensionNativeHosts,
+} from "./browser/extension-install.js";
 import { listSystemProfiles } from "./browser/system-profiles.js";
 import { movePathToTrash } from "./browser/trash.js";
 import type { OpenClawConfig } from "./config/config.js";
@@ -26,6 +31,8 @@ const REMOTE_DEBUGGING_PAGES = [
   "brave://inspect/#remote-debugging",
   "edge://inspect/#remote-debugging",
 ].join(", ");
+const BROWSER_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BUNDLED_CHROME_EXTENSION_DIR = path.join(BROWSER_PLUGIN_ROOT, "chrome-extension");
 
 type ExistingSessionProfile = {
   name: string;
@@ -243,6 +250,38 @@ export async function noteChromeMcpBrowserReadiness(
       "Browser relay authentication",
     );
   }
+  const extensionStateDir = deps?.configDir ?? CONFIG_DIR;
+  const extensionCopyPath = path.join(extensionStateDir, "browser", "chrome-extension");
+  try {
+    const extension = fs.existsSync(extensionCopyPath)
+      ? await browserExtensionStatus({
+          bundledDir: BUNDLED_CHROME_EXTENSION_DIR,
+          deps: {
+            stateDir: extensionStateDir,
+            platform,
+            env,
+            homeDir: deps?.homeDir,
+          },
+        })
+      : null;
+    if (extension && (extension.installedCopy.present || extension.discovered.length > 0)) {
+      if (extension.manualSetupRequired) {
+        noteFn(
+          [
+            "- The Chrome extension native bootstrap is not fully registered.",
+            `- Run ${formatCliCommand("openclaw browser extension status --json")} for the redacted registration report.`,
+            `- Run ${formatCliCommand("openclaw browser extension install")} after loading the printed unpacked directory.`,
+          ].join("\n"),
+          "Browser extension bootstrap",
+        );
+      }
+    }
+  } catch (error) {
+    noteFn(
+      `- Chrome extension bootstrap status could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+      "Browser extension bootstrap",
+    );
+  }
   const legacyClawdResidue = detectLegacyClawdBrowserProfileResidue(cfg, {
     configDir: deps?.configDir,
     pathExists: deps?.pathExists,
@@ -384,6 +423,17 @@ export async function noteChromeMcpBrowserReadiness(
   }
 
   noteFn(lines.join("\n"), "Browser");
+}
+
+/** Repair only an already-owned native-host registration during doctor --fix. */
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
+  changes: string[];
+  warnings: string[];
+}> {
+  return await repairOwnedChromeExtensionNativeHosts({
+    bundledDir: BUNDLED_CHROME_EXTENSION_DIR,
+    pluginRoot: BROWSER_PLUGIN_ROOT,
+  });
 }
 
 /** Archives legacy clawd browser profile residue when doctor --fix is requested. */

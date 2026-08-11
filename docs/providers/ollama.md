@@ -421,9 +421,16 @@ timeout and cap `num_ctx`:
   },
   tools: {
     media: {
+      models: [
+        {
+          provider: "ollama",
+          model: "qwen2.5vl:7b",
+          timeoutSeconds: 300,
+          capabilities: ["image"],
+        },
+      ],
       image: {
         timeoutSeconds: 180,
-        models: [{ provider: "ollama", model: "qwen2.5vl:7b", timeoutSeconds: 300 }],
       },
     },
   },
@@ -1024,7 +1031,7 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
         defaults: {
           models: {
             "ollama/gemma4": {
-              thinking: "low",
+              params: { thinking: "low" },
             },
           },
         },
@@ -1113,8 +1120,10 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     For native requests, thinking control is forwarded directly: `/think off`
     and `openclaw agent --thinking off` send top-level `think: false` unless
     an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string; `/think max` maps to
-    Ollama's highest effort, `think: "high"`.
+    low|medium|high` send the matching effort string. Verified full-effort
+    Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
+    `think: "max"` for `/think max`; other models and local servers keep the
+    compatible `think: "high"` mapping.
 
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.

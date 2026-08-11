@@ -54,7 +54,7 @@ vi.mock("../../skills/lifecycle/upload-install.js", () => ({
   installUploadedSkillArchive: vi.fn(),
 }));
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub-skills.js", () => ({
   fetchClawHubSkillDetail: vi.fn(),
 }));
 

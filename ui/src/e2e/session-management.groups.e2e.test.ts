@@ -9,9 +9,11 @@ import {
   controlUiSessionPath,
   createSessionManagementE2eSuite,
   installMockGateway,
+  openSessionMenuSubmenu,
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  submitInputDialog,
   uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -479,17 +481,21 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.locator(".session-groupby__select").selectOption("category");
-      page.once("dialog", (dialog) => void dialog.accept("X".repeat(513)));
       await page.getByRole("button", { name: "New group…" }).click();
+      const field = page.locator("openclaw-modal-dialog input");
+      await field.waitFor({ state: "visible" });
+      await field.fill("X".repeat(513));
+      await field.press("Enter");
       await gateway.waitForRequest("sessions.groups.put");
       await gateway.rejectDeferred("sessions.groups.put", {
         code: "INVALID_REQUEST",
         message: "group name exceeds 512 characters",
       });
 
-      const error = page.getByRole("alert");
+      const error = page.locator('openclaw-modal-dialog [role="alert"]');
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
+      expect(await field.inputValue()).toBe("X".repeat(513));
       expect(pageErrors).toEqual([]);
     } finally {
       await context.close();
@@ -566,8 +572,16 @@ suite.define(() => {
       await groupMenuButton.click();
       await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-group-menu.png");
-      page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      // The rename runs in the owned dialog, prefilled with the name it is
+      // changing; a native prompt here would be a regression.
+      const renameDialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      await renameDialog.waitFor({ state: "visible" });
+      await expect
+        .poll(() => page.locator("openclaw-modal-dialog input").inputValue())
+        .toBe("Research");
+      await captureUiProof(page, "sidebar-group-rename-dialog.png");
+      await submitInputDialog(page, "Projects");
       const renameRequest = await gateway.waitForRequest("sessions.groups.rename");
       expect(requireRecord(renameRequest.params)).toMatchObject({
         name: "Research",
@@ -591,9 +605,19 @@ suite.define(() => {
         name: "Group options for Projects",
       });
       await projectsGroup.locator(".sidebar-recent-sessions__head").hover();
-      page.once("dialog", (dialog) => void dialog.accept());
       await projectsMenuButton.click();
       await activateMenuItem(page.getByRole("menuitem", { name: "Delete group…" }));
+      // The confirm names the group and what happens to its sessions, and only
+      // the operator's answer sends sessions.groups.delete.
+      await page
+        .getByRole("dialog", { name: 'Delete group "Projects"' })
+        .waitFor({ state: "visible" });
+      const deleteConfirm = page.locator("openclaw-modal-dialog");
+      await expect
+        .poll(() => deleteConfirm.textContent())
+        .toContain("The group is removed. Its sessions move back to the session list.");
+      await captureUiProof(page, "sidebar-group-delete-confirm.png");
+      await deleteConfirm.getByRole("button", { name: "Delete", exact: true }).click();
       const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
       expect(requireRecord(deleteRequest.params)).toMatchObject({ name: "Projects" });
       await expect
@@ -611,13 +635,48 @@ suite.define(() => {
         )
         .toBe(2);
 
-      // Group by "None" flattens the category sections into the plain list.
+      // Group by "None" flattens the category sections into the plain list. The
+      // confirm left the pointer over the dialog rather than the sidebar, and
+      // section actions only surface on hover, so reveal this one first.
       const sortSessionsButton = page.locator(
         "button.sidebar-session-sort:not(.sidebar-session-new)",
       );
+      await page
+        .locator('[data-session-section="ungrouped"] .sidebar-recent-sessions__head')
+        .hover();
       await sortSessionsButton.click();
+      const showAutomationSessions = page.getByRole("menuitemcheckbox", {
+        name: "Show automation sessions",
+      });
+      await activateMenuItem(showAutomationSessions);
+      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+
+      await sortSessionsButton.click();
+      await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
+      const groupingCheck = page
+        .getByRole("menuitemradio", { name: "Custom groups" })
+        .locator(".session-menu__check");
+      const nativeAutomationCheck = showAutomationSessions.locator('[part="checkmark"]');
+      await expect.poll(() => nativeAutomationCheck.count()).toBe(1);
+      expect(await nativeAutomationCheck.boundingBox()).toBeNull();
+      const automationCheck = showAutomationSessions.locator(".session-menu__check");
+      await expect.poll(() => automationCheck.count()).toBe(1);
+      await expect
+        .poll(async () => {
+          const [groupingBounds, automationBounds] = await Promise.all([
+            groupingCheck.boundingBox(),
+            automationCheck.boundingBox(),
+          ]);
+          if (!groupingBounds || !automationBounds) {
+            return Number.POSITIVE_INFINITY;
+          }
+          const groupingRight = groupingBounds.x + groupingBounds.width;
+          const automationRight = automationBounds.x + automationBounds.width;
+          return Math.abs(automationRight - groupingRight);
+        })
+        .toBeLessThanOrEqual(1);
       await sortSessionsButton.click();
       await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
@@ -684,8 +743,8 @@ suite.define(() => {
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      await submitInputDialog(page, "Projects");
       await gateway.waitForRequest("sessions.groups.rename");
       await gateway.rejectDeferred("sessions.groups.rename", {
         code: "INVALID_REQUEST",
@@ -764,37 +823,9 @@ suite.define(() => {
       );
       await sessionTen.hover();
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
-      const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
-      await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
-      const moveToGroupIndex = await moveToGroup.evaluate((element) =>
-        [...(element.parentElement?.children ?? [])]
-          .filter(
-            (item) =>
-              item.localName === "wa-dropdown-item" &&
-              item.getAttribute("slot") !== "submenu" &&
-              !(item as HTMLElement & { disabled?: boolean }).disabled,
-          )
-          .indexOf(element),
-      );
-      expect(moveToGroupIndex).toBeGreaterThanOrEqual(0);
-      // Submenu ARIA is ready before Web Awesome finishes opening the dropdown.
-      // Wait for its focus contract so navigation keys cannot outrun the menu.
-      await expect
-        .poll(() =>
-          page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
-        )
-        .toBe(1);
-      await page.keyboard.press("Home");
-      for (let index = 0; index < moveToGroupIndex; index += 1) {
-        await page.keyboard.press("ArrowDown");
-      }
-      await expect
-        .poll(() => moveToGroup.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowRight");
-      await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
-      page.once("dialog", (dialog) => void dialog.accept("Gamma"));
+      await openSessionMenuSubmenu(page, "Move to group");
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await submitInputDialog(page, "Gamma");
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
       const createdPatch = await waitForPatch(
@@ -923,8 +954,8 @@ suite.define(() => {
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Second group"));
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await submitInputDialog(page, "Second group");
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });

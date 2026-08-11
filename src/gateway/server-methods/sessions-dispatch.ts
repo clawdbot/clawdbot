@@ -189,9 +189,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     if (
       existingPlacement &&
-      existingPlacement.state !== "local" &&
-      existingPlacement.state !== "reclaimed" &&
-      existingPlacement.state !== "failed"
+      (existingPlacement.state === "active" ||
+        existingPlacement.state === "draining" ||
+        existingPlacement.state === "reconciling")
     ) {
       respondInvalidWorkerSession(
         respond,

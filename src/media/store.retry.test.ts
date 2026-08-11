@@ -1,6 +1,5 @@
 // Media store retry tests cover the exact directory-recreation recovery boundary.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -53,7 +52,7 @@ describe("media store directory recreation", () => {
           return {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
-              if (args[0].includes(`${segment}${path.sep}`) && writeAttempts++ === 0) {
+              if (args[0].includes(`${segment}/`) && writeAttempts++ === 0) {
                 throw injectedError;
               }
               return await actualStore.write(...args);

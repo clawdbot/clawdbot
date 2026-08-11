@@ -232,6 +232,8 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
   allowCanonicalRepair?: boolean;
   /** Doctor-only synchronous state transfer that commits with the destination entry. */
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
+  /** Synchronous caller-authority guard checked immediately before lifecycle writes. */
+  beforeCommitInTransaction?: () => void;
 }): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -270,6 +272,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     const maintenancePlans: SqliteSessionEntryMaintenancePlan[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
+      params.beforeCommitInTransaction?.();
       const validatedRemovals = projected.removals.filter((removal) => {
         const entry = readProjectedRemovalEntry(
           transactionDb,

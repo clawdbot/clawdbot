@@ -147,6 +147,7 @@ let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQue
 let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
 let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
+let beginQueuedMessageEdit: typeof import("./queued-message-edit.ts").beginQueuedMessageEdit;
 let refreshPageChat: typeof import("./chat-state-refresh.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
@@ -158,6 +159,7 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send-actions.ts"));
   ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
+  ({ beginQueuedMessageEdit } = await import("./queued-message-edit.ts"));
   ({ handlePageGatewayEvent } = await import("./chat-state-events.ts"));
   ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
@@ -545,6 +547,42 @@ describe("refreshChat", () => {
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
     ]);
     expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("keeps the routed archived descriptor when history confirms archive state", async () => {
+    const key = "agent:main:dashboard:archived";
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: row(key, {
+            archived: true,
+            sessionId: "archived-session",
+          }),
+        },
+      },
+      sessionKey: key,
+      sessionsResult: createSessionsResult([
+        row(key, {
+          derivedTitle: "Readable archived title",
+          sessionId: "archived-session",
+        }),
+      ]),
+    });
+
+    await refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+
+    expect(asChatPageHost(host).selectedChatSessionArchived).toBe(true);
+    expect(host.sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        archived: true,
+        derivedTitle: "Readable archived title",
+      }),
+    ]);
   });
 
   it("keeps an active run adopted from history over newer stale catalog metadata", async () => {
@@ -4080,6 +4118,37 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(visibleHost)).toStrictEqual([]);
   });
 
+  it("holds a row being edited against a drain owned by another pane", async () => {
+    const request = makeRequestMock({ "chat.history": () => idleChatHistory() });
+    const client = clientWithRequest(request);
+    const item = {
+      id: "edited-across-panes",
+      text: "the text being rewritten",
+      createdAt: 1,
+      sessionKey: "agent:main",
+    };
+    // Two panes on one session: the composer holding the edit is pane-local, but
+    // the outbox and the drain lane are shared, and either pane can own the lane.
+    const editing = makeChatHost({ client, chatQueue: [item] });
+    const peer = makeChatHost({ client, chatQueue: [] });
+    const stopEditing = subscribeChatOutboxProjection(editing);
+    const stopPeer = subscribeChatOutboxProjection(peer);
+    expect(admitQueuedMessageForSession(editing, editing.sessionKey, item)).toBe(true);
+    expect(beginQueuedMessageEdit(editing, item.id)).toBe("started");
+
+    try {
+      await retryReconnectableQueuedChatSends(peer);
+
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(peer)[0]?.queue).toEqual([
+        expect.objectContaining({ id: item.id, text: item.text }),
+      ]);
+    } finally {
+      stopPeer();
+      stopEditing();
+    }
+  });
+
   it("projects a running local command to panes that subscribe after execution starts", async () => {
     const command = createDeferred<{ content: string }>();
     executeSlashCommandMock.mockImplementationOnce(() => command.promise);
@@ -7090,6 +7159,42 @@ describe("handleSendChat", () => {
     expect(
       findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "empty-leaf send"),
     ).toHaveProperty("expectedLeafEntryId", null);
+  });
+
+  it("waits for terminal history reconciliation before sending a follow-up", async () => {
+    const history = createDeferred<unknown>();
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "reconciled follow-up payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-terminal",
+      chatMessage: "immediate follow-up",
+    });
+    const historyLoad = loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    const sending = handleSendChat(host);
+    await Promise.resolve();
+    const sendsBeforeHistory = host.request.mock.calls.filter(
+      ([method]) => method === "chat.send",
+    ).length;
+    history.resolve({
+      messages: [],
+      sessionInfo: {
+        activeLeafEntryId: "leaf-after-terminal",
+        key: "agent:main",
+        sessionId: "session-main",
+      },
+    });
+    await Promise.all([historyLoad, sending]);
+
+    expect(sendsBeforeHistory).toBe(0);
+    expect(
+      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "follow-up send"),
+    ).toMatchObject({ expectedLeafEntryId: "leaf-after-terminal" });
   });
 
   it("omits the active leaf when draining a restored outbox", async () => {

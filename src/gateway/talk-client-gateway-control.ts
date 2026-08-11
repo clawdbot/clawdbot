@@ -3,6 +3,7 @@ import { normalizeTalkSection } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "../talk/agent-consult-tool.js";
@@ -46,12 +47,73 @@ const owners = new Map<string, GatewayControlOwner>();
 
 const REALTIME_VOICE_CONTEXT_MAX_UTF8_BYTES = 8_000;
 const REALTIME_CONTROL_MAX_PENDING = 8;
+const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
+  const [embeddedAgent, admission] = await Promise.all([
+    import("../agents/embedded-agent.js"),
+    import("../agents/admitted-run-context.js"),
+  ]);
+  return {
+    runEmbeddedAgent: embeddedAgent.runEmbeddedAgent,
+    createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
+    prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
+  };
+});
 
 function createRealtimeControlQueue(): BoundedSerialQueue {
   return new BoundedSerialQueue({
     maxPendingCount: REALTIME_CONTROL_MAX_PENDING,
     maxPendingWeight: REALTIME_CONTROL_MAX_PENDING,
   });
+}
+
+function createTalkClientAgentRuntime(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  rawSourceRef?: string;
+}) {
+  const agentRuntime = createPluginRuntime().agent;
+  const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (runParams) => {
+    runParams.abortSignal?.throwIfAborted();
+    const execution = await loadTalkAgentExecution();
+    runParams.abortSignal?.throwIfAborted();
+    const preparedRunAdmission = execution.prepareAgentRunAdmission({
+      cfg: params.config,
+      operationalRunInstance: execution.createOperationalRunInstanceRef(runParams.runId),
+      facts: {
+        runId: runParams.runId,
+        agentId: runParams.sessionTarget?.agentId ?? runParams.agentId ?? params.agentId,
+        ingress: {
+          kind: "gateway-client",
+          boundary: "talk-agent-consult",
+          state: "present",
+          ...(params.rawSourceRef ? { rawSourceRef: params.rawSourceRef } : {}),
+        },
+      },
+    });
+    let closed = false;
+    const close = () => {
+      if (!closed) {
+        closed = true;
+        preparedRunAdmission.close();
+      }
+    };
+    // Abort owns authority revocation independently of core completion; the
+    // post-registration check closes the prepare-to-listener race.
+    runParams.abortSignal?.addEventListener("abort", close, { once: true });
+    try {
+      runParams.abortSignal?.throwIfAborted();
+      return await execution.runEmbeddedAgent({ ...runParams, preparedRunAdmission });
+    } finally {
+      runParams.abortSignal?.removeEventListener("abort", close);
+      close();
+    }
+  };
+  Object.defineProperty(agentRuntime, "runEmbeddedAgent", {
+    configurable: true,
+    enumerable: true,
+    value: runEmbeddedAgent,
+  });
+  return agentRuntime;
 }
 
 export function createTalkRealtimeRunControlOwner(params: {
@@ -164,7 +226,11 @@ export function createTalkClientAgentConsultRunner(params: {
           confirmationId: parsedArgs.confirmationId,
         })
       : undefined;
-    agentRuntime ??= createPluginRuntime().agent;
+    agentRuntime ??= createTalkClientAgentRuntime({
+      config: params.config,
+      agentId: params.agentId,
+      ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+    });
     const talkConfig = normalizeTalkSection(params.config.talk);
     return await consultRealtimeVoiceAgent({
       cfg: params.config,

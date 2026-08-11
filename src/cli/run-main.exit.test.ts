@@ -58,6 +58,8 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const stopManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn());
+const closeProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(async () => {}));
 const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
   vi.fn<() => { port: number } | undefined>(() => undefined),
 );
@@ -316,6 +318,14 @@ vi.mock("../plugins/memory-state.js", () => ({
 vi.mock("../agents/harness/registry.js", () => ({
   listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
+}));
+
+vi.mock("../agents/provider-local-service.js", () => ({
+  stopManagedProviderLocalServices: stopManagedProviderLocalServicesMock,
+}));
+
+vi.mock("../agents/provider-transport-dispatcher-pool.js", () => ({
+  closeProviderTransportDispatcherPool: closeProviderTransportDispatcherPoolMock,
 }));
 
 vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
@@ -666,6 +676,12 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+      order.push("provider-local-services");
+    });
+    closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
+      order.push("provider-transport-dispatchers");
+    });
     getActiveMcpLoopbackRuntimeMock.mockReturnValueOnce({ port: 1234 });
     closeMcpLoopbackServerMock.mockImplementationOnce(async () => {
       order.push("mcp-loopback");
@@ -678,7 +694,13 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "models", "status", "--probe"]);
 
-    expect(order).toEqual(["harnesses", "mcp-loopback", "memory"]);
+    expect(order).toEqual([
+      "harnesses",
+      "provider-local-services",
+      "provider-transport-dispatchers",
+      "mcp-loopback",
+      "memory",
+    ]);
     expect(flushExitAfterOneShotOutputMock).not.toHaveBeenCalled();
   });
 

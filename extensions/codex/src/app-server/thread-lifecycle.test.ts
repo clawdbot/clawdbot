@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./client.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
@@ -353,6 +354,7 @@ function createAttemptParams(params: {
       : {});
   const authProfileType = params.authProfileType ?? "oauth";
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     provider: params.provider,
     modelId: params.modelId ?? "gpt-5.4",
     prompt: "test prompt",
@@ -435,6 +437,7 @@ function createThreadLifecycleParams(
   workspaceDir: string,
 ): EmbeddedRunAttemptParams {
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "hello",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -785,12 +788,14 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
-    // Codex defers native collab tools behind tool_search on search-capable
-    // models; the instructions must teach the retrieval path or models fall
-    // back to the always-direct sessions_spawn.
+    // Codex defers native collab tools behind tool_search or code mode; the
+    // instructions must teach both retrieval paths or models fall back to the
+    // always-direct sessions_spawn.
+    expect(instructions).toContain("Use `tool_search` when directly callable");
     expect(instructions).toContain(
-      "when `spawn_agent` is not directly listed, load it with `tool_search` before spawning",
+      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
     );
+    expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).toContain(
       "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
@@ -952,7 +957,11 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain(
       "Deferred searchable OpenClaw dynamic tools available: image_generate, music_generate.",
     );
-    expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
+    expect(instructions).toContain("Use `tool_search` when directly callable");
+    expect(instructions).toContain(
+      "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
+    );
+    expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).not.toContain("message,");
   });
 
@@ -4497,6 +4506,7 @@ describe("Codex app-server thread lifecycle timing", () => {
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
     it.each([
+      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
@@ -4512,6 +4522,7 @@ describe("resolveReasoningEffort (#71946)", () => {
     );
 
     it.each([
+      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
