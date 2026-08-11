@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";
 
@@ -118,7 +118,7 @@ describe("SessionArchiveCleanupPreviewCoordinator", () => {
   });
 
   it("does not probe missing archive-directory aliases during preview", async () => {
-    await withTempDir({ prefix: "openclaw-archive-preview-readonly-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-archive-preview-readonly-" }, async (dir) => {
       const main = target("main", path.join(dir, "Future", "sessions.json"));
       const work = target("work", path.join(dir, "future", "sessions.json"));
       fs.utimesSync(dir, new Date(0), new Date(0));
