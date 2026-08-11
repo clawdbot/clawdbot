@@ -60,6 +60,7 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
   openclawCodeModeToolSurface?: boolean;
+  openclawCodeModeAllowedHostedToolTypes?: Set<string>;
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;

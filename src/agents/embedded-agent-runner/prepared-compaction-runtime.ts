@@ -66,7 +66,7 @@ import type { DirectCompactionPreparation } from "./direct-compaction-preparatio
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { log } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
-import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
+import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
@@ -205,6 +205,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       provider: contextConfigProvider,
       modelId,
       model: runtimeModelWithContext,
+      agentId: effectiveSkillAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
@@ -267,6 +268,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
+      conversationToolPolicy: params.conversationToolPolicy,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,

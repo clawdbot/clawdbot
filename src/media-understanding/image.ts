@@ -600,30 +600,30 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
   };
 }
 
-export async function describeImagesWithModel(
+export async function describeImagesWithModelCore(
   params: ImagesDescriptionRequest,
 ): Promise<ImagesDescriptionResult> {
   return await describeImagesWithModelInternal(params);
 }
 
-export async function describeImagesWithModelPayloadTransform(
+export async function describeImagesWithModelPayloadTransformCore(
   params: ImagesDescriptionRequest,
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImagesDescriptionResult> {
   return await describeImagesWithModelInternal(params, { onPayload });
 }
 
-export async function describeImageWithModel(
+export async function describeImageWithModelCore(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
-  return await describeImagesWithModel(toImagesDescriptionRequest(params));
+  return await describeImagesWithModelCore(toImagesDescriptionRequest(params));
 }
 
-export async function describeImageWithModelPayloadTransform(
+export async function describeImageWithModelPayloadTransformCore(
   params: ImageDescriptionRequest,
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImageDescriptionResult> {
-  return await describeImagesWithModelPayloadTransform(
+  return await describeImagesWithModelPayloadTransformCore(
     toImagesDescriptionRequest(params),
     onPayload,
   );

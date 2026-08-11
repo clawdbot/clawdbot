@@ -1,9 +1,10 @@
 // Round-trip and naming coverage for the archived-transcript zstd cold tier.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
   readSessionArchiveContentSync,
@@ -15,25 +16,38 @@ import {
   parseUsageCountedSessionIdFromFileName,
 } from "./artifacts.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-zstd-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("archive compression", () => {
+  it("decodes both plain bytes and runtime-supported compressed archive bytes", () => {
+    const content = `${JSON.stringify({ type: "message", body: "archive round trip" })}\n`;
+    const encoded = encodeSessionArchiveContent(content);
+
+    expect(decodeSessionArchiveBytes(Buffer.from(content, "utf8"), false)).toBe(content);
+    expect(decodeSessionArchiveBytes(encoded.bytes, encoded.suffix !== "")).toBe(content);
+  });
+
+  it("invalidates a materialized cache when its source archive is removed", () => {
+    const encoded = encodeSessionArchiveContent("cached archive contents\n");
+    if (encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
+      return;
+    }
+    const dir = tempDirs.make("openclaw-archive-zstd-");
+    const archivePath = path.join(dir, `removed.jsonl.deleted.2026-07-11${encoded.suffix}`);
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const cachePath = materializeSessionArchiveForRead(archivePath);
+    expect(fs.existsSync(cachePath)).toBe(true);
+
+    fs.rmSync(archivePath);
+
+    expect(() => materializeSessionArchiveForRead(archivePath)).toThrow();
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
   it("round-trips archived transcript content through encode and read", () => {
     const content = `${JSON.stringify({ type: "message", body: "hello" })}\n`.repeat(200);
     const encoded = encodeSessionArchiveContent(content);
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-archive-zstd-");
     const archivePath = path.join(
       dir,
       `sess.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
@@ -48,7 +62,7 @@ describe("archive compression", () => {
   });
 
   it("keeps plain archives readable regardless of runtime zstd support", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-archive-zstd-");
     const archivePath = path.join(dir, "sess.jsonl.reset.2026-07-11T00-00-00.000Z");
     fs.writeFileSync(archivePath, "plain\n", "utf8");
 
@@ -58,7 +72,7 @@ describe("archive compression", () => {
   it("materializes compressed archives to a stable plain JSONL cache path", () => {
     const content = `${JSON.stringify({ type: "message", body: "cold" })}\n`;
     const encoded = encodeSessionArchiveContent(content);
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-archive-zstd-");
     const archivePath = path.join(
       dir,
       `sess.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,

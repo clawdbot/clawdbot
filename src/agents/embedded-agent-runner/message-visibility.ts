@@ -1,3 +1,4 @@
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -23,10 +24,6 @@ type PayloadVisibilityOptions = {
   includeReasoningPayloads?: boolean;
   includeSilentReplyPayloads?: boolean;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);

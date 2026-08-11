@@ -7,11 +7,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
@@ -34,6 +39,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 vi.mock("./in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
@@ -382,6 +388,8 @@ describe("sanitizeTextContent", () => {
 
 beforeEach(() => {
   facadeRuntimeMock.sessionKeyResolvers.clear();
+  inProcessGatewayRequestMock.mockReset();
+  inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
@@ -471,6 +479,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({ channel: "discord", to: "group:dev" });
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -494,6 +503,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "whatsapp",
@@ -523,6 +533,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "whatsapp",
@@ -550,6 +561,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "whatsapp",
@@ -577,6 +589,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:feishu:direct:ou_user",
       displayKey: "agent:main:feishu:direct:ou_user",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "feishu",
@@ -603,6 +616,7 @@ describe("resolveAnnounceTarget", () => {
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
       displayKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+      callGateway: callGatewayMock,
     });
     expect(target).toEqual({
       channel: "slack",
@@ -836,7 +850,6 @@ describe("sessions_send gating", () => {
       status: "accepted",
       sessionKey: MAIN_AGENT_SESSION_KEY,
     });
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(callGatewayMock.mock.calls).toContainEqual([
       expect.objectContaining({
         method: "agent",
@@ -1169,6 +1182,37 @@ describe("sessions_send gating", () => {
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
     expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
+  it("detaches fire-and-forget A2A work from parent transcript ownership", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    let inheritedFence: ReturnType<typeof getOwnedSessionTranscriptWriterFence>;
+    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async () => {
+      inheritedFence = getOwnedSessionTranscriptWriterFence();
+    });
+    let parentTranscriptWriteCalls = 0;
+    const parentTranscriptWrite = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      parentTranscriptWriteCalls += 1;
+      return await run();
+    };
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        sessionTarget: {
+          expectedWriterRunId: "disposed-parent-run",
+          sessionKey: MAIN_AGENT_SESSION_KEY,
+        },
+        withTranscriptWrite: parentTranscriptWrite,
+      },
+      async () => {
+        await executeFireAndForgetA2AFrom(MAIN_AGENT_SESSION_KEY);
+      },
+    );
+    await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
+
+    expect(inheritedFence).toBeUndefined();
+    expect(parentTranscriptWriteCalls).toBe(0);
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {

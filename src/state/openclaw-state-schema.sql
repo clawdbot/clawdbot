@@ -447,6 +447,17 @@ CREATE INDEX IF NOT EXISTS idx_operator_approvals_runtime_pending
   ON operator_approvals(runtime_epoch, approval_id)
   WHERE status = 'pending';
 
+CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
+  approval_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  source_context_id TEXT NOT NULL CHECK (
+    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
+  ),
+  source_execution_id TEXT NOT NULL CHECK (
+    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
+  )
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
   role TEXT NOT NULL,
@@ -553,6 +564,16 @@ CREATE TABLE IF NOT EXISTS device_auth_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
   ON device_auth_tokens(updated_at_ms DESC, device_id, role);
+
+CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
+  gateway_scope TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  token TEXT NOT NULL,
+  scopes_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (gateway_scope, device_id, role)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
   package_name TEXT NOT NULL PRIMARY KEY,
@@ -1793,7 +1814,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
-  removed_at INTEGER
+  removed_at INTEGER,
+  run_end_cleanup_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -1808,6 +1830,16 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
   data BLOB NOT NULL,
   PRIMARY KEY (worktree_id, path, chunk_index)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT NOT NULL PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  origin_url TEXT,
+  source TEXT NOT NULL CHECK (source IN ('registered', 'cloned')),
+  created_at_ms INT NOT NULL,
+  updated_at_ms INT NOT NULL
 ) STRICT;
 
 -- Gateway-owned custom session group catalog (names + display order).
@@ -1840,6 +1872,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   ssh_user TEXT,
   ssh_host_key TEXT,
   ssh_key_ref_json TEXT,
+  desktop_json TEXT,
   state TEXT NOT NULL CHECK (
     state IN (
       'requested',
@@ -1866,12 +1899,24 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   state_changed_at_ms INTEGER NOT NULL,
   idle_since_at_ms INTEGER,
   destroy_requested_at_ms INTEGER,
-  last_error TEXT
+  last_error TEXT,
+  shared_host INTEGER
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
+
+-- Provider-advertised fallback ports preserve stable retry order separately
+-- from the downgrade-sensitive canonical worker environment row.
+CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
+  environment_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
+  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
+  PRIMARY KEY (environment_id, position),
+  UNIQUE (environment_id, port),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+) STRICT;
 
 -- Session placement lives in the shared state database so local admission,
 -- worker admission, and environment attachment use one durable authority.
@@ -1918,6 +1963,8 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   state_changed_at_ms INTEGER NOT NULL,
+  terminal_reason TEXT,
+  terminal_at_ms INTEGER,
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL
@@ -2212,3 +2259,21 @@ CREATE TABLE IF NOT EXISTS model_catalog_remote (
   last_modified TEXT,
   checked_at INTEGER NOT NULL
 ) STRICT;
+
+-- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,
+-- which would allow duplicate team rows. This PK also avoids a rebuild for identity scope.
+CREATE TABLE IF NOT EXISTS secret_store_entries (
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('team', 'identity')),
+  scope_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('secret', 'env')),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  updated_by TEXT,
+  deleted_at_ms INTEGER,
+  CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
+  PRIMARY KEY (scope_kind, scope_id, name)
+) STRICT;
+CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
+  ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;

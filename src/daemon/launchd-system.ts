@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
   execLaunchctl,
@@ -30,10 +31,6 @@ type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status:
 function formatUnknownError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
 function quotePosixArgument(value: string): string {

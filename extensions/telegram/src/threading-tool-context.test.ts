@@ -1,7 +1,66 @@
 // Telegram tests cover threading tool context plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "./channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
+
+const tryReadSecretFileSyncMock = vi.hoisted(() =>
+  vi.fn(() => {
+    throw new Error("reply mode must not read Telegram credentials");
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-file-runtime")>()),
+  tryReadSecretFileSync: tryReadSecretFileSyncMock,
+}));
+
+describe("telegramPlugin reply threading", () => {
+  it.each([
+    {
+      name: "uses an account override",
+      telegram: {
+        accounts: {
+          sut: {
+            tokenFile: "/tmp/openclaw-telegram-reply-mode-must-not-read",
+            replyToMode: "first" as const,
+          },
+        },
+      },
+      expected: "first",
+    },
+    {
+      name: "inherits the top-level mode",
+      telegram: {
+        replyToMode: "all" as const,
+        accounts: {
+          sut: {
+            botToken: { source: "file", provider: "telegram_token", id: "value" },
+          },
+        },
+      },
+      expected: "all",
+    },
+    {
+      name: "allows an account to disable replies",
+      telegram: {
+        replyToMode: "all" as const,
+        accounts: { sut: { replyToMode: "off" as const } },
+      },
+      expected: "off",
+    },
+  ])("$name", ({ telegram, expected }) => {
+    tryReadSecretFileSyncMock.mockClear();
+    const resolveReplyToMode = telegramPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Telegram reply mode resolver is unavailable");
+    }
+
+    const cfg = { channels: { telegram } } as unknown as OpenClawConfig;
+    expect(resolveReplyToMode({ cfg, accountId: "sut" })).toBe(expected);
+    expect(tryReadSecretFileSyncMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("buildTelegramThreadingToolContext", () => {
   it("keeps topic thread state in plugin-owned tool context", () => {

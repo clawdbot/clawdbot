@@ -24,12 +24,23 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { isWorkerLocalToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 
 const LAUNCH_VERSION = 2;
 
+export type WorkerBrowserLaunchDescriptor = {
+  cdpUrl: string;
+  launcherPath: string;
+};
+
 type WorkerLaunchAssignment = {
+  /** Host placement namespace used for worker-local policy, hooks, and audit attribution. */
+  agentId: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+  /** Opaque host-signed runtime envelope; worker code never parses private identity. */
+  agentRuntimeIdentityToken: string;
   runId: string;
   turnId: string;
   prompt: string;
@@ -48,6 +59,7 @@ type WorkerLaunchAssignment = {
     nextSeq: number;
   };
   toolAuthority: WorkerToolAuthority;
+  browser?: WorkerBrowserLaunchDescriptor;
 };
 
 type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
@@ -98,13 +110,54 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   return { allowedToolNames: [...value.allowedToolNames] };
 }
 
+function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescriptor | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["cdpUrl", "launcherPath"]) ||
+    typeof value.cdpUrl !== "string" ||
+    typeof value.launcherPath !== "string" ||
+    !path.isAbsolute(value.launcherPath)
+  ) {
+    return undefined;
+  }
+  let cdpUrl: URL;
+  try {
+    cdpUrl = new URL(value.cdpUrl);
+  } catch {
+    return undefined;
+  }
+  const port = Number(cdpUrl.port);
+  if (
+    cdpUrl.protocol !== "http:" ||
+    cdpUrl.hostname !== "127.0.0.1" ||
+    cdpUrl.username !== "" ||
+    cdpUrl.password !== "" ||
+    cdpUrl.port === "" ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65_535 ||
+    cdpUrl.pathname !== "/" ||
+    cdpUrl.search !== "" ||
+    cdpUrl.hash !== ""
+  ) {
+    return undefined;
+  }
+  return {
+    cdpUrl: value.cdpUrl,
+    launcherPath: value.launcherPath,
+  };
+}
+
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
     !hasExactKeys(
       value,
       [
+        "agentId",
         "runId",
+        "operationalRunInstance",
+        "agentRuntimeIdentityToken",
         "turnId",
         "prompt",
         "suppressPromptTranscript",
@@ -116,13 +169,20 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt"],
+      ["systemPrompt", "browser"],
     )
   ) {
     return undefined;
   }
   if (
+    !isIdentifier(value.agentId) ||
     !isIdentifier(value.runId) ||
+    !isRecord(value.operationalRunInstance) ||
+    !isIdentifier(value.operationalRunInstance.instanceId) ||
+    value.operationalRunInstance.runId !== value.runId ||
+    typeof value.agentRuntimeIdentityToken !== "string" ||
+    value.agentRuntimeIdentityToken.length < 1 ||
+    value.agentRuntimeIdentityToken.length > 16_384 ||
     !isIdentifier(value.turnId) ||
     typeof value.prompt !== "string" ||
     typeof value.suppressPromptTranscript !== "boolean" ||
@@ -137,6 +197,11 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   }
   const toolAuthority = parseToolAuthority(value.toolAuthority);
   if (!toolAuthority) {
+    return undefined;
+  }
+  const browser =
+    value.browser === undefined ? undefined : parseBrowserLaunchDescriptor(value.browser);
+  if (value.browser !== undefined && !browser) {
     return undefined;
   }
   if (
@@ -162,7 +227,15 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   ) {
     return undefined;
   }
-  return { ...value, toolAuthority } as WorkerLaunchAssignment;
+  return {
+    ...value,
+    operationalRunInstance: Object.freeze({
+      instanceId: value.operationalRunInstance.instanceId,
+      runId: value.runId,
+    }),
+    toolAuthority,
+    ...(browser ? { browser } : {}),
+  } as WorkerLaunchAssignment;
 }
 
 export function buildWorkerConnectParams(

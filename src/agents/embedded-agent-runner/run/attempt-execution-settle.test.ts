@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../logger.js", () => ({
   log: { debug: mocks.logDebug, error: mocks.logError },
 }));
-vi.mock("../../subagent-registry.js", () => ({
+vi.mock("../../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 vi.mock("../runs.js", () => ({ clearActiveEmbeddedRun: mocks.clearActiveEmbeddedRun }));
@@ -27,8 +27,8 @@ vi.mock("./attempt-stream-finalize.js", () => ({
   finalizeEmbeddedAttemptStreamPhase: mocks.finalizeStream,
 }));
 
-import { runEmbeddedAttemptSettledPhase } from "./attempt-execution-settle.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
+import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 
@@ -162,8 +162,7 @@ function createFixture() {
       },
     },
     sessionLock: {
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      withOwnedTranscriptWrite: vi.fn(),
     },
     setup: {
       effectiveFsWorkspaceOnly: false,

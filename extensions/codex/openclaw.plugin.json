@@ -1,5 +1,19 @@
 {
   "id": "codex",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "providerIds": ["codex", "codex-cli", "openai-codex"],
+      "runtimeIds": ["codex", "codex-cli"],
+      "cliSessionKeys": ["codex-cli"],
+      "authProfilePrefixes": ["codex:", "codex-cli:", "openai-codex:"]
+    }
+  ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
   "contracts": {

@@ -1,6 +1,6 @@
 import {
   isHostScopedAgentToolActive,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -140,7 +140,7 @@ export function buildThreadStartParams(
     model?: string | null;
     modelProvider?: string | null;
     hostSystemAgentActive?: boolean;
-    ringZeroInheritedMcpServerNames?: readonly string[];
+    restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   },
 ): CodexThreadStartParams {
   const ringZeroActive =
@@ -182,7 +182,8 @@ export function buildThreadStartParams(
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
       hostSystemAgentActive: options.hostSystemAgentActive,
-      ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames:
+        options.restrictedToolSurfaceInheritedMcpServerNames,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
@@ -214,7 +215,7 @@ export function buildThreadResumeParams(
     webSearchAllowed?: boolean;
     model?: string | null;
     hostSystemAgentActive?: boolean;
-    ringZeroInheritedMcpServerNames?: readonly string[];
+    restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     preserveNativeModel?: boolean;
   },
 ): CodexThreadResumeParams {
@@ -267,7 +268,8 @@ export function buildThreadResumeParams(
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
       hostSystemAgentActive: options.hostSystemAgentActive,
-      ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames:
+        options.restrictedToolSurfaceInheritedMcpServerNames,
     }),
     developerInstructions:
       options.developerInstructions ??
@@ -367,20 +369,21 @@ export function buildCodexRuntimeThreadConfigForRun(
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
-    ringZeroInheritedMcpServerNames?: readonly string[];
+    restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   } = {},
 ): JsonObject {
   const ringZeroActive =
     (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
-  const restrictedToolSurface = ringZeroActive || messageOnlySourceReply;
+  const restrictedToolSurface =
+    ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
   const configMcpServers = config?.mcp_servers;
   if (restrictedToolSurface && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
-    throw new Error("Codex ring-zero received invalid thread mcp_servers config");
+    throw new Error("Codex restricted tool surface received invalid thread mcp_servers config");
   }
-  const ringZeroMcpServerNames = [
-    ...(options.ringZeroInheritedMcpServerNames ?? []),
+  const restrictedToolSurfaceMcpServerNames = [
+    ...(options.restrictedToolSurfaceInheritedMcpServerNames ?? []),
     ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
   ];
   // Per-thread configs deep-merge; drop server launch details before the
@@ -410,12 +413,12 @@ export function buildCodexRuntimeThreadConfigForRun(
       params.delegationCapability === "report_only"
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
-      messageOnlySourceReply
-        ? buildCodexRestrictedToolThreadConfigPatch(ringZeroMcpServerNames)
+      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
+        ? buildCodexRestrictedToolThreadConfigPatch(restrictedToolSurfaceMcpServerNames)
         : buildCodexRingZeroThreadConfigPatch(
             params,
             options.hostSystemAgentActive,
-            ringZeroMcpServerNames,
+            restrictedToolSurfaceMcpServerNames,
           ),
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
@@ -443,8 +446,8 @@ export function buildCodexRingZeroThreadConfigPatch(
 function buildCodexRestrictedToolThreadConfigPatch(
   inheritedMcpServerNames: readonly string[],
 ): JsonObject {
-  // Narrow OpenClaw allowlists already send environments: [] and disable
-  // native code mode. Remove every other configurable Codex-owned source so
+  // Restricted turns already send environments: [] and disable native code
+  // mode. Remove every other configurable Codex-owned source so
   // native delegation, installed MCP tools, and utilities cannot escape the cap.
   const mcpServers = Object.fromEntries(
     [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
@@ -482,10 +485,14 @@ export async function readCodexInheritedMcpServerNames(
       layer.name.type === "legacyManagedConfigTomlFromFile" ||
       layer.name.type === "legacyManagedConfigTomlFromMdm"
     ) {
-      throw new Error(`Codex ring-zero cannot override config layer ${layer.name.type}`);
+      throw new Error(
+        `Codex restricted tool surface cannot override config layer ${layer.name.type}`,
+      );
     }
     if (!CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
-      throw new Error(`Codex ring-zero does not recognize config layer ${layer.name.type}`);
+      throw new Error(
+        `Codex restricted tool surface does not recognize config layer ${layer.name.type}`,
+      );
     }
   }
   const configuredServers = response.config.mcp_servers;
@@ -498,7 +505,7 @@ export async function readCodexInheritedMcpServerNames(
   return Object.keys(configuredServers).toSorted();
 }
 
-export async function assertCodexRingZeroHasNoManagedHooks(
+export async function assertCodexRestrictedToolSurfaceHasNoManagedHooks(
   client: Pick<CodexAppServerClient, "request">,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -525,7 +532,7 @@ export async function assertCodexRingZeroHasNoManagedHooks(
       throw new Error("Codex configRequirements/read returned invalid managed hooks");
     }
     if (hasNonEmptyJsonValue(hooks)) {
-      throw new Error("Codex ring-zero cannot override managed hooks");
+      throw new Error("Codex restricted tool surface cannot override managed hooks");
     }
   }
   for (const key of ["featureRequirements", "feature_requirements"] as const) {
@@ -541,30 +548,83 @@ export async function assertCodexRingZeroHasNoManagedHooks(
         throw new Error("Codex configRequirements/read returned invalid feature requirements");
       }
       if (enabled && CODEX_RING_ZERO_RESTRICTED_FEATURES.has(feature)) {
-        throw new Error(`Codex ring-zero cannot override required feature ${feature}`);
+        throw new Error(
+          `Codex restricted tool surface cannot override required feature ${feature}`,
+        );
       }
     }
   }
 }
 
-export async function attestCodexRingZeroThreadHasNoMcpServers(
+export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
   client: Pick<CodexAppServerClient, "request">,
   threadId: string,
+  threadConfig: JsonObject | undefined,
   signal?: AbortSignal,
 ): Promise<void> {
+  const configuredServers = threadConfig?.mcp_servers;
+  if (configuredServers !== undefined && !isJsonObject(configuredServers)) {
+    throw new Error("Codex restricted-tool-surface thread config has invalid mcp_servers");
+  }
+  // Codex reports configured-but-disabled servers as inactive status rows.
+  // Match those rows to the exact per-thread deny patch instead of requiring an empty inventory.
+  const expectedDisabledServerNames = new Set<string>();
+  for (const [name, serverConfig] of Object.entries(configuredServers ?? {})) {
+    if (!isJsonObject(serverConfig) || serverConfig.enabled !== false) {
+      throw new Error(`Codex restricted-tool-surface MCP server ${name} is not disabled`);
+    }
+    expectedDisabledServerNames.add(name);
+  }
   const response = await client.request(
     "mcpServerStatus/list",
-    { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+    { threadId, detail: "toolsAndAuthOnly" },
     { signal },
   );
   if (!isJsonObject(response) || !Array.isArray(response.data)) {
-    throw new Error("Codex mcpServerStatus/list returned an invalid ring-zero attestation");
+    throw new Error(
+      "Codex mcpServerStatus/list returned an invalid restricted-tool-surface attestation",
+    );
   }
-  if (response.data.length > 0) {
-    const first = response.data[0];
-    const serverName =
-      isJsonObject(first) && typeof first.name === "string" ? first.name : "unknown";
-    throw new Error(`Codex ring-zero MCP attestation found server ${serverName}`);
+  const observedDisabledServerNames = new Set<string>();
+  for (const status of response.data) {
+    if (!isJsonObject(status) || typeof status.name !== "string" || !isJsonObject(status.tools)) {
+      throw new Error(
+        "Codex mcpServerStatus/list returned an invalid restricted-tool-surface server",
+      );
+    }
+    if (!expectedDisabledServerNames.has(status.name)) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation found unexpected server ${status.name}`,
+      );
+    }
+    if (observedDisabledServerNames.has(status.name)) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation returned duplicate server ${status.name}`,
+      );
+    }
+    observedDisabledServerNames.add(status.name);
+    if (!Object.hasOwn(status, "serverInfo")) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation returned malformed server ${status.name}`,
+      );
+    }
+    if (status.serverInfo !== null) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation found active server ${status.name}`,
+      );
+    }
+    if (Object.keys(status.tools).length > 0) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation found tools for server ${status.name}`,
+      );
+    }
+  }
+  for (const expectedName of expectedDisabledServerNames) {
+    if (!observedDisabledServerNames.has(expectedName)) {
+      throw new Error(
+        `Codex restricted-tool-surface MCP attestation is missing server ${expectedName}`,
+      );
+    }
   }
   if (response.nextCursor !== undefined && response.nextCursor !== null) {
     throw new Error("Codex mcpServerStatus/list returned an invalid empty-page cursor");

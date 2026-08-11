@@ -48,6 +48,9 @@ export async function runTelegramDispatchTurn(params: {
 }) {
   const { context } = params;
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
+  const toolProgressEnabled =
+    params.streamMode !== "off" &&
+    resolveChannelStreamingPreviewToolProgress(params.telegramCfg, true, params.streamMode);
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
@@ -158,7 +161,16 @@ export async function runTelegramDispatchTurn(params: {
                     const queued = params.draft.enqueueEvent(async () => {
                       await params.draft.ingestDraftLaneSegments(payload);
                     });
-                    return queued.then(() => false);
+                    // Queue settlement records draft intent; a numeric provider message ID
+                    // proves operator visibility for terminal recovery.
+                    return queued.then(async () => {
+                      const answerStream = params.draft.answerLane.stream;
+                      await answerStream?.waitForInFlight();
+                      const providerMessageId = answerStream?.messageId();
+                      return (
+                        typeof providerMessageId === "number" && Number.isFinite(providerMessageId)
+                      );
+                    });
                   }
                 : undefined,
             onBlockReplyQueued: params.draft.answerLane.stream
@@ -239,13 +251,11 @@ export async function runTelegramDispatchTurn(params: {
             },
             suppressDefaultToolProgressMessages:
               !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
+            suppressToolProgressMessages: !toolProgressEnabled,
             forceToolResultProgress:
+              Boolean(params.draft.answerLane.stream) &&
               params.streamMode === "progress" &&
-              resolveChannelStreamingPreviewToolProgress(
-                params.telegramCfg,
-                true,
-                params.streamMode,
-              ),
+              toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(params.draft.answerLane.stream),
             onVerboseProgressVisibility: (isActive) => {

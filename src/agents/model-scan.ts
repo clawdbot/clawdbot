@@ -20,6 +20,7 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
@@ -284,9 +285,7 @@ async function fetchOpenRouterModels(
       "OpenRouter model scan",
     );
   } finally {
-    if (res && !res.bodyUsed) {
-      await res.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(res);
   }
 }
 

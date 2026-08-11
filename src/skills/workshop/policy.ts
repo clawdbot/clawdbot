@@ -9,14 +9,19 @@ import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-t
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { resolvePendingSkillProposal } from "./service.js";
 
-const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set(["apply", "reject", "quarantine"]);
+const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set([
+  "apply",
+  "reject",
+  "quarantine",
+  "restore_collection",
+]);
 // Codex dynamic tools have a 90s watchdog. Approval RPCs reserve another 10s
 // for Gateway cleanup, leaving 10s for proposal lookup and tool-call overhead.
 const SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS = 70_000;
 
-type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine";
+type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine" | "restore_collection";
 
-// Only lifecycle actions mutate proposals and therefore require approval checks.
+// Lifecycle actions mutate proposals or live skills and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
   if (typeof action !== "string" || !SKILL_WORKSHOP_LIFECYCLE_ACTIONS.has(action)) {
@@ -42,6 +47,14 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
       title: "Reject workspace skill proposal",
       description: "Reject a pending workspace skill proposal.",
       severity: "info",
+    };
+  }
+  if (action === "restore_collection") {
+    return {
+      title: "Restore previous skill collection",
+      description:
+        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+      severity: "warning",
     };
   }
   return {
@@ -138,8 +151,19 @@ async function resolveLifecycleApprovalDescription(params: {
   }
 }
 
-function lifecycleApprovalTimeoutReason(proposalId?: string): string {
-  const proposal = proposalId ? `Proposal ${proposalId}` : "the proposal";
+function lifecycleApprovalTimeoutReason(params: {
+  action: SkillWorkshopLifecycleAction;
+  proposalId?: string;
+}): string {
+  if (params.action === "restore_collection") {
+    return [
+      "The Skill Workshop approval request expired without a decision.",
+      "This restore call left workspace skills unchanged.",
+      "Review the current skills, then request the restore again if it is still wanted.",
+      "Do not retry this tool call in a loop.",
+    ].join(" ");
+  }
+  const proposal = params.proposalId ? `Proposal ${params.proposalId}` : "the proposal";
   return [
     "The Skill Workshop approval request expired without a decision.",
     `This lifecycle call left ${proposal} unchanged and pending; check its current status in case another operator acted on it.`,
@@ -180,17 +204,23 @@ export async function resolveSkillWorkshopToolApproval(params: {
     return undefined;
   }
   const text = lifecycleApprovalText(action);
-  const approvalDescription = await resolveLifecycleApprovalDescription({
-    toolParams: params.toolParams,
-    workspaceDir: params.workspaceDir,
-    fallback: text.description,
-  });
+  const approvalDescription =
+    action === "restore_collection"
+      ? { description: text.description }
+      : await resolveLifecycleApprovalDescription({
+          toolParams: params.toolParams,
+          workspaceDir: params.workspaceDir,
+          fallback: text.description,
+        });
   return {
     requireApproval: {
       ...text,
       description: approvalDescription.description,
       timeoutMs: SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS,
-      timeoutReason: lifecycleApprovalTimeoutReason(approvalDescription.proposalId),
+      timeoutReason: lifecycleApprovalTimeoutReason({
+        action,
+        proposalId: approvalDescription.proposalId,
+      }),
       allowedDecisions: ["allow-once", "deny"],
     },
   };

@@ -1,6 +1,6 @@
 import {
   prepareHarnessNativeMcpAppPreview,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type McpToolCatalog,
   type SessionMcpRuntime,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

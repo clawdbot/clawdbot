@@ -5,11 +5,12 @@ import { expect } from "vitest";
 import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import { testing } from "./openai-transport-stream.test-support.js";
 
-export const {
-  buildOpenAIResponsesParams,
-  parseTransportChunkUsage,
-  resolveAzureOpenAIApiVersion,
-} = testing;
+export const buildOpenAIResponsesParams: typeof testing.buildOpenAIResponsesParams =
+  testing.buildOpenAIResponsesParams;
+export const parseTransportChunkUsage: typeof testing.parseTransportChunkUsage =
+  testing.parseTransportChunkUsage;
+export const resolveAzureOpenAIApiVersion: typeof testing.resolveAzureOpenAIApiVersion =
+  testing.resolveAzureOpenAIApiVersion;
 
 export type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 

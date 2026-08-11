@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
@@ -901,6 +902,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       allowGatewaySubagentBinding: true,
       messageChannel: params.followupRun.run.messageProvider,
       clientCaps: params.followupRun.run.clientCaps,
+      conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
       groupId: entry.groupId ?? params.followupRun.run.groupId,
       groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
       groupSpace: entry.space ?? params.followupRun.run.groupSpace,
@@ -1306,6 +1308,12 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.cfg,
+    flushRunId,
+    params.followupRun.run.agentId,
+    "auto-reply.memory-flush",
+  );
   try {
     const selection = resolveMemoryFlushModelFallbackOptions(
       params.followupRun.run,
@@ -1380,6 +1388,7 @@ export async function runMemoryFlushIfNeeded(params: {
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
         });
         const result = await memoryDeps.runEmbeddedAgent({
+          preparedRunAdmission,
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
@@ -1596,6 +1605,8 @@ export async function runMemoryFlushIfNeeded(params: {
     if (visibleErrorPayload) {
       params.onVisibleErrorPayloads?.([visibleErrorPayload]);
     }
+  } finally {
+    preparedRunAdmission.close();
   }
 
   return { sessionEntry: activeSessionEntry, outcome };

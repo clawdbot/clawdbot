@@ -24,16 +24,16 @@ import { isDirectRunUrl } from "../../../../scripts/lib/direct-run.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../../../scripts/lib/local-build-metadata.mjs";
-import { runManagedCommand } from "../../../../scripts/lib/managed-child-process.mjs";
+} from "../../../../scripts/lib/local-build-metadata.mts";
+import { runManagedCommand } from "../../../../scripts/lib/managed-child-process.mts";
 import {
   runNodeConfigFiles,
   runNodeSourceRoots,
-} from "../../../../scripts/run-node-watch-paths.mjs";
+} from "../../../../scripts/run-node-watch-paths.mts";
 import {
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
-} from "../../../../scripts/run-node.mjs";
+} from "../../../../scripts/run-node.mts";
 
 const DEFAULT_CHECKOUT = "/Users/steipete/openclaw";
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
@@ -90,6 +90,68 @@ exec "$@"
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
+/**
+ * @typedef {object} GatewayDeploymentRef
+ * @property {string} entrypoint
+ */
+
+/**
+ * The fields required when the updater invokes the managed Gateway CLI.
+ * LaunchAgent inspection returns a richer object, while focused probes may
+ * provide only this execution view.
+ *
+ * @typedef {object} GatewayCliDeploymentBase
+ * @property {string} configPath
+ * @property {string} entrypoint
+ * @property {string} executable
+ * @property {string[]} invocationPrefix
+ * @property {number} port
+ * @property {Record<string, string>} [serviceEnvironment]
+ * @property {string | null} [workingDirectory]
+ */
+
+/**
+ * @typedef {GatewayCliDeploymentBase & {
+ *   envFilePath?: null,
+ *   runtime?: string,
+ *   wrapperPath?: null,
+ * }} DirectGatewayCliDeployment
+ */
+
+/**
+ * @typedef {GatewayCliDeploymentBase & {
+ *   envFilePath: string,
+ *   runtime: string,
+ *   wrapperPath: string,
+ * }} WrappedGatewayCliDeployment
+ */
+
+/** @typedef {DirectGatewayCliDeployment | WrappedGatewayCliDeployment} GatewayCliDeployment */
+
+/**
+ * The stable identity fields used to verify a LaunchAgent retarget.
+ * Repointing deliberately does not require the execution-only fields above.
+ *
+ * @typedef {object} GatewayRepointDeployment
+ * @property {string} configPath
+ * @property {string} entrypoint
+ * @property {string} label
+ * @property {number} port
+ */
+
+/**
+ * The updater's established test/API result keeps owner details extensible,
+ * while naming the fields every completed maintenance run exposes.
+ *
+ * @typedef {Record<string, unknown> & {
+ *   actions: Record<string, unknown>,
+ *   buildBefore: Record<string, unknown>,
+ *   changedPaths?: string[],
+ *   macTarget?: Record<string, unknown>,
+ *   release?: () => void,
+ * }} UpdateResult
+ */
+
 class UpdateInvariantError extends Error {
   constructor(code, message, details, options) {
     super(message, options);
@@ -115,7 +177,11 @@ class UpdateCommandError extends Error {
   }
 }
 
-/** Re-throw the original runtime value while exposing the Error contract to type-aware lint. */
+/**
+ * Re-throw the original runtime value while exposing the Error contract to type-aware lint.
+ *
+ * @returns {never}
+ */
 function throwPreservingValue(value) {
   throw /** @type {Error} */ (value);
 }
@@ -1377,6 +1443,13 @@ function inspectManagedGatewayDeployment(checkout) {
   return readManagedGatewayLaunchAgent(checkout);
 }
 
+/**
+ * @param {string} checkout
+ * @param {GatewayRepointDeployment} deployment
+ * @param {(deployment: GatewayRepointDeployment, replacement: string) => void} replaceEntrypoint
+ * @param {(checkout: string) => GatewayRepointDeployment | null} [inspectDeployment]
+ * @returns {GatewayRepointDeployment & { changed: boolean, previousEntrypoint?: string }}
+ */
 export function repointManagedGatewayDeployment(
   checkout,
   deployment,
@@ -1631,6 +1704,13 @@ export function parseLaunchctlArguments(output) {
     : [];
 }
 
+/**
+ * @param {string} checkout
+ * @param {string[]} args
+ * @param {GatewayCliDeployment | null | undefined} deployment
+ * @param {{ stderr?: "inherit" | "pipe", timeoutMs?: number }} [options]
+ * @returns {string}
+ */
 export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
   const observedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
   const sourceEntrypoint = path.join(checkout, "dist/index.js");
@@ -1738,6 +1818,13 @@ export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
   }
 }
 
+/**
+ * @param {string} checkout
+ * @param {string} method
+ * @param {Record<string, unknown>} params
+ * @param {GatewayCliDeployment | null | undefined} deployment
+ * @returns {string}
+ */
 export function runBuiltGatewayCall(checkout, method, params, deployment) {
   const managedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
   return runBuiltGatewayCli(
@@ -1756,6 +1843,11 @@ export function runBuiltGatewayCall(checkout, method, params, deployment) {
   );
 }
 
+/**
+ * @param {string} checkout
+ * @param {(checkout: string, method: string, params: { requestId: string }, deployment: GatewayDeploymentRef | null) => string} [callGateway]
+ * @param {GatewayDeploymentRef | null} [deployment]
+ */
 export function prepareGatewaySuspension(
   checkout,
   callGateway = runBuiltGatewayCall,
@@ -2629,6 +2721,23 @@ function defaultSleep(ms) {
   return delay(ms);
 }
 
+/**
+ * @param {(command: string, args: string[], checkout: string, options?: Record<string, unknown>) => unknown | Promise<unknown>} runCommand
+ * @param {string} checkout
+ * @param {string} expectedSha
+ * @param {(ms: number) => void | Promise<void>} [sleep]
+ * @param {GatewayCliDeployment | null} [deployment]
+ * @param {{
+ *   now?: () => number,
+ *   probeMilestones?: (deployment: GatewayCliDeployment) => {
+ *     listenerReady: boolean,
+ *     healthzReady: boolean,
+ *     readyzReady: boolean,
+ *   },
+ *   timing?: Record<string, unknown>,
+ * }} [options]
+ * @returns {Promise<Record<string, unknown>>}
+ */
 export async function verifyGatewayReadiness(
   runCommand,
   checkout,
@@ -2825,6 +2934,12 @@ function summarizeGatewayLogAudit(entries) {
   };
 }
 
+/**
+ * @param {string} output
+ * @param {number} sinceMs
+ * @param {string | null} [sourceRoot]
+ * @param {string[] | null} [managedSourceRoots]
+ */
 export function parseGatewayLogAudit(output, sinceMs, sourceRoot = null, managedSourceRoots = []) {
   const entries = parseGatewayLogEntries(output, sinceMs).filter((entry) =>
     isCurrentGatewayLogSource(entry.source, sourceRoot, managedSourceRoots),
@@ -2888,6 +3003,10 @@ export function resolveManagedPluginSourceRoots(report) {
   return roots;
 }
 
+/**
+ * @param {string} checkout
+ * @param {GatewayDeploymentRef | null | undefined} deployment
+ */
 export function resolveManagedGatewaySourceRoot(checkout, deployment) {
   return typeof deployment?.entrypoint === "string" && deployment.entrypoint.length > 0
     ? path.dirname(path.resolve(deployment.entrypoint))
@@ -3026,6 +3145,12 @@ async function defaultVerifyMacTarget(checkout) {
   return target;
 }
 
+/**
+ * @overload
+ * @param {Record<string, unknown>} options
+ * @param {Record<string, unknown>} [dependencies]
+ * @returns {Promise<UpdateResult>}
+ */
 export async function maintainMain(options, dependencies = {}) {
   const lock = acquireMaintenanceLock(options.checkout, options.lockPath);
   if (!lock.acquired) {

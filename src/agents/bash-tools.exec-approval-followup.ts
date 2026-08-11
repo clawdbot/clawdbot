@@ -31,7 +31,7 @@ import {
   buildExecApprovalContinuationFallbackPrompt,
   buildExecApprovalContinuationPrompt,
 } from "./bash-tools.exec-approval-output.js";
-import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
@@ -169,7 +169,7 @@ function formatDirectExecApprovalFollowupText(
   if (parsed.kind === "finished") {
     const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
     const body = redactToolPayloadText(
-      sanitizeUserFacingText(parsed.body, {
+      renderUserFacingText(parsed.body, {
         errorContext: !metadata.includes("code 0"),
       }),
     ).trim();
@@ -188,13 +188,13 @@ function formatDirectExecApprovalFollowupText(
 
   if (parsed.kind === "completed") {
     const body = redactToolPayloadText(
-      sanitizeUserFacingText(parsed.body, { errorContext: true }),
+      renderUserFacingText(parsed.body, { errorContext: true }),
     ).trim();
     return body || "Background command finished.";
   }
 
   return (
-    redactToolPayloadText(sanitizeUserFacingText(parsed.raw, { errorContext: true })).trim() || null
+    redactToolPayloadText(renderUserFacingText(parsed.raw, { errorContext: true })).trim() || null
   );
 }
 

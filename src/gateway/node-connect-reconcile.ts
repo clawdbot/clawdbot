@@ -2,12 +2,12 @@
 // Computes approved runtime surfaces and pending pairing upgrades on reconnect.
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
 import type {
-  NodePairingPairedNode,
+  PairedDeviceNode,
   NodePairingRequestInput,
   RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
+import { normalizeNodeApprovalSurfaceList } from "../infra/node-pairing-surface.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodePairingCommandAllowlist,
@@ -119,7 +119,7 @@ function buildNodePairingRequestInput(params: {
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
-  pairedNode: NodePairingPairedNode | null;
+  pairedNode: PairedDeviceNode | null;
   reportedClientIp?: string;
   /**
    * Marks the first-surface capability request silent when device pairing was

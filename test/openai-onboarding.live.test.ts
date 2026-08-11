@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { extractAgentReplyTexts } from "../scripts/e2e/lib/agent-turn-output.mjs";
-import { terminateManagedChild } from "../scripts/lib/managed-child-process.mjs";
+import { terminateManagedChild } from "../scripts/lib/managed-child-process.mts";
 import { readPersistedAuthProfileStoreRaw } from "../src/agents/auth-profiles/sqlite.js";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import {

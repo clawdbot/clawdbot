@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../memory-host-sdk/engine-qmd.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -24,10 +23,6 @@ const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true))
 const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
-type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
-const checkQmdBinaryAvailability = vi.hoisted(() =>
-  vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
-);
 const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
@@ -65,11 +60,6 @@ vi.mock("../agents/auth-profiles.js", () => ({
 vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
-}));
-
-vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
-  checkQmdBinaryAvailability,
-  resolveQmdBinaryUnavailableReason: (result: { reason?: string }) => result.reason ?? "binary",
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -200,12 +190,12 @@ describe("noteMemorySearchHealth", () => {
     ...skippedGatewayOptions,
     skipAuthProfileResolution: true,
   } satisfies NonNullable<Parameters<typeof noteMemorySearchHealth>[1]>;
-  const qmdSessionMemory = {
+  const sessionMemory = {
     sources: ["memory", "sessions"],
     experimental: { sessionMemory: true },
   };
   const conversationRecall = {
-    ...qmdSessionMemory,
+    ...sessionMemory,
     rememberAcrossConversations: true,
   };
   const openAiEmbeddingModel = { model: "text-embedding-3-small" };
@@ -255,18 +245,11 @@ describe("noteMemorySearchHealth", () => {
     await runMemorySearchHealth(provider, options, overrides, config);
   }
 
-  function qmdConfig(
-    qmd: Record<string, unknown> = { command: "qmd" },
-    extra: Record<string, unknown> = {},
-  ): OpenClawConfig {
-    return { memory: { backend: "qmd", qmd }, ...extra } as OpenClawConfig;
-  }
-
   function conversationRecallConfig(
     plugins?: OpenClawConfig["plugins"],
     rememberAcrossConversations = true,
   ): OpenClawConfig {
-    return qmdConfig(undefined, {
+    return {
       agents: {
         list: [
           {
@@ -276,7 +259,7 @@ describe("noteMemorySearchHealth", () => {
         ],
       },
       ...(plugins ? { plugins } : {}),
-    });
+    } as OpenClawConfig;
   }
 
   async function runConversationRecallHealth(
@@ -285,9 +268,9 @@ describe("noteMemorySearchHealth", () => {
     overrides: Record<string, unknown> = conversationRecall,
   ) {
     await runConfiguredMemorySearch(
-      "auto",
+      "none",
       conversationRecallConfig(plugins, rememberAcrossConversations),
-      { skipQmdBinaryProbe: true },
+      undefined,
       overrides,
     );
   }
@@ -321,20 +304,13 @@ describe("noteMemorySearchHealth", () => {
     isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
-    resolveActiveMemoryBackendConfig.mockImplementation(
-      ({ cfg: cfgLocal }: { cfg: OpenClawConfig }) =>
-        cfgLocal.memory?.backend === "qmd"
-          ? { backend: "qmd", qmd: cfgLocal.memory.qmd ?? {} }
-          : { backend: "builtin" },
-    );
+    resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {
         status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
         close: vi.fn(async () => {}),
       },
     });
-    checkQmdBinaryAvailability.mockReset();
-    checkQmdBinaryAvailability.mockResolvedValue({ available: true });
     resetMemoryRecallMocks();
   });
 
@@ -543,7 +519,6 @@ describe("noteMemorySearchHealth", () => {
     await runMemorySearchHealth("auto", {});
 
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledTimes(1);
     expect(firstNoteMessage()).toContain("No active memory plugin is registered");
   });
@@ -583,7 +558,6 @@ describe("noteMemorySearchHealth", () => {
     const config = { session: { dmScope: "per-peer" }, plugins } as unknown as OpenClawConfig;
     await runConfiguredMemorySearch("auto", config);
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
     if (isActive) {
       expect(note).not.toHaveBeenCalled();
     } else {
@@ -614,7 +588,6 @@ describe("noteMemorySearchHealth", () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     await runMemorySearchHealth("auto", options);
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
     if (shouldWarn) {
       expect(note).toHaveBeenCalledTimes(1);
       expect(firstNoteMessage()).toContain("No active memory plugin is registered");
@@ -710,8 +683,7 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("warns when an opted-in agent has memory search disabled", async () => {
-    const qmdCfg = {
-      memory: { backend: "qmd", qmd: { command: "qmd" } },
+    const memoryCfg = {
       agents: {
         list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
       },
@@ -722,142 +694,11 @@ describe("noteMemorySearchHealth", () => {
         : { provider: "auto", local: {}, remote: {}, sources: ["memory"] },
     );
 
-    await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
+    await noteMemorySearchHealth(memoryCfg);
 
     expect(firstNoteMessage()).toBe(
       'Remember across conversations is effectively enabled for agent "personal", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.',
     );
-  });
-
-  it("does not warn when QMD backend is active", async () => {
-    const qmdCfg = qmdConfig();
-    await runConfiguredMemorySearch("auto", qmdCfg);
-
-    expect(note).not.toHaveBeenCalled();
-    expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
-      command: "qmd",
-      env: process.env,
-      cwd: "/tmp/agent-default/workspace",
-    });
-  });
-
-  it("skips QMD binary probing while preserving QMD session export warnings", async () => {
-    const qmdCfg = qmdConfig({ command: "custom-qmd" });
-    await runConfiguredMemorySearch(
-      "auto",
-      qmdCfg,
-      {
-        includeWorkspaceMemoryHealth: false,
-        skipQmdBinaryProbe: true,
-      },
-      qmdSessionMemory,
-    );
-
-    expect(noteWorkspaceMemoryHealth).not.toHaveBeenCalled();
-    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledTimes(1);
-    expect(firstNoteMessage()).toContain("QMD session transcript export is not enabled");
-  });
-
-  it.each([
-    [
-      "warns when QMD backend is active but the qmd binary is unavailable",
-      {
-        available: false as const,
-        reason: "binary" as const,
-        error: "spawn qmd ENOENT",
-      },
-      [
-        "QMD memory backend is configured",
-        "spawn qmd ENOENT",
-        "npm install -g @tobilu/qmd",
-        "bun install -g @tobilu/qmd",
-      ],
-      [],
-    ],
-    [
-      "treats legacy QMD unavailable results without a reason as binary failures",
-      { available: false as const, error: "spawn qmd ENOENT" },
-      ["qmd binary could not be started", "spawn qmd ENOENT", "npm install -g @tobilu/qmd"],
-      ["agent workspace directory could not be used"],
-    ],
-    [
-      "warns with a workspace-specific fix when the QMD probe cwd is missing",
-      {
-        available: false as const,
-        reason: "workspace-cwd" as const,
-        error: "workspace directory missing: /tmp/agent-default/workspace",
-      },
-      [
-        "agent workspace directory could not be used",
-        "workspace directory missing: /tmp/agent-default/workspace",
-        "Create the missing workspace directory",
-      ],
-      ["npm install -g @tobilu/qmd"],
-    ],
-  ])("%s", async (_name, availability, contains, excludes) => {
-    checkQmdBinaryAvailability.mockResolvedValueOnce(availability);
-    await runConfiguredMemorySearch("auto", qmdConfig());
-    expect(note).toHaveBeenCalledTimes(1);
-    expectFirstNoteContains(...contains);
-    expectFirstNoteExcludes(...excludes);
-  });
-
-  it("warns when QMD backend uses session sources but QMD session export is disabled", async () => {
-    const qmdCfg = qmdConfig();
-    await runConfiguredMemorySearch("auto", qmdCfg, {}, qmdSessionMemory);
-
-    expect(note).toHaveBeenCalledTimes(1);
-    expectFirstNoteContains(
-      "memory.search.sources with sessions",
-      "memory.qmd.sessions.enabled is not true",
-      "openclaw config set memory.qmd.sessions.enabled true",
-    );
-  });
-
-  it("warns when QMD session export is explicitly disabled", async () => {
-    const qmdCfg = qmdConfig({ command: "qmd", sessions: { enabled: false } });
-    await runConfiguredMemorySearch("auto", qmdCfg, {}, qmdSessionMemory);
-
-    expect(note).toHaveBeenCalledTimes(1);
-    expectFirstNoteContains("QMD session transcript export is not enabled");
-  });
-
-  it("does not warn about QMD session export when session sources are not enabled", async () => {
-    const qmdCfg = qmdConfig();
-    await runConfiguredMemorySearch(
-      "auto",
-      qmdCfg,
-      {},
-      {
-        sources: ["memory"],
-        experimental: { sessionMemory: true },
-      },
-    );
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("reports QMD binary and session export warnings independently", async () => {
-    const qmdCfg = qmdConfig();
-    checkQmdBinaryAvailability.mockResolvedValueOnce({
-      available: false,
-      error: "spawn qmd ENOENT",
-    });
-    await runConfiguredMemorySearch("auto", qmdCfg, {}, qmdSessionMemory);
-
-    expect(note).toHaveBeenCalledTimes(2);
-    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain("spawn qmd ENOENT");
-    expect(String(note.mock.calls[1]?.[0] ?? "")).toContain(
-      "QMD session transcript export is not enabled",
-    );
-  });
-
-  it("does not warn when QMD session sources and QMD session export are both enabled", async () => {
-    const qmdCfg = qmdConfig({ command: "qmd", sessions: { enabled: true } });
-    await runConfiguredMemorySearch("auto", qmdCfg, {}, qmdSessionMemory);
-
-    expect(note).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1310,7 +1151,6 @@ describe("memory recall doctor integration", () => {
 
     expect(auditShortTermPromotionArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
-      qmd: undefined,
     });
     expect(note).toHaveBeenCalledTimes(2);
     expectFirstNoteContains(

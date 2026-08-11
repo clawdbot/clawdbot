@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import {
@@ -14,7 +15,6 @@ import {
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
-import { parseMusicGenerationModelRef } from "../../music-generation/model-ref.js";
 import {
   generateMusic,
   listRuntimeMusicGenerationProviders,
@@ -26,7 +26,7 @@ import type {
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -52,6 +52,14 @@ import {
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
 import {
+  completeMusicGenerationTaskRun,
+  createMusicGenerationTaskRun,
+  failMusicGenerationTaskRun,
+  musicGenerationTaskLifecycle,
+  recordMusicGenerationTaskProgress,
+  type MusicGenerationTaskHandle,
+} from "./media-generate-background.js";
+import {
   applyMusicGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
@@ -70,14 +78,6 @@ import {
   hasToolModelConfig,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import {
-  completeMusicGenerationTaskRun,
-  createMusicGenerationTaskRun,
-  failMusicGenerationTaskRun,
-  musicGenerationTaskLifecycle,
-  recordMusicGenerationTaskProgress,
-  type MusicGenerationTaskHandle,
-} from "./music-generate-background.js";
 import {
   createMusicGenerateDuplicateGuardResult,
   createMusicGenerateListActionResult,

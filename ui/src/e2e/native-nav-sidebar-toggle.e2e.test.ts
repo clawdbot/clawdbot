@@ -196,7 +196,7 @@ suite.define(() => {
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
     const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newThread = toolbar.getByRole("button", { name: "New thread" });
+    const newThread = toolbar.getByRole("button", { name: "New session" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
@@ -256,7 +256,7 @@ suite.define(() => {
     await expect
       .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
       .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New thread" }).count()).toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
@@ -311,6 +311,15 @@ suite.define(() => {
     const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const readFocusLocation = () =>
+      page.evaluate(() => {
+        // Native dialog tab order may hand focus to browser chrome when no document candidate remains.
+        // `document.hasFocus()` distinguishes that from focus on the underlying inert page.
+        if (!document.hasFocus()) {
+          return "browser-chrome";
+        }
+        return document.activeElement?.closest(".shell-nav") ? "navigation" : "page";
+      });
 
     await expect.poll(() => navigation.getAttribute("inert")).toBe("");
     await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
@@ -324,7 +333,16 @@ suite.define(() => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();
+    const afterShowMarker = "data-e2e-after-show";
+    await drawer.evaluate((element, marker) => {
+      element.removeAttribute(marker);
+      element.addEventListener("wa-after-show", () => element.setAttribute(marker, ""), {
+        once: true,
+      });
+    }, afterShowMarker);
     await page.keyboard.press("Enter");
+    await expect.poll(() => drawer.getAttribute(afterShowMarker)).toBe("");
+    await expect.poll(readFocusLocation).toBe("navigation");
 
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
@@ -333,15 +351,10 @@ suite.define(() => {
     await expect.poll(() => dialog.isVisible()).toBe(true);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
-    await expect
-      .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
-      .toBe(true);
 
     for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"] as const) {
       await page.keyboard.press(key);
-      await expect
-        .poll(() => navigation.evaluate((element) => element.contains(document.activeElement)))
-        .toBe(true);
+      await expect.poll(readFocusLocation).not.toBe("page");
     }
 
     expect(
@@ -353,7 +366,7 @@ suite.define(() => {
 
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
-    await row.getByRole("button", { name: "Open thread menu" }).click();
+    await row.getByRole("button", { name: "Open session menu" }).click();
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");

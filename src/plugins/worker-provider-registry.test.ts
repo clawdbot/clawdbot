@@ -4,7 +4,7 @@ import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { WorkerProvider } from "./types.js";
-import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-registry.js";
+import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-manifest.js";
 
 function createTestRegistry() {
   return createPluginRegistry({

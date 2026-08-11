@@ -1,5 +1,5 @@
 // Memory Core plugin module formats deterministic recall metadata for promoted entries.
-import { extractProjectKeysFromCuratedEntry } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { extractProjectKeysFromCuratedEntry } from "openclaw/plugin-sdk/memory-core-host-engine-curated";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 const MAX_PROMOTION_TRIGGER_PHRASE_CHARS = 64;

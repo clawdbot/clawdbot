@@ -9,10 +9,10 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
-  - "@openclaw/fs-safe@0.5.2"
+  - "@openclaw/fs-safe@0.5.4"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
-  - "@openclaw/uirouter@0.1.0"
+  - "@openclaw/uirouter@0.1.1"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
@@ -120,7 +120,7 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.146.1
+  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.147.0
   "@anthropic-ai/sdk": 0.115.0
   "@opentelemetry/core": 2.10.0
   "@opentelemetry/propagator-jaeger": 2.10.0

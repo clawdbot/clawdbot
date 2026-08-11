@@ -1,4 +1,13 @@
 // Reads response bodies with byte limits, abort handling, and timeout cancellation.
+/**
+ * @typedef {object} BoundedResponseOptions
+ * @property {((message: string) => Error)=} createTooLargeError
+ * @property {((label: string, maxBytes: number) => string)=} formatTooLargeMessage
+ * @property {AbortSignal=} signal
+ * @property {Promise<never>=} timeoutPromise
+ */
+
+/** @param {string} label @param {number} maxBytes */
 function defaultTooLargeMessage(label, maxBytes) {
   return `${label} response body exceeded ${maxBytes} bytes`;
 }
@@ -7,6 +16,7 @@ function defaultTooLargeError(message) {
   return new Error(message);
 }
 
+/** @param {string} message @returns {Error & { code: "ETOOBIG" }} */
 export function createBoundedResponseTooLargeError(message) {
   return Object.assign(new Error(message), { code: "ETOOBIG" });
 }
@@ -81,7 +91,13 @@ async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromis
   }
 }
 
-/** Read response bytes while enforcing max bytes before and during streaming. */
+/**
+ * Read response bytes while enforcing max bytes before and during streaming.
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} maxBytes
+ * @param {BoundedResponseOptions} [options]
+ */
 export async function readBoundedResponseBytes(response, label, maxBytes, options = {}) {
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
@@ -133,7 +149,13 @@ export async function readBoundedResponseBytes(response, label, maxBytes, option
   return Buffer.concat(chunks, totalBytes);
 }
 
-/** Read response text while enforcing max bytes before and during streaming. */
+/**
+ * Read response text while enforcing max bytes before and during streaming.
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} maxBytes
+ * @param {BoundedResponseOptions} [options]
+ */
 export async function readBoundedResponseText(response, label, maxBytes, options = {}) {
   const bytes = await readBoundedResponseBytes(response, label, maxBytes, options);
   return new TextDecoder().decode(bytes);

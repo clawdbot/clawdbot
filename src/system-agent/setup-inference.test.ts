@@ -13,6 +13,7 @@ import {
   fingerprintResolvedProviderAuth,
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
+import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,6 +30,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -184,12 +189,8 @@ beforeEach(() => {
   pluginMetadataSnapshot?.rebindForCurrentEnv();
 });
 
-async function makeTempDir(): Promise<string> {
-  return await suiteTempRootTracker.make("case");
-}
-
 async function createMainAgentFixture() {
-  const stateDir = await makeTempDir();
+  const stateDir = await suiteTempRootTracker.make("case");
   const agentDir = path.join(stateDir, "agent");
   const initialConfig = {
     agents: { list: [{ id: "main", default: true, agentDir }] },
@@ -286,9 +287,9 @@ function withSuiteFixtures<
     Object.getOwnPropertyDescriptors(input ?? {}),
   ) as T;
   if (!deps.createTempDir) {
-    deps.createTempDir = makeTempDir;
+    deps.createTempDir = suiteTempRootTracker.make;
   }
-  if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
+  if (deps.createTempDir === suiteTempRootTracker.make && !deps.removeTempDir) {
     deps.removeTempDir = deferSuiteTempDirCleanup;
   }
   if (!deps.readCodexCliActiveApiKey) {
@@ -445,6 +446,7 @@ type SuccessfulRunParams = {
   authProfileId?: string;
   agentHarnessRuntimeOverride?: string;
   config?: OpenClawConfig;
+  reportedModel?: string;
 };
 
 function successfulAgentHarnessBinding(params?: SuccessfulRunParams): AgentExecutionAuthBinding {
@@ -491,13 +493,14 @@ function successfulRun(provider: string, model: string, params?: SuccessfulRunPa
   return {
     meta: {
       finalAssistantVisibleText: "OK",
-      executionTrace: { winnerProvider: provider, winnerModel: model },
+      executionTrace: { winnerProvider: provider, winnerModel: params?.reportedModel ?? model },
     },
   };
 }
 
-function successfulRunner(provider: string, model: string) {
-  return async (params: SuccessfulRunParams) => successfulRun(provider, model, params);
+function successfulRunner(provider: string, model: string, reportedModel?: string) {
+  return async (params: SuccessfulRunParams) =>
+    successfulRun(provider, model, { ...params, reportedModel });
 }
 
 function openAiOAuthCredential(token: string, lifetimeMs = 3_600_000) {
@@ -1590,7 +1593,7 @@ describe("activateSetupInference", () => {
   });
 
   it("disposes the temporary auth database before Windows-style removal", async () => {
-    const tempDir = await makeTempDir();
+    const tempDir = await suiteTempRootTracker.make("case");
     const databasePath = path.join(tempDir, "agent", "openclaw-agent.sqlite");
     let disposed = false;
     const disposeDatabase = vi.fn((pathname: string) => {
@@ -2026,7 +2029,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(concurrentConfig));
   });
 
-  it("preserves authored provider rows and lifts an onboarding-owned lean setting", async () => {
+  it("accepts OpenAI's gpt-5.6 alias reporting Sol while preserving authored rows", async () => {
     const sourceConfig = {
       wizard: { localModelLeanAutoModel: "lmstudio/qwen-local" },
       agents: {
@@ -2067,17 +2070,21 @@ describe("activateSetupInference", () => {
       },
     ];
     const configHarness = createConfigTransformHarness(sourceConfig, runtimeConfig);
+    const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6", "gpt-5.6-sol"));
 
     const result = await activateSetupInference({
       kind: "openai-api-key",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(sourceConfig, { runtimeConfig }),
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6")) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
     });
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6" });
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", model: "gpt-5.6" }),
+    );
     expect(configHarness.current().models?.providers?.openai?.models).toEqual(
       sourceConfig.models.providers.openai.models,
     );
@@ -2363,7 +2370,7 @@ describe("activateSetupInference", () => {
         agentId: "execution-agent",
         routeAgentId: "route-agent",
       },
-      tempDir: await makeTempDir(),
+      tempDir: await suiteTempRootTracker.make("case"),
       deps: { runEmbeddedAgent: runEmbeddedAgent as never },
       authProfileStateMode: "read-only",
       requireExecutionOwner: false,
@@ -2426,14 +2433,20 @@ describe("activateSetupInference", () => {
       error: "did not report which provider and model",
     },
     {
-      name: "model-routing override",
+      name: "provider-routing override",
       runResult: successfulRun("openai", "gpt-5.5"),
       error: "instead of the requested anthropic/claude-opus-5",
     },
-  ])("does not persist inference after a $name", async ({ runResult, error }) => {
+    {
+      name: "same-provider model-routing override",
+      kind: "openai-api-key" as const,
+      runResult: successfulRun("openai", "gpt-5.6-terra"),
+      error: "instead of the requested openai/gpt-5.6",
+    },
+  ])("does not persist inference after a $name", async ({ runResult, error, kind }) => {
     const transformConfig = vi.fn();
     const result = await activateSetupInference({
-      kind: "anthropic-api-key",
+      kind: kind ?? "anthropic-api-key",
       deps: {
         runEmbeddedAgent: vi.fn(async () => runResult) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
@@ -2442,7 +2455,7 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      status: "format",
+      status: "unknown",
       error: expect.stringContaining(error),
     });
     expect(transformConfig).not.toHaveBeenCalled();
@@ -2779,7 +2792,7 @@ describe("activateSetupInference", () => {
   ])(
     "uses a provider-owned $name method and persists it after a passing test",
     async ({ authKind, credentialType }) => {
-      const stateDir = await makeTempDir();
+      const stateDir = await suiteTempRootTracker.make("case");
       const agentDir = path.join(stateDir, "agent");
       const initialConfig = {
         agents: { list: [{ id: "main", default: true, agentDir }] },
@@ -2958,7 +2971,7 @@ describe("activateSetupInference", () => {
   });
 
   it("scopes provider setup to the selected inference route and one credential", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       gateway: { port: 18_789 },
@@ -3203,7 +3216,7 @@ describe("activateSetupInference", () => {
   });
 
   it("rolls back a staged key when the config commit fails", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       agents: { list: [{ id: "main", default: true, agentDir }] },
@@ -3581,7 +3594,7 @@ describe("activateSetupInference", () => {
   });
 
   it("ignores an unrelated provider patch and preserves a concurrent operator edit", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const auxProvider = {
       baseUrl: "https://aux.example.test/v1",
@@ -3698,7 +3711,7 @@ describe("activateSetupInference", () => {
     },
   ])("$name without starting interactive login", async (testCase) => {
     const { existingModel, starterModel, expectedSetupInputModel } = testCase;
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const runInteractive = vi.fn();
     const runNonInteractive = vi.fn(
@@ -4407,6 +4420,63 @@ describe("activateSetupInference", () => {
     });
   });
 
+  it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const stagedRegistry = createEmptyPluginRegistry();
+    stagedRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(stagedRegistry);
+    let ownerArtifactRegistry: unknown;
+    const captureSystemAgentOwnerPluginArtifacts = vi.fn(() => {
+      ownerArtifactRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
+    });
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      const pluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      expect(pluginRegistry).toBe(stagedRegistry);
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/work",
+        pluginRegistry,
+      });
+      return successfulRun("openai", "gpt-5.6-sol", params);
+    });
+
+    await withPluginRuntimeGatewayRequestScope(
+      { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
+      async () => {
+        const result = await activateCodexSetup({
+          workspace: "/tmp/work",
+          deps: {
+            captureSystemAgentOwnerPluginArtifacts,
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            transformConfigWithPendingPluginInstalls: createPreRosterConfigTransformHarness()
+              .transform as never,
+          },
+        });
+
+        expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(oldRegistry);
+      },
+    );
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    expect(ownerArtifactRegistry).toBe(stagedRegistry);
+    expect(captureSystemAgentOwnerPluginArtifacts).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
+
   it("commits only the refreshed codex record when authored install metadata is stale", async () => {
     const staleAuthoredRecords = {
       codex: {
@@ -4608,7 +4678,7 @@ describe("activateSetupInference", () => {
         invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
         createTempDir: async () => {
-          tempDir = await makeTempDir();
+          tempDir = await suiteTempRootTracker.make("case");
           return tempDir;
         },
       },
@@ -4726,7 +4796,7 @@ describe("activateSetupInference", () => {
   });
 
   it("marks an unowned Codex package generation retained when the live test fails", async () => {
-    const installProjectDir = await makeTempDir();
+    const installProjectDir = await suiteTempRootTracker.make("case");
     const packageDir = path.join(installProjectDir, "node_modules", "@openclaw", "codex");
     await fs.mkdir(packageDir, { recursive: true });
     const transformConfig = vi.fn();
@@ -5305,7 +5375,7 @@ describe("verifySetupInference", () => {
     ["missing default-agent model", { exists: true, valid: true, config: {} }],
   ])("rejects %s before starting a model", async (_label, snapshot) => {
     const runEmbeddedAgent = vi.fn();
-    const createTempDir = vi.fn(makeTempDir);
+    const createTempDir = vi.fn(suiteTempRootTracker.make);
 
     const result = await verifySetupInference({
       deps: {
@@ -5322,7 +5392,7 @@ describe("verifySetupInference", () => {
 
   it("reports invalid config without starting a live check", async () => {
     const runEmbeddedAgent = vi.fn();
-    const createTempDir = vi.fn(makeTempDir);
+    const createTempDir = vi.fn(suiteTempRootTracker.make);
     const result = await verifySetupInference({
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(
@@ -5504,7 +5574,7 @@ describe("verifySetupInference", () => {
   });
 
   it("binds a runtime-only Codex profile after activation and runs the first OpenClaw turn", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const profileId = "openai:default";
     const credential = {
@@ -5691,7 +5761,7 @@ describe("verifySetupInference", () => {
   });
 
   it("returns a refreshed staged profile without changing the configured agent store", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "configured-agent");
     const profileId = "openai:default";
     seedInMemoryAuthProfileStore(agentDir, {
@@ -6076,7 +6146,7 @@ describe("verifySetupInference", () => {
       },
     },
   ])("resolves $name but rejects Gemini CLI as a setup verifier", async (testCase) => {
-    const stateDir = await makeTempDir();
+    const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const runCliAgent = vi.fn(async () =>
       successfulRun("google-gemini-cli", "gemini-3.1-pro-preview"),

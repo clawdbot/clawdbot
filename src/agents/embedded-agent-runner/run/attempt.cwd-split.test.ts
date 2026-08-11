@@ -10,7 +10,7 @@ import {
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];

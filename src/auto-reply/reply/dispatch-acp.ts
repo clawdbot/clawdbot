@@ -1,5 +1,4 @@
 // Dispatches reply turns through ACP runtimes and projects their events.
-import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
 import {
   isSessionIdentityPending,
@@ -12,8 +11,19 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
-import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
+import {
+  AcpRuntimeError,
+  formatAcpRuntimeErrorText,
+  toAcpRuntimeError,
+} from "../../acp/runtime/errors.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -90,11 +100,8 @@ function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAt
     })
     .map((entry) => entry.attachment);
 }
-const dispatchAcpSessionRuntimeLoader = createLazyImportLoader(
-  () => import("./dispatch-acp-session.runtime.js"),
-);
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
-  () => import("./dispatch-acp-tts.runtime.js"),
+  () => import("../../tts/tts.runtime.js"),
 );
 const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-transcript.runtime.js"),
@@ -106,10 +113,6 @@ function loadDispatchAcpManagerRuntime() {
 
 function loadDispatchAcpAuditRuntime() {
   return dispatchAcpAuditRuntimeLoader.load();
-}
-
-function loadDispatchAcpSessionRuntime() {
-  return dispatchAcpSessionRuntimeLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
@@ -388,7 +391,7 @@ async function finalizeAcpTurnOutput(params: {
   }
 
   if (params.shouldEmitResolvedIdentityNotice) {
-    const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+    const { readAcpSessionEntry } = await loadDispatchAcpManagerRuntime();
     const currentMeta = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -411,7 +414,7 @@ async function finalizeAcpTurnOutput(params: {
   return queuedFinal;
 }
 
-export async function tryDispatchAcpReply(params: {
+export async function tryDispatchAcpReplyCore(params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
@@ -435,6 +438,7 @@ export async function tryDispatchAcpReply(params: {
   originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
+  shouldSendFullToolDetails: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
   recordProcessed: DispatchProcessedRecorder;
@@ -552,6 +556,7 @@ export async function tryDispatchAcpReply(params: {
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
+    shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,
@@ -661,17 +666,21 @@ export async function tryDispatchAcpReply(params: {
       );
     }
   };
+  let admittedRunContext: AdmittedRunContext | undefined;
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
       auditTerminalOutcome = "blocked";
       throw dispatchPolicyError;
     }
-    if (isRestrictiveRuntimeToolsAllow(params.toolsAllow)) {
+    if (
+      isRestrictiveRuntimeToolsAllow(params.toolsAllow) ||
+      toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)
+    ) {
       auditTerminalOutcome = "blocked";
       throw new AcpRuntimeError(
         "ACP_DISPATCH_DISABLED",
-        "ACP dispatch cannot enforce runtime toolsAllow for this session; use an embedded runtime for restricted tool policy.",
+        "This session's bound runtime cannot enforce its tool policy; use an embedded runtime for this restricted conversation.",
       );
     }
     if (acpResolution.kind === "stale") {
@@ -777,7 +786,17 @@ export async function tryDispatchAcpReply(params: {
     }
 
     turnDispatched = true;
+    admittedRunContext = await prepareAgentRunAdmission({
+      cfg: params.cfg,
+      operationalRunInstance: createOperationalRunInstanceRef(requestId),
+      facts: {
+        runId: requestId,
+        agentId: acpAgentId,
+        ingress: { kind: "acp", boundary: "auto-reply.acp", state: "present" },
+      },
+    }).admit("acp");
     await acpManager.runTurn({
+      admittedRunContext,
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
       provenance: classifySessionStateActor({
@@ -880,6 +899,10 @@ export async function tryDispatchAcpReply(params: {
       queuedFinal,
       outcome: { kind: "error", error: acpError },
     });
+  } finally {
+    if (admittedRunContext) {
+      closeAdmittedRunDelegatedAuthority(admittedRunContext);
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderStreamFn,
@@ -57,6 +58,7 @@ export function configureAiTransportRuntimeHost(): void {
         resolveProviderTransportTurnStateWithPlugin({
           ...params,
           config: params.config as OpenClawConfig | undefined,
+          runtimeHandle: getModelProviderRuntimePluginHandle(params.context.model),
           context: {
             ...params.context,
             model: params.context.model as ProviderRuntimeModel | undefined,

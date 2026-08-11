@@ -9,6 +9,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
+  bindAgentRunTaskRunId,
   claimAgentRunContext,
   consumeCronNextCheckProposal,
   getAgentRunContext,
@@ -24,6 +25,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -37,10 +39,6 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
-
-async function loadCronExecutorRuntime() {
-  return await cronExecutorRuntimeLoader.load();
-}
 
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
@@ -203,7 +201,13 @@ export async function runCronIsolatedAgentTurn(params: {
         ownsContext: ownsRunContext,
       },
     );
-    const { executeCronRun } = await loadCronExecutorRuntime();
+    if (runContextOwnerToken) {
+      const taskRunId = getActiveCronTaskRunId();
+      if (taskRunId) {
+        bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
+      }
+    }
+    const { executeCronRun } = await cronExecutorRuntimeLoader.load();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
       cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,

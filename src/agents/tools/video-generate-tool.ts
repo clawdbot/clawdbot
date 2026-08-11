@@ -4,6 +4,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import {
@@ -16,8 +17,7 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveUserPath } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
-import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   generateVideo,
   listRuntimeVideoGenerationProviders,
@@ -58,6 +58,14 @@ import {
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
 import {
+  completeVideoGenerationTaskRun,
+  createVideoGenerationTaskRun,
+  failVideoGenerationTaskRun,
+  recordVideoGenerationTaskProgress,
+  videoGenerationTaskLifecycle,
+  type VideoGenerationTaskHandle,
+} from "./media-generate-background.js";
+import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
@@ -84,14 +92,6 @@ import {
   type SandboxFsBridge,
   type ToolFsPolicy,
 } from "./tool-runtime.helpers.js";
-import {
-  completeVideoGenerationTaskRun,
-  createVideoGenerationTaskRun,
-  failVideoGenerationTaskRun,
-  recordVideoGenerationTaskProgress,
-  videoGenerationTaskLifecycle,
-  type VideoGenerationTaskHandle,
-} from "./video-generate-background.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,

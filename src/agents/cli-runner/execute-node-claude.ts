@@ -200,6 +200,7 @@ export async function executeNodeClaudeRun(params: {
   const replyBackendHandle = contextParams.replyOperation
     ? {
         kind: "cli" as const,
+        runId: contextParams.runId,
         cancel: abortNodeRun,
       }
     : undefined;

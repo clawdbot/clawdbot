@@ -7,9 +7,13 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { upsertPresence } from "../infra/system-presence.js";
+import { resolveUserProfileId } from "../state/user-profiles.js";
+import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
 
@@ -77,6 +81,7 @@ type GatewayRequestContextParams = {
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
+  validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
@@ -261,6 +266,52 @@ export function createGatewayRequestContext(
       }
       return false;
     },
+    refreshConnectedUserProfile: (profile) => {
+      let presenceChanged = false;
+      for (const gatewayClient of params.clients) {
+        const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
+        if (!authenticatedUserProfile) {
+          continue;
+        }
+        const canonicalProfileId =
+          authenticatedUserProfile.profileId === profile.id
+            ? profile.id
+            : resolveUserProfileId(authenticatedUserProfile.profileId);
+        if (canonicalProfileId !== profile.id) {
+          continue;
+        }
+        Object.assign(authenticatedUserProfile, {
+          profileId: canonicalProfileId,
+          displayName: profile.displayName,
+          avatarRevision: profile.avatarRevision,
+          hasAvatar: profile.hasAvatar,
+          updatedAt: profile.updatedAt,
+        });
+        if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
+          continue;
+        }
+        upsertPresence(gatewayClient.presenceKey, {
+          user: buildAuthenticatedPresenceUser({
+            authenticatedUserId: gatewayClient.authenticatedUserId,
+            authenticatedUserIsTailscaleProvider:
+              gatewayClient.authenticatedUserIsTailscaleProvider,
+            authenticatedUserProfile: {
+              profileId: profile.id,
+              displayName: profile.displayName,
+              avatarRevision: profile.avatarRevision,
+            },
+          }),
+        });
+        presenceChanged = true;
+      }
+      if (presenceChanged) {
+        broadcastPresenceSnapshot({
+          broadcast: params.broadcast,
+          incrementPresenceVersion: params.incrementPresenceVersion,
+          getHealthVersion: params.getHealthVersion,
+        });
+      }
+    },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
       for (const gatewayClient of params.clients) {
@@ -316,6 +367,7 @@ export function createGatewayRequestContext(
     ...(params.workerSessionPlacementService
       ? { workerSessionPlacementService: params.workerSessionPlacementService }
       : {}),
+    validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
       : {}),

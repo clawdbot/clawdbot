@@ -35,7 +35,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 type PluginModuleLoaderOverrides = Pick<
   Parameters<typeof createPluginModuleLoader>[0],
-  "aliasOverrides" | "tryNative" | "loaderFilename" | "installNativeSdkResolver"
+  "tryNative" | "loaderFilename" | "installNativeSdkResolver"
 >;
 type InternalPluginLoadOverrides = {
   moduleLoader: PluginModuleLoaderOverrides;

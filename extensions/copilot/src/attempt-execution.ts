@@ -1,6 +1,5 @@
 import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
-  AgentHarnessAttemptParams,
   AgentMessage,
   AnyAgentTool,
   SandboxContext,
@@ -33,12 +32,14 @@ import {
   createAttemptTranscriptJournal,
   type AttemptTranscriptJournal,
 } from "./attempt-transcript-journal.js";
+import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
 import type {
   AgentHarnessAttemptResult,
   AttemptParamsLike,
   CopilotAttemptDeps,
   CopilotAgentEndHookParams,
   ModelRef,
+  CopilotAttemptParams,
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -47,7 +48,7 @@ import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
 import type { PooledClient } from "./runtime.js";
 import type { CopilotUserInputBridge } from "./user-input-bridge.js";
 export async function runCopilotExecution(context: {
-  params: AgentHarnessAttemptParams;
+  params: CopilotAttemptParams;
   deps: CopilotAttemptDeps;
   now: () => number;
   attemptStartedAt: number;
@@ -259,6 +260,7 @@ export async function runCopilotExecution(context: {
     >();
     if (!settledToolFinalization) {
       try {
+        assertCopilotAttemptHostCapabilities(input);
         const toolBridge = await createToolBridge({
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
@@ -458,17 +460,23 @@ export async function runCopilotExecution(context: {
         resultContentSourceByToolName,
       },
     });
-    activeRunHandleRef = registerCopilotActiveRun({
-      abortActiveSession,
-      bridge,
-      canAcceptSteering: () => initialSdkUserValidated,
-      input,
-      isAborted: () => aborted,
-      isSettled: () => settled,
-      session,
-      transcriptJournal,
-      userInputBridge,
-    });
+    if (!settledToolFinalization) {
+      assertCopilotAttemptHostCapabilities(input);
+      if (!userInputBridge) {
+        throw new Error("[copilot-attempt] ordinary attempts require a user-input bridge");
+      }
+      activeRunHandleRef = registerCopilotActiveRun({
+        abortActiveSession,
+        bridge,
+        canAcceptSteering: () => initialSdkUserValidated,
+        input,
+        isAborted: () => aborted,
+        isSettled: () => settled,
+        session,
+        transcriptJournal,
+        userInputBridge,
+      });
+    }
     const messageOptions = await createMessageOptions(attemptInput, {
       effectiveCwd,
       effectiveWorkspaceDir,

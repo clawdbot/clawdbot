@@ -4,7 +4,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+
+function draftRouteKey(requestedAgentId: string, catalogId: string): string {
+  return JSON.stringify([requestedAgentId, catalogId]);
+}
 
 /**
  * Which draft a new-session route has open. This keys on the requested agent,
@@ -13,7 +17,12 @@ import type { NewSessionRouteData } from "./location.ts";
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return JSON.stringify([data?.requestedAgentId ?? "", data?.catalogId ?? ""]);
+  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "");
+}
+
+export function routeKeyFromSearch(search: string): string {
+  const location = newSessionLocationFromSearch(search);
+  return draftRouteKey(location.agentId, location.catalogId);
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {
@@ -50,7 +59,7 @@ export async function resolveCreateTarget(
   client: GatewayBrowserClient,
   catalogId: string,
   agentId?: string,
-): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel"> | undefined> {
+): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal"> | undefined> {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       ...(agentId ? { agentId } : {}),
@@ -59,7 +68,13 @@ export async function resolveCreateTarget(
     });
     const catalog = result.catalogs.find((candidate) => candidate.id === catalogId);
     const model = catalog?.capabilities.createSession?.model.trim();
-    return catalog && model ? { model, catalogLabel: catalog.label } : undefined;
+    return catalog && model
+      ? {
+          model,
+          catalogLabel: catalog.label,
+          startTerminal: catalog.capabilities.createSession?.startTerminal === true,
+        }
+      : undefined;
   } catch {
     return undefined;
   }

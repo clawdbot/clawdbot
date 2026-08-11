@@ -5,6 +5,7 @@ import {
   isWellFormedApprovalId,
   validateApprovalPresentation,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
@@ -14,6 +15,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   OperatorApprovals,
@@ -96,6 +98,7 @@ type NewOperatorApproval = {
   runtimeEpoch: string;
   createdAtMs: number;
   expiresAtMs: number;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
 type InsertOperatorApprovalResult =
@@ -141,7 +144,10 @@ type TerminalizeOperatorApprovalsResult = {
   records: OperatorApprovalRecord[];
 };
 
-type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
+type OperatorApprovalDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "operator_approvals" | "operator_approval_execution_identities"
+>;
 type OperatorApprovalRow = Selectable<OperatorApprovals>;
 
 type OperatorApprovalHistoryCursor = {
@@ -189,6 +195,38 @@ const OPERATOR_APPROVAL_RESOLVER_KINDS = new Set<OperatorApprovalResolverKind>([
   "runtime",
   "system",
 ]);
+
+const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
+  approval_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  source_context_id TEXT NOT NULL CHECK (
+    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
+  ),
+  source_execution_id TEXT NOT NULL CHECK (
+    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
+  )
+) STRICT;
+`;
+
+function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
+  const binding = input.executionIdentityToken;
+  const sourceRunId = normalizeString(input.source?.runId);
+  if (!binding || normalizeString(binding.runId) !== sourceRunId) {
+    return undefined;
+  }
+  const sourceContextId = normalizeString(binding.contextId);
+  const sourceExecutionId = normalizeString(binding.executionId);
+  if (
+    !sourceContextId ||
+    !sourceExecutionId ||
+    sourceContextId.length > 256 ||
+    sourceExecutionId.length > 256
+  ) {
+    return undefined;
+  }
+  return { sourceContextId, sourceExecutionId };
+}
 
 function parseApprovalPresentation(raw: string): ApprovalPresentation | null {
   try {
@@ -630,6 +668,7 @@ export function insertOperatorApproval(params: {
     reviewerDeviceIdsJson,
     audienceSessionKeysJson,
   };
+  const executionIdentityBinding = normalizeExecutionIdentityBinding(input);
 
   return runOpenClawStateWriteTransaction((database) => {
     const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
@@ -695,11 +734,42 @@ export function insertOperatorApproval(params: {
       return { outcome: "conflict" };
     }
     if (result.numAffectedRows === 1n) {
+      if (executionIdentityBinding) {
+        // sqlite-allow-raw -- feature-local additive schema DDL; binding rows use Kysely.
+        database.db.exec(OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL);
+        executeSqliteQuerySync(
+          database.db,
+          stateDb.insertInto("operator_approval_execution_identities").values({
+            approval_id: id,
+            source_context_id: executionIdentityBinding.sourceContextId,
+            source_execution_id: executionIdentityBinding.sourceExecutionId,
+          }),
+        );
+      }
       return { outcome: "inserted", record };
     }
-    return inputMatchesExistingRow(input, row, serialized)
-      ? { outcome: "existing", record }
-      : { outcome: "conflict" };
+    if (!inputMatchesExistingRow(input, row, serialized)) {
+      return { outcome: "conflict" };
+    }
+    if (executionIdentityBinding) {
+      if (!tableExists(database.db, "operator_approval_execution_identities")) {
+        return { outcome: "conflict" };
+      }
+      const existingBinding = executeSqliteQueryTakeFirstSync(
+        database.db,
+        stateDb
+          .selectFrom("operator_approval_execution_identities")
+          .select(["source_context_id", "source_execution_id"])
+          .where("approval_id", "=", id),
+      );
+      if (
+        existingBinding?.source_context_id !== executionIdentityBinding.sourceContextId ||
+        existingBinding.source_execution_id !== executionIdentityBinding.sourceExecutionId
+      ) {
+        return { outcome: "conflict" };
+      }
+    }
+    return { outcome: "existing", record };
   }, params.databaseOptions);
 }
 

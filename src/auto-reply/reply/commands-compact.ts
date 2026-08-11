@@ -271,6 +271,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     clientCaps: params.ctx.GatewayClientCaps,
+    conversationToolPolicy: params.ctx.ConversationToolPolicy,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,

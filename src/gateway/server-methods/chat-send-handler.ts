@@ -16,14 +16,9 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
-import {
-  completeQueuedChatTurn,
-  registerQueuedChatTurn,
-  retireQueuedChatTurnCancellation,
-} from "../chat-queued-turns.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -36,12 +31,13 @@ import {
   createChatSendDispatchErrorLifecycle,
   handleChatSendSetupError,
 } from "./chat-send-dispatch-errors.js";
+import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
-  beginChatSendMessageInjection,
+  createChatSendMessageInjectionStarter,
   finalizeAcceptedChatSendMessageInjection,
+  settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
@@ -49,6 +45,7 @@ import {
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
@@ -57,7 +54,6 @@ import {
   shouldIncludeChatSendAckServerTiming,
   type ChatSendServerTimingPhase,
 } from "./chat-server-timing.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -66,6 +62,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export async function handleChatSend(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
+  externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
@@ -99,6 +96,7 @@ export async function handleChatSend(
     agentId,
     activeRunScopeKey,
     expectedLeafEntryId,
+    expectedRunId,
     resolvedSessionModel,
     now,
   } = preparedSession.value;
@@ -128,7 +126,6 @@ export async function handleChatSend(
     finishAbortedChatSend();
     return;
   }
-
   // Attachment preparation can suspend. Recheck immediately before the
   // synchronous ACK path so aborts and hot routing reloads cannot cross it.
   if (sessionRoutingChanged(context.getRuntimeConfig())) {
@@ -136,6 +133,21 @@ export async function handleChatSend(
     return;
   }
   const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
+  const cronCreatorAuthority = externalAuthorityAdmission?.resolve({
+    runId: clientRunId,
+    sessionKey,
+    spawnedBy: entry?.spawnedBy,
+    client,
+    inputProvenance: systemInputProvenance,
+    hasExplicitOrigin: normalizedRequest.value.explicitOrigin !== undefined,
+    hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
+    isIncognitoEntry: entry?.incognito === true,
+    isReconnectResume: reconnectResumeRequested,
+    isSystemGenerated:
+      normalizedRequest.value.suppressCommandInterpretation ||
+      normalizedRequest.value.systemProvenanceReceipt !== undefined,
+    turnKind: normalizedRequest.value.turnKind,
+  });
 
   const admissionStartedAt = Date.now();
   const terminalizeRestartSafeAdmission = async (terminalState: {
@@ -213,15 +225,7 @@ export async function handleChatSend(
       }
     }
 
-    const {
-      accountId,
-      ctx,
-      isInternalTextSlashCommandTurn,
-      pluginBoundMediaPromise,
-      queuedFollowupOwnerKey,
-      replyOptionImages,
-      replyOptionMedia,
-    } = prepareChatSendUserTurn({
+    const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
       admission: admitted.value,
@@ -230,36 +234,62 @@ export async function handleChatSend(
       logGateway: context.logGateway,
       userTurn,
     });
-    const beginCapturedMessageInjection = () =>
+    const {
+      accountId,
+      ctx,
+      isInternalTextSlashCommandTurn,
+      pluginBoundMediaPromise,
+      queuedFollowupOwnerKey,
+      replyOptionImages,
+      replyOptionMedia,
+    } = preparedUserTurn;
+    const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      target: messageInjectionTarget,
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      turn: preparedUserTurn,
+      imageOrder,
+      userTurnTranscriptRecorder: userTurnRecorder,
+    });
+    const replyContextFieldsPromise = p.replyToId
+      ? resolveChatSendReplyContext({
+          replyToId: p.replyToId,
+          cfg,
+          agentId,
+          sessionKey,
+          sessionEntry: entry,
+          storePath,
+          userSenderLabel: clientInfo?.displayName,
+          warn: (message) => context.logGateway.warn(message),
+        })
+      : undefined;
+    const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? beginChatSendMessageInjection({
-            target: messageInjectionTarget,
-            text: ctx.BodyForAgent ?? ctx.Body ?? rawMessage,
-            replyContext: p.replyToId
-              ? { body: ctx.BodyForAgent ?? ctx.Body ?? rawMessage, cfg, ctx, sessionEntry: entry }
-              : undefined,
-            images: replyOptionImages,
-            imageOrder,
-            media: replyOptionMedia,
-            queueSettings: {
-              cfg,
-              channel: ctx.Provider,
-              sessionEntry: entry,
-              inlineMode: p.queueMode,
-            },
-            taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
-            userTurnTranscriptRecorder: userTurnRecorder,
-          })
+        ? replyContextFieldsPromise
         : undefined;
-    let messageInjectionAttempt = p.replyToId ? undefined : beginCapturedMessageInjection();
-    if (messageInjectionTarget && !isInternalTextSlashCommandTurn) {
-      // Accepted injection never consumes plugin-bound media, but the shared
-      // persistence promise still needs a rejection observer.
-      void pluginBoundMediaPromise.catch(() => undefined);
+    if (preAckReplyContextPromise) {
+      applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
+      if (activeRunAbort.controller.signal.aborted) {
+        return finishAbortedChatSend();
+      }
+      if (sessionRoutingChanged(context.getRuntimeConfig())) {
+        return admitted.value.rejectSessionRoutingChanged();
+      }
     }
-    if (messageInjectionAttempt?.rejectBeforeAck) {
-      return admitted.value.rejectActiveLeafChanged();
+    let messageInjectionAttempt =
+      !p.replyToId || preAckReplyContextPromise ? beginCapturedMessageInjection() : undefined;
+    const preAckInjection = await settleChatSendPreAckMessageInjection({
+      attempt: messageInjectionAttempt,
+      isAborted: () => activeRunAbort.controller.signal.aborted,
+      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
+      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
+      onAborted: finishAbortedChatSend,
+      onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
+    });
+    if (preAckInjection.status === "handled") {
+      return;
     }
+    messageInjectionAttempt = preAckInjection.attempt;
 
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
@@ -308,27 +338,11 @@ export async function handleChatSend(
       cfg,
       context,
       entry,
-      rawMessage,
+      request: normalizedRequest.value,
       sessionKey,
       sessionLoadOptions,
       storePath,
     });
-    // Resolve the reply target from session history in parallel with the
-    // remaining dispatch prep so replies do not delay the first model call.
-    // Skipped entirely for non-reply sends so their dispatch path keeps its
-    // existing await ordering.
-    const replyContextFieldsPromise = p.replyToId
-      ? resolveChatSendReplyContext({
-          replyToId: p.replyToId,
-          cfg,
-          agentId,
-          sessionKey,
-          sessionEntry: entry,
-          storePath,
-          userSenderLabel: clientInfo?.displayName,
-          warn: (message) => context.logGateway.warn(message),
-        })
-      : undefined;
     let agentRunStarted = false;
     const replyDispatch = createChatSendReplyDispatch({
       accountId,
@@ -337,12 +351,24 @@ export async function handleChatSend(
       session: preparedSession.value,
       userTurnRecorder,
     });
-    let queuedFollowupEnqueued = false;
-    let releaseQueuedFollowupWorkAdmission: (() => void) | undefined;
+    const queuedFollowup = createChatSendTurnAdoptionLifecycle({
+      chatQueuedTurns: context.chatQueuedTurns,
+      runId: clientRunId,
+      controller: activeRunAbort.controller,
+      sessionId: backingSessionId ?? clientRunId,
+      sessionKey,
+      agentId: selectedAgent.agentId,
+      ownerConnId: client?.connId,
+      ownerDeviceId: client?.connect?.device?.id,
+      ownerKey: queuedFollowupOwnerKey,
+      ...(expectedLeafEntryId !== undefined ? { originatingLeafEntryId: expectedLeafEntryId } : {}),
+      hasCronCreatorAuthority: cronCreatorAuthority !== undefined,
+      retainWorkAdmission: retainGatewayWorkAdmission,
+    });
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
       context,
-      isQueuedFollowupEnqueued: () => queuedFollowupEnqueued,
+      isQueuedFollowupEnqueued: queuedFollowup.isEnqueued,
       persistUserTurnTranscript: persistGatewayUserTurnTranscript,
       session: preparedSession.value,
       terminalizeRestartSafeAdmission,
@@ -391,7 +417,7 @@ export async function handleChatSend(
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
-            if (replyContextFieldsPromise) {
+            if (replyContextFieldsPromise && !preAckReplyContextPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
               messageInjectionAttempt = beginCapturedMessageInjection();
             }
@@ -414,176 +440,140 @@ export async function handleChatSend(
                   counts: { tool: 0, block: 0, final: 0 },
                 };
               }
-              if (p.replyToId) {
-                throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
-              }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
-            const dispatchResult = await dispatchInboundMessageWithProjectedDispatcher({
-              ctx,
-              cfg,
-              dispatcherOptions: replyDispatch.dispatcherOptions,
-              onSessionMetadataChanges: (changes) => {
-                for (const change of changes) {
-                  emitSessionsChanged(context, change);
-                }
-              },
-              replyOptions: {
-                runId: clientRunId,
-                ...(isOperatorUiClient(clientInfo)
-                  ? {
-                      promptCacheKey: resolveWebchatPromptCacheKey({
-                        agentId,
-                        provider: resolvedSessionModel.provider,
-                        model: resolvedSessionModel.model,
-                        sessionKey: activeRunScopeKey,
-                      }),
-                    }
-                  : {}),
-                ...(supportsTaskSuggestions
-                  ? { taskSuggestionDeliveryMode: "gateway" as const }
-                  : {}),
-                requestedSessionId,
-                ...(restartSafeAdmission
-                  ? {
-                      expectedExistingSessionId: admittedSessionId,
-                      pinExpectedExistingSession: true,
-                    }
-                  : entry?.sessionId
-                    ? { expectedExistingSessionId: entry.sessionId }
-                    : {}),
-                resumeRequestedSession: reconnectResumeRequested,
-                onSessionPrepared: (binding) => {
-                  if (binding.sessionKey === sessionKey) {
-                    userTurn.setAcceptedSessionId(binding.sessionId);
+            const dispatchInbound = () =>
+              dispatchInboundMessageWithProjectedDispatcher({
+                ctx,
+                cfg,
+                dispatcherOptions: replyDispatch.dispatcherOptions,
+                onSessionMetadataChanges: (changes) => {
+                  for (const change of changes) {
+                    emitSessionsChanged(context, change);
                   }
                 },
-                abortSignal: activeRunAbort.controller.signal,
-                // Keep a Gateway-owned cancel identity after this chat.send
-                // terminalizes while the prompt waits in followup/collect queue.
-                onFollowupQueueDisposition: (reason) => {
-                  context.logGateway.info("chat queue turn intentionally skipped", {
-                    runId: clientRunId,
-                    sessionKey,
-                    outcome: "skipped",
-                    reason,
-                  });
-                },
-                turnAdoptionLifecycle: {
-                  // Gateway cancel identity only — share collect key via ownerKey.
-                  admission: "cancel-only",
-                  ...(expectedLeafEntryId !== undefined
-                    ? { originatingLeafEntryId: expectedLeafEntryId }
+                replyOptions: {
+                  runId: clientRunId,
+                  ...(isOperatorUiClient(clientInfo)
+                    ? {
+                        promptCacheKey: resolveWebchatPromptCacheKey({
+                          agentId,
+                          provider: resolvedSessionModel.provider,
+                          model: resolvedSessionModel.model,
+                          sessionKey: activeRunScopeKey,
+                        }),
+                      }
                     : {}),
-                  ownerKey: queuedFollowupOwnerKey,
-                  onAdopted: async () => {},
-                  onDeferred: () => {
-                    queuedFollowupEnqueued = registerQueuedChatTurn({
-                      chatQueuedTurns: context.chatQueuedTurns,
-                      runId: clientRunId,
-                      controller: activeRunAbort.controller,
-                      sessionId: backingSessionId ?? clientRunId,
-                      sessionKey,
-                      agentId: selectedAgent.agentId,
-                      ownerConnId: normalizeOptionalText(client?.connId),
-                      ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-                    });
-                    if (queuedFollowupEnqueued && !releaseQueuedFollowupWorkAdmission) {
-                      // The detached dispatch can finish before this queued turn is
-                      // adopted. Retain the session fence across that ownership gap.
-                      releaseQueuedFollowupWorkAdmission = retainGatewayWorkAdmission();
+                  ...(supportsTaskSuggestions
+                    ? { taskSuggestionDeliveryMode: "gateway" as const }
+                    : {}),
+                  requestedSessionId,
+                  ...(restartSafeAdmission
+                    ? {
+                        expectedExistingSessionId: admittedSessionId,
+                        pinExpectedExistingSession: true,
+                      }
+                    : entry?.sessionId
+                      ? { expectedExistingSessionId: entry.sessionId }
+                      : {}),
+                  resumeRequestedSession: reconnectResumeRequested,
+                  onSessionPrepared: (binding) => {
+                    if (binding.sessionKey === sessionKey) {
+                      userTurn.setAcceptedSessionId(binding.sessionId);
                     }
-                    return queuedFollowupEnqueued;
                   },
-                  onCancellationRetired: () => {
-                    retireQueuedChatTurnCancellation(
-                      context.chatQueuedTurns,
-                      clientRunId,
-                      activeRunAbort.controller,
+                  abortSignal: activeRunAbort.controller.signal,
+                  // Keep a Gateway-owned cancel identity after this chat.send
+                  // terminalizes while the prompt waits in followup/collect queue.
+                  onFollowupQueueDisposition: (reason) => {
+                    context.logGateway.info("chat queue turn intentionally skipped", {
+                      runId: clientRunId,
+                      sessionKey,
+                      outcome: "skipped",
+                      reason,
+                    });
+                  },
+                  turnAdoptionLifecycle: queuedFollowup.lifecycle,
+                  images: replyOptionImages,
+                  imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+                  media: replyOptionMedia,
+                  thinkingLevelOverride: p.thinking,
+                  fastModeOverride: p.fastMode,
+                  queueModeOverride: p.queueMode,
+                  userTurnTranscriptRecorder: userTurnRecorder,
+                  ...((messageInjectionTarget && !isInternalTextSlashCommandTurn) ||
+                  (p.queueMode === "steer" && expectedRunId !== undefined)
+                    ? { messageInjectionAttempted: true as const }
+                    : {}),
+                  ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
+                  fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
+                  onAgentRunStart: (runId) => {
+                    agentRunStarted = replyDispatch.captureAgentTranscriptStart();
+                    emitServerTiming(
+                      "agent-run-started",
+                      runId !== clientRunId ? { agentRunId: runId } : undefined,
+                      dispatchStartedAtMs,
                     );
-                  },
-                  onSettled: () => {
-                    completeQueuedChatTurn(
-                      context.chatQueuedTurns,
-                      clientRunId,
-                      activeRunAbort.controller,
+                    const connId = typeof client?.connId === "string" ? client.connId : undefined;
+                    const wantsToolEvents = hasGatewayClientCap(
+                      client?.connect?.caps,
+                      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
                     );
-                    releaseQueuedFollowupWorkAdmission?.();
-                    releaseQueuedFollowupWorkAdmission = undefined;
-                  },
-                },
-                images: replyOptionImages,
-                imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
-                media: replyOptionMedia,
-                thinkingLevelOverride: p.thinking,
-                fastModeOverride: p.fastMode,
-                queueModeOverride: p.queueMode,
-                userTurnTranscriptRecorder: userTurnRecorder,
-                ...(messageInjectionTarget && !isInternalTextSlashCommandTurn
-                  ? { messageInjectionAttempted: true as const }
-                  : {}),
-                ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
-                fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
-                onAgentRunStart: (runId) => {
-                  agentRunStarted = replyDispatch.captureAgentTranscriptStart();
-                  emitServerTiming(
-                    "agent-run-started",
-                    runId !== clientRunId ? { agentRunId: runId } : undefined,
-                    dispatchStartedAtMs,
-                  );
-                  const connId = typeof client?.connId === "string" ? client.connId : undefined;
-                  const wantsToolEvents = hasGatewayClientCap(
-                    client?.connect?.caps,
-                    GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-                  );
-                  if (connId && wantsToolEvents) {
-                    context.registerToolEventRecipient(runId, connId);
-                    // Register for any other active runs *in the same session* so
-                    // late-joining clients (e.g. page refresh mid-response) receive
-                    // in-progress tool events without leaking cross-session data.
-                    const defaultAgentId = resolveDefaultAgentId(cfg);
-                    const selectedGlobalAgentId =
-                      sessionKey === "global"
-                        ? (selectedAgent.agentId ?? defaultAgentId)
-                        : undefined;
-                    for (const [activeRunId, active] of context.chatAbortControllers) {
-                      const activeGlobalAgentId =
-                        active.sessionKey === "global"
-                          ? (active.agentId ?? defaultAgentId)
+                    if (connId && wantsToolEvents) {
+                      context.registerToolEventRecipient(runId, connId);
+                      // Register for any other active runs *in the same session* so
+                      // late-joining clients (e.g. page refresh mid-response) receive
+                      // in-progress tool events without leaking cross-session data.
+                      const defaultAgentId = resolveDefaultAgentId(cfg);
+                      const selectedGlobalAgentId =
+                        sessionKey === "global"
+                          ? (selectedAgent.agentId ?? defaultAgentId)
                           : undefined;
-                      const sameSelectedGlobalAgent =
-                        sessionKey === "global" &&
-                        selectedGlobalAgentId !== undefined &&
-                        activeGlobalAgentId === selectedGlobalAgentId;
-                      const sameSession =
-                        active.sessionKey === sessionKey &&
-                        (sessionKey !== "global" || sameSelectedGlobalAgent);
-                      if (activeRunId !== runId && sameSession) {
-                        context.registerToolEventRecipient(activeRunId, connId);
+                      for (const [activeRunId, active] of context.chatAbortControllers) {
+                        const activeGlobalAgentId =
+                          active.sessionKey === "global"
+                            ? (active.agentId ?? defaultAgentId)
+                            : undefined;
+                        const sameSelectedGlobalAgent =
+                          sessionKey === "global" &&
+                          selectedGlobalAgentId !== undefined &&
+                          activeGlobalAgentId === selectedGlobalAgentId;
+                        const sameSession =
+                          active.sessionKey === sessionKey &&
+                          (sessionKey !== "global" || sameSelectedGlobalAgent);
+                        if (activeRunId !== runId && sameSession) {
+                          context.registerToolEventRecipient(activeRunId, connId);
+                        }
                       }
                     }
-                  }
+                  },
+                  onModelSelected: (modelSelection) => {
+                    updateChatRunProvider(context.chatAbortControllers, {
+                      runId: clientRunId,
+                      providerId: modelSelection.provider,
+                      authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
+                        config: cfg,
+                      }),
+                    });
+                    replyDispatch.onModelSelected(modelSelection);
+                    emitServerTiming(
+                      "model-selected",
+                      {
+                        provider: modelSelection.provider,
+                        model: modelSelection.model,
+                      },
+                      dispatchStartedAtMs,
+                    );
+                  },
                 },
-                onModelSelected: (modelSelection) => {
-                  updateChatRunProvider(context.chatAbortControllers, {
-                    runId: clientRunId,
-                    providerId: modelSelection.provider,
-                    authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
-                      config: cfg,
-                    }),
-                  });
-                  replyDispatch.onModelSelected(modelSelection);
-                  emitServerTiming(
-                    "model-selected",
-                    {
-                      provider: modelSelection.provider,
-                      model: modelSelection.model,
-                    },
-                    dispatchStartedAtMs,
-                  );
-                },
-              },
-            });
+              });
+            const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
+              ? externalAuthorityAdmission.run(
+                  cronCreatorAuthority,
+                  dispatchInbound,
+                  activeRunAbort.controller.signal,
+                )
+              : dispatchInbound());
             if (dispatchResult.beforeAgentRunBlocked === true) {
               userTurnRecorder.markBlocked();
             }
@@ -633,13 +623,10 @@ export async function handleChatSend(
               await persistGatewayUserTurnTranscriptBestEffort();
             }
             let broadcastedSourceReplyFinal = false;
-            // WebChat persistence has two owners. Agent runs persist model-visible turns
-            // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
-            // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-            // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
-            // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
-            // broadcasting the final UI event.
-            if (!agentRunStarted && !queuedFollowupEnqueued) {
+            // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
+            // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
+            // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
+            if (!agentRunStarted && !queuedFollowup.isEnqueued()) {
               await finalizeChatSendNonAgentReplies({
                 accountId,
                 context,
@@ -709,7 +696,7 @@ export async function handleChatSend(
           },
           dispatchStartedAtMs,
         );
-        if (queuedFollowupEnqueued && !context.chatRunState.hasAbortMarker(clientRunId)) {
+        if (queuedFollowup.isEnqueued() && !context.chatRunState.hasAbortMarker(clientRunId)) {
           // Successful queue admission ends this client run. The later
           // aggregate/followup owns its own run id.
           broadcastChatFinal({

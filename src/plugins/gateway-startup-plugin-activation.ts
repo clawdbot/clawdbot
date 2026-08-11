@@ -23,7 +23,7 @@ import {
 } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { manifestOwnsWorkerProvider } from "./worker-provider-registry.js";
+import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
 type PluginStartupActivationParams = {
   plugin: InstalledPluginIndexRecord;

@@ -182,7 +182,7 @@ describe("minimal npm extended-stable workflow", () => {
     });
     expect(plugins.run).toContain("--selection-mode all-publishable");
     expect(plugins.run).toContain("--npm-dist-tag extended-stable");
-    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mts");
     expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
     expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
     expect(plugins.run).not.toContain("--publish");

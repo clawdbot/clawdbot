@@ -1,16 +1,18 @@
 // Dockable operator terminal panel for the Control UI shell.
 //
-// Renders a VS Code-style shell dock (bottom by default, or right) with session
+// Renders a VS Code-style shell dock (bottom by default, right, or main) with session
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { terminalDocumentPath } from "../../app/terminal-document-mode.ts";
 import { t } from "../../i18n/index.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { createDockPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   isTerminalPanelShortcut,
@@ -38,14 +40,14 @@ import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
 
-type TerminalDock = Exclude<DockPanelSide, "left">;
+type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 const panelLayout = createDockPanelLayout({
   storageKey: "openclaw.terminal.panel.v1",
   minHeight: 140,
   minWidth: 320,
   defaultDock: "bottom",
-  supportedDocks: ["bottom", "right"],
+  supportedDocks: ["bottom", "right", "main"],
   defaultHeight: 320,
   defaultWidth: 520,
 });
@@ -63,9 +65,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ type: Boolean }) suppressed = false;
   /** Active Control UI color mode, mirrored into the terminal theme. */
   @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
+  /** Configured Control UI mount prefix used by document links. */
+  @property({ attribute: false }) basePath = "";
   /**
-   * Terminal-only document mode (`?view=terminal`), used by the mobile apps'
-   * WebViews: fills the viewport, always open while available, no dock chrome.
+   * Terminal-only document mode (`/terminal` or `?view=terminal`): fills the
+   * viewport, stays open while available, and omits dock chrome.
    */
   @property({ type: Boolean }) fullscreen = false;
 
@@ -191,6 +195,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       if (!this.available) {
         return;
       }
+      if (detail.catalog) {
+        this.dockLayout.setDock("main");
+      }
       this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
         ? this.terminalSessions.openRequestedSession(detail.terminalSessionId)
@@ -310,6 +317,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     void this.updateComplete.then(() => fitAllTerminalSessions(this.terminalSessions.tabs));
   }
 
+  private openFullscreen(): void {
+    openExternalUrlSafe(terminalDocumentPath(this.basePath));
+  }
+
   resetTerminalSessionPicker(): void {
     this.closeSessionPicker(false);
     void this.sessionPickerTask.run([null]);
@@ -325,11 +336,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       return nothing;
     }
     const mode = this.fullscreen ? "fullscreen" : this.dockLayout.dock;
-    const style = this.fullscreen
-      ? nothing
-      : this.dockLayout.dock === "bottom"
-        ? `height:${this.dockLayout.height}px;--tp-panel-height:${this.dockLayout.height}px`
-        : `width:${this.dockLayout.width}px`;
+    const style =
+      this.fullscreen || this.dockLayout.dock === "main"
+        ? nothing
+        : this.dockLayout.dock === "bottom"
+          ? `height:${this.dockLayout.height}px;--tp-panel-height:${this.dockLayout.height}px`
+          : `width:${this.dockLayout.width}px`;
     const activeTab = this.terminalSessions.tabs.find(
       (tab) => tab.id === this.terminalSessions.activeId,
     );
@@ -360,6 +372,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.terminalPanelUploadController,
       sessionPicker,
       (dock) => this.setDock(dock),
+      () => this.openFullscreen(),
       () => this.closeTerminalPanel(),
     );
     return html`

@@ -81,6 +81,8 @@ export async function finishGatewayStartup(params: {
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
+    bindApprovalPublicationContext,
+    validateAgentRuntimeApprovalAuthority,
     approvalSessionEvents,
     startupTrace,
     loadGatewayModelCatalog,
@@ -106,6 +108,7 @@ export async function finishGatewayStartup(params: {
     controlUiDeviceAuthMigration,
     nodeRegistry,
     workerEnvironmentService,
+    workerEnvironmentStartup,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
@@ -257,12 +260,13 @@ export async function finishGatewayStartup(params: {
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
-      ...(workerPlacementRuntime
-        ? { workerSessionPlacementService: workerPlacementRuntime.placements }
+      ...(workerEnvironmentStartup
+        ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
         : {}),
+      validateAgentRuntimeApprovalAuthority,
       terminalSessions,
       agentRunSeq,
       chatAbortControllers,
@@ -298,6 +302,7 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
+  bindApprovalPublicationContext(gatewayRequestContext);
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
     gatewayRequestContext,
@@ -314,15 +319,11 @@ export async function finishGatewayStartup(params: {
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntimeLocal;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntimeLocal.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntimeLocal.recovery;
-  const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
+  const clearFallbackContext: unknown = setFallbackGatewayContextResolver(
     () => gatewayRequestContext,
   );
   clearFallbackGatewayContextForServer.set(
-    typeof fallbackGatewayContextCleanup === "function"
-      ? () => {
-          fallbackGatewayContextCleanup();
-        }
-      : () => {},
+    typeof clearFallbackContext === "function" ? () => clearFallbackContext() : () => {},
   );
   const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
     "gateway.ws-imports",
@@ -406,6 +407,7 @@ export async function finishGatewayStartup(params: {
       runtimeState.stopOutboundDeliveryRecovery = activated.stopOutboundDeliveryRecovery;
     });
   };
+  const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
   ({
     stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
     tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -424,7 +426,8 @@ export async function finishGatewayStartup(params: {
           log,
           isNixMode,
           startupStartedAt: opts.startupStartedAt,
-          broadcast,
+          broadcastToConnIds,
+          getClientConnIds: gatewayRequestContext.getClientConnIds!,
           broadcastPluginEvent,
           tailscaleMode,
           resetOnExit: tailscaleConfig.resetOnExit ?? false,
@@ -520,6 +523,7 @@ export async function finishGatewayStartup(params: {
           startupTrace,
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
+          activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
           providerAuthPrewarm: {
             getConfig: getRuntimeConfig,
           },

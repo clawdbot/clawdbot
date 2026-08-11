@@ -94,7 +94,7 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
   return trimmed;
 }
 
-export function resolveExplicitAgentCommandSessionKey(params: {
+function resolveExplicitAgentCommandSessionKey(params: {
   rawExplicitSessionKey?: string;
   agentIdOverride?: string;
   shouldScopeDefaultAgentKey?: boolean;

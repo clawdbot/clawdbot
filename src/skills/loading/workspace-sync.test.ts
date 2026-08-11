@@ -4,8 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./workspace.js";
+import {
+  buildWorkspaceSkillSnapshot,
+  buildWorkspaceSkillsPrompt,
+  syncSkillsToWorkspace,
+} from "./workspace.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
@@ -154,6 +159,254 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(
       await pathExists(path.join(targetWorkspace, "skills", "demo-skill", "node_modules")),
     ).toBe(false);
+  });
+
+  it("skips discovery and copying when the synced snapshot still matches", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "hidden"),
+      name: "hidden",
+      description: "Prompt-hidden skill",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+    const skillsSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    expect(skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha", "hidden"]);
+    expect(skillsSnapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["alpha"]);
+    const params = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    };
+
+    const first = await syncSkillsToWorkspace(params);
+    await fs.rm(path.join(sourceWorkspace, "skills"), { recursive: true, force: true });
+    const copy = vi.spyOn(fs, "cp");
+    const second = await syncSkillsToWorkspace(params);
+    const copyCount = copy.mock.calls.length;
+    copy.mockRestore();
+
+    expect(second).toEqual(first);
+    expect(copyCount).toBe(0);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "hidden", "SKILL.md"))).toBe(true);
+  });
+
+  it("rejects path-like tampering without deriving read paths from the manifest", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    for (const name of ["alpha", "beta"]) {
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: `${name} skill`,
+      });
+    }
+    const skillsSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot,
+    };
+    await syncSkillsToWorkspace(syncParams);
+
+    const targetSkillsDir = path.join(targetWorkspace, "skills");
+    const manifestPath = path.join(targetSkillsDir, ".openclaw-sync.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      skillsVersion: number;
+      entryKeys: string[];
+    };
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify({
+        ...manifest,
+        entryKeys: ["../escape", "..\\escape"],
+      }),
+    );
+
+    const copy = vi.spyOn(fs, "cp");
+    const usagePaths = await syncSkillsToWorkspace(syncParams);
+    const copyCount = copy.mock.calls.length;
+    copy.mockRestore();
+
+    expect(copyCount).toBe(2);
+    expect(
+      usagePaths.every((entry) => {
+        const relative = path.relative(targetSkillsDir, entry.readPath);
+        return relative !== ".." && !relative.startsWith(`..${path.sep}`);
+      }),
+    ).toBe(true);
+    expect(await pathExists(path.resolve(targetSkillsDir, "../escape"))).toBe(false);
+  });
+
+  it("incrementally adds and removes skills while preserving unchanged destinations", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    for (const name of ["alpha", "beta", "gamma"]) {
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: `${name} skill`,
+      });
+    }
+    const snapshotVersion = getSkillsSnapshotVersion(sourceWorkspace);
+    const firstSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillFilter: ["alpha", "beta"],
+      snapshotVersion,
+    });
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillFilter: ["alpha", "beta"],
+      skillsSnapshot: firstSnapshot,
+    });
+    const preservedMarker = path.join(targetWorkspace, "skills", "alpha", "preserved.txt");
+    await fs.writeFile(preservedMarker, "preserved");
+
+    const secondSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillFilter: ["alpha", "gamma"],
+      snapshotVersion,
+    });
+    const copy = vi.spyOn(fs, "cp");
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillFilter: ["alpha", "gamma"],
+      skillsSnapshot: secondSnapshot,
+    });
+    const copyCount = copy.mock.calls.length;
+    copy.mockRestore();
+
+    expect(copyCount).toBe(1);
+    expect(await fs.readFile(preservedMarker, "utf8")).toBe("preserved");
+    expect(await pathExists(path.join(targetWorkspace, "skills", "beta"))).toBe(false);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "gamma", "SKILL.md"))).toBe(true);
+  });
+
+  it("refreshes same-key skill trees after the watcher version changes", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Alpha skill" });
+    await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "before");
+    await fs.writeFile(path.join(sourceSkillDir, "removed.txt"), "stale");
+    const firstSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: firstSnapshot,
+    });
+
+    await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "after");
+    await fs.rm(path.join(sourceSkillDir, "removed.txt"));
+    const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const secondSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: nextVersion,
+    });
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: secondSnapshot,
+    });
+
+    expect(
+      await fs.readFile(path.join(targetWorkspace, "skills", "alpha", "asset.txt"), "utf8"),
+    ).toBe("after");
+    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "removed.txt"))).toBe(
+      false,
+    );
+  });
+
+  it("does not publish a manifest when a refreshed copy fails", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Alpha skill" });
+    await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "before");
+    const firstSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const syncParams = {
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: firstSnapshot,
+    };
+    await syncSkillsToWorkspace(syncParams);
+
+    await fs.writeFile(path.join(sourceSkillDir, "asset.txt"), "after");
+    const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const secondSnapshot = buildWorkspaceSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: nextVersion,
+    });
+    const copy = vi.spyOn(fs, "cp").mockRejectedValueOnce(new Error("injected copy failure"));
+    await syncSkillsToWorkspace({ ...syncParams, skillsSnapshot: secondSnapshot });
+    copy.mockRestore();
+
+    const manifestPath = path.join(targetWorkspace, "skills", ".openclaw-sync.json");
+    expect(await pathExists(manifestPath)).toBe(false);
+    await syncSkillsToWorkspace({ ...syncParams, skillsSnapshot: secondSnapshot });
+    expect(await pathExists(manifestPath)).toBe(true);
+    expect(
+      await fs.readFile(path.join(targetWorkspace, "skills", "alpha", "asset.txt"), "utf8"),
+    ).toBe("after");
+
+    const interruptedTemp = path.join(targetWorkspace, "skills", ".openclaw-sync.interrupted.tmp");
+    await fs.rm(manifestPath);
+    await fs.writeFile(interruptedTemp, "partial");
+    await syncSkillsToWorkspace({ ...syncParams, skillsSnapshot: secondSnapshot });
+    expect(await pathExists(interruptedTemp)).toBe(false);
+    expect(await pathExists(manifestPath)).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(

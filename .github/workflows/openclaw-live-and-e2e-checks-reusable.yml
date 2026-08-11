@@ -542,6 +542,7 @@ env:
 jobs:
   validate_selected_ref:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -776,6 +777,7 @@ jobs:
   validate_live_suite_filter:
     runs-on: ubuntu-24.04
     if: inputs.live_suite_filter != ''
+    timeout-minutes: 10
     steps:
       - name: Validate focused live suite filter
         shell: bash
@@ -892,6 +894,7 @@ jobs:
   plan_release_workflow_matrices:
     needs: validate_selected_ref
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
       docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}
@@ -1255,6 +1258,12 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
+
+      - name: Setup trusted release harness
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Log in to GHCR for shared Docker E2E image
         if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy != 'no-push-artifact'
@@ -1632,6 +1641,11 @@ jobs:
           fetch-depth: 1
           path: .release-harness
 
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Log in to GHCR for shared Docker E2E image
         if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
@@ -1919,6 +1933,11 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Log in to GHCR for shared Docker E2E image
         if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
@@ -2141,6 +2160,11 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup trusted release harness
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Plan Docker E2E images
         id: plan
         shell: bash
@@ -2186,24 +2210,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
-
-      - name: Setup artifact package validation environment
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-file: .release-harness/package.json
-          use-actions-cache: "false"
-
-      - name: Install trusted package validation dependencies
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        env:
-          CI: "true"
-        # Corepack resolves packageManager from the process cwd before pnpm can
-        # process --dir. Keep this in the trusted harness so a frozen candidate
-        # pin cannot select a different pnpm binary for its harness install.
-        working-directory: .release-harness
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact
@@ -2296,7 +2302,7 @@ jobs:
           )
           # Frozen targets that predate the opt-in flag still strict-pack against their versioned changelog.
           if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
-            grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+            grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
             package_args+=(--allow-unreleased-changelog)
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
@@ -2341,12 +2347,12 @@ jobs:
             cp "${tgzs[0]}" "$target"
           fi
           echo "Validating Docker E2E package tarball: $target"
-          validator="scripts/check-openclaw-package-tarball.mjs"
+          validator=(node scripts/check-openclaw-package-tarball.mjs)
           if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
-            validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"
+            validator=(pnpm --dir .release-harness exec node scripts/check-openclaw-package-tarball.mjs)
           fi
           started_at="$(date +%s)"
-          timeout --foreground 5m node "$validator" "$target"
+          timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
           finished_at="$(date +%s)"
           echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"

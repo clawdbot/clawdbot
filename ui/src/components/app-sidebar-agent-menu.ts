@@ -465,10 +465,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           class="sidebar-customize-menu__item sidebar-pair-mobile"
           value="command:pair-mobile"
           ?disabled=${!params.canPairDevice}
-          title=${params.canPairDevice ? nothing : t("nodes.pairing.adminRequired")}
+          title=${params.canPairDevice ? nothing : t("devices.pairing.adminRequired")}
         >
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
-          <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
+          <span class="sidebar-customize-menu__text">${t("devices.pairing.button")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>

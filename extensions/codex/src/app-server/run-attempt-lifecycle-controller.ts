@@ -5,7 +5,7 @@ import {
   formatFastModeAutoProgressText,
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
 import {

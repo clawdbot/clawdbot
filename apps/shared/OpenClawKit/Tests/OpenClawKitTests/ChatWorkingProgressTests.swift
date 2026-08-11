@@ -14,13 +14,13 @@ struct ChatWorkingProgressTests {
         #expect(first == ChatWorkingClawStance.seeded(run, salt: salt))
         #expect(first == .southpaw)
         #expect(ChatWorkingClawStance.seeded("run-a", salt: salt) == .standard)
-        #expect(ChatWorkingClawStance.seeded("run-21", salt: salt) == .spin)
+        #expect(ChatWorkingClawStance.seeded("run-6", salt: salt) == .spin)
     }
 
     @Test func `stance weights total one hundred and match the allowlist`() {
         let weightedStances = ChatWorkingClawStance.weightedStances
         #expect(weightedStances.reduce(0) { $0 + $1.weight } == 100)
-        #expect(weightedStances.map(\.weight) == [63, 19, 5, 4, 3, 2, 2, 1, 1])
+        #expect(weightedStances.map(\.weight) == [55, 18, 5, 4, 3, 2, 2, 2, 2, 2, 2, 2, 1])
         #expect(weightedStances.map(\.stance) == [
             .standard,
             .southpaw,
@@ -31,15 +31,23 @@ struct ChatWorkingProgressTests {
             .zen,
             .drummer,
             .peekaboo,
+            .nodOff,
+            .curious,
+            .omNom,
+            .fakeOut,
         ])
         #expect(weightedStances.map(\.stance) == ChatWorkingClawStance.allCases)
     }
 
-    @Test func `new rare stances are selectable`() {
+    @Test func `rare stances are selectable`() {
         let salt: UInt32 = 0xA1B2_C3D4
-        #expect(ChatWorkingClawStance.seeded("run-10", salt: salt) == .zen)
-        #expect(ChatWorkingClawStance.seeded("run-299", salt: salt) == .drummer)
-        #expect(ChatWorkingClawStance.seeded("run-22", salt: salt) == .peekaboo)
+        #expect(ChatWorkingClawStance.seeded("run-38", salt: salt) == .zen)
+        #expect(ChatWorkingClawStance.seeded("run-21", salt: salt) == .drummer)
+        #expect(ChatWorkingClawStance.seeded("run-8", salt: salt) == .peekaboo)
+        #expect(ChatWorkingClawStance.seeded("run-15", salt: salt) == .nodOff)
+        #expect(ChatWorkingClawStance.seeded("run-10", salt: salt) == .curious)
+        #expect(ChatWorkingClawStance.seeded("run-24", salt: salt) == .omNom)
+        #expect(ChatWorkingClawStance.seeded("run-22", salt: salt) == .fakeOut)
     }
 
     @Test func `zen samples the breath and deliberate snip keyframes`() {
@@ -100,6 +108,31 @@ struct ChatWorkingProgressTests {
         ] {
             let pose = ChatWorkingClawMotion.pose(stance: .peekaboo, elapsed: elapsed)
             self.expectClose(pose.jawRotation, jaw)
+        }
+    }
+
+    @Test func `latest rare stances sample their defining beats`() {
+        let samples: [(
+            stance: ChatWorkingClawStance,
+            elapsed: TimeInterval,
+            bodyRotation: CGFloat,
+            xOffset: CGFloat,
+            yOffset: CGFloat,
+            jawRotation: CGFloat
+        )] = [
+            (.nodOff, 2.304, -3, 0, -0.5, -6),
+            (.curious, 0.96, -14, 0, 0, -16),
+            (.omNom, 0.864, 0, 2.5, 0, 8),
+            (.fakeOut, 1.392, 3, 0, 0, 4),
+        ]
+
+        for sample in samples {
+            let pose = ChatWorkingClawMotion.pose(stance: sample.stance, elapsed: sample.elapsed)
+            self.expectClose(pose.bodyRotation, sample.bodyRotation)
+            self.expectClose(pose.xOffset, sample.xOffset)
+            self.expectClose(pose.yOffset, sample.yOffset)
+            self.expectClose(pose.jawRotation, sample.jawRotation)
+            #expect(pose.bodyScale == 1)
         }
     }
 

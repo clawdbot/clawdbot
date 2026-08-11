@@ -4,7 +4,10 @@ import {
   expireStaleReplyOperation,
   type ReplyOperation,
 } from "../../../auto-reply/reply/reply-run-registry.js";
-import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import {
+  isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
+} from "../../run-termination.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
@@ -26,7 +29,7 @@ vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
-vi.mock("./attempt.subscription-cleanup.js", () => ({
+vi.mock("./attempt-subscription-cleanup.js", () => ({
   buildEmbeddedSubscriptionParams: mocks.buildSubscriptionParams,
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
@@ -39,9 +42,9 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
 import {
   createEmbeddedAttemptExternalAbortController,
   createEmbeddedAttemptRunAbort,
-} from "./attempt-abort.js";
+} from "./attempt-finalize.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],
@@ -491,7 +494,6 @@ describe("prepareEmbeddedAttemptStream", () => {
     const markExternalAbort = vi.fn();
     const markAborted = vi.fn();
     const abortActiveSession = vi.fn(async () => {});
-    const releaseHeldLockForAbort = vi.fn(async () => {});
     const abortState = {
       markAborted,
       markExternalAbort,
@@ -522,7 +524,6 @@ describe("prepareEmbeddedAttemptStream", () => {
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      sessionLockController: { releaseHeldLockForAbort },
       state: abortState,
     });
     externalAbortController.setRunAbort(abortRun);
@@ -553,11 +554,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(onAttemptAbort).toHaveBeenCalledOnce();
       expect(markAborted).toHaveBeenCalledOnce();
       expect(abortActiveSession).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
-      expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
-        reason: undefined,
-        terminal: true,
-      });
+      expect(isAgentRunSupersededAbortReason(runAbortController.signal.reason)).toBe(true);
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {

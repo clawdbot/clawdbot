@@ -24,10 +24,9 @@ const loadWorkerPlacementStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-placement-startup.js"),
 );
 
-export async function resetPreparedModelCatalogForTest(): Promise<void> {
-  const { resetPreparedModelCatalogForTest: resetPreparedModelCatalogForTestLocal } =
-    await loadGatewayModelCatalogModule();
-  await resetPreparedModelCatalogForTestLocal();
+export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
+  const { resetPreparedModelCatalogStateForTest } = await loadGatewayModelCatalogModule();
+  await resetPreparedModelCatalogStateForTest();
 }
 
 const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
@@ -102,7 +101,7 @@ async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
   stopTaskRegistryMaintenance();
 }
 
-export async function startGatewayServer(
+export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {

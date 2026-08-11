@@ -2,3 +2,4 @@
 CLAUDE.md -text
 src/gateway/server-methods/CLAUDE.md -text
 ui/src/i18n/.i18n/* linguist-generated
+docs/.generated/plugin-sdk-api-baseline.jsonl linguist-generated=true

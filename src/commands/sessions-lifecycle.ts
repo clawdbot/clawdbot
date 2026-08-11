@@ -3,6 +3,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
 type SessionsLifecycleCliOptions = {
@@ -266,7 +267,7 @@ async function runSessionsLifecycleCommand(
             ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
             archived: true,
           },
-          { defaultTimeoutMs: 30_000 },
+          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsPatchResult;
         if (response?.ok !== true || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");

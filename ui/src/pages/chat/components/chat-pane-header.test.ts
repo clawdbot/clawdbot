@@ -86,11 +86,13 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    terminalAction: nothing,
+    panelActions: nothing,
     discussionAction: nothing,
     diffAction: nothing,
     backgroundTasksAction: nothing,
     workspaceAction: nothing,
+    sessionRailAction: nothing,
+    sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -238,6 +240,19 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
+  it("places the session menu last in the header action row", () => {
+    const { container } = mount({
+      mergedChrome: true,
+      onClosePane: vi.fn(),
+      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+    });
+    const actions = container.querySelector(".chat-pane__actions");
+
+    expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
+    expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
+    expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
+  });
+
   it("renders an editable title and workspace chip", () => {
     const { container, props } = mount();
     const title = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button");
@@ -313,10 +328,11 @@ describe("chat pane header", () => {
     const { container } = mount({
       catalog: true,
       session: undefined,
-      terminalAction: html`<span data-action="terminal"></span>`,
+      panelActions: html`<span data-action="terminal"></span>`,
       diffAction: html`<span data-action="diff"></span>`,
       backgroundTasksAction: html`<span data-action="tasks"></span>`,
       workspaceAction: html`<span data-action="workspace"></span>`,
+      sessionRailAction: html`<span data-action="rail"></span>`,
     });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
@@ -327,6 +343,7 @@ describe("chat pane header", () => {
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
     expect(container.querySelector('[data-action="workspace"]')).toBeNull();
+    expect(container.querySelector('[data-action="rail"]')).toBeNull();
   });
 
   it("keeps read-only gateway session titles static", () => {
@@ -360,7 +377,7 @@ describe("chat pane header", () => {
   it("shows an incognito indicator for in-memory threads", () => {
     const { container } = mount({ session: row({ incognito: true }) });
     expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
-      "Incognito thread",
+      "Incognito session",
     );
   });
 

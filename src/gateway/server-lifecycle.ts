@@ -313,6 +313,7 @@ export async function prepareGatewayLifecycle(params: {
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
+    runtimeState.stopGatewayUpdateCheck();
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
@@ -442,7 +443,7 @@ export async function prepareGatewayLifecycle(params: {
           return;
         }
         const { markRestartAbortedMainSessions } =
-          await import("../agents/main-session-restart-recovery.js");
+          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
         await markRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
           sessionKeys,

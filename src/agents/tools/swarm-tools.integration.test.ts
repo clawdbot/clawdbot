@@ -6,10 +6,10 @@ import { createOpenClawTools } from "../openclaw-tools.js";
 import {
   resetSubagentRegistryForTests,
   testing as registryTesting,
-} from "../subagent-registry.test-helpers.js";
-import "../subagent-registry.mocks.shared.js";
-import { testing as spawnTesting } from "../subagent-spawn.test-support.js";
-import { testing as swarmSchedulerTesting } from "../swarm-scheduler.test-support.js";
+} from "../subagents/registry/subagent-registry.test-helpers.js";
+import "../subagents/registry/subagent-registry.mocks.shared.js";
+import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-support.js";
+import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 import { testing as structuredOutputTesting } from "./structured-output-tool.test-support.js";
@@ -129,7 +129,7 @@ describe("swarm tools integration", () => {
         persistSubagentRunsToDiskOrThrow: vi.fn(),
         resolveAgentTimeoutMs: () => 1_000,
         restoreSubagentRunsFromDisk: vi.fn(() => 0),
-        runSubagentAnnounceFlow: vi.fn(async () => true),
+        runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
         ensureContextEnginesInitialized: vi.fn(),
         loadAgentRuntimePluginRegistryHandle: vi.fn(),
         resolveContextEngine: vi.fn(async () => ({

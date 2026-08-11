@@ -3,9 +3,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
@@ -37,7 +38,6 @@ import {
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
-import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -700,7 +700,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   });
 }
 
-export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
+export async function startTestGatewayServer(port: number, opts?: GatewayServerOptions) {
   // Tests mutate testState-backed config before server startup; discard earlier
   // helper reads so startup observes the current fixture state.
   resetConfigRuntimeState();
@@ -741,13 +741,13 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
 export async function startGatewayServerWithRetries(params: {
   port: number;
   opts?: GatewayServerOptions;
-}): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
+}): Promise<{ port: number; server: Awaited<ReturnType<typeof startTestGatewayServer>> }> {
   let port = params.port;
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
       return {
         port,
-        server: await startGatewayServer(port, params.opts),
+        server: await startTestGatewayServer(port, params.opts),
       };
     } catch (err) {
       const code = (err as { cause?: { code?: string } }).cause?.code;
@@ -801,7 +801,10 @@ async function openTrackedWebSocket(params: {
 }
 
 export async function withGatewayServer<T>(
-  fn: (ctx: { port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }) => Promise<T>,
+  fn: (ctx: {
+    port: number;
+    server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+  }) => Promise<T>,
   opts?: { port?: number; serverOptions?: GatewayServerOptions },
 ): Promise<T> {
   const started = await startGatewayServerWithRetries({
@@ -820,7 +823,7 @@ export async function createGatewaySuiteHarness(opts?: {
   serverOptions?: GatewayServerOptions;
 }): Promise<{
   port: number;
-  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   openWs: (headers?: Record<string, string>) => Promise<WebSocket>;
   close: () => Promise<void>;
 }> {

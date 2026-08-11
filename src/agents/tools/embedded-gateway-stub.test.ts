@@ -113,8 +113,26 @@ describe("embedded gateway stub", () => {
     expect(result).toEqual({ ok: true, key: "agent:main:main" });
     expect(runtime.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
       cfg: { agents: { list: [{ id: "main", default: true }] } },
+      client: null,
       p: { sessionId: "sess-main", includeGlobal: true },
     });
+  });
+
+  it("preserves short-id ambiguity as a successful embedded response", async () => {
+    const candidates = [
+      { key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001", displayName: "One" },
+      { key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002", displayName: "Two" },
+    ];
+    runtime.resolveSessionKeyFromResolveParams.mockResolvedValueOnce({
+      ok: true,
+      ambiguous: true,
+      candidates,
+    });
+
+    const callGateway = createEmbeddedCallGateway();
+    await expect(
+      callGateway({ method: "sessions.resolve", params: { shortId: "12345678" } }),
+    ).resolves.toEqual({ ok: false, candidates });
   });
 
   it("throws resolver errors for unresolved sessions", async () => {

@@ -4,7 +4,7 @@ import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 /** Default timeout for provider usage collection. */
-export const DEFAULT_TIMEOUT_MS = 5000;
+export const PROVIDER_USAGE_TIMEOUT_MS = 5000;
 
 export const PROVIDER_LABELS = {
   anthropic: "Claude",
@@ -25,10 +25,6 @@ export const PROVIDER_LABELS = {
 export function providerUsageLabel(provider: string): string | undefined {
   const labels: Readonly<Record<string, string | undefined>> = PROVIDER_LABELS;
   return labels[provider];
-}
-
-export function resolveProviderUsageDisplayName(provider: string): string {
-  return providerUsageLabel(provider) ?? provider;
 }
 
 /** Returns true for providers whose usage endpoint is only meaningful with OAuth/token auth. */

@@ -106,6 +106,30 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("removes retired thread-ownership config while retaining valid plugin ids", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["discord", "thread-ownership"],
+        deny: ["thread-ownership", "openai"],
+        entries: {
+          discord: { enabled: true },
+          "thread-ownership": { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.config.plugins).toEqual({
+      allow: ["discord"],
+      deny: ["openai"],
+      entries: { discord: { enabled: true } },
+    });
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (thread-ownership)",
+      "- plugins.deny: removed 1 stale plugin id (thread-ownership)",
+      "- plugins.entries: removed 1 stale plugin entry (thread-ownership)",
+    ]);
+  });
+
   it("resets stale plugin slots without changing valid slot sentinels", () => {
     const cfg = {
       plugins: {

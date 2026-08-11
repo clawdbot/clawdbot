@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionDirect } from "./embedded-agent-runner/compact.runtime.js";
 import { extractAssistantText } from "./embedded-agent-utils.js";
@@ -321,9 +322,11 @@ async function runEmbeddedCacheProbe(params: {
   promptSections?: number;
 }): Promise<CacheRun> {
   const sessionPaths = buildRunnerSessionPaths(params.sessionId);
+  const runId = `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`;
   await fs.mkdir(sessionPaths.workspaceDir, { recursive: true });
   const result = await withLiveCacheHeartbeat(
     runEmbeddedAgent({
+      admittedRunContext: createTestAdmittedRunContext(runId),
       sessionId: params.sessionId,
       sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
       sessionFile: sessionPaths.sessionFile,
@@ -339,7 +342,7 @@ async function runEmbeddedCacheProbe(params: {
       provider: params.model.provider,
       model: params.model.id,
       timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
-      runId: `${params.sessionId}-${params.suffix}-${params.transport ?? "default"}`,
+      runId,
       extraSystemPrompt: params.prefix,
       disableTools: true,
       cleanupBundleMcpOnRunEnd: true,

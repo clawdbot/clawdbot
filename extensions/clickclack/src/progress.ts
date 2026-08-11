@@ -16,6 +16,7 @@ export type ClickClackItemEventPayload = {
   summary?: string;
   progressText?: string;
   meta?: string;
+  commandBearing?: boolean;
 };
 
 type ClickClackProgressClient = {
@@ -62,6 +63,7 @@ function progressText(payload: ClickClackItemEventPayload): string {
     summary: payload.summary,
     progressText: payload.progressText,
     meta: payload.meta,
+    commandBearing: payload.commandBearing,
   })?.text?.trim();
   if (line) {
     return line;

@@ -369,7 +369,7 @@ export async function handleBashChatCommand(params: {
       command: commandText,
       background: shouldBackgroundImmediately,
       yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
       elevated: true,
     });
 

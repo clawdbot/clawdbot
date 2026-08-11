@@ -21,6 +21,7 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -38,13 +39,13 @@ import {
   type EmbeddedAgentQueueHandle,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
-} from "./attempt.async-tasks.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
-import { buildEmbeddedSubscriptionParams } from "./attempt.subscription-cleanup.js";
+} from "./attempt-async-tasks.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
+import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
+import { buildEmbeddedSubscriptionParams } from "./attempt-subscription-cleanup.js";
 import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
@@ -393,10 +394,20 @@ export function prepareEmbeddedAttemptStream(input: {
     externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onAttemptAbort?.();
-    input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
+    const abortReason =
+      reason === "restart"
+        ? createAgentRunRestartAbortError()
+        : reason === "superseded"
+          ? createAgentRunSupersededAbortError()
+          : undefined;
+    input.abortRun(false, abortReason);
   };
   const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
-    if (!acceptingSteerMessages) {
+    const canInject = () =>
+      acceptingSteerMessages &&
+      !input.getRunState().aborted &&
+      !input.runAbortController.signal.aborted;
+    if (!canInject()) {
       throw new Error("active session is finalizing");
     }
     activeQueueAdmissions++;
@@ -409,6 +420,7 @@ export function prepareEmbeddedAttemptStream(input: {
         text,
         options,
         attempt.sessionKey,
+        canInject,
       );
     } finally {
       activeQueueAdmissions--;

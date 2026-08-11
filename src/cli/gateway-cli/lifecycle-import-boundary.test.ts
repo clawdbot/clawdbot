@@ -22,8 +22,12 @@ describe("gateway lifecycle hub import boundaries", () => {
 
     // main-session-restart-recovery.ts also re-exports its -runtime sibling,
     // which the primed hub never calls.
-    expect(hub).toContain('from "../../agents/main-session-restart-recovery-marking.js"');
-    expect(hub).not.toContain('from "../../agents/main-session-restart-recovery.js"');
+    expect(hub).toContain(
+      'from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js"',
+    );
+    expect(hub).not.toContain(
+      'from "../../agents/main-session-recovery/main-session-restart-recovery.js"',
+    );
   });
 
   it("still primes the hub eagerly so signal handlers survive dist chunk rotation", () => {

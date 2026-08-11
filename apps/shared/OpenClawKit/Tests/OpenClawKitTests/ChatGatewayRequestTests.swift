@@ -523,6 +523,34 @@ struct ChatGatewayPayloadCodecTests {
         #expect(digest.runid == "run-1")
         #expect(digest.revision == 2)
 
+        let task = EventFrame(
+            type: "event",
+            event: "task",
+            payload: AnyCodable([
+                "action": AnyCodable("upserted"),
+                "task": AnyCodable([
+                    "id": AnyCodable("task-1"),
+                    "runtime": AnyCodable("subagent"),
+                    "status": AnyCodable("running"),
+                    "sessionKey": AnyCodable("agent:main:main"),
+                    "lastActivity": AnyCodable("Editing ChatView.swift"),
+                    "diffStat": AnyCodable([
+                        "files": AnyCodable(1),
+                        "added": AnyCodable(8),
+                        "removed": AnyCodable(2),
+                    ]),
+                ]),
+            ]))
+        guard case let .task(.upserted(summary)) = OpenClawChatGatewayPayloadCodec.event(from: task)
+        else {
+            Issue.record("expected task upsert")
+            return
+        }
+        #expect(summary.id == "task-1")
+        #expect(summary.sessionkey == "agent:main:main")
+        #expect(summary.lastactivity == "Editing ChatView.swift")
+        #expect(summary.diffstat?["added"]?.intValue == 8)
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)

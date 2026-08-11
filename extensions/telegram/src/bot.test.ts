@@ -201,6 +201,7 @@ function makeTelegramPollRegistryEntry(
 ): Omit<TelegramPollRegistryEntry, "createdAt"> {
   return {
     chat: { id: 9876, type: "private", first_name: "Ada" },
+    threadSpec: { scope: "dm" },
     question: "Ready?",
     options: ["Yes", "No"],
     ...overrides,
@@ -934,10 +935,9 @@ describe("createTelegramBot", () => {
           id: -1001234567890,
           type: "supergroup",
           title: "Reviewers",
-          is_forum: true,
         },
         messageId: 321,
-        messageThreadId: 99,
+        threadSpec: { scope: "forum", id: 99 },
         question: "Escalate?",
       }),
     );
@@ -995,7 +995,7 @@ describe("createTelegramBot", () => {
           is_forum: true,
         },
         messageId: 324,
-        messageThreadId: 99,
+        threadSpec: { scope: "forum", id: 99 },
         question: "Escalate?",
       }),
     );
@@ -1091,7 +1091,7 @@ describe("createTelegramBot", () => {
       makeTelegramPollRegistryEntry({
         pollId: "poll-dm-topic",
         messageId: 323,
-        messageThreadId: 42,
+        threadSpec: { scope: "dm", id: 42 },
       }),
     );
 
@@ -1100,7 +1100,7 @@ describe("createTelegramBot", () => {
 
       await getTelegramPollAnswerHandlerForTests()({
         update: { update_id: 9002 },
-        me: { id: 999, username: "openclaw_bot", has_topics_enabled: true },
+        me: { id: 999, username: "openclaw_bot", has_topics_enabled: false },
         getFile: getEmptyTelegramFile,
         pollAnswer: {
           poll_id: "poll-dm-topic",
@@ -1803,7 +1803,7 @@ describe("createTelegramBot", () => {
     expect(execApprovals.approvers).toEqual(["9"]);
     expect(execApprovals.target).toBe("dm");
     expect(approvalCall.approvalId).toBe("138e9b8c");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(replySpy).not.toHaveBeenCalled();
@@ -2025,7 +2025,7 @@ describe("createTelegramBot", () => {
       assertDistinctResult: () => {
         expect(execApprovalCall(0)).toMatchObject({
           approvalId: "stale-legacy-id",
-          approvalKind: "exec",
+          resolveMethod: "exec",
         });
         expect(execApprovalCall(1)).toMatchObject({
           approvalId: "stale-legacy-id",
@@ -2149,12 +2149,12 @@ describe("createTelegramBot", () => {
     expect(execApprovals.approvers).toEqual(["9"]);
     expect(execApprovals.target).toBe("dm");
     expect(approvalCall.approvalId).toBe("opaque-plugin-approval-id");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(execApprovalCall(1)).toMatchObject({
       approvalId: "opaque-plugin-approval-id",
-      approvalKind: "plugin",
+      resolveMethod: "plugin",
       decision: "allow-once",
       senderId: "9",
     });
@@ -2268,7 +2268,7 @@ describe("createTelegramBot", () => {
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.mode).toBe("targets");
     expect(approvalCall.approvalId).toBe("plugin:misleading-exec-id");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
@@ -2313,7 +2313,7 @@ describe("createTelegramBot", () => {
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.mode).toBe("targets");
     expect(approvalCall.approvalId).toBe("138e9b8c");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
@@ -2343,11 +2343,11 @@ describe("createTelegramBot", () => {
 
     const approvalCall = execApprovalCall();
     expect(approvalCall.approvalId).toBe("138e9b8c");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
-    expect(execApprovalCall(1).approvalKind).toBe("plugin");
+    expect(execApprovalCall(1).resolveMethod).toBe("plugin");
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       1234,
       26,
@@ -2391,7 +2391,7 @@ describe("createTelegramBot", () => {
 
     expect(execApprovalCall()).toMatchObject({
       approvalId: "plugin:138e9b8c",
-      approvalKind: "exec",
+      resolveMethod: "exec",
       decision: "allow-once",
       senderId: "9",
     });
@@ -4263,40 +4263,44 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("continue after polling restart");
   });
 
-  it("durably retries a spooled reply when shutdown aborts reply media", async () => {
-    const botShutdown = new AbortController();
-    const mediaAbort = new AbortController();
-    getFileSpy.mockImplementationOnce(async () => {
-      botShutdown.abort();
+  it("durably retries a spooled reply when its claim owner aborts reply media", async () => {
+    const claimOwner = new AbortController();
+    getFileSpy.mockImplementationOnce(async (_fileId, signal) => {
+      claimOwner.abort(new Error("claim adoption stalled"));
+      expect((signal as AbortSignal | undefined)?.aborted).toBe(true);
       throw new Error("Bad Request: file is too big");
     });
 
-    createTelegramBot({
-      token: "tok",
-      fetchAbortSignal: botShutdown.signal,
-      mediaAbortSignal: mediaAbort.signal,
-    });
+    createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const update = { update_id: 98081, message: createReplyPhotoMessage("keep the old image") };
 
     const { result } = await runWithTelegramUpdateProcessingFrame(() =>
-      withTelegramSpooledReplayUpdate(update, () =>
-        handler({
-          update,
-          message: update.message,
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({}),
-        }),
+      runWithTelegramSpooledReplayUpdate(
+        update,
+        () =>
+          handler({
+            update,
+            message: update.message,
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          }),
+        {
+          abortSignal: claimOwner.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
       ),
     );
 
     expect(result).toEqual({ kind: "failed-retryable", error: expect.any(Error) });
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).not.toHaveBeenCalled();
-    expect(mediaAbort.signal.aborted).toBe(false);
   });
 
-  it("hydrates reply chains from cached Telegram messages", async () => {
+  it("reuses resolved media when hydrating cached Telegram reply chains", async () => {
     const mediaFetch = vi.fn(
       async () =>
         new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
@@ -4319,7 +4323,7 @@ describe("createTelegramBot", () => {
           message_id: 9000,
           date: 1736380700,
           from: { id: 1, first_name: "Kesava" },
-          photo: [{ file_id: "root-photo-1" }],
+          photo: [{ file_id: "root-photo-1", file_unique_id: "root-photo-unique-1" }],
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "media/root.jpg" }),
@@ -4334,7 +4338,7 @@ describe("createTelegramBot", () => {
           from: { id: 2, first_name: "Ada" },
           reply_to_message: {
             message_id: 9000,
-            photo: [{ file_id: "root-photo-1" }],
+            photo: [{ file_id: "root-photo-1", file_unique_id: "root-photo-unique-1" }],
             from: { id: 1, first_name: "Kesava" },
           },
         },
@@ -4388,8 +4392,9 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyChain?.[0]?.replyToId).toBe("9000");
     expect(payload.ReplyChain?.[1]?.messageId).toBe("9000");
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+    expect(payload.ReplyChain?.[1]?.mediaPath).toMatch(/^media:\/\/inbound\//);
     expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
+    expect(payload.ReplyChain?.[1]).not.toHaveProperty("resolvedMedia");
     const [conversationContext] = requireArray(
       payload.ChannelStructuredContext,
       "structured context",
@@ -4404,10 +4409,10 @@ describe("createTelegramBot", () => {
       sender: "Kesava",
     });
     expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
-    expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
+    expect(messagesById.get("9000")?.media_path).toBe(payload.ReplyChain?.[1]?.mediaPath);
     expect(messagesById.get("9000")?.media_ref).toBeUndefined();
-    expect(getFileSpy).toHaveBeenCalledWith("root-photo-1", expect.any(AbortSignal));
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -4466,6 +4471,9 @@ describe("createTelegramBot", () => {
         },
       });
 
+      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1", expect.any(AbortSignal));
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+
       replySpy.mockClear();
       getFileSpy.mockClear();
       mediaFetch.mockClear();
@@ -4514,7 +4522,7 @@ describe("createTelegramBot", () => {
     });
     if (expectHydrated) {
       expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-      expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+      expect(payload.ReplyChain?.[1]?.mediaPath).toMatch(/^media:\/\/inbound\//);
       expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
     } else {
       expect(payload.ReplyChain?.[1]?.mediaPath).toBeUndefined();
@@ -4548,13 +4556,8 @@ describe("createTelegramBot", () => {
       reply_to_id: "101",
       is_reply_target: true,
     });
-    if (expectHydrated) {
-      expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1", expect.any(AbortSignal));
-      expect(mediaFetch).toHaveBeenCalledTimes(1);
-    } else {
-      expect(getFileSpy).not.toHaveBeenCalled();
-      expect(mediaFetch).not.toHaveBeenCalled();
-    }
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
   });
 
   it("does not hydrate reply media denied by General forum topic visibility", async () => {
@@ -4651,6 +4654,94 @@ describe("createTelegramBot", () => {
     );
     const hiddenMessage = messages.find((message) => message.message_id === "102");
     expect(hiddenMessage?.media_ref).toBe("telegram:file/hidden-photo-1");
+    expect(hiddenMessage?.media_path).toBeUndefined();
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(mediaFetch).not.toHaveBeenCalled();
+  });
+
+  it("uses refreshed channel-DM topic config for reply-media visibility", async () => {
+    mockTelegramConfig({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+      groups: {
+        "-1010": {
+          requireMention: false,
+          allowFrom: ["1", "2"],
+          topics: { "77": { allowFrom: ["1"], requireMention: false } },
+        },
+      },
+    });
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+    setTelegramPluginStateRuntimeForTests();
+
+    try {
+      const replyDelivered = waitForReplyCalls(1);
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const chat = {
+        id: -1010,
+        type: "supergroup",
+        title: "Channel Inbox",
+        is_direct_messages: true,
+      };
+
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+        message: {
+          chat,
+          message_id: 103,
+          text: "explain this",
+          date: 1736380800,
+          from: { id: 1, is_bot: false, first_name: "Allowed" },
+          direct_messages_topic: { topic_id: 77 },
+          message_thread_id: 999,
+          reply_to_message: {
+            chat,
+            message_id: 102,
+            caption: "hidden image",
+            date: 1736380750,
+            from: { id: 2, is_bot: false, first_name: "Hidden" },
+            photo: [{ file_id: "hidden-channel-photo-1" }],
+          },
+        },
+      });
+      await replyDelivered;
+    } finally {
+      ssrfMock.mockRestore();
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      0,
+      0,
+      "replySpy call",
+    ) as { ChannelStructuredContext?: unknown[] };
+    const [conversationContext] = requireArray(
+      payload.ChannelStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const hiddenMessage = messages.find((message) => message.message_id === "102");
+    expect(hiddenMessage?.media_ref).toBe("telegram:file/hidden-channel-photo-1");
     expect(hiddenMessage?.media_path).toBeUndefined();
     expect(getFileSpy).not.toHaveBeenCalled();
     expect(mediaFetch).not.toHaveBeenCalled();
@@ -4973,6 +5064,59 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
     expect((payload as Record<string, unknown>).ReplyToIsExternal).toBe(true);
+  });
+
+  it("keeps fetched media for uncached external replies", async () => {
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "What is in this image?",
+          date: 1736380800,
+          external_reply: {
+            origin: {
+              type: "user",
+              sender_user: { id: 22, is_bot: false, first_name: "Ada" },
+              date: 1736380700,
+            },
+            chat: { id: -10022, type: "supergroup", title: "Source" },
+            message_id: 9003,
+            photo: [{ file_id: "external-photo-1" }],
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getEmptyTelegramFile,
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      0,
+      0,
+      "replySpy call",
+    ) as { ReplyChain?: Array<{ messageId?: string; mediaPath?: string }> };
+    expect(payload.ReplyChain?.[0]).toMatchObject({ messageId: "9003" });
+    expect(payload.ReplyChain?.[0]?.mediaPath).toBeTypeOf("string");
+    expect(getFileSpy).toHaveBeenCalledWith("external-photo-1", expect.any(AbortSignal));
+    expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
   it("propagates forwarded origin from external_reply targets", async () => {

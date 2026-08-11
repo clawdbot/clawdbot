@@ -29,6 +29,29 @@ const SHA256_RE = /^[0-9a-f]{64}$/u;
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
+/** @typedef {typeof fetch} PlaceholderFetch */
+/**
+ * @typedef {object} CreatePlaceholderPublicationParams
+ * @property {PlaceholderFetch} [fetchImpl]
+ * @property {string} outputDir
+ * @property {string} packages
+ * @property {string} repoRoot
+ * @property {string} targetSha
+ * @property {string} workflowSha
+ */
+/**
+ * @typedef {object} PublishPlaceholdersParams
+ * @property {string} artifactDir
+ * @property {PlaceholderFetch} [fetchImpl]
+ * @property {string} npmToken
+ * @property {(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => void} [npmRunner]
+ * @property {number} [registryAttempts]
+ * @property {(delayMs: number) => Promise<void>} [sleep]
+ * @property {string} targetSha
+ * @property {string} [tempRoot]
+ * @property {string} workflowSha
+ */
+
 function compareCodeUnits(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -328,6 +351,7 @@ function assertFreshDirectory(path) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
 }
 
+/** @param {CreatePlaceholderPublicationParams} params */
 export async function createPlaceholderPublication(params) {
   const repoRoot = resolve(params.repoRoot);
   const outputDir = resolve(params.outputDir);
@@ -613,6 +637,7 @@ async function readFinalRegistry(entry, params) {
   throw lastError;
 }
 
+/** @param {PublishPlaceholdersParams} params */
 export async function publishPlaceholders(params) {
   const artifactDir = resolve(params.artifactDir);
   const manifest = validateManifest(
