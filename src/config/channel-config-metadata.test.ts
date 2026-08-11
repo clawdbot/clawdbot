@@ -479,6 +479,28 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     });
   }
 
+  // #120332 round 51 (P1): the owner's `sensitive: true` also survives a STRICTLY CLOSER claim
+  // that writes `sensitive: false` on the same key AFTER the owner was traversed. The owner-time
+  // guard protects only the owner's own write; the key must stay redacted independent of
+  // traversal and presentation precedence, or Control UI raw-config diffs render the credential.
+  const CLOSER_FALSE_HINT_SLACK = createChannelPlugin({
+    id: "operator-slack-false-hint",
+    origin: "config",
+    omitSchema: true,
+    uiHints: { botToken: { label: "Operator Token", sensitive: false } },
+  });
+  for (const [order, plugins] of [
+    ["owner first", [SENSITIVE_HINTED_OWNER_SLACK, CLOSER_FALSE_HINT_SLACK]],
+    ["owner last", [CLOSER_FALSE_HINT_SLACK, SENSITIVE_HINTED_OWNER_SLACK]],
+  ] as const) {
+    it(`keeps the owner's sensitive flag under a closer claim's false on the same key (${order})`, () => {
+      const owner = selectSlackSchemaOwner([...plugins]);
+      expect(owner.configUiHints).toMatchObject({
+        botToken: { label: "Operator Token", sensitive: true },
+      });
+    });
+  }
+
   it("lets an equal-origin losing claim fill presentation the schema owner leaves empty", () => {
     expect(selectSlackSchemaOwner([REPLACEMENT_SLACK, LABELED_REPLACED_SLACK])).toMatchObject({
       schemaPluginId: "acme-slack-thread-guard",

@@ -316,3 +316,66 @@ describe("default-ownership iteration reaches a fixpoint", () => {
     }
   });
 });
+
+// #120332 round 51 (P1): a hydration pass can REMOVE a default — a channel's default
+// materializes it, the material plan kills a sibling channel's defaulted owner, and the
+// surviving owner's schema no longer hydrates that sibling. The iteration must settle with
+// schemas built from the record it accepts: the sibling is enforced by the post-kill owner's
+// schema, and the de-hydrated sibling never resurrects the dead owner's defaults.
+describe("default removal settles on schemas built from the accepted record", () => {
+  it("enforces the post-kill owner on the channel whose default was removed", () => {
+    const schemaOf = (property: string, extra?: Record<string, unknown>, required = false) => ({
+      type: "object",
+      properties: { [property]: { type: "string", ...extra } },
+      ...(required ? { required: [property] } : {}),
+      additionalProperties: false,
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        // xch's incumbent, and ych's first claimant with a default: alive until xch's own
+        // default materializes xch and its replacement's kill lands.
+        createPluginManifestRecord({
+          id: "acme-l",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["xch", "ych"],
+          channelConfigs: {
+            xch: { schema: schemaOf("lOpt") },
+            ych: { schema: schemaOf("yOpt", { default: "v" }) },
+          },
+        }),
+        createPluginManifestRecord({
+          id: "acme-w",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["xch"],
+          channelConfigs: {
+            xch: { schema: schemaOf("wOpt", { default: "x" }), preferOver: ["acme-l"] },
+          },
+        }),
+        createPluginManifestRecord({
+          id: "acme-r",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["ych"],
+          channelConfigs: { ych: { schema: schemaOf("rOpt", undefined, true) } },
+        }),
+      ],
+    });
+
+    // Pass 1 defaults BOTH channels (w's replacement schema on xch, l's schema on ych); the
+    // rebuilt plan kills l, so ych's default supply disappears and the channel de-hydrates.
+    // The settled schemas must pair xch's surviving default with ych's post-kill owner, whose
+    // required property rejects the authored empty channel.
+    const result = validateConfigObjectWithPlugins({
+      channels: { xch: {}, ych: {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.path.startsWith("channels.ych"))).toBe(true);
+      expect(result.issues.some((issue) => issue.path.startsWith("channels.xch"))).toBe(false);
+    }
+  });
+});

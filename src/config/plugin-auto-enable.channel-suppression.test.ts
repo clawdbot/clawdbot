@@ -147,6 +147,44 @@ describe("preferOver cache keys are collision-safe", () => {
   });
 });
 
+// #120332 round 51 (P2): the suppression key's tuple encoding must stay unambiguous for EVERY
+// accepted id — identifiers are validated only as nonempty trimmed strings, so a bare-delimiter
+// encoding (even NUL) lets plugin `acme\0v` on channel `acme-nc` share a key with plugin `acme`
+// on channel `v\0acme-nc`. Suppressing the first claim then stashes the unrelated second one,
+// and restoration treats its channel as served, dropping the rightful discovery-first claimant.
+describe("suppression keys are collision-safe for embedded delimiters", () => {
+  const NUL_VICTIM: RegistryPlugins[number] = {
+    id: "acme\u0000v",
+    origin: "global",
+    channels: ["acme-nc"],
+    channelConfigs: { "acme-nc": { schema: { type: "object" } } },
+  };
+  const NUL_EDGE: RegistryPlugins[number] = {
+    id: "acme-nul-edge",
+    origin: "global",
+    channels: ["acme-nc"],
+    channelConfigs: { "acme-nc": { schema: { type: "object" }, preferOver: ["acme\u0000v"] } },
+  };
+  const INNOCENT: RegistryPlugins[number] = {
+    id: "acme",
+    origin: "global",
+    channels: ["v\u0000acme-nc"],
+    channelConfigs: { "v\u0000acme-nc": { schema: { type: "object" } } },
+  };
+
+  it("does not mark the innocent claim sharing the encoded key as superseded", () => {
+    const registry = makeRegistry([NUL_EDGE, NUL_VICTIM, INNOCENT]);
+    const config: OpenClawConfig = {
+      channels: { "acme-nc": { token: "c" }, "v\u0000acme-nc": { token: "e" } },
+    };
+    const env = makeIsolatedEnv();
+    const suppressed = collectSupersededChannelClaims({ config, env, manifestRegistry: registry });
+
+    expect(suppressed.has(channelClaimSuppressionKey("acme\u0000v", "acme-nc"))).toBe(true);
+    expect(suppressed.has(channelClaimSuppressionKey("acme", "v\u0000acme-nc"))).toBe(false);
+  });
+});
+
 // #120332 round 45 (P1): a channel detected from both `channels.*` settings and its credential
 // env vars is ONE logical configured channel. Presence signals dedupe per source, so the same
 // channel repeats and its claims re-decide against the landed dead fate — the recorded decision

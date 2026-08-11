@@ -483,24 +483,28 @@ export function hasRelevantSetupCandidateConfig(
   registry: PluginManifestRegistry,
   manifestCandidates?: readonly PluginAutoEnableCandidate[],
 ): boolean {
-  if (
-    hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
-    hasAcpxSetupAutoEnableRelevantConfig(cfg) ||
-    hasXaiSetupAutoEnableRelevantConfig(cfg)
-  ) {
+  // A plugin whose manifest facts already yield a candidate is categorically removed from setup
+  // probing (`manifestMatchedPluginIds` in the detector), so its material entry can never yield
+  // a probe-derived candidate a probe-skipping plan would miss. Policy-id space like the gate's
+  // other compares. The hard-coded special setup surfaces obey the same exclusion — configured
+  // `xai.config.xSearch` is itself a manifest tool candidate, and probing skips it too.
+  const manifestMatchedPolicyIds = new Set(
+    (manifestCandidates ?? []).map((candidate) => normalizePluginPolicyId(candidate.pluginId)),
+  );
+  const specialSetupRelevant =
+    (hasBrowserSetupAutoEnableRelevantConfig(cfg) &&
+      !manifestMatchedPolicyIds.has(normalizePluginPolicyId("browser"))) ||
+    (hasAcpxSetupAutoEnableRelevantConfig(cfg) &&
+      !manifestMatchedPolicyIds.has(normalizePluginPolicyId("acpx"))) ||
+    (hasXaiSetupAutoEnableRelevantConfig(cfg) &&
+      !manifestMatchedPolicyIds.has(normalizePluginPolicyId("xai")));
+  if (specialSetupRelevant) {
     return true;
   }
   const entries = asOptionalObjectRecord(cfg.plugins?.entries);
   if (!entries) {
     return false;
   }
-  // A plugin whose manifest facts already yield a candidate is categorically removed from setup
-  // probing (`manifestMatchedPluginIds` in the detector), so its material entry can never yield
-  // a probe-derived candidate a probe-skipping plan would miss. Policy-id space like the gate's
-  // other compares.
-  const manifestMatchedPolicyIds = new Set(
-    (manifestCandidates ?? []).map((candidate) => normalizePluginPolicyId(candidate.pluginId)),
-  );
   const entryPolicyIds = new Set(
     Object.keys(entries)
       // An explicitly disabled entry is categorically excluded from setup candidacy

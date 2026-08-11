@@ -43,6 +43,8 @@ type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   presentationRanks: Partial<Record<ChannelPresentationField, ChannelPresentationWrite>>;
   /** Rank and writer per config UI hint key; hints merge per key, not map-wide. */
   hintKeyRanks?: Record<string, ChannelPresentationWrite>;
+  /** Keys the schema owner marked sensitive; redaction survives every later write. */
+  ownerSensitiveHintKeys?: Set<string>;
 };
 
 // Per-field origin precedence: each presentation field belongs to the closest claim that
@@ -79,8 +81,9 @@ function writeChannelPresentationField<Field extends ChannelPresentationField>(
 // key, rank decides per PROPERTY: the key winner's properties overwrite, properties only one
 // side supplies survive — a closer claim's label on the owner's key must not drop the owner's
 // `sensitive: true` beneath it. The schema owner's `sensitive: true` is additionally
-// authoritative regardless of rank: redaction is fail-safe, and Control UI raw-config diffs
-// reveal any field whose flattened hint loses it.
+// authoritative regardless of rank AND traversal order: the key is remembered so a closer
+// claim written after the owner cannot flatten redaction away — redaction is fail-safe, and
+// Control UI raw-config diffs reveal any field whose flattened hint loses it.
 function mergeChannelConfigUiHints(
   record: ChannelMetadataRecord,
   value: ChannelMetadataRecord["configUiHints"],
@@ -111,8 +114,11 @@ function mergeChannelConfigUiHints(
     if (wins) {
       ranks[key] = { rank, pluginId };
     }
+    if (ownerTieBreak && isRecord(hint) && hint.sensitive === true) {
+      (record.ownerSensitiveHintKeys ??= new Set()).add(key);
+    }
     const mergedHint = merged[key];
-    if (ownerTieBreak && isRecord(hint) && hint.sensitive === true && isRecord(mergedHint)) {
+    if (record.ownerSensitiveHintKeys?.has(key) && isRecord(mergedHint)) {
       merged[key] = { ...mergedHint, sensitive: true };
     }
   }
@@ -773,7 +779,12 @@ export function collectChannelSchemaMetadataWithOwnership(
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
     .map(
-      ({ presentationRanks: _presentationRanks, hintKeyRanks: _hintKeyRanks, ...entry }) => entry,
+      ({
+        presentationRanks: _presentationRanks,
+        hintKeyRanks: _hintKeyRanks,
+        ownerSensitiveHintKeys: _ownerSensitiveHintKeys,
+        ...entry
+      }) => entry,
     );
 }
 

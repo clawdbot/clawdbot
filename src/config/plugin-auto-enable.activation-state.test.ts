@@ -668,6 +668,33 @@ describe("exact plans survive unrelated plugin entries", () => {
     expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
   });
 
+  // #120332 round 51 (P1): the special hard-coded setup surfaces (browser/acpx/xai) obey the
+  // same manifest-matched exclusion — `plugins.entries.xai.config.xSearch` already yields a
+  // manifest tool candidate and the detector removes manifest-matched plugins from setup
+  // probing, so the special-config gate cannot make a probe-skipping plan inexact either.
+  it("keeps the plan exact beside a manifest-matched special setup plugin (xai)", () => {
+    const XAI_TOOL: RegistryPlugins[number] = {
+      id: "xai",
+      origin: "global",
+      channels: [],
+      contracts: { tools: ["xai"] },
+      configSchema: { type: "object", properties: { xSearch: { type: "object" } } },
+      setup: {},
+    };
+    const registry = makeRegistry([PLAIN_C2, EDGE_A3, EDGE_B3, XAI_TOOL]);
+    const config: OpenClawConfig = {
+      channels: { "acme-x": { token: "x" } },
+      plugins: { entries: { xai: { config: { xSearch: {} } } } },
+    };
+    const env = makeIsolatedEnv();
+    applyPluginAutoEnable({ config, env, manifestRegistry: registry });
+
+    const owner = collectChannelSchemaMetadataWithOwnership(registry, config, env).find(
+      (entry) => entry.id === "acme-x",
+    );
+    expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
+  });
+
   // #120332 round 43 (P1): a runtime-disabled setup descriptor (`setup.requiresRuntime: false`)
   // is categorically skipped before any probe resolves, so a configured entry for such a plugin
   // can no more produce a probe-derived candidate than a setup-less one — the plan stays exact.

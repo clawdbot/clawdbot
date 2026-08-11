@@ -408,16 +408,17 @@ function validateConfigObjectWithPluginsBase(
       // planning to STABILITY — one channel's default can flip a second channel's owner, whose
       // own default then configures that channel and flips a third. Each pass applies defaults
       // with the current owners and replans; each productive pass settles at least one channel,
-      // so the authored channel count bounds convergence, and the loop stops as soon as the
-      // hydrated record repeats.
+      // so the authored channel count bounds convergence. The loop accepts schemas only when
+      // they were built from the very record they hydrate to — a pass that REMOVES defaults (a
+      // flipped owner's schema no longer hydrates a channel) rebuilds from the de-hydrated
+      // record before accepting instead of exiting with the hydrated build.
       const channelsRecord = isRecord(config.channels) ? config.channels : undefined;
       if (channelsRecord) {
         const compatChannels = isRecord(planBaseConfig.channels) ? planBaseConfig.channels : {};
         const maxPasses = Object.keys(channelsRecord).length + 1;
-        let previousHydrated = "";
+        let schemasSource = JSON.stringify(compatChannels);
         for (let pass = 0; pass < maxPasses; pass += 1) {
           const defaultedChannels: Record<string, unknown> = { ...compatChannels };
-          let defaultsChanged = false;
           for (const [key, value] of Object.entries(channelsRecord)) {
             const trimmed = key.trim();
             const schema = trimmed
@@ -434,18 +435,17 @@ function validateConfigObjectWithPluginsBase(
             });
             if (result.ok && JSON.stringify(result.value) !== JSON.stringify(value)) {
               defaultedChannels[key] = result.value;
-              defaultsChanged = true;
             }
           }
           const hydrated = JSON.stringify(defaultedChannels);
-          if (!defaultsChanged || hydrated === previousHydrated) {
+          if (hydrated === schemasSource) {
             break;
           }
-          previousHydrated = hydrated;
           schemas = buildChannelSchemas({
             ...planBaseConfig,
             channels: defaultedChannels,
           } as OpenClawConfig);
+          schemasSource = hydrated;
         }
       }
       info.channelSchemas = schemas;

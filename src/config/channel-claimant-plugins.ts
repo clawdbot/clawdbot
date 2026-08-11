@@ -31,10 +31,11 @@ export function normalizeManifestChannelId(channelId: string): string {
  * Key for one plugin's claim on one channel. The planner's superseded-claim set and the loader's
  * channel-registration suppression must build it identically, or a claim the plan superseded
  * still races first-wins registration and serves a channel validation projected for its
- * replacement.
+ * replacement. JSON tuple encoding: ids are validated only as nonempty trimmed strings, so any
+ * bare delimiter (even NUL) is ambiguous — ("a\0b","c") must not share a key with ("a","b\0c").
  */
 export function channelClaimSuppressionKey(pluginId: string, channelId: string): string {
-  return `${normalizePluginPolicyId(pluginId)}\0${normalizeManifestChannelId(channelId)}`;
+  return JSON.stringify([normalizePluginPolicyId(pluginId), normalizeManifestChannelId(channelId)]);
 }
 
 /**
