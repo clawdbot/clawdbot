@@ -187,12 +187,10 @@ test("bare ownerless reads fail closed without blocking scoped preview siblings"
   const preview = await directSessionReq<{
     previews: Array<{ key: string; status: string; items: unknown[] }>;
   }>("sessions.preview", { keys: ["global", sessionKey] });
-  expect(preview).toMatchObject({ ok: true });
-  expect(preview.payload?.previews).toEqual([
-    { key: "global", status: "error", items: [] },
-    { key: sessionKey, status: "ok", items: expect.any(Array) },
-  ]);
-  expect(preview.payload?.previews[1]?.items).not.toEqual([]);
+  expect(preview).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+  });
 });
 
 test("sessions.describe reads a pre-existing store after its agent is removed from config", async () => {

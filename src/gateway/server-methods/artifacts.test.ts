@@ -1,6 +1,7 @@
 // Artifact method tests cover collection from transcript messages, run/task
 // session lookup, list/get/download responses, and validation errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 import { artifactsHandlers } from "./artifacts.js";
 
@@ -347,7 +348,54 @@ describe("artifacts RPC handlers", () => {
     expectFields(expectFirstArtifact(calls), { sessionKey: "global", runId: "run-global" });
   });
 
-  it("preserves inferred task agent scope when loading global-scope task artifacts", async () => {
+  it("uses the run row owner before default selection", async () => {
+    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:research:main");
+    mockedMessages([assistantFileMessage({ title: "out.txt", runId: "run-owned" })]);
+
+    const { calls } = await listArtifacts(
+      { runId: "run-owned" },
+      {
+        context: runtimeContext({
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        }),
+      },
+    );
+
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-owned", {});
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:research:main");
+    expect(calls[0]?.ok).toBe(true);
+  });
+
+  it("translates run lookup selection-required into INVALID_REQUEST", async () => {
+    hoisted.resolveSessionKeyForRun.mockImplementation(() => {
+      throw new AgentSelectionRequiredError(["ops", "research"], {
+        surface: "artifact run",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    });
+
+    const { calls } = await listArtifacts(
+      { runId: "run-ambiguous" },
+      {
+        context: runtimeContext({
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        }),
+      },
+    );
+
+    expect(calls[0]).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent") },
+    });
+  });
+
+  it("uses the compatibility owner instead of the executor for a global task requester", async () => {
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
       agentId: "work",
       requesterSessionKey: "global",
@@ -366,8 +414,55 @@ describe("artifacts RPC handlers", () => {
       },
     );
 
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "main" });
     expectFields(expectFirstArtifact(calls), { sessionKey: "global", taskId: "task-global" });
+  });
+
+  it("returns typed selection-required instead of adopting the task executor", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      agentId: "work",
+      requesterSessionKey: "global",
+      ownerKey: "global",
+    });
+    const { calls } = await listArtifacts(
+      { taskId: "task-global" },
+      {
+        context: runtimeContext({
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "work" }],
+          },
+        }),
+      },
+    );
+
+    expect(calls[0]).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent") },
+    });
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("translates a keyless task selection failure into INVALID_REQUEST", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({ runId: "run-keyless" });
+
+    const { calls } = await listArtifacts(
+      { taskId: "task-keyless" },
+      {
+        context: runtimeContext({
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        }),
+      },
+    );
+
+    expect(calls[0]).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent") },
+    });
   });
 
   it("gets and downloads an inline artifact", async () => {
@@ -437,6 +532,8 @@ describe("artifacts RPC handlers", () => {
     });
     expect(hoisted.resolveManagedArtifactDownload).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      agentId: "main",
+      defaultAgentId: "main",
       artifactId,
     });
   });
@@ -582,9 +679,7 @@ describe("artifacts RPC handlers", () => {
     mockedMessages([assistantImageMessage({ alt: "run-result.png", runId: "run-1" })]);
     const { calls } = await listArtifacts({ runId: "run-1" }, { id: "4" });
 
-    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {
-      agentId: "main",
-    });
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {});
     expectFields(expectFirstArtifact(calls), { runId: "run-1" });
   });
 

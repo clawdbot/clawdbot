@@ -11,6 +11,7 @@ import { getSessionDiscussionProvider } from "../../plugins/session-discussion-r
 import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { formatForLog } from "../ws-log.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -112,6 +113,7 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
     const requestedAgent = resolveRequestedSessionAgentId(
       context.getRuntimeConfig(),
       params.sessionKey,
+      params.agentId,
     );
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -123,7 +125,12 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await provider.info({ sessionKey: params.sessionKey });
+      const sessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg: context.getRuntimeConfig(),
+        agentId: requestedAgent.agentId,
+        sessionKey: params.sessionKey,
+      });
+      const result = await provider.info({ sessionKey, agentId: requestedAgent.agentId });
       if (!validateSessionDiscussionInfoResult(result)) {
         respond(
           false,
@@ -164,6 +171,7 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
     const requestedAgent = resolveRequestedSessionAgentId(
       context.getRuntimeConfig(),
       params.sessionKey,
+      params.agentId,
     );
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -180,7 +188,12 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
         sessionKey: params.sessionKey,
         agentId: requestedAgent.agentId,
       });
-      const result = await provider.open({ sessionKey: params.sessionKey });
+      const sessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg: context.getRuntimeConfig(),
+        agentId: requestedAgent.agentId,
+        sessionKey: params.sessionKey,
+      });
+      const result = await provider.open({ sessionKey, agentId: requestedAgent.agentId });
       if (!validateSessionDiscussionOpenResult(result)) {
         respond(
           false,

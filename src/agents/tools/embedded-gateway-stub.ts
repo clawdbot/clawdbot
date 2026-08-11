@@ -229,7 +229,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if ("ambiguous" in resolved) {
     return { ok: false, candidates: resolved.candidates };
   }
-  return { ok: true, key: resolved.key };
+  return { ok: true, key: resolved.key, agentId: resolved.agentId };
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {

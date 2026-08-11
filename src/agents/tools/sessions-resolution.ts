@@ -18,6 +18,7 @@ import {
   isAcpSessionKey,
   isIncognitoSessionKey,
   normalizeMainKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import {
@@ -88,10 +89,15 @@ export function resolveCurrentSessionClientAlias(params: {
 
 async function isRequesterSpawnedSessionVisible(params: {
   requesterSessionKey: string;
+  requesterAgentId: string;
   targetSessionKey: string;
+  targetAgentId?: string;
   callGateway?: GatewayCaller;
 }): Promise<boolean> {
-  if (params.requesterSessionKey === params.targetSessionKey) {
+  if (
+    params.requesterSessionKey === params.targetSessionKey &&
+    params.targetAgentId === params.requesterAgentId
+  ) {
     return true;
   }
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
@@ -100,6 +106,7 @@ async function isRequesterSpawnedSessionVisible(params: {
       method: "sessions.resolve",
       params: {
         key: params.targetSessionKey,
+        agentId: params.targetAgentId,
         spawnedBy: params.requesterSessionKey,
       },
     });
@@ -109,12 +116,14 @@ async function isRequesterSpawnedSessionVisible(params: {
   } catch {
     // Older Gateways can reject exact spawned-session resolution.
   }
-  return (
-    await listSpawnedSessionKeys({
+  const keys = await listSpawnedSessionKeys({
       requesterSessionKey: params.requesterSessionKey,
       callGateway: gatewayCall,
-    })
-  ).has(params.targetSessionKey);
+    });
+  return (
+    (!params.targetAgentId || params.targetAgentId === params.requesterAgentId) &&
+    keys.has(params.targetSessionKey)
+  );
 }
 
 function looksLikeSessionKey(value: string): boolean {
@@ -257,6 +266,8 @@ function buildSessionResolveQuery(params: {
 
 export async function resolveSessionReference(params: {
   sessionKey: string;
+  /** Owner already selected for literal key lookup; session-id lookup remains cross-agent. */
+  keyAgentId?: string;
   agentId?: string;
   alias: string;
   mainKey: string;
@@ -281,7 +292,7 @@ export async function resolveSessionReference(params: {
         buildSessionResolveQuery({
           input,
           kind,
-          agentId: params.agentId,
+          agentId: kind === "key" ? (params.keyAgentId ?? params.agentId) : params.agentId,
           requesterInternalKey: params.requesterInternalKey,
           restrictToSpawned: params.restrictToSpawned,
           allowMissing,
@@ -298,14 +309,6 @@ export async function resolveSessionReference(params: {
       key: params.sessionKey,
       requesterInternalKey: params.requesterInternalKey,
     }) ?? params.sessionKey.trim();
-  if (rawInput === "current") {
-    const resolvedCurrent =
-      (params.restrictToSpawned ? null : await tryResolve(rawInput, "key", true)) ??
-      (await tryResolve(rawInput, "sessionId", true));
-    if (resolvedCurrent) {
-      return resolvedCurrent;
-    }
-  }
   const raw =
     rawInput === "current" && params.requesterInternalKey ? params.requesterInternalKey : rawInput;
   if (shouldResolveSessionIdInput(raw)) {
@@ -346,6 +349,7 @@ export async function resolveVisibleSessionReference(params: {
   action: "history" | "send" | "status" | "list";
   resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
   requesterSessionKey: string;
+  requesterAgentId: string;
   restrictToSpawned: boolean;
   visibilitySessionKey: string;
   allowMissingKey?: boolean;
@@ -353,6 +357,8 @@ export async function resolveVisibleSessionReference(params: {
   callGateway?: GatewayCaller;
 }): Promise<VisibleSessionReferenceResolution> {
   let resolvedKey = params.resolvedSession.key;
+  let resolvedAgentId =
+    params.resolvedSession.agentId ?? parseAgentSessionKey(resolvedKey)?.agentId;
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
   // Cross-session tools persist their results into the caller transcript; an
@@ -375,19 +381,21 @@ export async function resolveVisibleSessionReference(params: {
     !shouldResolveSessionIdInput(input);
   if (isExplicitKey && (params.action === "history" || params.action === "send")) {
     try {
-      const key = await requestResolvedSessionKey(
+      const resolved = await requestResolvedSession(
         buildSessionResolveQuery({
           input: resolvedKey,
           kind: "key",
+          agentId: resolvedAgentId,
           requesterInternalKey: params.requesterSessionKey,
           restrictToSpawned: params.restrictToSpawned,
           allowMissing: params.allowMissingKey,
         }),
         params.callGateway ?? callAgentToolGatewayRequest,
       );
-      if (key) {
-        resolvedKey = key;
-        displayKey = key;
+      if (resolved) {
+        resolvedKey = resolved.key;
+        resolvedAgentId = resolved.agentId ?? parseAgentSessionKey(resolved.key)?.agentId;
+        displayKey = resolved.key;
       } else if (params.allowMissingKey) {
         missing = true;
       }
@@ -419,7 +427,7 @@ export async function resolveVisibleSessionReference(params: {
   const shouldVerifySpawnedVisibility =
     params.restrictToSpawned &&
     !params.resolvedSession.resolvedViaSessionId &&
-    params.requesterSessionKey !== resolvedKey;
+    (params.requesterSessionKey !== resolvedKey || resolvedAgentId !== params.requesterAgentId);
   const scopedAccess =
     params.action === "list"
       ? undefined
@@ -433,7 +441,9 @@ export async function resolveVisibleSessionReference(params: {
     !shouldVerifySpawnedVisibility ||
     (await isRequesterSpawnedSessionVisible({
       requesterSessionKey: params.requesterSessionKey,
+      requesterAgentId: params.requesterAgentId,
       targetSessionKey: resolvedKey,
+      targetAgentId: resolvedAgentId,
       callGateway: params.callGateway,
     }));
   if (!visible) {
@@ -446,7 +456,7 @@ export async function resolveVisibleSessionReference(params: {
   }
   return {
     ok: true,
-    ...(params.resolvedSession.agentId ? { agentId: params.resolvedSession.agentId } : {}),
+    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
     key: resolvedKey,
     displayKey,
     ...(missing ? { missing: true } : {}),

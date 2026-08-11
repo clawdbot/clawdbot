@@ -1495,7 +1495,7 @@ export async function performGatewaySessionReset(params: {
           };
         }
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
-        notifyGatewaySessionReset(target.canonicalKey);
+        notifyGatewaySessionReset(target.canonicalKey, target.agentId);
         emitGatewaySessionEndPluginHook({
           cfg,
           sessionKey: target.canonicalKey,
@@ -1760,7 +1760,7 @@ export async function performGatewaySessionReset(params: {
       if (!resetSkipped) {
         const resetSessionKey = target.canonicalKey ?? params.key;
         handleSessionStateSessionReset(resetSessionKey);
-        notifyGatewaySessionReset(resetSessionKey);
+        notifyGatewaySessionReset(resetSessionKey, target.agentId);
       }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);

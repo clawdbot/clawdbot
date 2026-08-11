@@ -77,9 +77,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
     let sessionKey: string | undefined;
+    let sessionAgentId: string | undefined;
     if (requestedSessionKey) {
-      const cfg = context.getRuntimeConfig();
       const sessionOwner = resolveRequestedSessionAgentId(
         cfg,
         requestedSessionKey,
@@ -89,6 +90,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
         respond(false, undefined, sessionOwner.error);
         return;
       }
+      sessionAgentId = sessionOwner.agentId;
       sessionKey = canonicalizeMainSessionAlias({
         cfg,
         agentId: sessionOwner.agentId,
@@ -102,8 +104,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
       offset: cursor,
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
-      agentId: params.agentId,
+      agentId: sessionKey ? undefined : params.agentId,
       sessionKey,
+      sessionAgentId,
+      cfg,
     });
     const nextOffset = cursor + page.tasks.length;
     respond(true, {

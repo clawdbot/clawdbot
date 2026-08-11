@@ -11,12 +11,7 @@ import {
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -322,11 +317,16 @@ export async function createGatewaySession(params: {
   if (requestedKeyAgent && !requestedKeyAgent.ok) {
     return requestedKeyAgent;
   }
+  const implicitAgent = requestedKeyAgent
+    ? undefined
+    : resolveRequestedSessionAgentId(params.cfg, "main", explicitAgentId, {
+        allowUnconfiguredExplicitAgent: true,
+      });
+  if (implicitAgent && !implicitAgent.ok) {
+    return implicitAgent;
+  }
   const agentId = normalizeAgentId(
-    explicitAgentId ??
-      requestedKeyAgent?.agentId ??
-      tryResolveLegacyCompatibilityAgentId(params.cfg) ??
-      resolveDefaultAgentId(params.cfg),
+    explicitAgentId ?? requestedKeyAgent?.agentId ?? implicitAgent?.agentId,
   );
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
@@ -533,9 +533,7 @@ export async function createGatewaySession(params: {
     parentSessionTarget = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: parentSessionKey,
-      ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
-        ? { agentId: parentSelectedAgentId }
-        : {}),
+      ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
     });
   }
   const parentIncognito =
@@ -653,9 +651,7 @@ export async function createGatewaySession(params: {
       const execCwd = normalizeOptionalString(params.execCwd);
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
-        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
-          ? { agentId: parentSelectedAgentId }
-          : {}),
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
         reason: "new",
         commandSource: params.commandSource,
         ...(params.creation ? { creation: params.creation } : {}),

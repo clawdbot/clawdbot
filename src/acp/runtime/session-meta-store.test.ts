@@ -34,14 +34,13 @@ describe("ACP session metadata store ownership", () => {
     mocks.loadExactSessionEntryReadOnly.mockReset();
   });
 
-  it("does not read a physical fallback store for an ownerless bare key", () => {
-    const result = readSessionEntryFromStore({
-      cfg: explicitFleet(),
-      sessionKey: "global",
-    });
-
-    expect(result).toMatchObject({ storeSessionKey: "global" });
-    expect(result.storePath).toBeUndefined();
+  it("returns a typed selection error for an ownerless bare key", () => {
+    expect(() =>
+      readSessionEntryFromStore({
+        cfg: explicitFleet(),
+        sessionKey: "global",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
     expect(mocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
@@ -70,7 +69,7 @@ describe("ACP session metadata store ownership", () => {
     );
   });
 
-  it("does not read a bare key when the persisted fixed-store owner is retired", () => {
+  it("returns a typed selection error when the persisted fixed-store owner is retired", () => {
     const cfg = {
       ...explicitFleet(),
       session: { store: "/stores/shared.sqlite" },
@@ -80,10 +79,9 @@ describe("ACP session metadata store ownership", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = readSessionEntryFromStore({ cfg, sessionKey: "global" });
-
-    expect(result).toMatchObject({ storeSessionKey: "global" });
-    expect(result.storePath).toBeUndefined();
+    expect(() => readSessionEntryFromStore({ cfg, sessionKey: "global" })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
     expect(() =>
       readSessionEntryFromStore({ cfg, agentId: "research", sessionKey: "global" }),
     ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
@@ -113,6 +111,6 @@ describe("ACP session metadata store ownership", () => {
         agentId: "ops",
         sessionKey: "agent:research:work",
       }),
-    ).toThrow('Agent id "ops" does not match session key agent "research".');
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
   });
 });

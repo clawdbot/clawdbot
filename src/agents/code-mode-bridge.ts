@@ -288,6 +288,7 @@ async function runAgentSpawnBridge(params: {
   let existing = codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
+    params.ctx.agentId,
   );
   if (existing) {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
@@ -300,8 +301,11 @@ async function runAgentSpawnBridge(params: {
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
       codeModeSwarmDeps.initSubagentRegistry();
       existing =
-        codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey) ??
-        existing;
+        codeModeSwarmDeps.getSwarmRunByLaunchReplayKey(
+          idempotencyKey,
+          requesterSessionKey,
+          params.ctx.agentId,
+        ) ?? existing;
       if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
@@ -349,6 +353,8 @@ async function runAgentWaitBridge(params: {
   return await codeModeSwarmDeps.waitForCollectorCompletion({
     runId: runId.trim(),
     currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+    currentAgentId: params.ctx.agentId,
+    config: params.ctx.runtimeConfig ?? params.ctx.config,
     signal: params.signal,
   });
 }

@@ -547,6 +547,16 @@ describe("agentCliCommand", () => {
     },
   );
 
+  it("forwards a remote bare key unchanged with an explicit agent", async () => {
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "incident-42" }, runtime);
+
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+      expect(request.params).toMatchObject({ agentId: "ops", sessionKey: "incident-42" });
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    }, remoteGatewayConfig);
+  });
+
   it("still resolves a remote recipient through the remote roster", async () => {
     mockRemoteGatewayRoster("explicit", ["ops", "research"]);
     await withTempStore(async () => {
@@ -1395,6 +1405,7 @@ describe("agentCliCommand", () => {
               status: "accepted",
               runId: "run-signal",
               sessionKey: "agent:main:explicit:reset-run",
+              agentId: "main",
             });
             return await new Promise((_, reject) => {
               signal?.addEventListener(
@@ -1433,6 +1444,7 @@ describe("agentCliCommand", () => {
         expect(sameConnectionAbort?.params).toEqual({
           sessionKey: "agent:main:explicit:reset-run",
           runId: "run-signal",
+          agentId: "main",
         });
       });
     },

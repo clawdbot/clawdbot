@@ -217,18 +217,18 @@ describe("ChatSessionCompanionThreads", () => {
     });
     const client = { request: request as GatewayBrowserClient["request"] };
 
-    await requestSessionCompanionAnswer(client, "one", "Question");
-    await requestSessionCompanionState(client, "one");
-    await resetSessionCompanion(client, "one");
+    await requestSessionCompanionAnswer(client, "one", "Question", "work");
+    await requestSessionCompanionState(client, "one", "work");
+    await resetSessionCompanion(client, "one", "work");
 
     expect(request.mock.calls).toEqual([
       [
         "sessions.companion.ask",
-        { sessionKey: "one", question: "Question" },
+        { sessionKey: "one", agentId: "work", question: "Question" },
         { timeoutMs: 70_000 },
       ],
-      ["sessions.companion.state", { sessionKey: "one" }],
-      ["sessions.companion.reset", { sessionKey: "one" }],
+      ["sessions.companion.state", { sessionKey: "one", agentId: "work" }],
+      ["sessions.companion.reset", { sessionKey: "one", agentId: "work" }],
     ]);
   });
 
@@ -249,6 +249,15 @@ describe("ChatSessionCompanionThreads", () => {
 
     expect(threads.view("one").exchanges[0]?.answer).toBe("Answer for one");
     expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
+  });
+
+  it("keeps matching bare session keys isolated by agent", () => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.setDraft("global", "main draft", "main");
+    threads.setDraft("global", "work draft", "work");
+
+    expect(threads.view("global", "main").draft).toBe("main draft");
+    expect(threads.view("global", "work").draft).toBe("work draft");
   });
 
   it("moves a composer submission through pending to a timestamped answer", async () => {

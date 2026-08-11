@@ -333,6 +333,7 @@ export function createOpenClawTools(
     agentDir: options?.agentDir,
     authProfileStore: options?.authProfileStore,
     agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterAgentId: sessionAgentId,
     requesterOrigin: deliveryContext ?? undefined,
     workspaceDir,
     preparedModelRuntime: options?.preparedModelRuntime,
@@ -422,6 +423,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
+    agentId: sessionAgentId,
     agentChannel: options?.agentChannel,
     agentAccountId: options?.agentAccountId,
     currentChannelId: options?.currentChannelId,
@@ -469,6 +471,7 @@ export function createOpenClawTools(
   const tools: AnyAgentTool[] = [
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentId: sessionAgentId,
     }),
     ...(embedded
       ? []
@@ -489,6 +492,7 @@ export function createOpenClawTools(
           createCronTool({
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
             agentAccountId: gatewayCallerAccountId,
             config: options?.config,
             currentDeliveryContext: {
@@ -513,6 +517,7 @@ export function createOpenClawTools(
           }),
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
           }),
           ...(options?.sandboxed
             ? []
@@ -696,16 +701,21 @@ export function createOpenClawTools(
       sessionId: options?.sessionId,
       onBeforeYield:
         requesterSessionKey && requesterTurnRunId
-          ? async () => {
+            ? async () => {
               const { markRequesterTurnYielded } =
                 await import("./subagents/registry/subagent-registry.js");
-              markRequesterTurnYielded({ requesterSessionKey, requesterTurnRunId });
+              markRequesterTurnYielded({
+                requesterSessionKey,
+                requesterAgentId: sessionAgentId,
+                requesterTurnRunId,
+              });
             }
           : undefined,
       onYield: options?.onYield,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
+      agentId: sessionAgentId,
       config: resolvedConfig,
     }),
     createSessionStatusTool({

@@ -72,9 +72,10 @@ export function resolveSessionStorePathForAcp(params: {
   const requestedAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const parsedAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : undefined;
   if (requestedAgentId && parsedAgentId && requestedAgentId !== parsedAgentId) {
-    throw new Error(
-      `Agent id "${requestedAgentId}" does not match session key agent "${parsedAgentId}".`,
-    );
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `ACP session key "${params.sessionKey}"`,
+      hint: `Agent "${requestedAgentId}" does not own agent-scoped session key "${params.sessionKey}".`,
+    });
   }
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, params.sessionKey);
   const agentId = requestedAgentId ?? parsedAgentId;
@@ -89,20 +90,20 @@ export function resolveSessionStorePathForAcp(params: {
     });
   }
   if (persistedStoreOwner.kind === "retired") {
-    if (requestedAgentId) {
-      throw new AgentSelectionRequiredError(listAgentIds(cfg), {
-        surface: `ACP session key "${params.sessionKey}"`,
-        hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
-      });
-    }
-    return { cfg };
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `ACP session key "${params.sessionKey}"`,
+      hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
+    });
   }
   const resolvedAgentId =
     agentId ??
     (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
     tryResolveLegacyCompatibilityAgentId(cfg);
   if (!resolvedAgentId) {
-    return { cfg };
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `ACP session key "${params.sessionKey}"`,
+      hint: "Pass an explicit agent owner for this ACP session.",
+    });
   }
   return {
     cfg,

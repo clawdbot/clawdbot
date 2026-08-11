@@ -564,7 +564,7 @@ export async function projectSessionPatchResult(params: {
   const agentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: params.canonicalKey,
-    ...(params.canonicalKey === "global" ? { agentId: params.targetAgentId } : {}),
+    agentId: params.targetAgentId,
   });
   const resolved = resolveSessionModelRef(params.cfg, params.entry, agentId);
   const displayModel = resolveSessionDisplayModelIdentityRef({

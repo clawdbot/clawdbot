@@ -7,6 +7,7 @@ import type {
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
@@ -206,14 +207,23 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
 }
 
 /** Stable client-generated gateway question id shared with tool-start delivery. */
-function buildAskUserQuestionId(toolCallId: string, sessionKey?: string, runId?: string): string {
-  const owner = runId?.trim() || sessionKey?.trim() || "";
+function buildAskUserQuestionId(
+  toolCallId: string,
+  sessionKey?: string,
+  runId?: string,
+  agentId?: string,
+): string {
+  const owner = runId?.trim() || askUserSessionKey(sessionKey, agentId);
   const identity = `${owner}\0${toolCallId}`;
   return `ask_${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
 
 function askUserSessionKey(sessionKey: string | undefined, agentId?: string): string {
-  return sessionKey?.trim() || (agentId?.trim() ? `agent:${agentId.trim()}` : "session:unknown");
+  const normalizedSessionKey = sessionKey?.trim();
+  if (normalizedSessionKey && parseAgentSessionKey(normalizedSessionKey)) {
+    return normalizedSessionKey;
+  }
+  return `${agentId?.trim() || "unknown"}\0${normalizedSessionKey || "session:unknown"}`;
 }
 
 function findAskUserQuestionForSession(sessionKey: string): AskUserQuestionState | undefined {
@@ -270,14 +280,20 @@ export function reserveAskUserPromptDelivery(params: {
   toolCallId: string;
   sessionKey?: string;
   runId?: string;
+  agentId?: string;
   questions: QuestionRequestQuestion[];
   timeoutSeconds?: number;
 }): { questionId: string } | undefined {
-  const sessionKey = askUserSessionKey(params.sessionKey);
+  const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
   if (findAskUserQuestionForSession(sessionKey)) {
     return undefined;
   }
-  const questionId = buildAskUserQuestionId(params.toolCallId, params.sessionKey, params.runId);
+  const questionId = buildAskUserQuestionId(
+    params.toolCallId,
+    params.sessionKey,
+    params.runId,
+    params.agentId,
+  );
   if (askUserQuestions.has(questionId)) {
     return undefined;
   }
@@ -467,8 +483,9 @@ export function cancelAskUserPromptDelivery(
   toolCallId: string,
   sessionKey?: string,
   runId?: string,
+  agentId?: string,
 ): void {
-  releaseAskUserQuestion(buildAskUserQuestionId(toolCallId, sessionKey, runId));
+  releaseAskUserQuestion(buildAskUserQuestionId(toolCallId, sessionKey, runId, agentId));
 }
 
 function answeredResult(questions: readonly QuestionRequestQuestion[], answers: QuestionAnswers) {
@@ -553,7 +570,12 @@ export function createAskUserTool(params: {
     description: describeAskUserTool(),
     parameters: AskUserToolSchema,
     execute: async (toolCallId, args, signal) => {
-      const questionId = buildAskUserQuestionId(toolCallId, params.sessionKey, params.runId);
+      const questionId = buildAskUserQuestionId(
+        toolCallId,
+        params.sessionKey,
+        params.runId,
+        params.agentId,
+      );
       let normalized: NormalizedAskUserParams;
       try {
         signal?.throwIfAborted();

@@ -317,6 +317,7 @@ async function createSessionEntry(
           const matchingAcpMeta = acpInitial
             ? readAcpSessionMetaForEntry({
                 sessionKey: target.canonicalKey,
+                agentId: target.agentId,
                 entry: matchingEntry,
               })
             : undefined;

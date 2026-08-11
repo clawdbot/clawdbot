@@ -70,10 +70,10 @@ function shouldRemapLegacyDefaultMainAlias(
   if (rest !== "main" && rest !== mainKey) {
     return false;
   }
-  const defaultAgentId = resolveLogicalSessionStoreAgentId(cfg, "main");
-  if (options?.storeAgentId && normalizeAgentId(options.storeAgentId) !== defaultAgentId) {
-    return false;
+  if (options?.storeAgentId) {
+    return true;
   }
+  resolveLogicalSessionStoreAgentId(cfg, "main");
   return true;
 }
 
@@ -89,7 +89,9 @@ function resolveParsedSessionStoreKey(
       sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
-  const agentId = resolveLogicalSessionStoreAgentId(cfg, "main");
+  const agentId = options?.storeAgentId
+    ? normalizeAgentId(options.storeAgentId)
+    : resolveLogicalSessionStoreAgentId(cfg, "main");
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   return { agentId, sessionKey: `agent:${agentId}:${rest}` };
 }
@@ -166,6 +168,16 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
+  }
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
+  if (
+    !parseAgentSessionKey(raw) &&
+    persistedOwner.kind === "configured" &&
+    persistedOwner.agentId === normalizeAgentId(params.agentId) &&
+    lowered !== "main" &&
+    lowered !== normalizeMainKey(params.cfg.session?.mainKey)
+  ) {
+    return raw;
   }
   const key = parseAgentSessionKey(raw) ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
   return resolveSessionStoreKey({

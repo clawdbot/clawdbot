@@ -6,6 +6,7 @@ import {
   type SessionSharingRole,
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import {
   isSessionMember,
   resolveAllAgentSessionStoreTargetsSync,
@@ -499,15 +500,35 @@ export function resolveSessionMutationAuthorization(params: {
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
   const lookupCaches = createLookupCaches();
+  const resolveAuthorizedTarget = (
+    targetRef: SessionMutationTarget,
+  ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
+    try {
+      return {
+        target: resolveSessionSharingTarget({
+          cfg: getCfg(),
+          sessionKey: targetRef.sessionKey,
+          agentId: targetRef.agentId,
+          ...lookupCaches,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof AgentSelectionRequiredError) {
+        return {
+          error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
+        };
+      }
+      throw error;
+    }
+  };
   // Incognito direct reads and writes share this central participation choke point;
   // hidden keys use the stale-session refusal instead of revealing existence.
   for (const targetRef of resolveDirectIncognitoTargets(params.method, params.requestParams)) {
-    const target = resolveSessionSharingTarget({
-      cfg: getCfg(),
-      sessionKey: targetRef.sessionKey,
-      agentId: targetRef.agentId,
-      ...lookupCaches,
-    });
+    const resolved = resolveAuthorizedTarget(targetRef);
+    if ("error" in resolved) {
+      return { error: resolved.error };
+    }
+    const target = resolved.target;
     const error = authorizeIncognitoSessionTarget({
       client: params.client,
       sessionKey: targetRef.sessionKey,
@@ -533,15 +554,13 @@ export function resolveSessionMutationAuthorization(params: {
     }
     return { error: null };
   }
-  const cfg = getCfg();
   const authorizedTargets: AuthorizedSessionMutationTarget[] = [];
   for (const targetRef of targetRefs) {
-    const target = resolveSessionSharingTarget({
-      cfg,
-      sessionKey: targetRef.sessionKey,
-      agentId: targetRef.agentId,
-      ...lookupCaches,
-    });
+    const resolved = resolveAuthorizedTarget(targetRef);
+    if ("error" in resolved) {
+      return { error: resolved.error };
+    }
+    const target = resolved.target;
     const error =
       (params.method === "sessions.patchMany"
         ? authorizeIncognitoSessionTarget({

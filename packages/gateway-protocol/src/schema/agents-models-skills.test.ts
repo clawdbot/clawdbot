@@ -201,6 +201,7 @@ describe("ModelsListParamsSchema", () => {
       {
         agentId: "writer",
         view: "all",
+        agentId: "research",
         includeProviderCapabilities: true,
       },
     );

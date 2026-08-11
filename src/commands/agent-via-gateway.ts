@@ -577,17 +577,21 @@ async function normalizeSessionKeyOptsForDispatch(
     const cfg = readGatewayDispatchConfig();
     normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg };
     selectionCfg = cfg;
+    if (
+      rawSessionKey &&
+      usesRemoteGateway(cfg) &&
+      classifySessionKeyShape(rawSessionKey) !== "agent"
+    ) {
+      // The remote gateway owns its roster and durable session-store metadata. Forward bare keys
+      // unchanged, even with an explicit agent, so stale local state cannot rewrite the target.
+      return normalizedOpts;
+    }
   }
   if (!agentIdRaw && !hasExplicitSessionTarget && !(opts.local === true && rawTo)) {
     let cfg =
       opts.local === true
         ? await loadRuntimeConfig()
         : (selectionCfg ?? readGatewayDispatchConfig());
-    if (opts.local !== true && rawSessionKey && usesRemoteGateway(cfg)) {
-      // The remote gateway owns its roster and durable session-store metadata. Forward bare keys
-      // unchanged so it can resolve a persisted/compatibility owner or reject ambiguity itself.
-      return normalizedOpts;
-    }
     if (opts.local !== true && usesRemoteGateway(cfg)) {
       const loaded = await loadRemoteGatewayRosterWithShellEnvFallback(cfg);
       cfg = loaded.config;
@@ -666,6 +670,15 @@ async function normalizeSessionKeyOptsForDispatch(
         ? await loadRuntimeConfig()
         : (selectionCfg ?? readGatewayDispatchConfig())
       : undefined;
+  const persistedBareOwner =
+    cfg && rawSessionKey && isLegacySessionKey && !isUnscopedSessionKeySentinel(rawSessionKey)
+      ? resolvePersistedSessionStoreOwnerForKey(cfg, rawSessionKey)
+      : undefined;
+  if (persistedBareOwner?.kind === "configured") {
+    // Fixed-store rows keep their durable bare key. The selected owner travels separately so
+    // request-time resolution can validate it without changing the storage identity.
+    return normalizedOpts;
+  }
   const sessionKey = scopeLegacySessionKeyToAgent({
     agentId: agentIdRaw,
     sessionKey: normalizedOpts.sessionKey,
@@ -687,12 +700,14 @@ function isAbortError(err: unknown): boolean {
 function readAcceptedRunContext(payload: unknown): {
   runId?: string;
   sessionKey?: string;
+  agentId?: string;
 } {
   if (!payload || typeof payload !== "object") {
     return {};
   }
   const runId = (payload as { runId?: unknown }).runId;
   const sessionKey = (payload as { sessionKey?: unknown }).sessionKey;
+  const agentId = (payload as { agentId?: unknown }).agentId;
   const status = (payload as { status?: unknown }).status;
   if (status !== "accepted") {
     return {};
@@ -700,6 +715,7 @@ function readAcceptedRunContext(payload: unknown): {
   return {
     runId: typeof runId === "string" && runId.trim() ? runId.trim() : undefined,
     sessionKey: typeof sessionKey === "string" && sessionKey.trim() ? sessionKey.trim() : undefined,
+    agentId: typeof agentId === "string" && agentId.trim() ? agentId.trim() : undefined,
   };
 }
 
@@ -769,6 +785,7 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
 async function abortAcceptedGatewayAgentRunWithRequest(params: {
   runId: string | undefined;
   sessionKey: string | undefined;
+  agentId?: string;
   signal: AgentCliSignal | undefined;
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
@@ -783,6 +800,7 @@ async function abortAcceptedGatewayAgentRunWithRequest(params: {
       {
         sessionKey: params.sessionKey,
         runId: params.runId,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
     );
@@ -810,6 +828,7 @@ async function abortAcceptedGatewayAgentRunWithRequest(params: {
 async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
   runId: string | undefined;
   sessionKey: string | undefined;
+  agentId?: string;
   signal: AgentCliSignal | undefined;
   runtime: RuntimeEnv;
   gatewayIdentity: AgentGatewayCallIdentity;
@@ -834,6 +853,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       signal: params.signal,
       runtime: params.runtime,
       request,
@@ -849,6 +869,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
 async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
   runId: string | undefined;
   sessionKey: string | undefined;
+  agentId?: string;
   signal: AgentCliSignal | undefined;
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
@@ -859,6 +880,7 @@ async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       signal: params.signal,
       runtime: params.runtime,
       request: params.request,
@@ -1037,6 +1059,7 @@ async function agentViaGatewayCommand(
 
   let acceptedRunId: string | undefined = idempotencyKey;
   let acceptedSessionKey: string | undefined = abortSessionKey;
+  let acceptedAgentId: string | undefined;
   let acceptedGatewayRun = false;
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
@@ -1080,12 +1103,14 @@ async function agentViaGatewayCommand(
             const accepted = readAcceptedRunContext(payload);
             acceptedRunId = accepted.runId ?? acceptedRunId;
             acceptedSessionKey = accepted.sessionKey ?? acceptedSessionKey;
+            acceptedAgentId = accepted.agentId;
           },
           onSignalAbort: async (request) => {
             activeConnectionAbortAttempted = true;
             activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
               runId: acceptedRunId,
               sessionKey: acceptedSessionKey,
+              agentId: acceptedAgentId,
               signal: signalBridge.getReceivedSignal(),
               runtime,
               request,
@@ -1118,6 +1143,7 @@ async function agentViaGatewayCommand(
         await abortAcceptedGatewayAgentRunWithGatewayCall({
           runId: acceptedRunId,
           sessionKey: acceptedSessionKey,
+          agentId: acceptedAgentId,
           signal: signalBridge.getReceivedSignal(),
           runtime,
           gatewayIdentity,

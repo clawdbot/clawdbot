@@ -323,27 +323,19 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     // Register for any other active runs *in the same session* so
                     // late-joining clients (e.g. page refresh mid-response) receive
                     // in-progress tool events without leaking cross-session data.
-                    const compatibilityGlobalAgentId =
-                      sessionKey === "global"
-                        ? tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey)
-                        : undefined;
-                    const selectedGlobalAgentId =
-                      sessionKey === "global"
-                        ? (selectedAgent.agentId ?? compatibilityGlobalAgentId)
-                        : undefined;
+                    const compatibilityOwnerAgentId =
+                      tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+                    const selectedSessionAgentId = selectedAgent.agentId;
                     for (const [activeRunId, active] of context.chatAbortControllers) {
-                      const sameSelectedGlobalAgent =
-                        sessionKey === "global" &&
-                        selectedGlobalAgentId !== undefined &&
+                      const sameSelectedAgent =
+                        selectedSessionAgentId !== undefined &&
                         chatRunBelongsToSelectedAgent({
                           agentId: active.agentId,
                           sessionKey: active.sessionKey,
-                          defaultAgentId: compatibilityGlobalAgentId,
-                          selectedAgentId: selectedGlobalAgentId,
+                          defaultAgentId: compatibilityOwnerAgentId,
+                          selectedAgentId: selectedSessionAgentId,
                         });
-                      const sameSession =
-                        active.sessionKey === sessionKey &&
-                        (sessionKey !== "global" || sameSelectedGlobalAgent);
+                      const sameSession = active.sessionKey === sessionKey && sameSelectedAgent;
                       if (activeRunId !== runId && sameSession) {
                         context.registerToolEventRecipient(activeRunId, connId);
                       }

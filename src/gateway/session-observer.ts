@@ -72,9 +72,16 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
-  const getCompanionSnapshot = (sessionKey: string): SessionObserverCompanionSnapshot => {
+  const getCompanionSnapshot = (
+    sessionKey: string,
+    selectedAgentId?: string,
+  ): SessionObserverCompanionSnapshot => {
     const cfg = deps.getConfig();
-    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
+    });
     const canonicalSessionKey = resolveStoreKey({ cfg, agentId, sessionKey });
     const state = states.get(resolveSessionSubscriptionKey(canonicalSessionKey, agentId));
     if (state) {

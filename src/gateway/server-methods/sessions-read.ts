@@ -11,7 +11,6 @@ import {
   validateSessionsResolveParams,
   validateSessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   isConfiguredSessionStoreAgentId,
   isPerAgentSessionStoreConfig,
@@ -36,7 +35,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
@@ -147,8 +149,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const agentId =
-      requestedAgentId ?? agentIds.values().next().value ?? resolveDefaultAgentId(cfg);
+    let agentId = requestedAgentId ?? agentIds.values().next().value;
+    if (!agentId) {
+      const fallbackAgent = resolveRequestedGlobalAgentId(cfg, "main");
+      if (!fallbackAgent.ok) {
+        respond(false, undefined, fallbackAgent.error);
+        return;
+      }
+      agentId = fallbackAgent.agentId;
+    }
     const configured = isConfiguredSessionStoreAgentId(cfg, agentId);
     if (requestedAgentId && !params.sessionKeys && configured) {
       respond(
@@ -417,7 +426,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           );
           const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
           const projectedAgentRunIndex = buildProjectedAgentRunIndex();
-          const defaultAgentId = resolveDefaultAgentId(cfg);
           const sessions = measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
             () => {
@@ -434,8 +442,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   requestedKey: session.key,
                   canonicalKey: session.key,
                   sessionId: session.sessionId,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
-                  defaultAgentId,
+                  agentId: session.agentId,
+                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
                   trackedActiveRuns,
                   projectedAgentRunIndex,
                 });
@@ -592,8 +600,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     for (const key of keys) {
       const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
       if (!requestedAgent.ok) {
-        previews.push({ key, status: "error", items: [] });
-        continue;
+        respond(false, undefined, requestedAgent.error);
+        return;
       }
       try {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
@@ -704,7 +712,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, candidates: resolved.candidates }, undefined);
       return;
     }
-    respond(true, { ok: true, key: resolved.key }, undefined);
+    respond(true, { ok: true, key: resolved.key, agentId: resolved.agentId }, undefined);
   },
   "sessions.get": async ({ params, respond, context }) => {
     const p = params as {

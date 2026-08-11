@@ -91,6 +91,7 @@ async function invoke(
   method: keyof typeof mcpAppHandlers,
   params: Record<string, unknown>,
   mcpAppsEnabled = true,
+  config: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -102,6 +103,7 @@ async function invoke(
     context: {
       getMcpAppSandboxPort: () => 18790,
       getRuntimeConfig: () => ({
+        ...config,
         mcp: { apps: { enabled: mcpAppsEnabled, sandboxOrigin: "https://apps.example.com" } },
       }),
     },
@@ -127,6 +129,39 @@ describe("MCP App gateway bridge", () => {
       url: "/__openclaw__/mcp-app#ticket",
       expiresAtMs: 1_800_000_120_000,
     });
+  });
+
+  it("returns typed selection-required for a bare key without an owner", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    };
+    const missing = await invoke(
+      "mcp.app.view",
+      { sessionKey: "global", viewId: "cv_app" },
+      true,
+      config,
+    );
+    expect(missing).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
+    );
+
+    await invoke(
+      "mcp.app.view",
+      { sessionKey: "global", agentId: "research", viewId: "cv_app" },
+      true,
+      config,
+    );
+    expect(mocks.restoreMcpAppView).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+    );
   });
 
   it("returns the ephemeral view payload only for the bound session", async () => {

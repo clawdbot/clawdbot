@@ -1251,8 +1251,22 @@ export const sendHandlers: GatewayRequestHandlers = {
             return { ok: false, error: sessionOwner.error, meta: { channel } };
           }
           const sessionAgentId = sessionOwner?.agentId;
+          const implicitAgent =
+            !explicitAgentId && !sessionAgentId
+              ? resolveRequestedSessionAgentId(cfg, "main")
+              : undefined;
+          if (implicitAgent && !implicitAgent.ok) {
+            return { ok: false, error: implicitAgent.error, meta: { channel } };
+          }
           const effectiveAgentId =
-            explicitAgentId ?? sessionAgentId ?? resolveSessionAgentId({ config: cfg });
+            explicitAgentId ?? sessionAgentId ?? (implicitAgent?.ok ? implicitAgent.agentId : null);
+          if (!effectiveAgentId) {
+            return {
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
+              meta: { channel },
+            };
+          }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
             mediaUrls,

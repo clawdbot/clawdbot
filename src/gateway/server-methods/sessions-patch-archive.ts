@@ -7,13 +7,13 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
@@ -217,7 +217,7 @@ export async function prepareSessionPatchArchive(params: {
       sessionId: fresh.entry?.sessionId,
       sessionKey: freshCanonicalKey,
       agentId: freshResolved.agentId,
-      defaultAgentId: freshResolved.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg),
+      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, freshCanonicalKey),
       lifecycleIdentities: target.lifecycleIdentities.filter((identity): identity is string =>
         Boolean(identity),
       ),

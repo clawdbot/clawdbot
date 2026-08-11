@@ -29,6 +29,7 @@ import {
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
@@ -346,6 +347,7 @@ async function handleChatHistoryRequest({
   scheduleChatHistoryManagedMediaCleanup({
     sessionKey,
     ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
+    cfg,
     context,
   });
   const capped = messageId
@@ -390,7 +392,7 @@ async function handleChatHistoryRequest({
   const modelCatalogSnapshot = await modelCatalogPromise;
   const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
   const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
-  const defaultAgentId = sessionAgentId;
+  const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
   let startupProjection: ChatStartupProjectionResult | undefined;
   let startupMetadata: ChatMetadataResult | undefined;
   let startupAgentsList: AgentsListResult | undefined;
@@ -467,15 +469,14 @@ async function handleChatHistoryRequest({
       },
     },
   );
-  const activeRunAgentId =
-    canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+  const activeRunAgentId = selectedAgent.agentId;
   const activeRunState = resolveVisibleActiveSessionRunState({
     context,
     requestedKey: sessionKey,
     canonicalKey,
     sessionId: entry?.sessionId,
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
-    defaultAgentId,
+    defaultAgentId: compatibilityOwnerAgentId,
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   sessionInfo.activeRunIds = activeRunState.runIds;
@@ -497,7 +498,7 @@ async function handleChatHistoryRequest({
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,
-    defaultAgentId,
+    defaultAgentId: compatibilityOwnerAgentId,
   });
   const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
     snapshot: inFlightRun,

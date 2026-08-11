@@ -7,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
@@ -27,7 +26,10 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
@@ -69,7 +71,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+    const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
     const target = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key,
@@ -339,9 +341,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
-                ...(target.canonicalKey === "global" && target.agentId
-                  ? { agentId: target.agentId }
-                  : {}),
+                agentId: target.agentId,
                 reason: "compact",
                 compacted: true,
               });
@@ -373,9 +373,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             operation: "compact",
             phase: "start",
             sessionKey: target.canonicalKey,
-            ...(target.canonicalKey === "global" && target.agentId
-              ? { agentId: target.agentId }
-              : {}),
+            agentId: target.agentId,
           });
           const emitCompactionEnd = (completed: boolean, reason?: string) =>
             emitSessionOperation(context, {
@@ -383,9 +381,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               operation: "compact",
               phase: "end",
               sessionKey: target.canonicalKey,
-              ...(target.canonicalKey === "global" && target.agentId
-                ? { agentId: target.agentId }
-                : {}),
+              agentId: target.agentId,
               completed,
               reason,
             });
@@ -491,9 +487,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           if (result.ok) {
             emitSessionsChanged(context, {
               sessionKey: target.canonicalKey,
-              ...(target.canonicalKey === "global" && target.agentId
-                ? { agentId: target.agentId }
-                : {}),
+              agentId: target.agentId,
               reason: "compact",
               compacted: result.compacted,
             });

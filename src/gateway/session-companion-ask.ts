@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
@@ -20,6 +20,7 @@ import {
   type SessionCompanionThread,
 } from "./session-companion-state.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 
 const companionLog = createSubsystemLogger("gateway/session-companion");
 
@@ -51,7 +52,10 @@ type SessionCompanionRunParams = {
 export type SessionCompanionAskDeps = {
   getConfig: () => OpenClawConfig;
   sessionObserver: {
-    getCompanionSnapshot: (sessionKey: string) => SessionObserverCompanionSnapshot;
+    getCompanionSnapshot: (
+      sessionKey: string,
+      agentId?: string,
+    ) => SessionObserverCompanionSnapshot;
   };
   resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
@@ -359,10 +363,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
-  const resolveTarget = (sessionKey: string) => {
+  const resolveTarget = (sessionKey: string, agentId: string) => {
     const cfg = params.getConfig();
-    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey);
-    const agentId = observerSnapshot.agentId || resolveSessionAgentId({ sessionKey, config: cfg });
+    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
     return { agentId, cfg, observerSnapshot };
   };
 
@@ -371,10 +374,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
 
   const prepareThread = async (
     sessionKey: string,
+    agentId: string,
     signal: AbortSignal,
   ): Promise<SessionCompanionThread> => {
-    const existing = params.threads.get(sessionKey);
-    const { agentId, observerSnapshot } = resolveTarget(sessionKey);
+    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
+    const existing = params.threads.get(threadKey);
+    const { observerSnapshot } = resolveTarget(sessionKey, agentId);
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
@@ -382,7 +387,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       return existing;
     }
     if (existing) {
-      params.threads.delete(sessionKey);
+      params.threads.delete(threadKey);
     }
     const result = await contextReader.read({ agentId, sessionKey, signal });
     if (signal.aborted || params.isDisposed()) {
@@ -411,23 +416,26 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       busy: false,
       lastUsedAt: params.now(),
     };
-    params.threads.set(sessionKey, thread);
+    params.threads.set(threadKey, thread);
     return thread;
   };
 
   const ask = async (request: {
+    agentId: string;
     sessionKey: string;
     question: string;
     connId: string;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
+    const agentId = request.agentId.trim();
     const question = request.question.trim();
-    if (!sessionKey || !question || params.isDisposed() || request.signal?.aborted) {
+    if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Session companion is unavailable.");
     }
-    const existing = params.threads.get(sessionKey);
-    if (existing?.busy || activeAsks.has(sessionKey)) {
+    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
+    const existing = params.threads.get(threadKey);
+    if (existing?.busy || activeAsks.has(threadKey)) {
       throw new SessionCompanionAskError(
         "busy",
         "The session companion is answering another question.",
@@ -471,9 +479,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     admissions.push({ connId: request.connId, admittedAt });
     const controller = new AbortController();
     const activeAsk: SessionCompanionActiveAsk = { controller };
-    activeAsks.set(sessionKey, activeAsk);
+    activeAsks.set(threadKey, activeAsk);
     const abort = (cancellation: SessionCompanionCancellationKind) => {
-      if (activeAsks.get(sessionKey) !== activeAsk || activeAsk.cancellation) {
+      if (activeAsks.get(threadKey) !== activeAsk || activeAsk.cancellation) {
         return;
       }
       activeAsk.cancellation = cancellation;
@@ -495,12 +503,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     });
     let ownedThread: SessionCompanionThread | undefined;
     const discardOwnedThread = () => {
-      if (ownedThread && params.threads.get(sessionKey) === ownedThread) {
-        params.threads.delete(sessionKey);
+      if (ownedThread && params.threads.get(threadKey) === ownedThread) {
+        params.threads.delete(threadKey);
       }
     };
     try {
-      const thread = await prepareThread(sessionKey, controller.signal);
+      const thread = await prepareThread(sessionKey, agentId, controller.signal);
       ownedThread = thread;
       if (thread.busy) {
         throw new SessionCompanionAskError(
@@ -510,9 +518,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
-      const { agentId, cfg } = resolveTarget(sessionKey);
+      const { cfg } = resolveTarget(sessionKey, agentId);
       if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
-        params.threads.delete(sessionKey);
+        params.threads.delete(threadKey);
         throw contextError(
           "context-unavailable",
           "The selected session changed before the companion could answer.",
@@ -526,7 +534,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         );
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey);
+      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
       thread.digestText = formatObserverDigest(currentSnapshot);
       const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
       const referenceContext = buildReferenceContext({
@@ -563,7 +571,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         throw new Error("session companion ask was cancelled");
       }
       if (
-        params.threads.get(sessionKey) !== thread ||
+        params.threads.get(threadKey) !== thread ||
         currentSessionId(sessionKey, agentId) !== thread.context.sessionId
       ) {
         discardOwnedThread();
@@ -606,10 +614,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     } finally {
       clearTimeoutFn(timeout);
       request.signal?.removeEventListener("abort", abortRequest);
-      if (activeAsks.get(sessionKey) === activeAsk) {
-        activeAsks.delete(sessionKey);
+      if (activeAsks.get(threadKey) === activeAsk) {
+        activeAsks.delete(threadKey);
       }
-      if (ownedThread && params.threads.get(sessionKey) === ownedThread) {
+      if (ownedThread && params.threads.get(threadKey) === ownedThread) {
         ownedThread.busy = false;
       }
     }
@@ -619,12 +627,13 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     ask,
     cancel(
       sessionKey: string,
+      agentId: string,
       cancellation: Extract<
         SessionCompanionCancellationKind,
         "backing-session-revoked" | "explicit-reset"
       >,
     ) {
-      const activeAsk = activeAsks.get(sessionKey);
+      const activeAsk = activeAsks.get(sessionObserverScopeKey(sessionKey, agentId));
       if (!activeAsk || activeAsk.cancellation) {
         return;
       }

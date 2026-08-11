@@ -1165,12 +1165,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
+    let effectiveAgentId = agentId;
+    if (!agentScope && !effectiveAgentId) {
+      const requestedAgent = resolveRequestedSessionAgentId(config, "main");
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      effectiveAgentId = requestedAgent.agentId;
+    }
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
       dayBucket: resolveDayBucket(dateInterpretation),
       config,
-      agentId,
+      agentId: effectiveAgentId,
       agentScope,
     });
     respond(true, summary, undefined);
@@ -1212,10 +1221,18 @@ export const usageHandlers: GatewayRequestHandlers = {
       respond(false, undefined, specificSessionOwner.error);
       return;
     }
+    const implicitAgent =
+      !requestedAllAgents && !specificSessionOwner?.agentId && !requestedAgentId
+        ? resolveRequestedSessionAgentId(config, "main")
+        : undefined;
+    if (implicitAgent && !implicitAgent.ok) {
+      respond(false, undefined, implicitAgent.error);
+      return;
+    }
     const effectiveAgentId = requestedAllAgents
       ? undefined
       : normalizeAgentId(
-          specificSessionOwner?.agentId ?? requestedAgentId ?? resolveSessionAgentId({ config }),
+          specificSessionOwner?.agentId ?? requestedAgentId ?? implicitAgent?.agentId,
         );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
@@ -1254,16 +1271,14 @@ export const usageHandlers: GatewayRequestHandlers = {
               cfg: config,
               agentId:
                 effectiveAgentId ??
-                specificSessionOwner?.agentId ??
-                resolveSessionAgentId({ config }),
+                expectDefined(specificSessionOwner?.agentId, "specific session owner"),
               sessionKey: specificKey,
             });
             const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
             const agentIdFromKey =
               scopedParsed?.agentId ??
               effectiveAgentId ??
-              specificSessionOwner?.agentId ??
-              resolveSessionAgentId({ config });
+              expectDefined(specificSessionOwner?.agentId, "specific session owner");
             const keyRest = scopedParsed?.rest ?? specificKey;
 
             // Prefer the store entry when available, even if the caller provides a discovered key

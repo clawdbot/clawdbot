@@ -7,7 +7,6 @@ import {
   validateSessionsForkParams,
   validateSessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
@@ -30,7 +29,10 @@ import {
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -286,7 +288,7 @@ async function mutateSessionAtMessage(
           canonicalKey: current.canonicalKey,
           sessionId: initialSessionId,
           agentId: requestedAgent.agentId,
-          defaultAgentId: resolveDefaultAgentId(cfg),
+          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
         });
     },
     run: async () => {
@@ -412,9 +414,7 @@ async function mutateSessionAtMessage(
         );
         emitSessionsChanged(context, {
           sessionKey: upstreamFork.key,
-          ...(upstreamFork.key === "global" && requestedAgent.agentId
-            ? { agentId: requestedAgent.agentId }
-            : {}),
+          agentId: requestedAgent.agentId,
           reason: "fork",
         });
         return;
@@ -507,10 +507,7 @@ async function mutateSessionAtMessage(
       );
       emitSessionsChanged(context, {
         sessionKey: action === "fork" ? result.key : current.canonicalKey,
-        ...((action === "fork" ? result.key : current.canonicalKey) === "global" &&
-        requestedAgent.agentId
-          ? { agentId: requestedAgent.agentId }
-          : {}),
+        agentId: requestedAgent.agentId,
         reason: action === "switch" ? "branch-switch" : action,
       });
     },

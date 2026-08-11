@@ -93,6 +93,7 @@ export const SessionCompanionExchangeSchema = closedObject({
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
 });
 
@@ -105,6 +106,7 @@ export const SessionsCompanionAskResultSchema = closedObject({
 /** Selects the in-memory companion thread for one session. */
 export const SessionsCompanionStateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Current bounded exchanges for one session companion thread. */
@@ -115,6 +117,7 @@ export const SessionsCompanionStateResultSchema = closedObject({
 /** Selects the in-memory companion thread to clear. */
 export const SessionsCompanionResetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Acknowledges clearing one companion thread. */
@@ -515,6 +518,7 @@ export const SessionsAbortParamsSchema = closedObject({
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
   key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   pluginId: NonEmptyString,
   namespace: NonEmptyString,
   value: Type.Optional(PluginJsonValueSchema),

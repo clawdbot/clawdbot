@@ -111,9 +111,8 @@ describe("sessions tool", () => {
   });
 
   it("resolves current under the requester instead of the persisted bare-row owner", async () => {
-    const resolveGateway = vi.fn(async (request: { params?: Record<string, unknown> }) => {
-      expect(request.params).toMatchObject({ agentId: "research", sessionId: "current" });
-      return { agentId: "research", key: "agent:research:main" };
+    const resolveGateway = vi.fn(async () => {
+      throw new Error("current must resolve locally under the requester");
     });
     sessionsResolutionTesting.setDepsForTest({ callGateway: resolveGateway as never });
     const callGateway = vi.fn(async () => ({ ok: true }));
@@ -137,11 +136,7 @@ describe("sessions tool", () => {
       label: "Research",
     });
 
-    expect(resolveGateway).toHaveBeenCalledTimes(2);
-    expect(resolveGateway.mock.calls.map(([request]) => request.params?.agentId)).toEqual([
-      "research",
-      "research",
-    ]);
+    expect(resolveGateway).not.toHaveBeenCalled();
     expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:research:main",
       label: "Research",

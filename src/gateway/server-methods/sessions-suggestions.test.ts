@@ -214,6 +214,55 @@ describe("session suggestion handlers", () => {
     });
   });
 
+  it("attributes an ownerless active run to the persisted bare-key owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared-sessions.sqlite");
+      await upsertSessionEntry(
+        { agentId: "ops", sessionKey: "global", storePath },
+        {
+          sessionId: "session-ops-global",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const ownedConfig = {
+        session: { scope: "global", store: storePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const requestContext = context(vi.fn(), ownedConfig);
+      requestContext.chatAbortControllers.set("run-ops", {
+        sessionKey: "global",
+        sessionId: "session-ops-global",
+      } as never);
+      const added = await call(
+        "session.suggestions.add",
+        { sessionKey: "global", text: "steer the owner" },
+        client("alice", "Alice"),
+        requestContext,
+      );
+      const id = responseSuggestionId(added);
+
+      const resolved = await call(
+        "session.suggestions.resolve",
+        { sessionKey: "global", id, resolution: "send" },
+        client("owner", "Owner"),
+        requestContext,
+      );
+
+      expect(resolved.responses[0]?.[0]).toBe(true);
+      expect(mocks.handleChatSend.mock.calls[0]?.[0]?.params).toMatchObject({
+        agentId: "ops",
+        queueMode: "steer",
+        expectedRunId: "run-ops",
+      });
+    });
+  });
+
   it("lets a suggest viewer add and list only their own suggestion", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();

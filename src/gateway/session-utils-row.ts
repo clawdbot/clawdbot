@@ -484,7 +484,7 @@ export function buildGatewaySessionRow(params: {
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     lastRunError: entry?.lastRunError,
-    hasAutomation: sessionHasAutomation(key, cfg) ? true : undefined,
+    hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

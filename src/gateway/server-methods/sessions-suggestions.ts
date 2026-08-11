@@ -23,7 +23,11 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionSharingTarget,
@@ -231,6 +235,10 @@ async function dispatchSuggestion(params: {
   suggestion: StoredSessionSuggestion;
   resolution: "send" | "queue";
 }): Promise<{ ok: true } | { ok: false; error: Parameters<RespondFn>[2] }> {
+  const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+    params.context.getRuntimeConfig(),
+    params.target.storeKey,
+  );
   const activeRunState =
     params.resolution === "send"
       ? resolveVisibleActiveSessionRunState({
@@ -239,6 +247,7 @@ async function dispatchSuggestion(params: {
           canonicalKey: params.target.storeKey,
           sessionId: params.target.entry.sessionId,
           agentId: params.target.agentId,
+          defaultAgentId: compatibilityOwnerAgentId,
         })
       : undefined;
   if (activeRunState?.active && activeRunState.runIds.length !== 1) {
@@ -662,7 +671,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const sessionKeys = new Set([params.sessionKey, target.canonicalKey, target.storeKey]);
+    const sessionKeys = new Set([
+      params.sessionKey,
+      target.canonicalKey,
+      target.storeKey,
+      sessionObserverScopeKey(target.canonicalKey, target.agentId),
+    ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
     const effectiveTyping = updateTypingConnections({

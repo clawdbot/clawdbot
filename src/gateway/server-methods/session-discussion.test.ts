@@ -130,7 +130,10 @@ describe("session discussion gateway methods", () => {
       sessionKey: "agent:main:thread",
     });
 
-    expect(registered.info).toHaveBeenCalledWith({ sessionKey: "agent:main:thread" });
+    expect(registered.info).toHaveBeenCalledWith({
+      sessionKey: "agent:main:thread",
+      agentId: "main",
+    });
     expect(response).toMatchObject({
       ok: true,
       payload: {
@@ -149,7 +152,10 @@ describe("session discussion gateway methods", () => {
       sessionKey: "agent:main:thread",
     });
 
-    expect(registered.open).toHaveBeenCalledWith({ sessionKey: "agent:main:thread" });
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "agent:main:thread",
+      agentId: "main",
+    });
     expect(response).toMatchObject({ ok: true, payload: { state: "available" } });
   });
 

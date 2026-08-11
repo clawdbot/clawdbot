@@ -25,6 +25,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { restoreMcpAppView } from "./mcp-app-reconstruction.js";
 
 export type McpAppActiveView = {
@@ -111,6 +112,7 @@ async function requireCallableTool(
 
 export async function resolveMcpAppActiveView(params: {
   sessionKey: string;
+  agentId?: string;
   viewId: string;
   cfg?: OpenClawConfig;
 }): Promise<McpAppActiveView> {
@@ -124,7 +126,12 @@ export async function resolveMcpAppActiveView(params: {
     }
     return { runtime: liveView.runtime, view: liveView };
   }
-  const existingRuntime = peekSessionMcpRuntime({ sessionKey: params.sessionKey });
+  // An unscoped runtime key cannot prove its owning agent. Prefer transcript
+  // restoration with the prepared owner instead of adopting a sibling runtime.
+  const existingRuntime =
+    params.agentId && !parseAgentSessionKey(params.sessionKey)
+      ? undefined
+      : peekSessionMcpRuntime({ sessionKey: params.sessionKey });
   if (existingRuntime && existingRuntime.mcpAppsEnabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
@@ -137,6 +144,7 @@ export async function resolveMcpAppActiveView(params: {
       : params.cfg
         ? await restoreMcpAppView({
             cfg: params.cfg,
+            agentId: params.agentId,
             sessionKey: params.sessionKey,
             viewId: params.viewId,
           })

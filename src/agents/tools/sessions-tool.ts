@@ -236,6 +236,7 @@ async function resolvePatchTarget(
   const resolved = await resolveSessionReference({
     sessionKey: rawKey,
     agentId: inputAgentId,
+    keyAgentId: requesterAgentId,
     alias: context.alias,
     mainKey: context.mainKey,
     requesterInternalKey: context.effectiveRequesterKey,

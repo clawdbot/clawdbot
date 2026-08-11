@@ -66,10 +66,7 @@ export async function persistAbortedPartials(params: {
     return;
   }
   for (const snapshot of params.snapshots) {
-    const sessionLoadOptions =
-      params.sessionKey === "global" && snapshot.agentId
-        ? { agentId: snapshot.agentId }
-        : undefined;
+    const sessionLoadOptions = snapshot.agentId ? { agentId: snapshot.agentId } : undefined;
     const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({

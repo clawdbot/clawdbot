@@ -1,9 +1,8 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -53,26 +52,21 @@ function broadcastSessionsChanged(
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
+  const cfg = context.getRuntimeConfig();
+  const unscopedOwnerAgentId = payload.sessionKey
+    ? tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey)
+    : undefined;
+  const effectiveAgentId = payload.agentId ?? unscopedOwnerAgentId;
   const sessionRow = payload.sessionKey
     ? loadGatewaySessionRow(
         payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
+        effectiveAgentId ? { agentId: effectiveAgentId } : undefined,
       )
     : null;
-  const cfg = context.getRuntimeConfig();
-  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
-  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionRow?.key);
-  const unscopedOwnerAgentId =
-    persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : compatibilityAgentId;
   let rowAgentId: string | undefined;
   if (sessionRow) {
     try {
-      rowAgentId = resolveAgentIdFromSessionKey(
-        sessionRow.key,
-        payload.agentId ?? unscopedOwnerAgentId,
-      );
+      rowAgentId = resolveAgentIdFromSessionKey(sessionRow.key, effectiveAgentId);
     } catch {
       rowAgentId = undefined;
     }
@@ -93,12 +87,13 @@ function broadcastSessionsChanged(
     "sessions.changed",
     {
       ...payload,
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       ts: Date.now(),
       ...(sessionRow
         ? {
             ...buildGatewaySessionEventFields({
               sessionRow,
-              agentId: payload.agentId,
+              agentId: effectiveAgentId,
               hasActiveRun: activeRunState?.active,
               activeRunIds: activeRunState?.runIds,
             }),
@@ -112,7 +107,7 @@ function broadcastSessionsChanged(
     },
     connIds,
     {
-      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       dropIfSlow: true,
       // Scope only to a concrete key; a `[undefined]` scope filters no connection
       // correctly and would strip draft gating, so fall back to an unscoped send.

@@ -72,6 +72,16 @@ export function createSubagentRegistryPublicApi(config: {
     return updated;
   }
 
+  function listSubagentRunsForController(
+    controllerSessionKey: string,
+    controllerAgentId?: string,
+  ): SubagentRunRecord[] {
+    return listRunsForControllerFromRuns(
+      deps().getSubagentRunsSnapshotForController(runs, controllerSessionKey),
+      controllerSessionKey,
+      controllerAgentId,
+    );
+  }
   function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
     return findRunById(readRuns(), runId.trim());
   }
@@ -137,6 +147,7 @@ export function createSubagentRegistryPublicApi(config: {
   function listSwarmRunsForGroup(
     groupId: string,
     requesterSessionKey?: string,
+    requesterAgentId?: string,
   ): SubagentRunRecord[] {
     const key = groupId.trim();
     const requesterKey = requesterSessionKey?.trim();
@@ -145,7 +156,8 @@ export function createSubagentRegistryPublicApi(config: {
         entry.collect === true &&
         entry.groupId === key &&
         (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey),
+          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
+        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
     );
   }
 
@@ -153,6 +165,7 @@ export function createSubagentRegistryPublicApi(config: {
   function getSwarmRunByLaunchReplayKey(
     replayKey: string,
     requesterSessionKey?: string,
+    requesterAgentId?: string,
   ): SubagentRunRecord | undefined {
     const key = replayKey.trim();
     const requesterKey = requesterSessionKey?.trim();
@@ -164,13 +177,14 @@ export function createSubagentRegistryPublicApi(config: {
         entry.collect === true &&
         entry.swarmLaunchReplayKey === key &&
         (!requesterKey ||
-          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey),
+          (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
+        (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
     );
   }
 
   function countActiveRunsForSession(
     requesterSessionKey: string,
-    options?: { collect?: boolean },
+    options?: { collect?: boolean; requesterAgentId?: string },
   ): number {
     return countActiveRunsForSessionFromRuns(readRuns(), requesterSessionKey, options);
   }
@@ -178,6 +192,7 @@ export function createSubagentRegistryPublicApi(config: {
   /** Records sessions_yield before the active requester run is aborted. */
   function markRequesterTurnYielded(params: {
     requesterSessionKey: string;
+    requesterAgentId?: string;
     requesterTurnRunId: string;
   }): number {
     restoreOnce();

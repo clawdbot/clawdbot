@@ -195,7 +195,6 @@ describe("tasks gateway handlers", () => {
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: "global",
-      requesterAgentId: "ops",
       ownerKey: "global",
       scopeKind: "session",
       runId: "run-global",

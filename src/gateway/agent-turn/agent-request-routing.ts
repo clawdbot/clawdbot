@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { resolveSessionKeyForRequest } from "../../agents/command/session.js";
 import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -112,6 +113,29 @@ export async function prepareAgentRequestRouting(params: {
     }
     agentId = requestedSessionAgent.agentId;
   }
+  let sessionIdTarget: ReturnType<typeof resolveSessionKeyForRequest> | undefined;
+  if (requestedSessionId && !requestedSessionKeyRaw) {
+    try {
+      sessionIdTarget = resolveSessionKeyForRequest({
+        cfg: params.cfg,
+        sessionId: requestedSessionId,
+        agentId,
+        clone: false,
+      });
+      agentId = sessionIdTarget.agentId ?? agentId;
+    } catch (error) {
+      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
+      return undefined;
+    }
+  }
+  if (!requestedSessionKeyRaw && !requestedSessionId && !agentId) {
+    const implicitMainOwner = resolveRequestedSessionAgentId(params.cfg, "main");
+    if (!implicitMainOwner.ok) {
+      params.respond(false, undefined, implicitMainOwner.error);
+      return undefined;
+    }
+    agentId = implicitMainOwner.agentId;
+  }
   const explicitRecipientChannel = normalizeMessageChannel(params.request.channel);
   const explicitRecipient =
     !requestedSessionKeyRaw &&
@@ -152,6 +176,7 @@ export async function prepareAgentRequestRouting(params: {
   }
   const requestedSessionKey =
     requestedSessionKeyRaw ??
+    sessionIdTarget?.sessionKey ??
     explicitRecipientSession?.sessionKey ??
     (!requestedSessionId
       ? resolveAgentExplicitRecipientSessionKey(params.cfg, agentId)
@@ -186,6 +211,7 @@ export async function prepareAgentRequestRouting(params: {
     dropReboundExecApprovalFollowup({
       ...params,
       requestedSessionKeyRaw,
+      agentId,
     })
   ) {
     return undefined;
@@ -233,6 +259,7 @@ function resolveAgentExplicitRecipientSessionKey(cfg: OpenClawConfig, agentId?: 
 function dropReboundExecApprovalFollowup(params: {
   request: AgentRunRequest;
   requestedSessionKeyRaw?: string;
+  agentId?: string;
   execApprovalFollowupApprovalId?: string;
   runId: string;
   agentDedupeKeys: string[];
@@ -248,7 +275,10 @@ function dropReboundExecApprovalFollowup(params: {
   let currentSessionId: string | undefined;
   try {
     currentSessionId = normalizeOptionalString(
-      loadSessionEntry(params.requestedSessionKeyRaw).entry?.sessionId,
+      loadSessionEntry(params.requestedSessionKeyRaw, {
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        clone: false,
+      }).entry?.sessionId,
     );
   } catch {
     currentSessionId = undefined;

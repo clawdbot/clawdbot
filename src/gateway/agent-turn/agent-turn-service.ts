@@ -70,9 +70,7 @@ function replayAgentTurnIfCached(params: {
         ? cached.payload.sessionKey.trim()
         : undefined;
     const cachedAgentId =
-      cachedSessionKey === "global" &&
-      typeof cached.payload.agentId === "string" &&
-      cached.payload.agentId.trim()
+      typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
         ? cached.payload.agentId.trim()
         : undefined;
     params.io.emitAcceptance(

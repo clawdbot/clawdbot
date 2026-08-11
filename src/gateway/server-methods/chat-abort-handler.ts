@@ -4,14 +4,16 @@ import {
   errorShape,
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
@@ -65,7 +67,10 @@ export async function handleChatAbortRequestWithLifecycle(
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const abortCfg = context.getRuntimeConfig();
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
-  const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(abortCfg);
+  const compatibilityDefaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+    abortCfg,
+    rawSessionKey,
+  );
   const inferredSessionAgentId =
     !agentIdOverride && parsedAbortSessionKey
       ? normalizeAgentId(parsedAbortSessionKey.agentId)

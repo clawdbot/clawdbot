@@ -248,7 +248,6 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
   const compatibleLegacyMarker = completeTarget ? undefined : legacyMarker;
-  const storageAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
   const sessionKey = compatibleLegacyMarker
     ? candidateKeyEntry?.sessionId === compatibleLegacyMarker.sessionId ||
       (!candidateKeyEntry && markerMatches.length === 0)
@@ -261,14 +260,15 @@ async function handleTranscriptUpdateBroadcast(
   const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
   const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(getRuntimeConfig(), sessionKey);
-  const defaultGlobalAgentId =
-    sessionKey === "global" && !effectiveAgentId
+  const stableUnscopedOwner =
+    !parseAgentSessionKey(sessionKey) && !effectiveAgentId
       ? persistedOwner.kind === "configured"
         ? persistedOwner.agentId
         : compatibilityDefaultAgentId
       : undefined;
+  const storageAgentId = effectiveAgentId ?? stableUnscopedOwner;
   const visibleAgentId = effectiveAgentId;
-  const routingAgentId = effectiveAgentId ?? defaultGlobalAgentId;
+  const routingAgentId = effectiveAgentId ?? stableUnscopedOwner;
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
@@ -356,7 +356,7 @@ async function handleTranscriptUpdateBroadcast(
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
           ...(routingAgentId ? { agentId: routingAgentId } : {}),
-          defaultAgentId: compatibilityDefaultAgentId,
+          defaultAgentId: stableUnscopedOwner,
         })
       : null;
   const sessionSnapshot = buildGatewaySessionSnapshot({
@@ -452,10 +452,10 @@ export function createLifecycleEventBroadcastHandler(params: {
       getRuntimeConfig(),
       event.sessionKey,
     );
-    const rowAgentId =
-      eventAgentId ??
+    const stableOwnerAgentId =
       (persistedOwner.kind === "configured" ? persistedOwner.agentId : undefined) ??
       compatibilityDefaultAgentId;
+    const rowAgentId = eventAgentId ?? stableOwnerAgentId;
     const sessionRow = rowAgentId
       ? loadGatewaySessionRow(event.sessionKey, { agentId: rowAgentId })
       : undefined;
@@ -467,7 +467,7 @@ export function createLifecycleEventBroadcastHandler(params: {
             canonicalKey: sessionRow.key,
             sessionId: sessionRow.sessionId,
             ...(rowAgentId ? { agentId: rowAgentId } : {}),
-            defaultAgentId: compatibilityDefaultAgentId,
+            defaultAgentId: stableOwnerAgentId,
           })
         : null;
     params.broadcastToConnIds(

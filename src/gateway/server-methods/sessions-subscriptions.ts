@@ -6,9 +6,11 @@ import {
   validateSessionsMessagesUnsubscribeParams,
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
@@ -57,7 +59,21 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      canonicalKeys.push(resolveSessionStoreKey({ cfg, sessionKey: trimmed }));
+      const requested = resolveRequestedSessionAgentId(
+        cfg,
+        trimmed,
+        parseAgentSessionKey(trimmed) ? undefined : params.agentId,
+      );
+      if (!requested.ok) {
+        respond(false, undefined, requested.error);
+        return;
+      }
+      const canonicalKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: trimmed,
+        storeAgentId: requested.agentId,
+      });
+      canonicalKeys.push(sessionObserverScopeKey(canonicalKey, requested.agentId));
     }
     const sessionKeys = declarations.replace(connId, canonicalKeys);
     respond(true, { sessionKeys }, undefined);
@@ -91,7 +107,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -176,7 +192,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;

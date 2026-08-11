@@ -30,6 +30,7 @@ import {
   resolveTuiLocalAuthCliInvocation,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
+  resolveTuiSessionSelection,
   scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
 } from "./tui.js";
@@ -421,6 +422,44 @@ describe("resolveInitialTuiAgentId", () => {
         cwd: "/tmp/openclaw",
       }),
     ).toBe("ops");
+  });
+});
+
+describe("resolveTuiSessionSelection", () => {
+  it("keeps a fixed-store bare key with its persisted owner", () => {
+    const cfg: OpenClawConfig = {
+      session: { store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    };
+
+    expect(
+      resolveTuiSessionSelection({
+        raw: "incident-42",
+        cfg,
+        sessionScope: "per-sender",
+        currentAgentId: "research",
+        sessionMainKey: "main",
+      }),
+    ).toEqual({ key: "incident-42", agentId: "ops" });
+  });
+
+  it("carries an explicit owner while unwrapping global storage", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] },
+    };
+    expect(
+      resolveTuiSessionSelection({
+        raw: "agent:ops:global",
+        cfg,
+        sessionScope: "per-sender",
+        currentAgentId: "research",
+        sessionMainKey: "main",
+      }),
+    ).toEqual({ key: "global", agentId: "ops" });
   });
 });
 

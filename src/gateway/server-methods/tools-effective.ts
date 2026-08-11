@@ -545,18 +545,11 @@ function resolveTrustedToolsEffectiveContext(params: {
     return null;
   }
 
-  // Only a canonical `global` key may adopt the client-requested agent: global
-  // stores are shared, so the requested agent selects which agent's global store
-  // to read. Non-global keys encode their owning agent, so the requested agent
-  // must stay subject to the mismatch guard below instead of overriding session
-  // ownership — otherwise `{ sessionKey: "agent:main:x", agentId: "work" }` would
-  // resolve under `work` and silently bypass the guard.
   const canonicalKey = loaded.canonicalKey ?? params.sessionKey;
-  const allowRequestedAgentOverride = canonicalKey === "global" && Boolean(params.requestedAgentId);
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: canonicalKey,
     config: loaded.cfg,
-    ...(allowRequestedAgentOverride ? { agentId: params.requestedAgentId } : {}),
+    ...(params.requestedAgentId ? { agentId: params.requestedAgentId } : {}),
   });
   if (params.requestedAgentId && params.requestedAgentId !== sessionAgentId) {
     params.respond(
