@@ -228,7 +228,7 @@ vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
-  loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
+  loadCombinedSessionStoreForGatewayCore: (...args: unknown[]) =>
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),

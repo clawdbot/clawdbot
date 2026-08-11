@@ -1,5 +1,5 @@
 import type { CliBackendToolAvailability } from "../../plugins/cli-backend.types.js";
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 
 /** Transport prefix CLI harnesses use for loopback OpenClaw MCP tool names. */
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
@@ -31,7 +31,7 @@ export function resolveCliRuntimeToolsAllow(
   if (toolsAllow === undefined) {
     return undefined;
   }
-  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+  return toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }

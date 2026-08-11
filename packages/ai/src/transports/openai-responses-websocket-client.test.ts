@@ -377,6 +377,44 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.sdkRequests).toHaveLength(1);
   });
 
+  it("awaits the SSE response hook before start after a WebSocket fallback", async () => {
+    transportState.handshakeMessages.push({ type: "error", error: new Error("connect failed") });
+    transportState.sdkOutcomes.push(sdkCompletion("resp_sse"));
+    const order: string[] = [];
+    let releaseHook!: () => void;
+    const hookPending = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const onResponse = vi.fn(async () => {
+      order.push("hook:start");
+      await hookPending;
+      order.push("hook:end");
+    });
+    const responseStream = await createOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        apiKey: "test-key",
+        sessionId: "session-1",
+        transport: "auto",
+        onResponse,
+      },
+    );
+    const consume = (async () => {
+      for await (const event of responseStream) {
+        order.push(event.type);
+      }
+    })();
+
+    await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
+    expect(order).toEqual(["hook:start"]);
+
+    releaseHook();
+    await consume;
+    expect((await responseStream.result()).stopReason).toBe("stop");
+    expect(order.slice(0, 3)).toEqual(["hook:start", "hook:end", "start"]);
+  });
+
   it("skips repeated WebSocket setup during the provider degradation cooldown", async () => {
     transportState.handshakeMessages.push({ type: "error", error: new Error("connect failed") });
     transportState.sdkOutcomes.push(sdkCompletion("resp_sse_1"), sdkCompletion("resp_sse_2"));

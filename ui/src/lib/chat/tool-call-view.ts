@@ -7,6 +7,7 @@
  */
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -56,10 +57,6 @@ const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
 const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
 const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
   if (!args) {

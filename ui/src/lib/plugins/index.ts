@@ -14,7 +14,7 @@ import type {
   PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../config/index.ts";
+import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type PluginCatalogItem = PluginCatalogEntry;
 export type PluginListResult = ProtocolPluginsListResult;

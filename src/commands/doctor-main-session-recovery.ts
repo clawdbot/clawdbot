@@ -3,7 +3,7 @@ import { transitionMainSessionRecovery } from "../agents/main-session-recovery/m
 import type { InternalSessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryReplacements,
-  listSessionEntries,
+  listSessionEntriesCore,
 } from "../config/sessions/session-accessor.js";
 
 type MainSessionRecoveryDoctorParams = {
@@ -18,7 +18,7 @@ type MainSessionRecoveryDoctorParams = {
 export async function noteMainSessionRecoveryIntegrity(
   params: MainSessionRecoveryDoctorParams,
 ): Promise<number> {
-  const entries = listSessionEntries({ agentId: params.agentId, storePath: params.storePath });
+  const entries = listSessionEntriesCore({ agentId: params.agentId, storePath: params.storePath });
   const wedged = entries.flatMap(({ entry, sessionKey }) => {
     const tombstone = (entry as InternalSessionEntry).mainRestartRecovery?.tombstone;
     return tombstone

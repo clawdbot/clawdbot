@@ -1,7 +1,7 @@
 // Proves when a new state root cannot contain legacy state migration work.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveConfigPath,
   resolveLegacyStateDirs,
@@ -86,9 +86,7 @@ function hasOnlyMigrationSafeInternalHooks(config: Record<string, unknown>): boo
     if (entry.env === undefined) {
       return true;
     }
-    return (
-      isRecord(entry.env) && Object.values(entry.env).every((value) => typeof value === "string")
-    );
+    return isStringRecord(entry.env);
   });
 }
 

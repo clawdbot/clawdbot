@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -332,7 +332,7 @@ describe("gateway method authorization", () => {
           createdActor: { type: "human", id: "owner" },
         },
       );
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         visibility: "draft",
       }));
       continueHandler();

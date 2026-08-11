@@ -93,6 +93,8 @@ type DeliverLaneTextParams = {
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
 };
 
+export type LaneTextDeliverer = (params: DeliverLaneTextParams) => Promise<LaneDeliveryResult>;
+
 function result(
   kind: Exclude<LaneDeliveryResult["kind"], "preview-finalized-partial">,
   delivery?: LanePreviewFinalizedDeliveryInput,
@@ -110,7 +112,7 @@ function result(
   return { kind };
 }
 
-export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
+export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): LaneTextDeliverer {
   const textOnlyPayload = (payload: ReplyPayload): ReplyPayload => {
     const {
       mediaUrl: _mediaUrl,
@@ -175,10 +177,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     ) {
       return payload;
     }
-    const telegramRest =
-      telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
-        ? (telegramData as Record<string, unknown>)
-        : {};
+    const telegramRest = asNonArrayRecord(telegramData);
     return {
       ...payload,
       channelData: {
@@ -535,3 +534,4 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     return delivered ? result("sent") : result("skipped");
   };
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

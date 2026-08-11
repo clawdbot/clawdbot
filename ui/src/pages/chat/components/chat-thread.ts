@@ -503,6 +503,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
                     transform: `translateY(${
                       virtualRow.start - virtualizer.options.scrollMargin
                     }px)`,
+                    // Keep skipped overscan rows at the virtualizer's known size.
+                    containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}
@@ -1922,7 +1924,7 @@ function renderChatThreadContents(
       @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <span
-        class="chat-transcript-announcement agent-chat__sr-only"
+        class="chat-transcript-announcement sr-only"
         role="status"
         aria-live=${props.announceTranscript !== false ? "polite" : "off"}
         aria-atomic="true"

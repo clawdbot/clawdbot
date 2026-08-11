@@ -25,17 +25,17 @@ import {
   installPluginFromMarketplaceMock,
   installPluginFromNpmSpecMock,
   installPluginFromPathMock,
-  loadConfig,
-  loadPluginManifestRegistry,
-  readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite,
-  parseClawHubPluginSpec,
+  pluginCliConfigMock,
+  loadPluginManifestRegistryMock,
+  readConfigFileSnapshotMock,
+  readConfigFileSnapshotForWriteMock,
+  parseClawHubPluginSpecMock,
   promptYesNoMock,
-  reportClawHubPluginInstallTelemetry,
-  recordHookInstall,
-  recordPluginInstall,
+  reportClawHubPluginInstallTelemetryMock,
+  recordHookInstallMock,
+  recordPluginInstallMock,
   resetPluginsCliTestState,
-  replaceConfigFile,
+  replaceConfigFileMock,
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
@@ -215,11 +215,11 @@ function primeNpmPluginFallback(pluginId = "demo") {
   const cfg = createEmptyPluginConfig();
   const enabledCfg = createEnabledPluginConfig(pluginId);
 
-  loadConfig.mockReturnValue(cfg);
+  pluginCliConfigMock.mockReturnValue(cfg);
   mockClawHubPackageNotFound(pluginId);
   installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult(pluginId));
   enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
-  recordPluginInstall.mockReturnValue(enabledCfg);
+  recordPluginInstallMock.mockReturnValue(enabledCfg);
   applyExclusiveSlotSelectionMock.mockReturnValue({
     config: enabledCfg,
     warnings: [],
@@ -232,9 +232,9 @@ function primeSuccessfulPluginPersistence(pluginId = "demo") {
   const cfg = createEmptyPluginConfig();
   const enabledCfg = createEnabledPluginConfig(pluginId);
 
-  loadConfig.mockReturnValue(cfg);
+  pluginCliConfigMock.mockReturnValue(cfg);
   enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
-  recordPluginInstall.mockReturnValue(enabledCfg);
+  recordPluginInstallMock.mockReturnValue(enabledCfg);
   applyExclusiveSlotSelectionMock.mockReturnValue({
     config: enabledCfg,
     warnings: [],
@@ -250,7 +250,7 @@ function primeSuccessfulClawHubPluginInstall(
   } = {},
 ) {
   const result = primeSuccessfulPluginPersistence("demo");
-  parseClawHubPluginSpec.mockReturnValue({
+  parseClawHubPluginSpecMock.mockReturnValue({
     name: "demo",
     ...(params.explicitVersion ? { version: "1.2.3" } : {}),
   });
@@ -319,7 +319,7 @@ function primeHookPackNpmFallback() {
   const cfg = {} as OpenClawConfig;
   const installedCfg = createNpmHookPackInstalledConfig();
 
-  loadConfig.mockReturnValue(cfg);
+  pluginCliConfigMock.mockReturnValue(cfg);
   mockClawHubPackageNotFound("@acme/demo-hooks");
   installPluginFromNpmSpecMock.mockResolvedValue({
     ok: false,
@@ -334,7 +334,7 @@ function primeHookPackNpmFallback() {
       integrity: "sha256-demo",
     },
   });
-  recordHookInstall.mockReturnValue(installedCfg);
+  recordHookInstallMock.mockReturnValue(installedCfg);
 
   return { cfg, installedCfg };
 }
@@ -345,13 +345,13 @@ function primeHookPackPathFallback(params: {
 }): OpenClawConfig {
   const installedCfg = createPathHookPackInstalledConfig(params.tmpRoot);
 
-  loadConfig.mockReturnValue({} as OpenClawConfig);
+  pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
   installPluginFromPathMock.mockResolvedValueOnce({
     ok: false,
     error: params.pluginInstallError,
   });
   installHooksFromPathMock.mockResolvedValueOnce(createHookPackInstallResult(params.tmpRoot));
-  recordHookInstall.mockReturnValue(installedCfg);
+  recordHookInstallMock.mockReturnValue(installedCfg);
 
   return installedCfg;
 }
@@ -445,14 +445,14 @@ function persistedInstallRecord(pluginId: string, callIndex = 0): PersistedInsta
 }
 
 function replaceConfigCall(callIndex = 0): { baseHash?: string; nextConfig?: OpenClawConfig } {
-  return mockCallArg(replaceConfigFile, callIndex) as {
+  return mockCallArg(replaceConfigFileMock, callIndex) as {
     baseHash?: string;
     nextConfig?: OpenClawConfig;
   };
 }
 
 function recordHookInstallCall(callIndex = 0): PersistedInstallRecord {
-  return mockCallArg(recordHookInstall, callIndex, 1) as PersistedInstallRecord;
+  return mockCallArg(recordHookInstallMock, callIndex, 1) as PersistedInstallRecord;
 }
 
 function runtimeLogsContain(fragment: string): boolean {
@@ -506,8 +506,8 @@ function primeInstallConfigSnapshot(params: {
 }): void {
   const configPath = params.configPath ?? path.join(process.cwd(), "openclaw.json5");
   const config = params.config ?? ({} as OpenClawConfig);
-  loadConfig.mockReturnValue(config);
-  readConfigFileSnapshotForWrite.mockResolvedValue({
+  pluginCliConfigMock.mockReturnValue(config);
+  readConfigFileSnapshotForWriteMock.mockResolvedValue({
     snapshot: {
       path: configPath,
       exists: true,
@@ -706,7 +706,7 @@ describe("plugins cli install", () => {
         integrity: "sha256-demo",
       },
     });
-    recordHookInstall.mockReturnValue(installedCfg);
+    recordHookInstallMock.mockReturnValue(installedCfg);
 
     await runAcknowledgedPluginsInstallCommand(["plugins", "install", "@acme/demo-hooks"]);
 
@@ -832,14 +832,14 @@ describe("plugins cli install", () => {
       } as OpenClawConfig;
       fs.mkdirSync(localPath);
       primeBlockedPluginConfigMutation();
-      parseClawHubPluginSpec.mockReturnValue({ name: "demo-hooks" });
+      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo-hooks" });
       installPluginFromPathMock.mockResolvedValue({
         ok: false,
         error: "package.json missing openclaw.extensions",
         code: "missing_openclaw_extensions",
       });
       installHooksFromPathMock.mockResolvedValue(createHookPackInstallResult(localPath));
-      recordHookInstall.mockReturnValue(installedCfg);
+      recordHookInstallMock.mockReturnValue(installedCfg);
 
       try {
         await runAcknowledgedPluginsInstallCommand([
@@ -1067,7 +1067,7 @@ describe("plugins cli install", () => {
       args: ["plugins", "install", "clawhub:demo"],
       installer: installPluginFromClawHubMock,
       setup: () => {
-        parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+        parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
         installPluginFromClawHubMock.mockResolvedValue(
           createClawHubInstallResult({
             pluginId: "demo",
@@ -1213,10 +1213,10 @@ describe("plugins cli install", () => {
   it("fails closed for unrelated invalid config before installer side effects", async () => {
     const invalidConfigErr = new Error("config invalid");
     (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
-    loadConfig.mockImplementation(() => {
+    pluginCliConfigMock.mockImplementation(() => {
       throw invalidConfigErr;
     });
-    readConfigFileSnapshot.mockResolvedValue({
+    readConfigFileSnapshotMock.mockResolvedValue({
       path: "/tmp/openclaw-config.json5",
       exists: true,
       raw: '{ "models": { "default": 123 } }',
@@ -1257,7 +1257,7 @@ describe("plugins cli install", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
+    pluginCliConfigMock.mockReturnValue(cfg);
     installPluginFromMarketplaceMock.mockResolvedValue({
       ok: true,
       pluginId: "alpha",
@@ -1274,7 +1274,7 @@ describe("plugins cli install", () => {
       diagnostics: [],
     });
     const alphaRoot = cliInstallPath("alpha");
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {
           id: "alpha",
@@ -1615,10 +1615,10 @@ describe("plugins cli install", () => {
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
     expect(record.clawpackSize).toBe(4096);
-    expect(readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
+    expect(readConfigFileSnapshotForWriteMock).toHaveBeenCalledTimes(2);
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("Installed plugin: demo")).toBe(true);
-    expect(reportClawHubPluginInstallTelemetry).toHaveBeenCalledWith({
+    expect(reportClawHubPluginInstallTelemetryMock).toHaveBeenCalledWith({
       baseUrl: "https://clawhub.ai",
       packageName: "demo",
       version: "1.2.3",
@@ -1634,7 +1634,7 @@ describe("plugins cli install", () => {
       "persistence failed",
     );
 
-    expect(reportClawHubPluginInstallTelemetry).not.toHaveBeenCalled();
+    expect(reportClawHubPluginInstallTelemetryMock).not.toHaveBeenCalled();
   });
 
   it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
@@ -1665,8 +1665,8 @@ describe("plugins cli install", () => {
   });
 
   it("prints acknowledgement guidance for unacknowledged ClawHub plugin installs", async () => {
-    loadConfig.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    pluginCliConfigMock.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       code: "clawhub_risk_acknowledgement_required",
@@ -1683,8 +1683,8 @@ describe("plugins cli install", () => {
   });
 
   it("prints blocked ClawHub download failures when no trust warning was emitted", async () => {
-    loadConfig.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    pluginCliConfigMock.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       code: "clawhub_download_blocked",
@@ -1723,7 +1723,7 @@ describe("plugins cli install", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
+    pluginCliConfigMock.mockReturnValue(cfg);
     findBundledPluginSourceMock.mockReturnValue({
       pluginId,
       localPath: `/app/dist/extensions/${pluginId}`,
@@ -1770,7 +1770,7 @@ describe("plugins cli install", () => {
         },
       },
     } as OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
+    pluginCliConfigMock.mockReturnValue(cfg);
     findBundledPluginSourceMock.mockReturnValue({
       pluginId,
       localPath: `/app/dist/extensions/${pluginId}`,
@@ -1804,7 +1804,7 @@ describe("plugins cli install", () => {
       },
     } as OpenClawConfig;
     const enabledCfg = createEnabledPluginConfig(pluginId);
-    loadConfig.mockReturnValue(cfg);
+    pluginCliConfigMock.mockReturnValue(cfg);
     findBundledPluginSourceMock.mockReturnValue({
       pluginId,
       localPath: `/app/dist/extensions/${pluginId}`,
@@ -1920,7 +1920,7 @@ describe("plugins cli install", () => {
   );
 
   it("passes third-party external catalog integrity to hook-pack fallback", async () => {
-    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    pluginCliConfigMock.mockReturnValue(createEmptyPluginConfig());
     findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
@@ -2168,7 +2168,7 @@ describe("plugins cli install", () => {
   });
 
   it("reports npm install failures without trying ClawHub when npm: prefix is used", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
       error: "npm install failed",
@@ -2189,7 +2189,7 @@ describe("plugins cli install", () => {
   });
 
   it("keeps actionable hook-pack fallback details", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
       error: "npm install failed",
@@ -2210,7 +2210,7 @@ describe("plugins cli install", () => {
   });
 
   it("adds a Git PATH hint when npm plugin dependency install cannot spawn git", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
       error: [
@@ -2239,7 +2239,7 @@ describe("plugins cli install", () => {
   });
 
   it("does not resolve npm: prefixed bundled plugin ids through bundled installs", async () => {
-    loadConfig.mockReturnValue({ plugins: { load: { paths: [] } } } as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({ plugins: { load: { paths: [] } } } as OpenClawConfig);
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
       error: "Package not found on npm: memory-lancedb.",
@@ -2263,7 +2263,7 @@ describe("plugins cli install", () => {
   });
 
   it("rejects empty npm: prefix installs before resolver lookup", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
 
     await expect(
       runAcknowledgedPluginsInstallCommand(["plugins", "install", "npm:"]),
@@ -2299,7 +2299,7 @@ describe("plugins cli install", () => {
   });
 
   it("rejects --pin for git installs and points at git refs", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
 
     await expect(
       runAcknowledgedPluginsInstallCommand([
@@ -2354,7 +2354,7 @@ describe("plugins cli install", () => {
     const enabledCfg = createEnabledPluginConfig("demo");
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-link-"));
 
-    loadConfig.mockReturnValue(cfg);
+    pluginCliConfigMock.mockReturnValue(cfg);
     installPluginFromPathMock.mockResolvedValueOnce({
       ok: true,
       pluginId: "demo",
@@ -2363,7 +2363,7 @@ describe("plugins cli install", () => {
       extensions: ["./dist/index.js"],
     });
     enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(enabledCfg);
+    recordPluginInstallMock.mockReturnValue(enabledCfg);
     applyExclusiveSlotSelectionMock.mockReturnValue({
       config: enabledCfg,
       warnings: [],
@@ -2416,7 +2416,7 @@ describe("plugins cli install", () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
     const pluginInstallError = "plugin blocked by security scan";
 
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromPathMock.mockResolvedValue({
       ok: false,
       error: pluginInstallError,
@@ -2489,7 +2489,7 @@ describe("plugins cli install", () => {
   });
 
   it("suggests update or --force when npm plugin install target already exists", async () => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     mockClawHubPackageNotFound("@example/lossless-claw");
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
@@ -2514,7 +2514,7 @@ describe("plugins cli install", () => {
   it("does not append hook-pack fallback details for managed extensions boundary failures", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
 
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromPathMock.mockResolvedValue({
       ok: false,
       error: "Invalid path: must stay within extensions directory",
@@ -2548,7 +2548,7 @@ describe("plugins cli install", () => {
     } as OpenClawConfig;
     const enabledCfg = createEnabledPluginConfig("demo");
 
-    loadConfig.mockReturnValue(cfg);
+    pluginCliConfigMock.mockReturnValue(cfg);
     installPluginFromPathMock.mockImplementation(async (...args: unknown[]) => {
       const [params] = args as [
         {
@@ -2568,7 +2568,7 @@ describe("plugins cli install", () => {
       };
     });
     enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(enabledCfg);
+    recordPluginInstallMock.mockReturnValue(enabledCfg);
     applyExclusiveSlotSelectionMock.mockReturnValue({
       config: enabledCfg,
       warnings: [],
@@ -2621,7 +2621,7 @@ describe("plugins cli install", () => {
     },
   ] as const)("does not fall back to hook pack for local path when $name", async (testCase) => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromPathMock.mockResolvedValue({
       ok: false,
       error: testCase.error,
@@ -2670,7 +2670,7 @@ describe("plugins cli install", () => {
       flags: ["--dangerously-force-unsafe-install"],
     },
   ] as const)("does not fall back to hook pack for npm installs when $name", async (testCase) => {
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     mockClawHubPackageNotFound(testCase.spec);
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
@@ -2694,7 +2694,7 @@ describe("plugins cli install", () => {
 
   it("still falls back to local hook pack when dangerous force unsafe install is set for non-security errors", async () => {
     const localHookDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-hook-pack-"));
-    loadConfig.mockReturnValue({} as OpenClawConfig);
+    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
     installPluginFromPathMock.mockResolvedValue({
       ok: false,
       error: "package.json missing openclaw.plugin.json",
@@ -2707,7 +2707,7 @@ describe("plugins cli install", () => {
       targetDir: "/tmp/hooks/demo-hooks",
       version: "1.2.3",
     });
-    recordHookInstall.mockReturnValue(createPathHookPackInstalledConfig(localHookDir));
+    recordHookInstallMock.mockReturnValue(createPathHookPackInstalledConfig(localHookDir));
 
     try {
       await runAcknowledgedPluginsInstallCommand([
@@ -2739,7 +2739,7 @@ describe("plugins cli install", () => {
   });
 
   it("does not fall back to npm when explicit ClawHub rejects a real package", async () => {
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       error: 'Use "openclaw skills install demo" instead.',

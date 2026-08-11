@@ -19,7 +19,7 @@ import {
   loadSessionEntry,
   loadExactSessionEntry,
   loadTranscriptEventsSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   replaceTranscriptEvents,
   replaceSessionEntry,
   withTranscriptWriteLock,
@@ -3185,7 +3185,7 @@ describe("gateway server chat", () => {
       });
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
         async ({ sessionKey, storePath: recoveryStorePath }) => {
-          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+          await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             abortedLastRun: false,
             updatedAt: Date.now(),
           }));
@@ -3252,7 +3252,7 @@ describe("gateway server chat", () => {
         () => expect(context.dedupe.has(pendingChatSendDedupeKey(idempotencyKey))).toBe(true),
         FAST_WAIT_OPTS,
       );
-      await patchSessionEntry({ sessionKey: "agent:main:main", storePath }, () => ({
+      await patchSessionEntryCore({ sessionKey: "agent:main:main", storePath }, () => ({
         restartRecoveryTerminalRunIds: [idempotencyKey],
         updatedAt: Date.now(),
       }));
@@ -3323,7 +3323,7 @@ describe("gateway server chat", () => {
       });
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
         async ({ sessionKey, storePath: recoveryStorePath }) => {
-          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+          await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             sessionId: "replacement-session",
             restartRecoveryDeliveryRunId: "replacement-recovery",
             restartRecoveryDeliverySourceRunId: "replacement-source",

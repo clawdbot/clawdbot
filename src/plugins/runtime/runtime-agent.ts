@@ -20,10 +20,10 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntry as patchAccessorSessionEntry,
+  patchSessionEntryCore as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,

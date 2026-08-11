@@ -58,6 +58,7 @@ import {
 } from "./chat-thread-items.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
+import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
   extractToolMessageRefs,
@@ -270,12 +271,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
     const provenance = asRecord(raw.provenance);
     if (role === "user" && provenance?.kind === "internal_system") {
-      const text = extractTextCached(msg)?.replace(/^\[System\] /u, "");
+      const noticeKind = resolveSystemNoticeKind(
+        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
+      );
+      const text = noticeKind?.summaryKey
+        ? t(noticeKind.summaryKey)
+        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
       if (text?.trim()) {
         items.push({
           kind: "notice",
           key: itemKey,
-          label: t("common.system"),
+          icon: noticeKind?.icon ?? "cpu",
+          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
           startsTurn: true,
           text,
           timestamp: normalized.timestamp,

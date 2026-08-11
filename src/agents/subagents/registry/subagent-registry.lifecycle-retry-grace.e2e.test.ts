@@ -201,7 +201,7 @@ describe("subagent registry lifecycle error grace", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
-      readSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
+      readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
       resolveStorePath: () => "/tmp/test-store",
     });

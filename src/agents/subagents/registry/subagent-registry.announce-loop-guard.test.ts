@@ -42,16 +42,16 @@ vi.mock("../../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => {
-  const listSessionEntries = () =>
+  const listSessionEntriesCore = () =>
     Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   const loadSessionEntry = (scope: { sessionKey: keyof typeof sessionStore }) =>
     sessionStore[scope.sessionKey];
   return {
-    listSessionEntries,
-    listSessionEntriesReadOnly: listSessionEntries,
+    listSessionEntriesCore,
+    listSessionEntriesReadOnly: listSessionEntriesCore,
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
-    patchSessionEntry: async () => null,
+    patchSessionEntryCore: async () => null,
   };
 });
 

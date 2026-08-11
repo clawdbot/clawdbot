@@ -10,10 +10,10 @@ import {
 import { resolveStorePath } from "./paths.js";
 import {
   createSessionEntryWithTranscript,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
@@ -114,7 +114,7 @@ describe("incognito transcript access", () => {
     const now = Date.now();
 
     try {
-      await patchSessionEntry(
+      await patchSessionEntryCore(
         staleScope,
         () => ({ sessionId: "incognito-stale-session", updatedAt: now }),
         {
@@ -130,7 +130,7 @@ describe("incognito transcript access", () => {
           type: "metadata",
         },
       ]);
-      await patchSessionEntry(
+      await patchSessionEntryCore(
         activeScope,
         () => ({ sessionId: "incognito-active-session", updatedAt: now + 1 }),
         {
@@ -140,7 +140,7 @@ describe("incognito transcript access", () => {
         },
       );
 
-      await patchSessionEntry(activeScope, () => ({ model: "gpt-test" }), {
+      await patchSessionEntryCore(activeScope, () => ({ model: "gpt-test" }), {
         maintenanceConfig: {
           highWaterBytes: null,
           maxDiskBytes: null,
@@ -153,7 +153,7 @@ describe("incognito transcript access", () => {
       });
 
       expect(
-        listSessionEntries({ agentId: "main", env, storePath }).map(
+        listSessionEntriesCore({ agentId: "main", env, storePath }).map(
           (summary) => summary.sessionKey,
         ),
       ).toEqual([activeScope.sessionKey]);

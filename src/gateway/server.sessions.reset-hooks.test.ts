@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
@@ -319,7 +319,7 @@ async function resolveGatewaySessionStorePathForKey(key: string) {
 async function loadGatewaySessionStoreForKey(key: string) {
   const gatewayStorePath = await resolveGatewaySessionStorePathForKey(key);
   return Object.fromEntries(
-    listSessionEntries({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),

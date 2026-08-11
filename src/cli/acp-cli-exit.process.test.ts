@@ -7,7 +7,7 @@ import {
 } from "node:child_process";
 import { createServer } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 import {
@@ -60,6 +60,17 @@ function createAcpProcessEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     OPENCLAW_NO_RESPAWN: "1",
     VITEST: undefined,
   };
+}
+
+function withoutSqliteTransactionWarnings(stderr: string): string {
+  // Slow-hold logger output is load-dependent performance diagnostics, not ACP clean-exit
+  // signal; see logSlowTransactionHold in sqlite-transaction.ts.
+  return stderr
+    .split("\n")
+    .filter(
+      (line) => !stripVTControlCharacters(line).trimStart().startsWith("[sqlite/transaction]"),
+    )
+    .join("\n");
 }
 
 function waitForExit(child: ChildProcessWithoutNullStreams) {
@@ -139,7 +150,7 @@ describe("ACP CLI process exit", () => {
           },
         );
 
-        expect(result.stderr).toBe("");
+        expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
         expect(result.stdout).toContain(usage);
       } finally {
         await state.cleanup();
@@ -173,7 +184,7 @@ describe("ACP CLI process exit", () => {
       expect(result.error).toBeUndefined();
       expect(result.signal).toBeNull();
       expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
+      expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
     } finally {
       await state.cleanup();
     }
@@ -272,7 +283,7 @@ describe("ACP CLI process exit", () => {
       child.stdin.end();
       const exit = await exitPromise;
       expect(exit).toEqual({ code: 0, signal: null });
-      expect(stderr).toBe("");
+      expect(withoutSqliteTransactionWarnings(stderr)).toBe("");
     } finally {
       child?.kill("SIGKILL");
       for (const socket of wss.clients) {

@@ -8,7 +8,7 @@ import {
 } from "../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
@@ -125,7 +125,7 @@ export async function readBtwTranscriptMessages(params: {
     const storePath = completeTarget ? params.storePath : (params.storePath ?? marker?.storePath);
     const markerMatches =
       marker && !completeTarget
-        ? listSessionEntries({
+        ? listSessionEntriesCore({
             agentId: marker.agentId,
             storePath: marker.storePath,
           }).filter(({ entry }) => entry.sessionId === marker.sessionId)

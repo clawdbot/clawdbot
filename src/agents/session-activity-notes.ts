@@ -1,3 +1,4 @@
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
@@ -325,10 +326,6 @@ export function noteSessionActivityEvent(
     default:
       break;
   }
-}
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 export function readFiniteNumber(value: unknown): number | undefined {

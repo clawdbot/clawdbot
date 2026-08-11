@@ -269,7 +269,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // including the side-question compatibility split.
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
-      4866,
+      // +2: add high-use coercion primitives while retaining shipped object-record exports.
+      4868,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -331,7 +332,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: channel-account-bound native approval request selection.
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
-      2922,
+      // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
+      2924,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -355,7 +357,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: text-runtime now names its global-singleton exports explicitly.
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
-      79,
+      // -2: text-runtime names record and string coercion compatibility exports explicitly.
+      77,
       env,
     ),
   };

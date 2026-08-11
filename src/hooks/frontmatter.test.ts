@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  parseFrontmatter,
+  parseHookFrontmatter,
   resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
@@ -22,7 +22,7 @@ function requireOpenClawMetadata(metadata: OpenClawHookMetadata | undefined): Op
   return metadata;
 }
 
-describe("parseFrontmatter", () => {
+describe("parseHookFrontmatter", () => {
   it("parses single-line key-value pairs", () => {
     const content = `---
 name: test-hook
@@ -32,7 +32,7 @@ homepage: https://example.com
 
 # Test Hook
 `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("test-hook");
     expect(result.description).toBe("A test hook");
     expect(result.homepage).toBe("https://example.com");
@@ -40,7 +40,7 @@ homepage: https://example.com
 
   it("handles missing frontmatter", () => {
     const content = "# Just a markdown file";
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result).toStrictEqual({});
   });
 
@@ -48,7 +48,7 @@ homepage: https://example.com
     const content = `---
 name: broken
     `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result).toStrictEqual({});
   });
 
@@ -67,7 +67,7 @@ metadata:
 
 # Session Memory Hook
 `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("session-memory");
     expect(result.description).toBe("Save session context");
     const metadata = requireString(result.metadata, "session-memory metadata");
@@ -94,7 +94,7 @@ metadata:
   }
 ---
 `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("command-logger");
 
     const parsed = JSON.parse(requireString(result.metadata, "command-logger metadata"));
@@ -110,7 +110,7 @@ name: simple-hook
 metadata: {"openclaw": {"events": ["test"]}}
 ---
 `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("simple-hook");
     expect(result.metadata).toBe('{"openclaw": {"events": ["test"]}}');
   });
@@ -129,7 +129,7 @@ metadata:
 enabled: true
 ---
 `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("mixed-hook");
     expect(result.description).toBe("A hook with mixed values");
     expect(result.homepage).toBe("https://example.com");
@@ -143,21 +143,21 @@ name: "quoted-name"
 description: 'single-quoted'
 ---
 `;
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("quoted-name");
     expect(result.description).toBe("single-quoted");
   });
 
   it("handles CRLF line endings", () => {
     const content = "---\r\nname: test\r\ndescription: crlf\r\n---\r\n";
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("test");
     expect(result.description).toBe("crlf");
   });
 
   it("handles CR line endings", () => {
     const content = "---\rname: test\rdescription: cr\r---\r";
-    const result = parseFrontmatter(content);
+    const result = parseHookFrontmatter(content);
     expect(result.name).toBe("test");
     expect(result.description).toBe("cr");
   });
@@ -270,7 +270,7 @@ metadata:
 # Session Memory Hook
 `;
 
-    const frontmatter = parseFrontmatter(content);
+    const frontmatter = parseHookFrontmatter(content);
     expect(frontmatter.name).toBe("session-memory");
     expect(requireString(frontmatter.metadata, "session-memory metadata")).toContain(
       '"command:reset"',
@@ -295,7 +295,7 @@ metadata:
       - command:new
 ---
 `;
-    const frontmatter = parseFrontmatter(content);
+    const frontmatter = parseHookFrontmatter(content);
     const openclaw = resolveOpenClawMetadata(frontmatter);
     expect(openclaw?.emoji).toBe("disk");
     expect(openclaw?.events).toEqual(["command:new"]);

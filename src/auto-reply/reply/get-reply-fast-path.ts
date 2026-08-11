@@ -9,7 +9,10 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
-import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  listSessionEntriesCore,
+} from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import {
@@ -189,7 +192,10 @@ export function initFastReplySessionState(params: {
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey: entryKey, entry }) => [
+      entryKey,
+      entry,
+    ]),
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.commandText ?? "";

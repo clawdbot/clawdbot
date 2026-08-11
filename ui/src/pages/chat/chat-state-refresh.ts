@@ -48,6 +48,7 @@ type ChatMetadataRequest = {
 
 type ChatMetadataRefreshOptions = {
   preserveModelCatalogOnFallback?: boolean;
+  refreshModelCatalog?: boolean;
   requestVersion?: number;
 };
 
@@ -175,8 +176,17 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
   );
 }
 
-async function refreshCompatibilityModelCatalog(request: ChatMetadataRequest) {
-  const models = await loadModels(request.client);
+async function refreshCompatibilityModelCatalog(
+  request: ChatMetadataRequest,
+  opts?: { refresh?: boolean },
+) {
+  const agentId = canUseCompatibilityModelCatalog(request.host, request.agentId)
+    ? undefined
+    : request.agentId?.trim() || undefined;
+  const models = await loadModels(request.client, {
+    ...(agentId ? { agentId } : {}),
+    ...(opts?.refresh ? { refresh: true } : {}),
+  });
   if (ownsChatMetadataRequest(request)) {
     request.host.chatModelCatalog = models;
   }
@@ -212,13 +222,10 @@ async function refreshMissingChatMetadata(
   const modelsRefresh =
     applied.models || preserveModels
       ? Promise.resolve()
-      : canUseCompatibilityModelCatalog(request.host, request.agentId)
-        ? refreshCompatibilityModelCatalog(request)
-        : Promise.resolve().then(() => {
-            if (ownsChatMetadataRequest(request)) {
-              request.host.chatModelCatalog = [];
-            }
-          });
+      : refreshCompatibilityModelCatalog(
+          request,
+          opts?.refreshModelCatalog ? { refresh: true } : undefined,
+        );
   await Promise.allSettled([commandsRefresh, modelsRefresh]);
 }
 
@@ -435,11 +442,11 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
           return;
         }
         rememberChatMetadata(client, agentId, metadata);
-        const applied = applyChatMetadataResult(host, client, agentId, metadata);
+        // Startup metadata stays on the published static catalog so opening chat never waits on
+        // provider discovery. The explicit models.list read below owns the live picker inventory.
+        const applied = applyChatMetadataResult(host, client, agentId, metadata, { models: false });
         if (!applied.models || !applied.commands) {
-          // chat.startup owns the first metadata load. Fill only omitted fields here;
-          // a parallel chat.metadata request would repeat the same catalog discovery.
-          await refreshMissingChatMetadata(request, applied);
+          await refreshMissingChatMetadata(request, applied, { refreshModelCatalog: true });
         }
       } finally {
         if (ownsChatMetadataRequest(request)) {

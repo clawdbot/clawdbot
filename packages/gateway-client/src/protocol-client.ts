@@ -1,18 +1,24 @@
-import type { ErrorShape, EventFrame, HelloOk, ResponseFrame } from "@openclaw/gateway-protocol";
+import type { ErrorShape, EventFrame, HelloOk } from "@openclaw/gateway-protocol";
 import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
-import type { GatewayPendingRequest } from "./pending-request.js";
+import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import {
   GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import { clearGatewayConnectTimeout, startGatewayConnectTimeout } from "./timeouts.js";
 
-export { GatewayProtocolRequestError, type GatewayProtocolRequestOptions };
+export {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+  type GatewayProtocolRequestOptions,
+  type GatewayProtocolRequestTiming,
+};
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -70,15 +76,6 @@ export type GatewayProtocolTiming<TPlan> = {
   usedFallback: boolean;
   plan?: TPlan;
   detail?: unknown;
-};
-export type GatewayProtocolRequestTiming = {
-  id: string;
-  method: string;
-  ok: boolean;
-  durationMs: number;
-  startedAtMs: number;
-  endedAtMs: number;
-  errorCode?: string;
 };
 type GatewayProtocolClientOptions<TPlan> = {
   createSocket: (handlers: GatewayProtocolSocketHandlers) => GatewayProtocolSocket;
@@ -139,7 +136,7 @@ type CloseSnapshot = Omit<GatewayProtocolCloseContext, "code" | "reason">;
  */
 export class GatewayProtocolClient<TPlan> {
   private socket: GatewayProtocolSocket | null = null;
-  private readonly pending = new Map<string, GatewayPendingRequest>();
+  private readonly requests: GatewayPendingRequests;
   private readonly listeners = new GatewayEventListeners<EventFrame>();
   private stopped = true;
   private generation = 0;
@@ -164,6 +161,16 @@ export class GatewayProtocolClient<TPlan> {
       factor: opts.reconnect.multiplier,
       jitter: 0,
     });
+    this.requests = new GatewayPendingRequests({
+      createRequestId: opts.createRequestId,
+      createRequestError: opts.createRequestError,
+      createRequestTimeoutError: opts.createRequestTimeoutError,
+      createRequestAbortError: opts.createRequestAbortError,
+      requestTimeoutMs: opts.requestTimeoutMs,
+      nowMs: () => this.nowMs(),
+      onTiming: opts.onRequestTiming,
+      onCallbackError: opts.onCallbackError,
+    });
   }
 
   get connected(): boolean {
@@ -171,7 +178,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   get hasPendingRequests(): boolean {
-    return this.pending.size > 0;
+    return this.requests.hasPending;
   }
 
   get connecting(): boolean {
@@ -179,7 +186,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   get hasUnboundedPendingRequests(): boolean {
-    return [...this.pending.values()].some((pending) => pending.unbounded);
+    return this.requests.hasUnboundedPending;
   }
 
   start(): void {
@@ -205,7 +212,7 @@ export class GatewayProtocolClient<TPlan> {
     this.socket = null;
     this.connectFailure = undefined;
     this.connectTiming = null;
-    this.flushRequests(new Error("gateway client stopped"));
+    this.requests.flush(new Error("gateway client stopped"));
     socket?.close();
   }
 
@@ -221,73 +228,7 @@ export class GatewayProtocolClient<TPlan> {
     if (typeof method !== "string" || method.length === 0) {
       return Promise.reject(new Error("invalid request frame: method must be a non-empty string"));
     }
-    const id = this.opts.createRequestId();
-    const timeoutMs =
-      options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
-    return new Promise<T>((resolve, reject) => {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      let requestSent = false;
-      const pending: GatewayPendingRequest = {
-        resolve: (value) => resolve(value as T),
-        reject,
-        expectFinal: options?.expectFinal === true,
-        acceptedNotified: false,
-        onAccepted: options?.onAccepted,
-        unbounded: timeoutMs === undefined,
-        method,
-        startedAtMs: this.nowMs(),
-      };
-      const onAbort = () => {
-        this.pending.delete(id);
-        pending.cleanup?.();
-        this.finishRequestTiming(id, pending, false, "CLIENT_ABORTED");
-        reject(
-          this.opts.createRequestAbortError?.(method) ??
-            new Error(`gateway request aborted for ${method}`),
-        );
-      };
-      const cleanup = () => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
-        options?.signal?.removeEventListener("abort", onAbort);
-      };
-      if (options?.signal?.aborted) {
-        reject(
-          this.opts.createRequestAbortError?.(method) ??
-            new Error(`gateway request aborted for ${method}`),
-        );
-        return;
-      }
-      pending.cleanup = cleanup;
-      if (timeoutMs !== undefined && timeoutMs >= 0) {
-        timeout = setTimeout(() => {
-          if (this.pending.get(id) !== pending) {
-            return;
-          }
-          this.pending.delete(id);
-          options?.signal?.removeEventListener("abort", onAbort);
-          this.finishRequestTiming(id, pending, false, "CLIENT_TIMEOUT");
-          reject(
-            this.opts.createRequestTimeoutError?.(method, timeoutMs, requestSent) ??
-              new Error(`gateway request timed out after ${timeoutMs}ms: ${method}`),
-          );
-        }, timeoutMs);
-        timeout.unref?.();
-      }
-      options?.signal?.addEventListener("abort", onAbort, { once: true });
-      this.pending.set(id, pending);
-      try {
-        socket.send(JSON.stringify({ type: "req", id, method, params }));
-        requestSent = true;
-        this.invoke("sent", () => options?.onSent?.());
-      } catch (error) {
-        this.pending.delete(id);
-        cleanup();
-        this.finishRequestTiming(id, pending, false, "CLIENT_SEND_ERROR");
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
+    return this.requests.request<T>(socket, method, params, options);
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
@@ -588,34 +529,7 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.opts.onActivity?.();
-    this.handleResponse(parsed);
-  }
-
-  private handleResponse(frame: ResponseFrame): void {
-    const pending = this.pending.get(frame.id);
-    if (!pending) {
-      return;
-    }
-    const status = (frame.payload as { status?: unknown } | undefined)?.status;
-    if (pending.expectFinal && status === "accepted") {
-      if (!pending.acceptedNotified) {
-        pending.acceptedNotified = true;
-        this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
-      }
-      return;
-    }
-    this.pending.delete(frame.id);
-    pending.cleanup?.();
-    if (frame.ok) {
-      this.finishRequestTiming(frame.id, pending, true);
-      pending.resolve(frame.payload);
-      return;
-    }
-    this.finishRequestTiming(frame.id, pending, false, frame.error?.code);
-    pending.reject(
-      this.opts.createRequestError?.(frame.error ?? {}) ??
-        new GatewayProtocolRequestError(frame.error ?? {}),
-    );
+    this.requests.handleResponse(parsed);
   }
 
   private handleClose(
@@ -642,7 +556,7 @@ export class GatewayProtocolClient<TPlan> {
     };
     this.connectFailure = undefined;
     const decision = this.opts.resolveClose(context);
-    this.flushRequests(
+    this.requests.flush(
       decision.pendingError ??
         context.connectFailure?.error ??
         new Error(`gateway closed (${code}): ${reason}`),
@@ -658,35 +572,6 @@ export class GatewayProtocolClient<TPlan> {
       return;
     }
     this.opts.onConnectError?.(error);
-  }
-
-  private flushRequests(error: Error): void {
-    for (const [id, pending] of this.pending) {
-      this.finishRequestTiming(id, pending, false, "CLIENT_CLOSED");
-      pending.cleanup?.();
-      pending.reject(error);
-    }
-    this.pending.clear();
-  }
-
-  private finishRequestTiming(
-    id: string,
-    pending: GatewayPendingRequest,
-    ok: boolean,
-    errorCode?: string,
-  ): void {
-    const endedAtMs = this.nowMs();
-    this.invoke("request timing", () =>
-      this.opts.onRequestTiming?.({
-        id,
-        method: pending.method,
-        ok,
-        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
-        startedAtMs: pending.startedAtMs,
-        endedAtMs,
-        errorCode,
-      }),
-    );
   }
 
   private scheduleReconnect(overrideMs?: number): void {

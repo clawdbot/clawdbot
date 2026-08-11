@@ -56,6 +56,7 @@ function requestModelsList(params: {
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
+  agentId?: string;
   includeProviderCapabilities?: boolean;
 }) {
   const respond = params.respond ?? vi.fn();
@@ -71,11 +72,13 @@ function requestModelsList(params: {
       method: "models.list",
       params: {
         view: params.view,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
       },
     },
     params: {
       view: params.view,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
     },
     respond: respond as RespondFn,
@@ -106,6 +109,31 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it("loads the requested agent catalog", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { id: "writer-model", name: "Writer Model", provider: "test" },
+    ]);
+    const { request } = requestModelsList({
+      view: "configured",
+      agentId: "writer",
+      runtimeConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "writer", model: "test/writer-model" },
+          ],
+        },
+      },
+      loadGatewayModelCatalog,
+    });
+
+    await request;
+
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "writer" }),
+    );
+  });
+
   it("uses the replacement owner config for the whole catalog projection", async () => {
     const initialConfig = {
       agents: { defaults: { models: { "test/old": {} } } },

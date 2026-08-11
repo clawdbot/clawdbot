@@ -178,7 +178,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           session: row,
         })
       : {};
-    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot, row);
     const openDesktopPanel = () =>
       window.dispatchEvent(
         new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
@@ -231,7 +231,6 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         id: "changes",
         label: t("chat.sessionDiff.show"),
         icon: icons.fileDiff,
-        disabledReason: sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : undefined,
         onActivate: sessionWorkspace.onOpenDiff,
       });
     }

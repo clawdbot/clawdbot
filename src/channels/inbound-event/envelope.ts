@@ -4,7 +4,7 @@ import {
   type AgentEnvelopeParams,
 } from "../../auto-reply/envelope.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAgentRoute,
@@ -29,7 +29,7 @@ export function createChannelInboundEnvelopeBuilder(params: {
       input.previousTimestamp === null
         ? undefined
         : (input.previousTimestamp ??
-          readSessionUpdatedAt({ storePath, sessionKey: params.route.sessionKey }));
+          readSessionUpdatedAtCore({ storePath, sessionKey: params.route.sessionKey }));
     return formatAgentEnvelope({
       ...input,
       previousTimestamp,

@@ -22,6 +22,11 @@ export function asOptionalRecord(value: unknown): Record<string, unknown> | unde
   return isRecord(value) ? value : undefined;
 }
 
+/** Returns a non-array record or a fresh ordinary empty record. */
+export function asNonArrayRecord(value: unknown): Record<string, unknown> {
+  return asOptionalRecord(value) ?? {};
+}
+
 /** Returns a non-array record or null. */
 export function asNullableRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
@@ -35,4 +40,9 @@ export function asOptionalObjectRecord(value: unknown): Record<string, unknown> 
 /** Returns any object-backed record, including arrays, or null. */
 export function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+/** Checks that every enumerable own value in a non-array record is a string. */
+export function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
 }

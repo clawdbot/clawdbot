@@ -841,6 +841,52 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not treat unsupported-flag wording fragments as a Claude downgrade", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      makeManagedRun({
+        exitCode: 1,
+        durationMs: 25,
+        stderr: "Claude exited unexpectedly while using --resume-session-at",
+      }),
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:resume-token-boundary",
+      runId: "run-resume-token-boundary",
+      cliSessionId: "existing-session",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["--resume", "{sessionId}"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    };
+    context.params.cliSessionBinding = {
+      sessionId: "existing-session",
+      resumeCheckpointId: "assistant-before-stall",
+      forkNextResume: true,
+    };
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          forkCliSessionOnResume: true,
+          claimCliSessionFork: vi.fn(async () => true),
+          restoreCliSessionFork: vi.fn(async () => {}),
+          persistCliSessionForkSuccessor: vi.fn(async () => {}),
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("exited unexpectedly");
+
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(

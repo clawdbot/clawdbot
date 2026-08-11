@@ -112,7 +112,7 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
     subpath: "browser-control-auth",
     artifactBasename: "browser-control-auth.js",
     mentions: [
-      "loadBundledPluginPublicSurfaceModuleSync",
+      "loadBundledPluginPublicSurfaceModuleSyncCore",
       "resolveBrowserControlAuth",
       "shouldAutoGenerateBrowserAuth",
       "ensureBrowserControlAuth",
@@ -128,7 +128,7 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
     subpath: "browser-profiles",
     artifactBasename: "browser-profiles.js",
     mentions: [
-      "loadBundledPluginPublicSurfaceModuleSync",
+      "loadBundledPluginPublicSurfaceModuleSyncCore",
       "resolveBrowserConfig",
       "resolveProfile",
     ],
@@ -143,7 +143,7 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
     subpath: "browser-host-inspection",
     artifactBasename: "browser-host-inspection.js",
     mentions: [
-      "loadBundledPluginPublicSurfaceModuleSync",
+      "loadBundledPluginPublicSurfaceModuleSyncCore",
       "resolveGoogleChromeExecutableForPlatform",
       "readBrowserVersion",
       "parseBrowserMajorVersion",
@@ -486,7 +486,7 @@ function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
   const source = readPluginSdkSource(subpath);
   return (
     source.startsWith("// Manual facade.") &&
-    sourceMentionsIdentifier(source, "loadBundledPluginPublicSurfaceModuleSync")
+    sourceMentionsIdentifier(source, "loadBundledPluginPublicSurfaceModuleSyncCore")
   );
 }
 

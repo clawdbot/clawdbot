@@ -1,9 +1,7 @@
 // Finds duplicate PRs after merge and closes overlapping candidates.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord } from "./lib/record-shared.mjs";
 function normalizeStringifiedOptionalString(value) {
   if (
     typeof value !== "string" &&

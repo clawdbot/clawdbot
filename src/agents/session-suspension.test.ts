@@ -6,7 +6,7 @@ import { CommandLane } from "../process/lanes.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({
@@ -50,7 +50,7 @@ describe("session suspension", () => {
     const { resetSessionSuspensionStateForTest } =
       await import("./session-suspension.test-support.js");
     resetSessionSuspensionStateForTest();
-    sessionAccessorMocks.patchSessionEntry.mockClear();
+    sessionAccessorMocks.patchSessionEntryCore.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
   });
 
@@ -183,7 +183,7 @@ describe("session suspension", () => {
     vi.useFakeTimers();
     const { setGatewayLaneResumeConcurrencies } = await import("./session-suspension.js");
     let resolvePatch: (() => void) | undefined;
-    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+    sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
       await new Promise<void>((resolve) => {
         resolvePatch = resolve;
       });
@@ -222,7 +222,7 @@ describe("session suspension", () => {
     await suspendLane(Number.MAX_SAFE_INTEGER, {} as OpenClawConfig, CommandLane.Main);
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    const buildPatch = sessionAccessorMocks.patchSessionEntry.mock.calls[0]?.[1] as (_entry: {
+    const buildPatch = sessionAccessorMocks.patchSessionEntryCore.mock.calls[0]?.[1] as (_entry: {
       quotaSuspension?: unknown;
     }) => {
       quotaSuspension?: { expectedResumeBy?: number };
@@ -261,12 +261,12 @@ describe("session suspension", () => {
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Nested, 0);
     expect(clearSessionSuspensionTimers()).toBe(1);
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
-    sessionAccessorMocks.patchSessionEntry.mockClear();
+    sessionAccessorMocks.patchSessionEntryCore.mockClear();
 
     await suspendLane(100, {} as OpenClawConfig, CommandLane.Nested);
 
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
-    expect(sessionAccessorMocks.patchSessionEntry).not.toHaveBeenCalled();
+    expect(sessionAccessorMocks.patchSessionEntryCore).not.toHaveBeenCalled();
 
     enableSessionSuspensionTimersForGatewayStart();
     await suspendLane(100, {} as OpenClawConfig, CommandLane.Nested);
@@ -378,7 +378,7 @@ describe("session suspension", () => {
           laneId?: string;
         }
       | undefined;
-    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+    sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
       await new Promise<void>((resolve) => {
         resolvePatch = resolve;
       });
@@ -400,7 +400,7 @@ describe("session suspension", () => {
 
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
     expect(writtenQuotaSuspension).toBeUndefined();
-    expect(sessionAccessorMocks.patchSessionEntry).toHaveBeenCalledOnce();
+    expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledOnce();
 
     await vi.advanceTimersByTimeAsync(100);
 
@@ -410,7 +410,7 @@ describe("session suspension", () => {
   it("does not let a pending suspension regain ownership after test state resets", async () => {
     let resolvePatch: (() => void) | undefined;
     let writtenQuotaSuspension: unknown;
-    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(async (_scope, update) => {
+    sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
       await new Promise<void>((resolve) => {
         resolvePatch = resolve;
       });
@@ -452,7 +452,7 @@ describe("session suspension", () => {
     const initialWritesReleased = new Promise<void>((resolve) => {
       releaseInitialWrites = resolve;
     });
-    sessionAccessorMocks.patchSessionEntry.mockImplementation(async (_scope, update) => {
+    sessionAccessorMocks.patchSessionEntryCore.mockImplementation(async (_scope, update) => {
       const patch = update(storeEntry) as typeof storeEntry | null;
       if (patch && "quotaSuspension" in patch) {
         storeEntry =
@@ -481,7 +481,7 @@ describe("session suspension", () => {
 
   it("still throttles the lane when persistence fails while gateway is active", async () => {
     vi.useFakeTimers();
-    sessionAccessorMocks.patchSessionEntry.mockRejectedValueOnce(new Error("disk busy"));
+    sessionAccessorMocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("disk busy"));
 
     await suspendLane(
       100,

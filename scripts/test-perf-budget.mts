@@ -7,6 +7,7 @@ import {
   parseBudgetNumber,
   readBudgetEnvNumber,
 } from "./lib/budget-number-args.mts";
+import { coerceErrorMessage as formatErrorMessage } from "./lib/error-format.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
 import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mts";
 
@@ -76,10 +77,6 @@ function parseArgs(argv: readonly string[], env = process.env) {
     );
   }
   return opts;
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function collectPerfReportStats(reportPath: string) {

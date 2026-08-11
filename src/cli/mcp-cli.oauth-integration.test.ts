@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { defaultRuntime } from "../runtime.js";
@@ -162,11 +163,14 @@ describe("mcp login OAuth integration", () => {
         await login;
 
         await expect(
-          readMcpOAuthCredentialsStatus({
-            serverName: "fixture",
-            serverUrl: `${fixture.issuer}/mcp`,
-          }),
-        ).resolves.toMatchObject({ hasTokens: true, hasCodeVerifier: true });
+          readMcpOAuthCredentialsStatus(
+            operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
+          ),
+        ).resolves.toMatchObject({
+          hasTokens: true,
+          hasCodeVerifier: false,
+          hasLastAuthorizationUrl: false,
+        });
         expect(fixture.exchange()).toMatchObject({
           tokenRedirectUri: redirectUrl,
           tokenVerifier: expect.any(String),

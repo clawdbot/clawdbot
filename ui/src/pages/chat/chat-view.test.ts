@@ -104,9 +104,9 @@ const buildChatItemsMock = vi.fn(
         {
           kind: "divider",
           key: "divider:compaction:test",
+          icon: "foldVertical",
           label: "Compacted history",
-          description:
-            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+          description: "The compacted transcript is preserved as a checkpoint.",
           action: {
             kind: "session-checkpoints",
             label: "Open checkpoints",
@@ -898,12 +898,11 @@ describe("chat compaction divider", () => {
       onOpenSessionCheckpoints,
     });
 
-    expect(container.querySelector(".chat-divider__label > span")?.textContent).toBe(
-      "Compacted history",
-    );
+    expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint.",
     );
+    expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent?.trim()).toBe("Open checkpoints");
 
@@ -5151,6 +5150,20 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("shows an empty state instead of a configured default when no usable models exist", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [],
+    });
+    const container = renderModelControls(state);
+
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(
+      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
+    ).toContain("No models available");
+  });
+
   it("applies a model selection immediately", () => {
     const { state } = createOpenAiHeaderState();
     const onModelSelect = vi.fn(async () => true);
@@ -5450,7 +5463,7 @@ describe("chat model controls", () => {
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
     const providerLabels = providerButtons.map((button) => button.textContent?.trim());
-    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode", "Moonshot AI"]);
+    expect(providerLabels).toEqual(["Google", "OpenCode", "Moonshot AI"]);
     expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
       container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,

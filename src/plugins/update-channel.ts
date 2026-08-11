@@ -24,7 +24,7 @@ import {
   isBridgeBundledPathRecord,
   isExternalizedBundledPluginEnabled,
   migratePluginConfigId,
-  pathsEqual,
+  userPathsEqual,
   removeBridgeBundledLoadPaths,
   resolveBridgeInstallRecord,
   shouldFallbackClawHubBridgeToNpm,
@@ -95,7 +95,7 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
 
       const alreadyBundled =
-        record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath, env);
+        record.source === "path" && userPathsEqual(record.sourcePath, bundledInfo.localPath, env);
       if (alreadyBundled) {
         continue;
       }
@@ -335,7 +335,7 @@ export async function syncPluginsForUpdateChannel(params: {
       if (record.source !== "path") {
         continue;
       }
-      if (!pathsEqual(record.sourcePath, bundledInfo.localPath, env)) {
+      if (!userPathsEqual(record.sourcePath, bundledInfo.localPath, env)) {
         continue;
       }
       // Keep explicit bundled installs on release channels. Replacing them with
@@ -343,8 +343,8 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
       const alreadyBundled =
         record.source === "path" &&
-        pathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
-        pathsEqual(record.installPath, bundledInfo.localPath, env);
+        userPathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
+        userPathsEqual(record.installPath, bundledInfo.localPath, env);
       if (alreadyBundled) {
         continue;
       }

@@ -29,6 +29,7 @@ and what the automatic resume looks like.
 | Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
 | Scheduled (cron) jobs         | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                        |
 | Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
+| Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
 
 ## Graceful restarts drain first
 
@@ -245,6 +246,8 @@ channels.start --params '{"channel":"<id>"}'`
 - Work that was never admitted: messages arriving during the drain window are
   rejected with an explicit restart error rather than silently queued into a
   dying process.
+- Gateway terminal PTYs, including operator- and agent-owned terminals. They
+  are process-local and end when the Gateway restarts.
 - Standalone embedded turns cannot take over a main session with pending
   restart recovery because they do not share the gateway's lifecycle owner.
   Run the turn through the gateway or reset it there with `/new` or `/reset`.

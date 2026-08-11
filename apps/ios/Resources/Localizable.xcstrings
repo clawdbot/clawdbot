@@ -7073,6 +7073,142 @@
         }
       }
     },
+    "+%1$lld more working": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld more working"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld 个进行中"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld 個進行中"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld trabalhando"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld weitere aktiv"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld más trabajando"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+他%1$lld件が作業中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld개 더 작업 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld de plus en cours"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld और काम कर रहे हैं"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld أخرى قيد العمل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld altri in esecuzione"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld tane daha çalışıyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+ще %1$lld працює"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld lagi bekerja"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld więcej pracuje"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld กำลังทำงานเพิ่มเติม"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld đang hoạt động"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld meer actief"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld مورد دیگر در حال کار"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld ещё в работе"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%1$lld till arbetar"
+          }
+        }
+      }
+    },
     "1 more worker": {
       "localizations": {
         "en": {

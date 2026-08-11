@@ -57,7 +57,7 @@ import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gatewa
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
-import { redactSecrets } from "../status-all/format.js";
+import { redactStatusSecrets } from "../status-all/format.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
 
@@ -65,7 +65,7 @@ const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 /** Scrubs credential-shaped text before probe failures cross a UI or CLI boundary. */
 export function redactAuthProbeError(error: string): string {
-  return redactSecrets(error);
+  return redactStatusSecrets(error);
 }
 
 const embeddedRunnerModuleLoader = createLazyImportLoader(

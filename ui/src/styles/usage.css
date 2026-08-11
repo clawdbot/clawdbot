@@ -561,6 +561,11 @@
 .usage-export-menu::part(menu) {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 48px));
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
 }
 
 .usage-filter-option {
@@ -569,7 +574,8 @@
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
-  border-radius: var(--radius-md);
+  min-height: var(--menu-item-height);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   font-size: 12px;
   transition: background 0.12s ease;

@@ -9,6 +9,24 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
+function sessionsList(placement: "local" | "active") {
+  return {
+    count: 1,
+    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+    path: "",
+    sessions: [
+      {
+        key: "main",
+        kind: "direct",
+        label: "Main",
+        placement: { state: placement },
+        updatedAt: Date.now(),
+      },
+    ],
+    ts: Date.now(),
+  };
+}
+
 async function openPalette(page: import("playwright").Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
@@ -49,20 +67,47 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
 
 suite.define(() => {
   it("hides the desktop command without the method or operator.admin", async () => {
-    for (const scenario of [
-      { featureMethods: ["environments.list"] },
+    for (const testCase of [
+      {
+        featureMethods: ["environments.list"],
+        methodResponses: { "sessions.list": sessionsList("active") },
+      },
       {
         featureMethods: ["environments.list", "worker.desktop.observe"],
+        methodResponses: { "sessions.list": sessionsList("active") },
         operatorScopes: ["operator.read"],
       },
     ]) {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-        await installMockGateway(page, scenario);
+        await installMockGateway(page, testCase);
         await page.goto(`${suite.server.baseUrl}chat`);
         await openPalette(page);
         expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(0);
       });
     }
+  });
+
+  it("keeps the desktop command and panel unavailable for a local session", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["environments.list", "worker.desktop.observe"],
+        methodResponses: { "sessions.list": sessionsList("local") },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await openPalette(page);
+      expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(0);
+
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:desktop-toggle", { detail: { open: true } }),
+        );
+      });
+      await page.waitForTimeout(250);
+      expect(
+        await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
+      ).toBe(0);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+    });
   });
 
   it("launches advertised desktop apps and keeps observe controls working", async () => {
@@ -71,6 +116,7 @@ suite.define(() => {
         deferredMethods: ["worker.desktop.launch"],
         featureMethods: ["environments.list", "worker.desktop.launch", "worker.desktop.observe"],
         methodResponses: {
+          "sessions.list": sessionsList("active"),
           "environments.list": {
             environments: [
               {
@@ -207,6 +253,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["environments.list", "worker.desktop.launch", "worker.desktop.observe"],
         methodResponses: {
+          "sessions.list": sessionsList("active"),
           "environments.list": {
             environments: [
               {

@@ -19,7 +19,7 @@ vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
+    loadCombinedSessionStoreForGatewayCore: (
       cfg: OpenClawConfig,
       opts?: { agentId?: string; configuredAgentsOnly?: boolean },
     ) => hoisted.loadCombinedSessionStoreForGatewayMock(cfg, opts),

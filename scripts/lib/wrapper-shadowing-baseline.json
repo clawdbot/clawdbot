@@ -1,38 +1,8 @@
 [
   {
-    "name": "loadBundledPluginPublicSurfaceModuleSync",
-    "wrapped": "src/plugin-sdk/facade-loader.ts",
-    "wrapper": "src/plugin-sdk/facade-runtime.ts"
-  },
-  {
-    "name": "loadCombinedSessionStoreForGateway",
-    "wrapped": "src/config/sessions/combined-store-gateway.ts",
-    "wrapper": "src/plugin-sdk/session-transcript-hit.ts"
-  },
-  {
     "name": "loadPluginManifestRegistry",
     "wrapped": "src/plugins/manifest-registry.ts",
     "wrapper": "src/config/doc-baseline.runtime.ts"
-  },
-  {
-    "name": "loadWebMediaRaw",
-    "wrapped": "src/media/web-media.ts",
-    "wrapper": "src/plugins/runtime/runtime-web-channel-plugin.ts"
-  },
-  {
-    "name": "loadWebMedia",
-    "wrapped": "src/media/web-media.ts",
-    "wrapper": "src/plugins/runtime/runtime-web-channel-plugin.ts"
-  },
-  {
-    "name": "maybeApplyTtsToPayload",
-    "wrapped": "src/tts/tts-payload.ts",
-    "wrapper": "src/tts/tts.ts"
-  },
-  {
-    "name": "normalizeCronRunDiagnostics",
-    "wrapped": "src/cron/run-diagnostics-normalize.ts",
-    "wrapper": "src/cron/run-diagnostics.ts"
   },
   {
     "name": "normalizeOutboundReplyPayload",
@@ -45,30 +15,14 @@
     "wrapper": "src/plugins/config-policy.ts"
   },
   {
-    "name": "optimizeImageToJpeg",
-    "wrapped": "src/media/web-media.ts",
-    "wrapper": "src/plugins/runtime/runtime-web-channel-plugin.ts"
-  },
-  {
     "name": "pruneStaleCommandPolls",
     "wrapped": "src/agents/command-poll-backoff.ts",
     "wrapper": "src/agents/command-poll-backoff.runtime.ts"
   },
   {
-    "name": "readAmbientTranscriptWatermark",
-    "wrapped": "src/config/sessions/ambient-transcript-watermark.ts",
-    "wrapper": "src/plugin-sdk/session-store-runtime.ts"
-  },
-  {
     "name": "readBooleanParam",
     "wrapped": "src/plugin-sdk/boolean-param.ts",
     "wrapper": "src/infra/outbound/message-action-params.ts"
-  },
-  {
-    "name": "readSessionTranscriptVisibleMessageDelta",
-    "wrapped": "src/config/sessions/session-accessor.sqlite-active-events.ts",
-    "wrapper": "src/plugin-sdk/session-transcript-runtime.ts",
-    "via": "src/config/sessions/session-accessor.ts"
   },
   {
     "name": "resolveAllowedModelRef",

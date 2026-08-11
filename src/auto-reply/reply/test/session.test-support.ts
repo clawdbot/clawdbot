@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
   upsertSessionEntry,
@@ -52,7 +52,7 @@ export async function writeSessionStore(
 
 export function readSessionStore(storePath: string): Record<string, ProjectedSessionEntry> {
   const entries = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       projectSessionEntry(entry),
     ]),

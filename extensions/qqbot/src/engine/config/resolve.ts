@@ -9,13 +9,13 @@
  */
 
 import {
-  asOptionalObjectRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeStringifiedEntries,
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
+import { readQqbotObjectRecord as asOptionalObjectRecord } from "../object-record.js";
 
 /**
  * Default account ID, used for the unnamed top-level account.

@@ -7,7 +7,7 @@
  * and stay framework-agnostic.
  */
 
-import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQqbotObjectRecord as asOptionalObjectRecord } from "../object-record.js";
 import { DEFAULT_ACCOUNT_ID } from "./resolve.js";
 
 // ---- Logout: clear all credential fields for an account ----
