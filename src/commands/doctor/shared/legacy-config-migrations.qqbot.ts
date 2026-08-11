@@ -6,12 +6,12 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import {
-  hasOwnKey,
   listQQBotConfigEntries,
   migrateClientSecretFile,
   migrateDefaultAccount,
   shouldCreateEnvironmentOnlyQQBotConfig,
 } from "./legacy-config-migrations.qqbot-account.js";
+import { hasOwnKey } from "./legacy-config-record-shared.js";
 
 const APPROVALS_DISABLED_SENTINEL = "openclaw:approval-disabled";
 

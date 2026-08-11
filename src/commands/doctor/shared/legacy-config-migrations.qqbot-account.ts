@@ -1,10 +1,7 @@
 // Account and credential migrations for the Tencent QQBot 2.0 cutover.
 import { getRecord } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-
-export function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(target, key);
-}
+import { hasOwnKey } from "./legacy-config-record-shared.js";
 
 function hasEnvironmentValue(name: "QQBOT_APP_ID" | "QQBOT_CLIENT_SECRET"): boolean {
   return Boolean(process.env[name]?.trim());
