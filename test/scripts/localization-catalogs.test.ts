@@ -8,6 +8,7 @@ import {
   catalogSourceRevision,
   catalogWorkflowPaths,
   checkCatalogs,
+  detectChangedCatalogAreas,
   detectCatalogDrift,
   refreshCatalogs,
 } from "../../scripts/localization-catalogs.js";
@@ -18,46 +19,58 @@ const SOURCE_MESSAGES = { "wizard.completion.title": "Shell completion" };
 
 let root: string;
 
-async function writeJson(relativePath: string, value: unknown) {
-  const filePath = path.join(root, relativePath);
+async function writeJson(relativePath: string, value: unknown, fixtureRoot = root) {
+  const filePath = path.join(fixtureRoot, relativePath);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-async function writeFixture() {
-  await writeJson("registry.json", {
-    schemaVersion: 1,
-    areas: [
-      {
-        id: "wizard-core",
-        namespace: "wizard",
-        source: SOURCE_PATH,
-        targets: [{ locale: "zh-CN", path: TARGET_PATH }],
-        protectedLiterals: ["Shell"],
-      },
-    ],
-  });
-  await writeJson(SOURCE_PATH, {
-    schemaVersion: 1,
-    area: "wizard-core",
-    messages: SOURCE_MESSAGES,
-  });
-  await writeJson(TARGET_PATH, {
-    schemaVersion: 1,
-    area: "wizard-core",
-    locale: "zh-CN",
-    sourceRevision: catalogSourceRevision(SOURCE_MESSAGES),
-    sourceMessages: SOURCE_MESSAGES,
-    generation: {
-      workflow: "test",
-      provider: "fixture",
-      model: "fixture",
-      sourceCommit: "a".repeat(40),
-      glossaryRevision: "none",
-      validation: "passed",
+async function writeFixture(fixtureRoot = root) {
+  await writeJson(
+    "registry.json",
+    {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          namespace: "wizard",
+          source: SOURCE_PATH,
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: ["Shell"],
+        },
+      ],
     },
-    messages: { "wizard.completion.title": "Shell 补全" },
-  });
+    fixtureRoot,
+  );
+  await writeJson(
+    SOURCE_PATH,
+    {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: SOURCE_MESSAGES,
+    },
+    fixtureRoot,
+  );
+  await writeJson(
+    TARGET_PATH,
+    {
+      schemaVersion: 1,
+      area: "wizard-core",
+      locale: "zh-CN",
+      sourceRevision: catalogSourceRevision(SOURCE_MESSAGES),
+      sourceMessages: SOURCE_MESSAGES,
+      generation: {
+        workflow: "test",
+        provider: "fixture",
+        model: "fixture",
+        sourceCommit: "a".repeat(40),
+        glossaryRevision: "none",
+        validation: "passed",
+      },
+      messages: { "wizard.completion.title": "Shell 补全" },
+    },
+    fixtureRoot,
+  );
 }
 
 beforeEach(async () => {
@@ -243,6 +256,104 @@ describe("localization catalog authoring", () => {
       sources: [SOURCE_PATH],
       targets: [TARGET_PATH],
     });
+  });
+
+  it("selects only the catalog area changed from an exact comparison base", async () => {
+    const baseRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-localization-base-"));
+    const updaterSource = "updater/i18n/catalogs/en.json";
+    const updaterTarget = "updater/i18n/catalogs/generated/zh-CN.json";
+    const registry = {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          namespace: "wizard",
+          source: SOURCE_PATH,
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: ["Shell"],
+        },
+        {
+          id: "updater",
+          namespace: "updater",
+          source: updaterSource,
+          targets: [{ locale: "zh-CN", path: updaterTarget }],
+          protectedLiterals: [],
+        },
+      ],
+    };
+    try {
+      await writeJson("registry.json", registry);
+      await writeJson("registry.json", registry, baseRoot);
+      await writeJson(SOURCE_PATH, {
+        schemaVersion: 1,
+        area: "wizard-core",
+        messages: { "wizard.completion.title": "Shell completion changed" },
+      });
+      await writeJson(
+        SOURCE_PATH,
+        {
+          schemaVersion: 1,
+          area: "wizard-core",
+          messages: SOURCE_MESSAGES,
+        },
+        baseRoot,
+      );
+      for (const fixtureRoot of [root, baseRoot]) {
+        await writeJson(
+          updaterSource,
+          {
+            schemaVersion: 1,
+            area: "updater",
+            messages: { "updater.status": "Checking for updates" },
+          },
+          fixtureRoot,
+        );
+      }
+
+      await expect(
+        detectChangedCatalogAreas({ root, baseRoot, registryPath: "registry.json" }),
+      ).resolves.toEqual(["wizard-core"]);
+      await expect(
+        catalogWorkflowPaths({
+          root,
+          registryPath: "registry.json",
+          areas: ["wizard-core"],
+        }),
+      ).resolves.toEqual({ sources: [SOURCE_PATH], targets: [TARGET_PATH] });
+    } finally {
+      await rm(baseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a target redirected into another owner's catalog directory", async () => {
+    const registry = JSON.parse(await readFile(path.join(root, "registry.json"), "utf8"));
+    registry.areas[0].targets[0].path = "other/i18n/catalogs/generated/zh-CN.json";
+    await writeJson("registry.json", registry);
+
+    await expect(catalogWorkflowPaths({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "owner-local generated target",
+    );
+  });
+
+  it("rejects an oversized refresh plan before calling the translation provider", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    const translator = vi.fn();
+
+    await expect(
+      refreshCatalogs({
+        root,
+        registryPath: "registry.json",
+        sourceCommit: "d".repeat(40),
+        translator,
+        limits: { maxCharactersPerMessage: 10 },
+        write: true,
+      }),
+    ).rejects.toThrow("characters; limit is 10");
+    expect(translator).not.toHaveBeenCalled();
   });
 
   it("rejects registry paths outside the adopted owner convention", async () => {

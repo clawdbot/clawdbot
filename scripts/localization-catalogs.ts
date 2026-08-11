@@ -26,6 +26,15 @@ type CatalogRegistry = {
   areas: readonly CatalogArea[];
 };
 
+export type CatalogRefreshLimits = {
+  maxAreas: number;
+  maxTargets: number;
+  maxMessagesPerArea: number;
+  maxCharactersPerMessage: number;
+  maxSourceCharactersPerArea: number;
+  maxTranslationCharacters: number;
+};
+
 type SourceCatalog = {
   schemaVersion: 1;
   area: string;
@@ -52,6 +61,14 @@ export type CatalogTranslator = (
 ) => Promise<Map<string, string>>;
 
 const DEFAULT_REGISTRY_PATH = "localization/catalogs.json";
+const DEFAULT_REFRESH_LIMITS: CatalogRefreshLimits = Object.freeze({
+  maxAreas: 5,
+  maxTargets: 110,
+  maxMessagesPerArea: 500,
+  maxCharactersPerMessage: 4_000,
+  maxSourceCharactersPerArea: 100_000,
+  maxTranslationCharacters: 2_000_000,
+});
 
 class CatalogSourceDriftError extends Error {}
 
@@ -185,6 +202,7 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
     if (!/(?:^|\/)i18n\/catalogs\/en\.json$/u.test(area.source)) {
       throw new Error(`${area.source} must use the adopted i18n/catalogs/en.json source path`);
     }
+    const catalogDirectory = path.posix.dirname(area.source);
     const locales = new Set<string>();
     for (const target of area.targets) {
       if (!(SUPPORTED_LOCALES as readonly string[]).includes(target.locale)) {
@@ -194,9 +212,9 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
         throw new Error(`area ${area.id} contains duplicate target locale ${target.locale}`);
       }
       locales.add(target.locale);
-      const expectedSuffix = `/i18n/catalogs/generated/${target.locale}.json`;
-      if (!target.path.endsWith(expectedSuffix)) {
-        throw new Error(`${target.path} must end with ${expectedSuffix}`);
+      const expectedPath = `${catalogDirectory}/generated/${target.locale}.json`;
+      if (target.path !== expectedPath) {
+        throw new Error(`${target.path} must be the owner-local generated target ${expectedPath}`);
       }
       if (target.path === area.source) {
         throw new Error(`area ${area.id} source and target paths must differ`);
@@ -207,16 +225,30 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
 }
 
 export async function catalogWorkflowPaths(
-  options: { root?: string; registryPath?: string } = {},
+  options: {
+    root?: string;
+    registryPath?: string;
+    area?: string;
+    areas?: readonly string[];
+  } = {},
 ): Promise<{ sources: readonly string[]; targets: readonly string[] }> {
   const root = options.root ?? process.cwd();
   const registry = await readRegistry(root, options.registryPath ?? DEFAULT_REGISTRY_PATH);
+  const areas = selectAreas(registry, options.area, options.areas);
   return {
-    sources: Object.freeze(registry.areas.map((area) => area.source).toSorted()),
+    sources: Object.freeze(areas.map((area) => area.source).toSorted()),
     targets: Object.freeze(
-      registry.areas.flatMap((area) => area.targets.map((target) => target.path)).toSorted(),
+      areas.flatMap((area) => area.targets.map((target) => target.path)).toSorted(),
     ),
   };
+}
+
+export async function catalogWorkflowAreas(
+  options: { root?: string; registryPath?: string } = {},
+): Promise<readonly string[]> {
+  const root = options.root ?? process.cwd();
+  const registry = await readRegistry(root, options.registryPath ?? DEFAULT_REGISTRY_PATH);
+  return Object.freeze(registry.areas.map((area) => area.id).toSorted());
 }
 
 async function readSource(root: string, area: CatalogArea): Promise<SourceCatalog> {
@@ -348,15 +380,82 @@ function validateGenerated(
   }
 }
 
-function selectAreas(registry: CatalogRegistry, areaId?: string): readonly CatalogArea[] {
-  if (!areaId) {
+function selectAreas(
+  registry: CatalogRegistry,
+  areaId?: string,
+  areaIds?: readonly string[],
+): readonly CatalogArea[] {
+  if (areaId && areaIds) {
+    throw new Error("catalog selection accepts either area or areas, not both");
+  }
+  if (!areaId && !areaIds) {
     return registry.areas;
   }
-  const area = registry.areas.find((entry) => entry.id === areaId);
-  if (!area) {
-    throw new Error(`unknown localization catalog area: ${areaId}`);
+  const selectedIds = areaIds ?? [areaId as string];
+  if (new Set(selectedIds).size !== selectedIds.length) {
+    throw new Error("catalog selection contains duplicate area ids");
   }
-  return [area];
+  const areasById = new Map(registry.areas.map((entry) => [entry.id, entry]));
+  return selectedIds.map((selectedId) => {
+    const area = areasById.get(selectedId);
+    if (!area) {
+      throw new Error(`unknown localization catalog area: ${selectedId}`);
+    }
+    return area;
+  });
+}
+
+/**
+ * Selects only catalog areas whose registry contract or English source changed
+ * between two exact repository revisions. Area removal is intentionally not
+ * automated because deleting published locale artifacts needs an owner-reviewed
+ * migration rather than a generated refresh.
+ */
+export async function detectChangedCatalogAreas(options: {
+  root: string;
+  baseRoot: string;
+  registryPath?: string;
+}): Promise<readonly string[]> {
+  const registryPath = options.registryPath ?? DEFAULT_REGISTRY_PATH;
+  const current = await readRegistry(options.root, registryPath);
+  let base: CatalogRegistry;
+  try {
+    base = await readRegistry(options.baseRoot, registryPath);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") {
+      return Object.freeze(current.areas.map((area) => area.id).toSorted());
+    }
+    throw error;
+  }
+
+  const currentById = new Map(current.areas.map((area) => [area.id, area]));
+  const removed = base.areas
+    .map((area) => area.id)
+    .filter((areaId) => !currentById.has(areaId))
+    .toSorted();
+  if (removed.length > 0) {
+    throw new Error(
+      `catalog area removal requires an owner-reviewed migration: ${removed.join(", ")}`,
+    );
+  }
+
+  const baseById = new Map(base.areas.map((area) => [area.id, area]));
+  const changed: string[] = [];
+  for (const area of current.areas) {
+    const baseArea = baseById.get(area.id);
+    if (!baseArea || JSON.stringify(baseArea) !== JSON.stringify(area)) {
+      changed.push(area.id);
+      continue;
+    }
+    const [source, baseSource] = await Promise.all([
+      readSource(options.root, area),
+      readSource(options.baseRoot, baseArea),
+    ]);
+    if (catalogSourceRevision(source.messages) !== catalogSourceRevision(baseSource.messages)) {
+      changed.push(area.id);
+    }
+  }
+  return Object.freeze(changed.toSorted());
 }
 
 export async function checkCatalogs(
@@ -428,9 +527,11 @@ export async function refreshCatalogs(options: {
   root?: string;
   registryPath?: string;
   area?: string;
+  areas?: readonly string[];
   locale?: string;
   sourceCommit: string;
   translator?: CatalogTranslator;
+  limits?: Partial<CatalogRefreshLimits>;
   write: boolean;
 }): Promise<number> {
   if (!/^[0-9a-f]{40}$/u.test(options.sourceCommit)) {
@@ -444,10 +545,44 @@ export async function refreshCatalogs(options: {
       const { translateCatalogEntries } = await import("./control-ui-i18n.js");
       return await translateCatalogEntries(entries, locale);
     });
-  let changed = 0;
-  for (const area of selectAreas(registry, options.area)) {
+  const limits = { ...DEFAULT_REFRESH_LIMITS, ...options.limits };
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`catalog refresh limit ${name} must be a positive safe integer`);
+    }
+  }
+  const selectedAreas = selectAreas(registry, options.area, options.areas);
+  const plan: {
+    area: CatalogArea;
+    source: SourceCatalog;
+    sourceRevision: string;
+    targets: readonly CatalogTarget[];
+  }[] = [];
+  let targetCount = 0;
+  let translationCharacters = 0;
+  for (const area of selectedAreas) {
     const source = await readSource(root, area);
     validateSourceContent(area, source);
+    const sourceEntries = Object.entries(source.messages);
+    if (sourceEntries.length > limits.maxMessagesPerArea) {
+      throw new Error(
+        `catalog area ${area.id} contains ${sourceEntries.length} messages; limit is ${limits.maxMessagesPerArea}`,
+      );
+    }
+    let sourceCharacters = 0;
+    for (const [messageId, message] of sourceEntries) {
+      if (message.length > limits.maxCharactersPerMessage) {
+        throw new Error(
+          `catalog message ${messageId} contains ${message.length} characters; limit is ${limits.maxCharactersPerMessage}`,
+        );
+      }
+      sourceCharacters += message.length;
+    }
+    if (sourceCharacters > limits.maxSourceCharactersPerArea) {
+      throw new Error(
+        `catalog area ${area.id} contains ${sourceCharacters} source characters; limit is ${limits.maxSourceCharactersPerArea}`,
+      );
+    }
     const sourceRevision = catalogSourceRevision(source.messages);
     const targets = options.locale
       ? area.targets.filter((target) => target.locale === options.locale)
@@ -455,6 +590,7 @@ export async function refreshCatalogs(options: {
     if (options.locale && targets.length === 0) {
       throw new Error(`area ${area.id} does not declare locale ${options.locale}`);
     }
+    const staleTargets: CatalogTarget[] = [];
     for (const target of targets) {
       try {
         const current = await readGenerated(root, area, target);
@@ -463,6 +599,31 @@ export async function refreshCatalogs(options: {
       } catch {
         // Stale or invalid output is regenerated from the complete English family.
       }
+      staleTargets.push(target);
+    }
+    targetCount += staleTargets.length;
+    translationCharacters += sourceCharacters * staleTargets.length;
+    if (staleTargets.length > 0) {
+      plan.push({ area, source, sourceRevision, targets: staleTargets });
+    }
+  }
+  if (plan.length > limits.maxAreas) {
+    throw new Error(`catalog refresh selects ${plan.length} areas; limit is ${limits.maxAreas}`);
+  }
+  if (targetCount > limits.maxTargets) {
+    throw new Error(
+      `catalog refresh selects ${targetCount} targets; limit is ${limits.maxTargets}`,
+    );
+  }
+  if (translationCharacters > limits.maxTranslationCharacters) {
+    throw new Error(
+      `catalog refresh selects ${translationCharacters} source-character translations; limit is ${limits.maxTranslationCharacters}`,
+    );
+  }
+
+  const outputs: { path: string; generated: GeneratedCatalog }[] = [];
+  for (const { area, source, sourceRevision, targets } of plan) {
+    for (const target of targets) {
       const translated = await translator(
         Object.entries(source.messages).map(([id, text]) => ({
           id,
@@ -486,21 +647,25 @@ export async function refreshCatalogs(options: {
         ),
       };
       validateGenerated(area, source, generated);
-      changed += 1;
-      if (options.write) {
-        const targetPath = await resolveRepositoryFile(root, target.path, { allowMissing: true });
-        await mkdir(path.dirname(targetPath), { recursive: true });
-        await writeFile(targetPath, `${JSON.stringify(generated, null, 2)}\n`, "utf8");
-      }
+      outputs.push({ path: target.path, generated });
     }
   }
-  return changed;
+  if (options.write) {
+    for (const output of outputs) {
+      const targetPath = await resolveRepositoryFile(root, output.path, { allowMissing: true });
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, `${JSON.stringify(output.generated, null, 2)}\n`, "utf8");
+    }
+  }
+  return outputs.length;
 }
 
 type CliArgs = {
-  command: "check" | "detect" | "paths" | "refresh";
+  command: "areas" | "changed-areas" | "check" | "detect" | "paths" | "refresh";
   pathKind?: "sources" | "targets";
   area?: string;
+  areasFile?: string;
+  baseRoot?: string;
   locale?: string;
   root?: string;
   failOnDrift: boolean;
@@ -509,9 +674,16 @@ type CliArgs = {
 
 function parseArgs(argv: readonly string[]): CliArgs {
   const command = argv[0];
-  if (command !== "check" && command !== "detect" && command !== "paths" && command !== "refresh") {
+  if (
+    command !== "areas" &&
+    command !== "changed-areas" &&
+    command !== "check" &&
+    command !== "detect" &&
+    command !== "paths" &&
+    command !== "refresh"
+  ) {
     throw new Error(
-      "usage: localization-catalogs.ts check|detect [--area <id>] [--root <path>] [--fail-on-drift] | paths sources|targets [--root <path>] | refresh [--area <id>] [--locale <id>] [--root <path>] --write",
+      "usage: localization-catalogs.ts areas [--root <path>] | changed-areas --root <path> --base-root <path> | check|detect [--area <id>] [--root <path>] [--fail-on-drift] | paths sources|targets [--area <id>|--areas-file <path>] [--root <path>] | refresh [--area <id>|--areas-file <path>] [--locale <id>] [--root <path>] --write",
     );
   }
   const args: CliArgs = { command, failOnDrift: false, write: false };
@@ -530,13 +702,23 @@ function parseArgs(argv: readonly string[]): CliArgs {
       args.write = true;
     } else if (token === "--fail-on-drift") {
       args.failOnDrift = true;
-    } else if (token === "--area" || token === "--locale" || token === "--root") {
+    } else if (
+      token === "--area" ||
+      token === "--areas-file" ||
+      token === "--base-root" ||
+      token === "--locale" ||
+      token === "--root"
+    ) {
       const value = argv[index + 1];
       if (!value) {
         throw new Error(`${token} requires a value`);
       }
       if (token === "--area") {
         args.area = value;
+      } else if (token === "--areas-file") {
+        args.areasFile = value;
+      } else if (token === "--base-root") {
+        args.baseRoot = value;
       } else if (token === "--locale") {
         args.locale = value;
       } else {
@@ -547,11 +729,38 @@ function parseArgs(argv: readonly string[]): CliArgs {
       throw new Error(`unknown argument: ${token}`);
     }
   }
-  if (command === "paths" && (args.area || args.locale || args.failOnDrift || args.write)) {
-    throw new Error("paths accepts only --root");
+  if (args.area && args.areasFile) {
+    throw new Error("use either --area or --areas-file, not both");
   }
-  if ((command === "check" || command === "detect") && (args.locale || args.write)) {
+  if (command === "paths" && (args.locale || args.baseRoot || args.failOnDrift || args.write)) {
+    throw new Error("paths accepts only --area, --areas-file, and --root");
+  }
+  if (
+    (command === "check" || command === "detect") &&
+    (args.areasFile || args.baseRoot || args.locale || args.write)
+  ) {
     throw new Error(`${command} accepts only --area, --root, and detect's --fail-on-drift`);
+  }
+  if (command === "changed-areas") {
+    if (
+      !args.root ||
+      !args.baseRoot ||
+      args.area ||
+      args.areasFile ||
+      args.locale ||
+      args.failOnDrift ||
+      args.write
+    ) {
+      throw new Error("changed-areas requires only --root and --base-root");
+    }
+  } else if (args.baseRoot) {
+    throw new Error("--base-root requires changed-areas");
+  }
+  if (
+    command === "areas" &&
+    (args.area || args.areasFile || args.locale || args.failOnDrift || args.write)
+  ) {
+    throw new Error("areas accepts only --root");
   }
   if (command !== "detect" && args.failOnDrift) {
     throw new Error("--fail-on-drift requires detect");
@@ -559,8 +768,36 @@ function parseArgs(argv: readonly string[]): CliArgs {
   return args;
 }
 
+async function readAreaIds(filePath: string | undefined): Promise<readonly string[] | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  const areaIds = (await readFile(filePath, "utf8"))
+    .split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (areaIds.length === 0) {
+    throw new Error("--areas-file must contain at least one catalog area id");
+  }
+  return areaIds;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const areas = await readAreaIds(args.areasFile);
+  if (args.command === "changed-areas") {
+    const changed = await detectChangedCatalogAreas({
+      root: args.root as string,
+      baseRoot: args.baseRoot as string,
+    });
+    process.stdout.write(`${changed.join("\n")}${changed.length > 0 ? "\n" : ""}`);
+    return;
+  }
+  if (args.command === "areas") {
+    const areaIds = await catalogWorkflowAreas({ root: args.root });
+    process.stdout.write(`${areaIds.join("\n")}\n`);
+    return;
+  }
   if (args.command === "check") {
     await checkCatalogs({ area: args.area, root: args.root });
     process.stdout.write("localization catalogs are current\n");
@@ -580,7 +817,7 @@ async function main() {
     return;
   }
   if (args.command === "paths") {
-    const paths = await catalogWorkflowPaths({ root: args.root });
+    const paths = await catalogWorkflowPaths({ area: args.area, areas, root: args.root });
     process.stdout.write(`${paths[args.pathKind ?? "sources"].join("\n")}\n`);
     return;
   }
@@ -593,6 +830,7 @@ async function main() {
   }
   const changed = await refreshCatalogs({
     area: args.area,
+    areas,
     locale: args.locale,
     root: args.root,
     sourceCommit,

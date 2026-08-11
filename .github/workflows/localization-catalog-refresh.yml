@@ -39,6 +39,7 @@ jobs:
         id: source
         env:
           ACTOR: ${{ github.actor }}
+          BEFORE_SHA: ${{ github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
@@ -52,7 +53,13 @@ jobs:
           fi
           mode=main
           source_sha="${trusted_sha}"
+          base_sha=""
           head_ref=""
+          if [[ "${GITHUB_EVENT_NAME}" == "push" &&
+            "${BEFORE_SHA:-}" =~ ^[0-9a-f]{40}$ &&
+            "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]]; then
+            base_sha="${BEFORE_SHA}"
+          fi
           if [[ -n "${PULL_REQUEST_NUMBER:-}" ]]; then
             if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || ! "${PULL_REQUEST_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
               echo "In-place refresh requires a numeric pull request number on workflow_dispatch." >&2
@@ -80,10 +87,19 @@ jobs:
               exit 1
             fi
             source_sha="$(jq -r .head.sha "${pr_file}")"
+            base_sha="$(jq -r .base.sha "${pr_file}")"
             head_ref="$(jq -r .head.ref "${pr_file}")"
-            if [[ ! "${source_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+            if [[ ! "${source_sha}" =~ ^[0-9a-f]{40}$ ||
+              ! "${base_sha}" =~ ^[0-9a-f]{40}$ ]] ||
               ! git check-ref-format "refs/heads/${head_ref}"; then
               echo "Pull request head is not a valid exact branch revision." >&2
+              exit 1
+            fi
+            base_sha="$(timeout --signal=TERM --kill-after=10s 60s \
+              gh api "repos/${REPOSITORY}/compare/${base_sha}...${source_sha}" \
+                --jq .merge_base_commit.sha)"
+            if [[ ! "${base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Unable to resolve the pull request's exact comparison base." >&2
               exit 1
             fi
             mode=pull-request
@@ -92,6 +108,7 @@ jobs:
             echo "mode=${mode}"
             echo "trusted_sha=${trusted_sha}"
             echo "source_sha=${source_sha}"
+            echo "base_sha=${base_sha}"
             echo "head_ref=${head_ref}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -112,6 +129,16 @@ jobs:
         if: steps.source.outputs.mode == 'pull-request'
         run: pnpm localization:catalogs:check
 
+      - name: Checkout exact comparison base
+        if: steps.source.outputs.base_sha != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ steps.source.outputs.base_sha }}
+          path: .localization-base
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
       - name: Checkout exact pull request data
         if: steps.source.outputs.mode == 'pull-request'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -122,7 +149,38 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Resolve bounded catalog refresh scope
+        id: scope
+        env:
+          BASE_SHA: ${{ steps.source.outputs.base_sha }}
+          CATALOG_ROOT: ${{ steps.source.outputs.mode == 'pull-request' && '.localization-source' || '.' }}
+        run: |
+          set -euo pipefail
+          areas_file="${RUNNER_TEMP}/localization-areas.txt"
+          if [[ -n "${BASE_SHA}" ]]; then
+            node --import tsx scripts/localization-catalogs.ts changed-areas \
+              --root "${CATALOG_ROOT}" --base-root .localization-base > "${areas_file}"
+          else
+            node --import tsx scripts/localization-catalogs.ts areas \
+              --root "${CATALOG_ROOT}" > "${areas_file}"
+          fi
+          if [[ -s "${areas_file}" ]]; then
+            echo "has_changes=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "areas_file=${areas_file}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Localization refresh scope"
+            if [[ -s "${areas_file}" ]]; then
+              sed 's/^/- `/' "${areas_file}" | sed 's/$/`/'
+            else
+              echo "No adopted catalog area changed."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Require a trusted translation provider
+        if: steps.scope.outputs.has_changes == 'true'
         env:
           OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -135,6 +193,7 @@ jobs:
           fi
 
       - name: Refresh adopted catalog targets
+        if: steps.scope.outputs.has_changes == 'true'
         env:
           CATALOG_ROOT: ${{ steps.source.outputs.mode == 'pull-request' && '.localization-source' || '.' }}
           GITHUB_SHA: ${{ steps.source.outputs.source_sha }}
@@ -145,7 +204,10 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
-        run: node --import tsx scripts/localization-catalogs.ts refresh --root "${CATALOG_ROOT}" --write
+          AREAS_FILE: ${{ steps.scope.outputs.areas_file }}
+        run: >-
+          node --import tsx scripts/localization-catalogs.ts refresh
+          --root "${CATALOG_ROOT}" --areas-file "${AREAS_FILE}" --write
 
       - name: Validate generated catalog targets
         env:
@@ -154,21 +216,25 @@ jobs:
 
       - name: Resolve registry-owned publication paths
         id: paths
+        if: steps.scope.outputs.has_changes == 'true'
         env:
+          AREAS_FILE: ${{ steps.scope.outputs.areas_file }}
           CATALOG_ROOT: ${{ steps.source.outputs.mode == 'pull-request' && '.localization-source' || '.' }}
         run: |
           set -euo pipefail
           {
             echo 'generated<<OPENCLAW_GENERATED_PATHS'
-            node --import tsx scripts/localization-catalogs.ts paths targets --root "${CATALOG_ROOT}"
+            node --import tsx scripts/localization-catalogs.ts paths targets \
+              --root "${CATALOG_ROOT}" --areas-file "${AREAS_FILE}"
             echo 'OPENCLAW_GENERATED_PATHS'
             echo 'sources<<OPENCLAW_SOURCE_PATHS'
-            node --import tsx scripts/localization-catalogs.ts paths sources --root "${CATALOG_ROOT}"
+            node --import tsx scripts/localization-catalogs.ts paths sources \
+              --root "${CATALOG_ROOT}" --areas-file "${AREAS_FILE}"
             echo 'OPENCLAW_SOURCE_PATHS'
           } >> "${GITHUB_OUTPUT}"
 
       - name: Create in-place branch token
-        if: steps.source.outputs.mode == 'pull-request'
+        if: steps.source.outputs.mode == 'pull-request' && steps.scope.outputs.has_changes == 'true'
         id: branch-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -179,7 +245,7 @@ jobs:
           permission-contents: write
 
       - name: Commit translations to the source pull request
-        if: steps.source.outputs.mode == 'pull-request'
+        if: steps.source.outputs.mode == 'pull-request' && steps.scope.outputs.has_changes == 'true'
         working-directory: .localization-source
         env:
           CONTENTS_TOKEN: ${{ steps.branch-token.outputs.token }}
@@ -227,7 +293,7 @@ jobs:
             origin "HEAD:refs/heads/${HEAD_REF}"
 
       - name: Open or update generated catalog PR
-        if: steps.source.outputs.mode == 'main'
+        if: steps.source.outputs.mode == 'main' && steps.scope.outputs.has_changes == 'true'
         uses: ./.github/actions/publish-generated-pr
         with:
           contents-client-id: Iv23liOECG0slfuhz093

@@ -1,7 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
-import path from "node:path";
+import nodePath from "node:path";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
@@ -25,7 +25,7 @@ function loadLocalizationRoots(root) {
   const roots = new Set();
   const readJson = (relativePath) => {
     try {
-      return JSON.parse(readFileSync(path.join(root, relativePath), "utf8"));
+      return JSON.parse(readFileSync(nodePath.join(root, relativePath), "utf8"));
     } catch {
       return null;
     }
@@ -35,7 +35,7 @@ function loadLocalizationRoots(root) {
   if (Array.isArray(catalogs?.areas)) {
     for (const area of catalogs.areas) {
       if (typeof area?.source === "string") {
-        roots.add(path.posix.dirname(area.source));
+        roots.add(nodePath.posix.dirname(area.source));
       }
     }
   }

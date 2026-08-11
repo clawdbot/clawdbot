@@ -24,8 +24,12 @@ describe("localization catalog authoring workflow", () => {
     const steps = workflow.jobs.refresh.steps as WorkflowStep[];
     const resolve = steps.find((step) => step.name === "Resolve trusted tooling and exact source")!;
     const trustedCheckout = steps.find((step) => step.name === "Checkout trusted tooling")!;
+    const comparisonCheckout = steps.find(
+      (step) => step.name === "Checkout exact comparison base",
+    )!;
     const sourceCheckout = steps.find((step) => step.name === "Checkout exact pull request data")!;
     const baseCheck = steps.find((step) => step.name === "Require current trusted-base catalogs")!;
+    const scope = steps.find((step) => step.name === "Resolve bounded catalog refresh scope")!;
     const refresh = steps.find((step) => step.name === "Refresh adopted catalog targets")!;
     const validate = steps.find((step) => step.name === "Validate generated catalog targets")!;
     const token = steps.find((step) => step.name === "Create in-place branch token")!;
@@ -39,24 +43,35 @@ describe("localization catalog authoring workflow", () => {
     expect(resolve.run).toContain("collaborators/${ACTOR}/permission");
     expect(resolve.run).toContain('.head.repo.full_name "${pr_file}"');
     expect(resolve.run).toContain('.draft "${pr_file}"');
+    expect(resolve.run).toContain('base_sha="$(jq -r .base.sha');
+    expect(resolve.run).toContain("--jq .merge_base_commit.sha");
     expect(trustedCheckout.with?.ref).toBe("${{ steps.source.outputs.trusted_sha }}");
     expect(trustedCheckout.with?.["persist-credentials"]).toBe(false);
     expect(sourceCheckout.if).toBe("steps.source.outputs.mode == 'pull-request'");
     expect(sourceCheckout.with?.ref).toBe("${{ steps.source.outputs.source_sha }}");
     expect(sourceCheckout.with?.path).toBe(".localization-source");
+    expect(comparisonCheckout.with?.ref).toBe("${{ steps.source.outputs.base_sha }}");
+    expect(comparisonCheckout.with?.path).toBe(".localization-base");
     expect(baseCheck.if).toBe("steps.source.outputs.mode == 'pull-request'");
     expect(baseCheck.run).toBe("pnpm localization:catalogs:check");
-    expect(refresh.run).toContain("scripts/localization-catalogs.ts refresh --root");
+    expect(scope.run).toContain("localization-catalogs.ts changed-areas");
+    expect(scope.run).toContain("--base-root .localization-base");
+    expect(refresh.run).toContain("scripts/localization-catalogs.ts refresh");
+    expect(refresh.run).toContain('--areas-file "${AREAS_FILE}"');
     expect(validate.run).toContain("scripts/localization-catalogs.ts check --root");
     expect(token.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3);
-    expect(token.if).toBe("steps.source.outputs.mode == 'pull-request'");
+    expect(token.if).toBe(
+      "steps.source.outputs.mode == 'pull-request' && steps.scope.outputs.has_changes == 'true'",
+    );
     expect(update.run).toContain(
       'gh api "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}"',
     );
     expect(update.run).toContain(".base.ref == env.DEFAULT_BRANCH");
     expect(update.run).toContain(".head.ref == env.HEAD_REF");
     expect(update.run).toContain("--force-with-lease=refs/heads/${HEAD_REF}:${EXPECTED_HEAD_SHA}");
-    expect(fallback.if).toBe("steps.source.outputs.mode == 'main'");
+    expect(fallback.if).toBe(
+      "steps.source.outputs.mode == 'main' && steps.scope.outputs.has_changes == 'true'",
+    );
     expect(fallback.uses).toBe("./.github/actions/publish-generated-pr");
     expect(fallback.with?.["auto-merge"]).toBe("false");
   });
