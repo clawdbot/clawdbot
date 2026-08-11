@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { PREFLIGHT_UNRESOLVED_OVERFLOW_REASON } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { resolvePreflightRequiredCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -1804,10 +1804,14 @@ describe("runMemoryFlushIfNeeded", () => {
       systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
       relativePath: "memory/2023-11-14.md",
     }));
+    const unresolvedOverflowReason = resolvePreflightRequiredCompactionReason({
+      reason: "Already compacted",
+      preflightRequired: true,
+    });
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: false,
       compacted: false,
-      reason: PREFLIGHT_UNRESOLVED_OVERFLOW_REASON,
+      reason: unresolvedOverflowReason,
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1838,9 +1842,7 @@ describe("runMemoryFlushIfNeeded", () => {
         replyOperation: createReplyOperation(),
         onCompactionNotice,
       }),
-    ).rejects.toThrow(
-      `Preflight compaction required but failed: ${PREFLIGHT_UNRESOLVED_OVERFLOW_REASON}`,
-    );
+    ).rejects.toThrow(`Preflight compaction required but failed: ${unresolvedOverflowReason}`);
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
   });

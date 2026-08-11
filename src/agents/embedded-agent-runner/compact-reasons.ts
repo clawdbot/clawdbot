@@ -86,7 +86,7 @@ export function isBenignCompactionSkipReason(reason?: string): boolean {
  * classifies as live_context_still_exceeds_target — a mandatory preflight must
  * reject this instead of treating it as a benign already_compacted skip.
  */
-export const PREFLIGHT_UNRESOLVED_OVERFLOW_REASON =
+const PREFLIGHT_UNRESOLVED_OVERFLOW_REASON =
   "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)";
 
 /** Rewrite a benign already-compacted verdict into an unresolved-overflow failure for required preflights. */

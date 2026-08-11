@@ -5,7 +5,6 @@ import {
   formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
-  PREFLIGHT_UNRESOLVED_OVERFLOW_REASON,
   resolveCompactionFailureReason,
   resolvePreflightRequiredCompactionReason,
 } from "./compact-reasons.js";
@@ -134,22 +133,16 @@ describe("resolvePreflightRequiredCompactionReason", () => {
   it("rewrites already-compacted into an unresolved-overflow failure for required preflights", () => {
     // The budget gate only requires preflight after measuring the session over
     // budget, so "nothing new to compact" means fixed overhead, not a fine session.
-    expect(
-      resolvePreflightRequiredCompactionReason({
-        reason: "Already compacted",
-        preflightRequired: true,
-      }),
-    ).toBe(PREFLIGHT_UNRESOLVED_OVERFLOW_REASON);
-    expect(classifyCompactionReason(PREFLIGHT_UNRESOLVED_OVERFLOW_REASON)).toBe(
-      "live_context_still_exceeds_target",
+    const rewritten = resolvePreflightRequiredCompactionReason({
+      reason: "Already compacted",
+      preflightRequired: true,
+    });
+    expect(rewritten).not.toBe("Already compacted");
+    expect(rewritten).toContain("still exceeds target");
+    expect(classifyCompactionReason(rewritten)).toBe("live_context_still_exceeds_target");
+    expect(isBenignCompactionSkipResult({ ok: false, compacted: false, reason: rewritten })).toBe(
+      false,
     );
-    expect(
-      isBenignCompactionSkipResult({
-        ok: false,
-        compacted: false,
-        reason: PREFLIGHT_UNRESOLVED_OVERFLOW_REASON,
-      }),
-    ).toBe(false);
   });
 
   it("keeps the benign already-compacted skip for non-required compaction", () => {

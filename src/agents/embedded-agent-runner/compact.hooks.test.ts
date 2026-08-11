@@ -12,7 +12,7 @@ import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { PREFLIGHT_UNRESOLVED_OVERFLOW_REASON } from "./compact-reasons.js";
+import { resolvePreflightRequiredCompactionReason } from "./compact-reasons.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
@@ -4503,7 +4503,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
-    expect(result.reason).toBe(PREFLIGHT_UNRESOLVED_OVERFLOW_REASON);
+    expect(result.reason).toBe(
+      resolvePreflightRequiredCompactionReason({
+        reason: "Already compacted",
+        preflightRequired: true,
+      }),
+    );
   });
 
   it("keeps the benign already-compacted reason for non-required compaction", async () => {
