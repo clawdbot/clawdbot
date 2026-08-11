@@ -143,9 +143,13 @@ enforced denial only when the approval owner recorded that terminal state. A
 corrupt approval is `unknown`. The text view labels `operator_approvals` as an
 authoritative owner-native SQLite record retained for 30 days; JSON preserves
 the same source owner and record reference without lossy reformatting.
-When multiple retained executions share the approval's `runId`, exact execution
-inspection reports `operator_approval_execution_link_ambiguous` with unknown
-coverage instead of assigning the approval outcome to the selected execution.
+`enforced` requires the approval's immutable owner-local binding to match the
+selected context, execution, and run exactly. A missing, malformed, or
+mismatched binding reports `operator_approval_execution_link_missing`,
+`operator_approval_execution_link_malformed`, or
+`operator_approval_execution_link_mismatch` with unknown coverage and no grant
+references. The inspector never reconstructs that binding from `runId`, session
+metadata, timestamps, or the number of retained executions.
 
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
@@ -260,6 +264,8 @@ and no identity context or decisions until the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
 owner-native terminal approvals, then generic facts for boundaries without a
 native durable record. Approval inspection never writes a generic duplicate.
+Generic fact writes and projections also require the full context, execution,
+and run tuple to match the immutable execution context.
 
 The activity ledger remains best-effort. By contrast, a returned approval
 receipt comes from the authoritative first-answer-wins approval row, and a

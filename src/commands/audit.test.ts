@@ -437,7 +437,7 @@ describe("audit run explanation", () => {
             evaluatorRef: "operator-approval:device",
             policyRefs: ["operator-approval:human-decision"],
             grantRefs: [],
-            contextFieldsUsed: ["runId"],
+            contextFieldsUsed: ["contextId", "executionId", "runId"],
           },
           source: {
             owner: "operator_approvals",
@@ -484,7 +484,7 @@ describe("audit run explanation", () => {
     expect(output).toContain("operator_approval_denied_by_reviewer");
     expect(output).toContain("authoritative owner-native SQLite record; retained 30 days");
     expect(output).toContain("Policy refs: operator-approval:human-decision");
-    expect(output).toContain("Context used: runId");
+    expect(output).toContain("Context used: contextId, executionId, runId");
   });
 
   it("renders ambiguous run discovery and selects an exact execution", async () => {

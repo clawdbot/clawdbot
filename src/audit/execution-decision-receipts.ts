@@ -58,7 +58,6 @@ export function presentExecutionDecisionReceipts(params: {
   context: ExecutionIdentityContextV1;
   decisionOffset?: number;
   decisionLimit?: number;
-  approvalLinkState: "unambiguous" | "ambiguous";
   options: ExecutionDecisionReadOptions;
 }): AuditRunInspectResult {
   const offset = params.decisionOffset ?? 0;
@@ -69,15 +68,13 @@ export function presentExecutionDecisionReceipts(params: {
       contextId: params.context.contextId,
       executionId: params.context.executionId,
       runId: params.context.runId,
-      createdAt: params.context.createdAt,
     },
-    linkState: params.approvalLinkState,
     nowMs: now,
     databaseOptions: params.options,
   });
   const approvalCount = approvalSummary.count;
   const genericSummary = summarizeExecutionDecisionFactsForContext({
-    contextId: params.context.contextId,
+    context: params.context,
     now,
     database: params.options,
   });
@@ -99,9 +96,7 @@ export function presentExecutionDecisionReceipts(params: {
         contextId: params.context.contextId,
         executionId: params.context.executionId,
         runId: params.context.runId,
-        createdAt: params.context.createdAt,
       },
-      linkState: params.approvalLinkState,
       offset: remainingOffset,
       limit: remainingLimit,
       nowMs: now,
@@ -116,7 +111,7 @@ export function presentExecutionDecisionReceipts(params: {
   if (remainingLimit > 0 && remainingOffset < genericCount) {
     decisions.push(
       ...listExecutionDecisionFactsForContext({
-        contextId: params.context.contextId,
+        context: params.context,
         offset: remainingOffset,
         limit: remainingLimit,
         now,

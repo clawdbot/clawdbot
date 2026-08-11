@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
@@ -12,6 +13,10 @@ import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-c
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import {
+  GatewayClient,
+  startGatewayClientWhenEventLoopReady,
+} from "../../../../src/plugin-sdk/gateway-runtime.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "agent-run-decision-receipt";
@@ -24,6 +29,7 @@ type ProofResult = {
   durationMs: number;
   status: QaScriptEvidenceStatus;
 };
+type PendingApproval = { id: string; request?: { command?: string } };
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
   const readValue = (name: string) => {
@@ -52,7 +58,10 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>): string {
+function findApprovalRunId(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  approvalId: string,
+): string {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -61,19 +70,25 @@ function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>
     readOnly: true,
   });
   try {
-    const rows = database
+    const row = database
       .prepare(
-        "SELECT run_id, context_json FROM execution_identity_contexts ORDER BY created_at DESC, context_id DESC",
+        `SELECT approval.source_run_id, binding.source_context_id, binding.source_execution_id
+         FROM operator_approvals AS approval
+         JOIN operator_approval_execution_identities AS binding
+           ON binding.approval_id = approval.approval_id
+         WHERE approval.approval_id = ?`,
       )
-      .all() as Array<{ run_id: string; context_json: string }>;
-    const local = rows.find((row) => {
-      const context = parseJson<{ ingress?: { kind?: string } }>(row.context_json, "run context");
-      return context.ingress?.kind === "local-cli";
-    });
-    if (!local?.run_id) {
-      throw new Error("local mock-provider turn did not record an execution identity context");
+      .get(approvalId) as
+      | {
+          source_run_id?: string;
+          source_context_id?: string;
+          source_execution_id?: string;
+        }
+      | undefined;
+    if (!row?.source_run_id || !row.source_context_id || !row.source_execution_id) {
+      throw new Error("trusted approval omitted its exact execution identity binding");
     }
-    return local.run_id;
+    return row.source_run_id;
   } finally {
     database.close();
   }
@@ -106,6 +121,30 @@ function assertNoGenericApprovalDuplicate(
   }
 }
 
+function readApprovalToolCallRef(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  approvalId: string,
+): string {
+  const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("QA Gateway did not expose its isolated state directory");
+  }
+  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = database
+      .prepare("SELECT source_tool_call_id FROM operator_approvals WHERE approval_id = ?")
+      .get(approvalId) as { source_tool_call_id?: string } | undefined;
+    if (!row?.source_tool_call_id) {
+      throw new Error("trusted approval omitted its source tool-call reference");
+    }
+    return row.source_tool_call_id;
+  } finally {
+    database.close();
+  }
+}
+
 function requireDeniedApproval(result: AuditRunInspectResult) {
   const receipt = result.decisions.find(
     (candidate) => candidate.source.owner === "operator_approvals",
@@ -118,7 +157,7 @@ function requireDeniedApproval(result: AuditRunInspectResult) {
     receipt.decision.reasonCode !== "operator_approval_denied_by_reviewer" ||
     receipt.enforcement.coverageState !== "enforced" ||
     !receipt.enforcement.policyRefs.includes("operator-approval:human-decision") ||
-    !receipt.enforcement.contextFieldsUsed.includes("runId") ||
+    receipt.enforcement.contextFieldsUsed.join(",") !== "contextId,executionId,runId" ||
     receipt.enforcement.grantRefs.length !== 0 ||
     receipt.remediation[0]?.code !== "review_and_request_again"
   ) {
@@ -127,9 +166,66 @@ function requireDeniedApproval(result: AuditRunInspectResult) {
   return receipt;
 }
 
+async function waitForPendingApproval(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  agentFailure: () => string | undefined,
+): Promise<string> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const pending = (await gateway.call("exec.approval.list", {})) as PendingApproval[];
+    const match = pending[0];
+    if (match) {
+      return match.id;
+    }
+    const failure = agentFailure();
+    if (failure) {
+      throw new Error(`trusted agent run ended before approval: ${failure}`);
+    }
+    await delay(25);
+  }
+  throw new Error("trusted agent exec approval did not become pending");
+}
+
+async function startApprovalRoute(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+): Promise<GatewayClient> {
+  let resolveConnected!: () => void;
+  let rejectConnected!: (error: Error) => void;
+  const connected = new Promise<void>((resolve, reject) => {
+    resolveConnected = resolve;
+    rejectConnected = reject;
+  });
+  const client = new GatewayClient({
+    url: gateway.wsUrl,
+    token: gateway.token,
+    clientName: "gateway-client",
+    clientDisplayName: "decision receipt approval route",
+    deviceIdentity: null,
+    mode: "backend",
+    caps: ["exec-approvals"],
+    scopes: ["operator.admin"],
+    onHelloOk: resolveConnected,
+    onConnectError: rejectConnected,
+    onClose: (code, reason) => rejectConnected(new Error(`gateway closed (${code}): ${reason}`)),
+  });
+  const readiness = await startGatewayClientWhenEventLoopReady(client, { timeoutMs: 20_000 });
+  if (!readiness.ready) {
+    client.stop();
+    throw new Error("approval route client did not reach event-loop readiness");
+  }
+  await Promise.race([
+    connected,
+    delay(20_000).then(() => {
+      throw new Error("approval route client did not connect");
+    }),
+  ]);
+  return client;
+}
+
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  let approvalRoute: GatewayClient | undefined;
   try {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
@@ -144,45 +240,37 @@ async function runProof(options: ProducerOptions): Promise<string> {
           ...config.logging,
           audit: { ...config.logging?.audit, enabled: true, executionIdentity: true },
         },
+        tools: {
+          ...config.tools,
+          exec: { ...config.tools?.exec, host: "gateway", security: "full", ask: "always" },
+        },
       }),
     });
-    await gateway.runCli([
-      "agent",
-      "--local",
-      "--agent",
-      "qa",
-      "--session-id",
-      `decision-${randomUUID()}`,
-      "--message",
-      "Reply exactly: DECISION-RECEIPT-CONTEXT",
-      "--thinking",
-      "off",
-      "--timeout",
-      "60",
-      "--json",
-    ]);
-    const runId = findLocalRunId(gateway);
-    const approvalId = `decision-receipt-${randomUUID()}`;
+    approvalRoute = await startApprovalRoute(gateway);
     const commandSentinel = `PRIVATE-COMMAND-${randomUUID()}`;
-    const toolCallSentinel = `PRIVATE-TOOL-${randomUUID()}`;
-
-    const accepted = (await gateway.call("exec.approval.request", {
-      id: approvalId,
-      command: `printf ${commandSentinel}`,
-      commandArgv: ["printf", commandSentinel],
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
-      runId,
-      toolCallId: toolCallSentinel,
-      twoPhase: true,
-      requireDeliveryRoute: false,
-      timeoutMs: 60_000,
-    })) as { id?: string; status?: string };
-    if (accepted.id !== approvalId || accepted.status !== "accepted") {
-      throw new Error("Gateway did not accept the two-phase approval request");
-    }
+    let agentFailure: string | undefined;
+    const agentRun = gateway
+      .runCli([
+        "agent",
+        "--agent",
+        "qa",
+        "--session-id",
+        `decision-${randomUUID()}`,
+        "--message",
+        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`printf ${commandSentinel}\`. After that exec command completes or fails, reply exactly \`DECISION-RECEIPT-DONE\`.`,
+        "--thinking",
+        "off",
+        "--timeout",
+        "60",
+        "--json",
+      ])
+      .catch((error: unknown) => {
+        agentFailure = formatErrorMessage(error);
+      });
+    const approvalId = await waitForPendingApproval(gateway, () => agentFailure);
     await gateway.call("exec.approval.resolve", { id: approvalId, decision: "deny" });
+    await agentRun;
+    const runId = findApprovalRunId(gateway, approvalId);
     let conflictingRetryRejected = false;
     try {
       await gateway.call("exec.approval.resolve", { id: approvalId, decision: "allow-once" });
@@ -207,7 +295,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
     );
     const receipt = requireDeniedApproval(before);
     const serialized = JSON.stringify(before);
-    if (serialized.includes(commandSentinel) || serialized.includes(toolCallSentinel)) {
+    const toolCallRef = readApprovalToolCallRef(gateway, approvalId);
+    if (serialized.includes(commandSentinel) || serialized.includes(toolCallRef)) {
       throw new Error("approval receipt leaked command or tool-call content");
     }
     assertNoGenericApprovalDuplicate(gateway);
@@ -251,6 +340,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     );
     return `run=${runId}; denied approval projected before/after Gateway replacement; result sha256=${sha256(serialized)}`;
   } finally {
+    await approvalRoute?.stopAndWait().catch(() => approvalRoute?.stop());
     await gateway?.stop().catch(() => undefined);
     await mock.stop();
   }

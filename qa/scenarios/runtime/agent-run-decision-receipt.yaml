@@ -9,8 +9,8 @@ scenario:
       - gateway.exec-approvals
   objective: Verify a denied operator approval is durably explained from its authoritative first-answer row through the audit CLI.
   successCriteria:
-    - A real local turn against the deterministic mock provider records one execution identity context.
-    - A real two-phase Gateway exec approval is denied and a conflicting later allow cannot replace the first answer.
+    - A real Gateway agent turn against the deterministic mock provider records one execution identity context.
+    - A real trusted agent exec request records an exact execution binding, is denied by an approval-capable Gateway client, and a conflicting later allow cannot replace the first answer.
     - Text and JSON audit output report the denial reason, enforced state, authoritative durable owner, bounded policy references, and remediation.
     - Receipt output omits raw command, tool-call, and reviewer-device details and creates no generic duplicate.
     - A replacement Gateway process returns byte-equivalent decision inspection JSON.

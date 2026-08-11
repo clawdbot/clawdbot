@@ -28,7 +28,13 @@ function databaseOptions() {
 
 function approval(
   id: string,
-  overrides: { runId?: string; createdAtMs?: number; expiresAtMs?: number } = {},
+  overrides: {
+    runId?: string;
+    createdAtMs?: number;
+    expiresAtMs?: number;
+    contextId?: string;
+    executionId?: string;
+  } = {},
 ): Parameters<typeof insertOperatorApproval>[0]["approval"] {
   const createdAtMs = overrides.createdAtMs ?? 1_000;
   return {
@@ -57,6 +63,13 @@ function approval(
     runtimeEpoch: "runtime-secret",
     createdAtMs,
     expiresAtMs: overrides.expiresAtMs ?? createdAtMs + 10_000,
+    executionIdentityToken: {
+      tokenVersion: 1,
+      createdAt: createdAtMs,
+      runId: overrides.runId ?? "run-receipts",
+      contextId: overrides.contextId ?? "context-receipts",
+      executionId: overrides.executionId ?? "execution-receipts",
+    },
   };
 }
 
@@ -140,7 +153,6 @@ describe("operator approval decision receipts", () => {
 
     const receipts = listOperatorApprovalReceiptsForRun({
       context,
-      linkState: "unambiguous",
       offset: 0,
       limit: 20,
       nowMs: 3_000,
@@ -156,7 +168,6 @@ describe("operator approval decision receipts", () => {
     expect(
       summarizeOperatorApprovalReceiptsForRun({
         context,
-        linkState: "unambiguous",
         nowMs: 3_000,
         databaseOptions: database,
       }),
@@ -228,7 +239,6 @@ describe("operator approval decision receipts", () => {
     expect(
       listOperatorApprovalReceiptsForRun({
         context,
-        linkState: "unambiguous",
         offset: 0,
         limit: 10,
         nowMs: 2_001,
@@ -238,10 +248,96 @@ describe("operator approval decision receipts", () => {
       decision: { outcome: "denied", reasonCode: "operator_approval_denied_by_reviewer" },
       enforcement: {
         coverageState: "enforced",
-        contextFieldsUsed: ["runId"],
+        contextFieldsUsed: ["contextId", "executionId", "runId"],
       },
       source: { owner: "operator_approvals" },
     });
+  });
+
+  it("never enforces a later unrelated approval that reuses the retained run id", () => {
+    const database = databaseOptions();
+    insertOperatorApproval({ approval: approval("retained"), databaseOptions: database });
+    insertOperatorApproval({
+      approval: approval("later", {
+        createdAtMs: 2_000,
+        contextId: "context-later",
+        executionId: "execution-later",
+      }),
+      databaseOptions: database,
+    });
+    for (const [id, nowMs] of [
+      ["retained", 3_000],
+      ["later", 3_001],
+    ] as const) {
+      resolveOperatorApproval({
+        id,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer" },
+        nowMs,
+        databaseOptions: database,
+      });
+    }
+
+    expect(
+      listOperatorApprovalReceiptsForRun({
+        context,
+        offset: 0,
+        limit: 10,
+        nowMs: 4_000,
+        databaseOptions: database,
+      }).map((receipt) => receipt.enforcement.coverageState),
+    ).toEqual(["enforced", "unknown"]);
+  });
+
+  it("reports missing, malformed, and mismatched execution bindings as unknown", () => {
+    for (const [bindingState, reasonCode] of [
+      ["missing", "operator_approval_execution_link_missing"],
+      ["malformed", "operator_approval_execution_link_malformed"],
+      ["mismatch", "operator_approval_execution_link_mismatch"],
+    ] as const) {
+      const database = databaseOptions();
+      insertOperatorApproval({
+        approval: approval(`binding-${bindingState}`),
+        databaseOptions: database,
+      });
+      const db = openOpenClawStateDatabase(database).db;
+      if (bindingState === "missing") {
+        db.prepare("DELETE FROM operator_approval_execution_identities").run();
+      } else if (bindingState === "malformed") {
+        db.exec("PRAGMA ignore_check_constraints = ON");
+        db.prepare(
+          "UPDATE operator_approval_execution_identities SET source_context_id = ''",
+        ).run();
+      } else {
+        db.prepare(
+          "UPDATE operator_approval_execution_identities SET source_context_id = 'context-other'",
+        ).run();
+      }
+      resolveOperatorApproval({
+        id: `binding-${bindingState}`,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer" },
+        nowMs: 3_000,
+        databaseOptions: database,
+      });
+
+      expect(
+        listOperatorApprovalReceiptsForRun({
+          context,
+          offset: 0,
+          limit: 10,
+          nowMs: 4_000,
+          databaseOptions: database,
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          decision: { outcome: "unknown", reasonCode },
+          enforcement: expect.objectContaining({ coverageState: "unknown", grantRefs: [] }),
+          missingEvidence: ["decision.execution_link"],
+        }),
+      ]);
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("enforces approval retention and never creates a generic duplicate", () => {
@@ -260,7 +356,6 @@ describe("operator approval decision receipts", () => {
     expect(
       listOperatorApprovalReceiptsForRun({
         context,
-        linkState: "unambiguous",
         offset: 0,
         limit: 10,
         nowMs: RETENTION_MS + 2,

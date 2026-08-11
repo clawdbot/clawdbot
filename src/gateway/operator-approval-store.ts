@@ -1,6 +1,7 @@
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 // Persistent operator approval lifecycle and first-answer-wins transitions.
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { Selectable } from "kysely";
 import {
   type DecisionReceiptV1,
@@ -175,23 +176,12 @@ type OperatorApprovalReceiptContext = {
   contextId: string;
   executionId: string;
   runId: string;
-  createdAt: number;
 };
-type OperatorApprovalReceiptLinkState = "unambiguous" | "ambiguous";
-
-function isOperatorApprovalLinkAmbiguous(params: {
-  record: OperatorApprovalRecord;
-  context: OperatorApprovalReceiptContext;
-  linkState: OperatorApprovalReceiptLinkState;
-}): boolean {
-  return (
-    params.linkState === "ambiguous" ||
-    params.record.createdAtMs < params.context.createdAt ||
-    // Session-derived run correlations can name later executions after retention pruning.
-    (params.record.source.runId !== null &&
-      params.record.source.runId === params.record.source.sessionId)
-  );
-}
+type OperatorApprovalReceiptRow = OperatorApprovalRow & {
+  binding_context_id: string | null;
+  binding_execution_id: string | null;
+};
+type OperatorApprovalExecutionLinkState = "exact" | "missing" | "malformed" | "mismatch";
 
 const OPERATOR_APPROVAL_DECISIONS = new Set<OperatorApprovalDecision>([
   "allow-once",
@@ -650,7 +640,7 @@ function projectOperatorApprovalReceipt(
       evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}`,
       policyRefs: operatorApprovalPolicyRefs(record),
       grantRefs: allowed ? [`operator-approval-grant:${sourceRef}`] : [],
-      contextFieldsUsed: ["runId"],
+      contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
     source: {
       owner: "operator_approvals",
@@ -662,9 +652,10 @@ function projectOperatorApprovalReceipt(
   };
 }
 
-function projectAmbiguousOperatorApprovalReceipt(
+function projectUnlinkedOperatorApprovalReceipt(
   record: OperatorApprovalRecord,
   context: OperatorApprovalReceiptContext,
+  linkState: Exclude<OperatorApprovalExecutionLinkState, "exact">,
 ): DecisionReceiptV1 {
   const sourceRef = record.resolutionRef;
   const receiptId = `approval-unlinked:${createHash("sha256")
@@ -683,17 +674,17 @@ function projectAmbiguousOperatorApprovalReceipt(
     action: {
       family: record.kind,
       operation: "approval",
-      summary: `A terminal ${record.kind} approval is correlated with this run, but its retained record cannot identify an exact execution.`,
+      summary: `A terminal ${record.kind} approval shares this run correlation, but its retained binding does not match this exact execution.`,
     },
     decision: {
       outcome: "unknown",
-      reasonCode: "operator_approval_execution_link_ambiguous",
+      reasonCode: `operator_approval_execution_link_${linkState}`,
     },
     enforcement: {
       coverageState: "unknown",
       policyRefs: operatorApprovalPolicyRefs(record),
       grantRefs: [],
-      contextFieldsUsed: ["runId"],
+      contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
     source: {
       owner: "operator_approvals",
@@ -703,8 +694,8 @@ function projectAmbiguousOperatorApprovalReceipt(
     missingEvidence: ["decision.execution_link"],
     remediation: [
       {
-        code: "treat_as_run_correlated",
-        text: "Treat this approval only as run-correlated; its retained record cannot identify an exact execution.",
+        code: "inspect_exact_approval_binding",
+        text: "Treat this approval only as run-correlated; inspect its retained execution binding before trusting attribution.",
       },
     ],
   };
@@ -763,11 +754,76 @@ function terminalApprovalsForRunQuery(
 ) {
   return database
     .selectFrom("operator_approvals")
-    .selectAll()
     .where("source_run_id", "=", runId)
     .where("status", "!=", "pending")
     .where("resolved_at_ms", "is not", null)
     .where("resolved_at_ms", ">=", nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS);
+}
+
+function terminalApprovalReceiptRows(params: {
+  db: DatabaseSync;
+  stateDb: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>;
+  runId: string;
+  nowMs: number;
+  offset?: number;
+  limit?: number;
+}): OperatorApprovalReceiptRow[] {
+  const ordered = terminalApprovalsForRunQuery(params.stateDb, params.runId, params.nowMs)
+    .orderBy("operator_approvals.resolved_at_ms", "asc")
+    .orderBy("operator_approvals.approval_id", "asc")
+    .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
+    .$if(params.limit !== undefined, (query) => query.limit(params.limit!));
+  if (!tableExists(params.db, "operator_approval_execution_identities")) {
+    return executeSqliteQuerySync(
+      params.db,
+      ordered
+        .selectAll("operator_approvals")
+        .select((eb) => [
+          eb.val(null).as("binding_context_id"),
+          eb.val(null).as("binding_execution_id"),
+        ]),
+    ).rows;
+  }
+  return executeSqliteQuerySync(
+    params.db,
+    ordered
+      .leftJoin(
+        "operator_approval_execution_identities",
+        "operator_approval_execution_identities.approval_id",
+        "operator_approvals.approval_id",
+      )
+      .selectAll("operator_approvals")
+      .select([
+        "operator_approval_execution_identities.source_context_id as binding_context_id",
+        "operator_approval_execution_identities.source_execution_id as binding_execution_id",
+      ]),
+  ).rows;
+}
+
+function operatorApprovalExecutionLinkState(
+  row: OperatorApprovalReceiptRow,
+  context: OperatorApprovalReceiptContext,
+): OperatorApprovalExecutionLinkState {
+  if (row.binding_context_id === null && row.binding_execution_id === null) {
+    return "missing";
+  }
+  if (
+    typeof row.binding_context_id !== "string" ||
+    typeof row.binding_execution_id !== "string" ||
+    row.binding_context_id.length === 0 ||
+    row.binding_execution_id.length === 0 ||
+    row.binding_context_id.length > 256 ||
+    row.binding_execution_id.length > 256 ||
+    row.binding_context_id.trim() !== row.binding_context_id ||
+    row.binding_execution_id.trim() !== row.binding_execution_id
+  ) {
+    return "malformed";
+  }
+  return row.binding_context_id === context.contextId &&
+    row.binding_execution_id === context.executionId &&
+    row.source_run_id === context.runId
+    ? "exact"
+    : "mismatch";
 }
 
 /** Count authoritative retained approval decisions linked by their recorded source run. */
@@ -796,7 +852,6 @@ export function countOperatorApprovalReceiptsForRun(params: {
 /** Summarize all retained owner rows so receipt paging cannot change top-level coverage. */
 export function summarizeOperatorApprovalReceiptsForRun(params: {
   context: OperatorApprovalReceiptContext;
-  linkState: OperatorApprovalReceiptLinkState;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): {
@@ -810,31 +865,27 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
         return { count: 0, missingEvidence: [] };
       }
       const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
-      const rows = executeSqliteQuerySync(
+      const rows = terminalApprovalReceiptRows({
         db,
-        terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now()),
-      ).rows;
+        stateDb,
+        runId: params.context.runId,
+        nowMs: params.nowMs ?? Date.now(),
+      });
       if (rows.length === 0) {
         return { count: 0, missingEvidence: [] };
       }
       const records = rows.map((row) => decodeOperatorApprovalRow(row));
       const hasCorruptRecord = records.some((record) => record === null);
-      const hasAmbiguousLink =
-        params.linkState === "ambiguous" ||
-        records.some((record) =>
-          record
-            ? isOperatorApprovalLinkAmbiguous({
-                record,
-                context: params.context,
-                linkState: params.linkState,
-              })
-            : false,
-        );
+      const hasUnlinkedRecord = rows.some(
+        (row, index) =>
+          records[index] !== null &&
+          operatorApprovalExecutionLinkState(row, params.context) !== "exact",
+      );
       return {
         count: rows.length,
-        coverageState: hasCorruptRecord || hasAmbiguousLink ? "unknown" : "enforced",
+        coverageState: hasCorruptRecord || hasUnlinkedRecord ? "unknown" : "enforced",
         missingEvidence: [
-          ...(hasAmbiguousLink ? ["decision.execution_link"] : []),
+          ...(hasUnlinkedRecord ? ["decision.execution_link"] : []),
           ...(hasCorruptRecord ? ["operator_approval.valid"] : []),
         ],
       };
@@ -845,7 +896,6 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
 /** Project authoritative approval rows directly; no generic decision fact is written. */
 export function listOperatorApprovalReceiptsForRun(params: {
   context: OperatorApprovalReceiptContext;
-  linkState: OperatorApprovalReceiptLinkState;
   offset: number;
   limit: number;
   nowMs?: number;
@@ -857,25 +907,23 @@ export function listOperatorApprovalReceiptsForRun(params: {
         return [];
       }
       const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
-      const rows = executeSqliteQuerySync(
+      const rows = terminalApprovalReceiptRows({
         db,
-        terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now())
-          .orderBy("resolved_at_ms", "asc")
-          .orderBy("approval_id", "asc")
-          .offset(params.offset)
-          .limit(params.limit),
-      ).rows;
+        stateDb,
+        runId: params.context.runId,
+        nowMs: params.nowMs ?? Date.now(),
+        offset: params.offset,
+        limit: params.limit,
+      });
       return rows.map((row) => {
         const record = decodeOperatorApprovalRow(row);
-        return record
-          ? isOperatorApprovalLinkAmbiguous({
-              record,
-              context: params.context,
-              linkState: params.linkState,
-            })
-            ? projectAmbiguousOperatorApprovalReceipt(record, params.context)
-            : projectOperatorApprovalReceipt(record, params.context)
-          : projectCorruptOperatorApprovalReceipt(row, params.context);
+        if (!record) {
+          return projectCorruptOperatorApprovalReceipt(row, params.context);
+        }
+        const linkState = operatorApprovalExecutionLinkState(row, params.context);
+        return linkState === "exact"
+          ? projectOperatorApprovalReceipt(record, params.context)
+          : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
       });
     }, params.databaseOptions) ?? []
   );

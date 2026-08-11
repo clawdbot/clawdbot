@@ -443,9 +443,6 @@ function inspectExactExecution(
   if (contextResult.status === "found") {
     return presentExecutionDecisionReceipts({
       context: contextResult.context,
-      approvalLinkState: hasMultipleRetainedRunContexts(contextResult.context.runId, options)
-        ? "ambiguous"
-        : "unambiguous",
       decisionOffset: params.decisionOffset,
       decisionLimit: params.decisionLimit,
       options,
@@ -505,20 +502,6 @@ function hasAnyRunContext(db: DatabaseSync, runId: string): boolean {
   );
 }
 
-function hasMultipleRetainedRunContexts(
-  runId: string,
-  options: ExecutionIdentityReadOptions,
-): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "execution_identity_contexts")) {
-        return false;
-      }
-      return readRowsByRunId(db, runId, options.now ?? Date.now(), 0, 2).length > 1;
-    }, options) ?? false
-  );
-}
-
 function hasRetainedAuditRun(db: DatabaseSync, runId: string, now: number): boolean {
   if (!tableExists(db, "audit_events")) {
     return false;
@@ -558,7 +541,6 @@ function inspectRunSelector(
         try {
           return presentExecutionDecisionReceipts({
             context: parseExecutionIdentityRow(firstMatches[0]!),
-            approvalLinkState: "unambiguous",
             decisionOffset: params.decisionOffset,
             decisionLimit: params.decisionLimit,
             options,

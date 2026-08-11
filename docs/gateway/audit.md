@@ -116,12 +116,13 @@ states that no identity-aware policy or grant evaluation was proven. This is
 an explanation of admission evidence, not an enforcement claim.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
-inspector also projects an approval receipt from that row. The receipt names
-the durable owner and record reference, the exact stable reason code, the
-first-answer and terminal policy references, any grant created by an allow
-decision, the run correlation used, and a bounded next step. It never includes
-the command, arguments, path, environment, reviewer device id, resolver id, or
-approval presentation text.
+inspector also reads its owner-local `operator_approval_execution_identities`
+binding. Only an exact context, execution, and run tuple projects the approval
+as enforced. The receipt names the durable owner and record reference, the
+exact stable reason code, the first-answer and terminal policy references, any
+grant created by an allow decision, the exact context fields used, and a
+bounded next step. It never includes the command, arguments, path, environment,
+reviewer device id, resolver id, or approval presentation text.
 
 Approval outcomes map to stable receipt reasons:
 
@@ -135,7 +136,9 @@ Approval outcomes map to stable receipt reasons:
 | Malformed approval verdict     | `operator_approval_denied_malformed_verdict`                                              |
 | Fail-closed storage state      | `operator_approval_denied_storage_corrupt`                                                |
 | Unreadable or inconsistent row | `operator_approval_record_corrupt`                                                        |
-| Multiple executions share run  | `operator_approval_execution_link_ambiguous`                                              |
+| Missing execution binding      | `operator_approval_execution_link_missing`                                                |
+| Malformed execution binding    | `operator_approval_execution_link_malformed`                                              |
+| Mismatched execution binding   | `operator_approval_execution_link_mismatch`                                               |
 
 Allowed, denied, expired, and cancelled rows are `enforced` because the
 recorded human decision or fail-closed owner policy changed whether the action
@@ -146,12 +149,12 @@ approval names a run but its expected execution context is missing, run
 inspection returns `decision_context_link_missing` with `unknown` coverage and
 does not invent a receipt context.
 
-Because `runId` is correlation rather than execution identity, an approval row
-cannot select among multiple retained execution contexts sharing that run. An
-exact-execution inspection then projects the row as `unknown` with
-`operator_approval_execution_link_ambiguous`, no grant references, and an
-explicit run-only remediation. It never presents that row as an enforced allow
-or denial for the selected execution.
+Because `runId` is correlation rather than execution identity, it never
+substitutes for the owner-local binding. Missing, malformed, or mismatched
+binding rows project as `unknown` with no grant references and explicit binding
+remediation, even when only one execution context is retained for the run. The
+inspector never infers a binding from session metadata, timestamps, or retained
+context counts.
 
 Run inspection returns successful typed diagnostics instead of inventing
 facts:
@@ -332,6 +335,11 @@ their recorded decisions. Delivery to the generic table uses the bounded audit
 worker and remains best-effort until persisted; approval-owner writes do not
 depend on that queue. The activity ledger cannot recreate either source after
 loss.
+
+Every generic decision-fact write rereads the immutable execution context and
+requires the full context, execution, and run tuple. Projection validates the
+same tuple again; a mismatch is `unknown`, not reassigned by context or run
+correlation alone.
 
 ## Querying
 

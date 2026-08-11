@@ -16,6 +16,12 @@ import {
   summarizeExecutionDecisionFactsForContext,
 } from "./execution-decision-facts.js";
 import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
+import {
+  configureExecutionIdentityAdmissionSink,
+  enqueueExecutionIdentityContextAtAdmission,
+  type ExecutionIdentityAdmissionEnvelope,
+} from "./execution-identity-admission.js";
+import { processExecutionIdentityAdmissionWork } from "./execution-identity-context.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -27,6 +33,49 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function databaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-decision-facts-") } };
+}
+
+function seedExecutionContext(database: ReturnType<typeof databaseOptions>): void {
+  let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
+  const clear = configureExecutionIdentityAdmissionSink((work) => {
+    if (work.kind === "capture") {
+      envelope = work.envelope;
+    }
+    return true;
+  });
+  try {
+    enqueueExecutionIdentityContextAtAdmission(
+      {
+        runId: "run-1",
+        agentId: "main",
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+        runtime: { kind: "embedded" },
+      },
+      {
+        enabled: true,
+        now: 50,
+        contextId: "context-1",
+        executionId: "execution-1",
+        runtimeInstanceId: "runtime-1",
+      },
+    );
+  } finally {
+    clear();
+  }
+  if (!envelope) {
+    throw new Error("expected execution identity envelope");
+  }
+  const stored = processExecutionIdentityAdmissionWork(
+    { kind: "capture", envelope },
+    { ...database, now: 50 },
+  );
+  if (
+    stored.contextId !== "context-1" ||
+    stored.executionId !== "execution-1" ||
+    stored.runId !== "run-1"
+  ) {
+    throw new Error(`unexpected execution context: ${JSON.stringify(stored)}`);
+  }
 }
 
 function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
@@ -60,6 +109,7 @@ function receipt(id: string, occurredAt = 100): DecisionReceiptV1 {
 describe("execution decision facts", () => {
   it("stays absent until a future owner writes one immutable fact", () => {
     const database = databaseOptions();
+    seedExecutionContext(database);
     const opened = openOpenClawStateDatabase(database);
     expect(tableExists(opened.db, "execution_decision_facts")).toBe(false);
     expect(pruneExpiredExecutionDecisionFacts({ database })).toBe(0);
@@ -80,7 +130,7 @@ describe("execution decision facts", () => {
 
     expect(
       listExecutionDecisionFactsForContext({
-        contextId: "context-1",
+        context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
         offset: 0,
         limit: 10,
         now: 100,
@@ -88,7 +138,11 @@ describe("execution decision facts", () => {
       }),
     ).toEqual([receipt("receipt-1")]);
     expect(
-      summarizeExecutionDecisionFactsForContext({ contextId: "context-1", now: 100, database }),
+      summarizeExecutionDecisionFactsForContext({
+        context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
+        now: 100,
+        database,
+      }),
     ).toEqual({ count: 1, coverageState: "enforced", missingEvidence: [] });
   });
 
@@ -112,8 +166,45 @@ describe("execution decision facts", () => {
     );
   });
 
+  it("rejects a generic fact whose context, execution, and run tuple is not exact", () => {
+    const database = databaseOptions();
+    seedExecutionContext(database);
+    expect(() =>
+      recordExecutionDecisionFact(
+        { ...receipt("wrong-execution"), executionId: "execution-2" },
+        database,
+      ),
+    ).toThrow("exact retained execution context");
+    expect(tableExists(openOpenClawStateDatabase(database).db, "execution_decision_facts")).toBe(
+      false,
+    );
+  });
+
+  it("projects a fact as unknown when the requested tuple does not match", () => {
+    const database = databaseOptions();
+    seedExecutionContext(database);
+    recordExecutionDecisionFact(receipt("tuple-mismatch"), { ...database, now: 100 });
+
+    expect(
+      listExecutionDecisionFactsForContext({
+        context: { contextId: "context-1", executionId: "execution-2", runId: "run-1" },
+        offset: 0,
+        limit: 10,
+        now: 100,
+        database,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        decision: { outcome: "unknown", reasonCode: "decision_fact_execution_link_mismatch" },
+        enforcement: expect.objectContaining({ coverageState: "unknown" }),
+        missingEvidence: ["decision.execution_link"],
+      }),
+    ]);
+  });
+
   it("enforces the 30-day read boundary and bounded retention pruning", () => {
     const database = databaseOptions();
+    seedExecutionContext(database);
     recordExecutionDecisionFact(receipt("old", 0), { ...database, now: 0 });
     recordExecutionDecisionFact(receipt("new", RETENTION_MS + 1), {
       ...database,
@@ -123,7 +214,7 @@ describe("execution decision facts", () => {
 
     expect(
       listExecutionDecisionFactsForContext({
-        contextId: "context-1",
+        context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
         offset: 0,
         limit: 10,
         now: RETENTION_MS + 1,
@@ -139,6 +230,7 @@ describe("execution decision facts", () => {
 
   it("caps retained facts without accepting a non-identical receipt id", () => {
     const database = databaseOptions();
+    seedExecutionContext(database);
     for (const [index, id] of ["one", "two", "three"].entries()) {
       recordExecutionDecisionFact(receipt(id, 100 + index), {
         ...database,
@@ -148,7 +240,7 @@ describe("execution decision facts", () => {
     }
     expect(
       listExecutionDecisionFactsForContext({
-        contextId: "context-1",
+        context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
         offset: 0,
         limit: 10,
         now: 200,
@@ -159,6 +251,7 @@ describe("execution decision facts", () => {
 
   it("turns corrupt retained payloads into bounded unknown receipts", () => {
     const database = databaseOptions();
+    seedExecutionContext(database);
     const context: ExecutionIdentityContextV1 = {
       schemaVersion: 1,
       contextId: "context-1",
@@ -183,7 +276,7 @@ describe("execution decision facts", () => {
 
     expect(
       listExecutionDecisionFactsForContext({
-        contextId: "context-1",
+        context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
         offset: 0,
         limit: 10,
         now: 100,
@@ -198,7 +291,11 @@ describe("execution decision facts", () => {
       }),
     ]);
     expect(
-      summarizeExecutionDecisionFactsForContext({ contextId: "context-1", now: 100, database }),
+      summarizeExecutionDecisionFactsForContext({
+        context: { contextId: "context-1", executionId: "execution-1", runId: "run-1" },
+        now: 100,
+        database,
+      }),
     ).toEqual({
       count: 1,
       coverageState: "unknown",
@@ -207,7 +304,6 @@ describe("execution decision facts", () => {
     expect(
       presentExecutionDecisionReceipts({
         context,
-        approvalLinkState: "unambiguous",
         decisionLimit: 1,
         options: { ...database, now: 100 },
       }),

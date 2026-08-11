@@ -18,7 +18,10 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 
-type ExecutionDecisionDatabase = Pick<OpenClawStateKyselyDatabase, "execution_decision_facts">;
+type ExecutionDecisionDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "execution_decision_facts" | "execution_identity_contexts"
+>;
 type ExecutionDecisionRow = Selectable<OpenClawStateKyselyDatabase["execution_decision_facts"]>;
 
 const EXECUTION_DECISION_FACT_MAX_BYTES = 16 * 1024;
@@ -118,7 +121,11 @@ function parseDecisionRow(row: ExecutionDecisionRow): DecisionReceiptV1 {
   return parsed;
 }
 
-function corruptDecisionReceipt(row: ExecutionDecisionRow): DecisionReceiptV1 {
+function unknownDecisionReceipt(
+  row: ExecutionDecisionRow,
+  reasonCode: string,
+  missingEvidence: string,
+): DecisionReceiptV1 {
   return {
     schemaVersion: 1,
     receiptId: row.receipt_id,
@@ -128,7 +135,7 @@ function corruptDecisionReceipt(row: ExecutionDecisionRow): DecisionReceiptV1 {
     ...(row.action_id ? { actionId: row.action_id } : {}),
     occurredAt: normalizeSqliteNumber(row.occurred_at) ?? 0,
     action: { family: row.action_family, operation: "decision" },
-    decision: { outcome: "unknown", reasonCode: "decision_fact_record_corrupt" },
+    decision: { outcome: "unknown", reasonCode },
     enforcement: {
       coverageState: "unknown",
       policyRefs: [],
@@ -140,7 +147,7 @@ function corruptDecisionReceipt(row: ExecutionDecisionRow): DecisionReceiptV1 {
       recordRef: row.source_ref,
       decisionBoundary: "execution-decision-facts",
     },
-    missingEvidence: ["decision.fact.valid"],
+    missingEvidence: [missingEvidence],
     remediation: [
       {
         code: "inspect_state_integrity",
@@ -148,6 +155,25 @@ function corruptDecisionReceipt(row: ExecutionDecisionRow): DecisionReceiptV1 {
       },
     ],
   };
+}
+
+type ExecutionDecisionContext = Pick<DecisionReceiptV1, "contextId" | "executionId" | "runId">;
+
+function hasExactExecutionContext(db: DatabaseSync, context: ExecutionDecisionContext): boolean {
+  if (!tableExists(db, "execution_identity_contexts")) {
+    return false;
+  }
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      db,
+      decisionDb(db)
+        .selectFrom("execution_identity_contexts")
+        .select("context_id")
+        .where("context_id", "=", context.contextId)
+        .where("execution_id", "=", context.executionId)
+        .where("run_id", "=", context.runId),
+    ),
+  );
 }
 
 function deleteExpiredDecisionFacts(db: DatabaseSync, now: number, limit: number) {
@@ -206,6 +232,10 @@ export function recordExecutionDecisionFact(
   if (receipt.source.owner === "operator_approvals") {
     throw new Error("operator approvals must be read from their owner-native table");
   }
+  const opened = openOpenClawStateDatabase(options);
+  if (!hasExactExecutionContext(opened.db, receipt)) {
+    throw new Error("execution decision fact requires an exact retained execution context");
+  }
   const receiptJson = JSON.stringify(receipt);
   const receiptBytes = Buffer.byteLength(receiptJson, "utf8");
   if (receiptBytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
@@ -215,6 +245,10 @@ export function recordExecutionDecisionFact(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = decisionDb(db);
+      // The context is the authoritative tuple owner; reread it inside the commit section.
+      if (!hasExactExecutionContext(db, receipt)) {
+        throw new Error("execution decision fact requires an exact retained execution context");
+      }
       const existing = executeSqliteQueryTakeFirstSync(
         db,
         kysely
@@ -269,17 +303,29 @@ function retainedDecisionFactsForContextQuery(db: DatabaseSync, contextId: strin
     .where("occurred_at", ">=", now - EXECUTION_DECISION_FACT_RETENTION_MS);
 }
 
-function projectDecisionRow(row: ExecutionDecisionRow): DecisionReceiptV1 {
+function projectDecisionRow(
+  row: ExecutionDecisionRow,
+  context: ExecutionDecisionContext,
+): DecisionReceiptV1 {
   try {
-    return parseDecisionRow(row);
+    const receipt = parseDecisionRow(row);
+    return receipt.contextId === context.contextId &&
+      receipt.executionId === context.executionId &&
+      receipt.runId === context.runId
+      ? receipt
+      : unknownDecisionReceipt(
+          row,
+          "decision_fact_execution_link_mismatch",
+          "decision.execution_link",
+        );
   } catch {
-    return corruptDecisionReceipt(row);
+    return unknownDecisionReceipt(row, "decision_fact_record_corrupt", "decision.fact.valid");
   }
 }
 
 /** Summarize all retained owner rows so receipt paging cannot change top-level coverage. */
 export function summarizeExecutionDecisionFactsForContext(params: {
-  contextId: string;
+  context: ExecutionDecisionContext;
   now?: number;
   database?: OpenClawStateDatabaseOptions;
 }): {
@@ -296,11 +342,11 @@ export function summarizeExecutionDecisionFactsForContext(params: {
         db,
         retainedDecisionFactsForContextQuery(
           db,
-          params.contextId,
+          params.context.contextId,
           params.now ?? Date.now(),
         ).selectAll(),
       ).rows;
-      const receipts = rows.map(projectDecisionRow);
+      const receipts = rows.map((row) => projectDecisionRow(row, params.context));
       const coverage = new Set(receipts.map((receipt) => receipt.enforcement.coverageState));
       return {
         count: rows.length,
@@ -347,7 +393,7 @@ export function countExecutionDecisionFactsForRun(params: {
 }
 
 export function listExecutionDecisionFactsForContext(params: {
-  contextId: string;
+  context: ExecutionDecisionContext;
   offset: number;
   limit: number;
   now?: number;
@@ -360,14 +406,14 @@ export function listExecutionDecisionFactsForContext(params: {
       }
       const rows = executeSqliteQuerySync(
         db,
-        retainedDecisionFactsForContextQuery(db, params.contextId, params.now ?? Date.now())
+        retainedDecisionFactsForContextQuery(db, params.context.contextId, params.now ?? Date.now())
           .selectAll()
           .orderBy("occurred_at", "asc")
           .orderBy("receipt_id", "asc")
           .offset(params.offset)
           .limit(params.limit),
       ).rows;
-      return rows.map(projectDecisionRow);
+      return rows.map((row) => projectDecisionRow(row, params.context));
     }, params.database) ?? []
   );
 }

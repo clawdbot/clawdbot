@@ -159,13 +159,28 @@ describe("audit event worker", () => {
 
     await writer.ready;
     const receipt = decisionReceipt();
+    const envelope = captureExecutionIdentityAdmissionEnvelope(
+      {
+        runId: receipt.runId,
+        agentId: "main",
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+        runtime: { kind: "embedded" },
+      },
+      {
+        contextId: receipt.contextId,
+        executionId: receipt.executionId,
+        runtimeInstanceId: "worker-runtime",
+        now: receipt.occurredAt,
+      },
+    );
+    expect(writer.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(writer.recordExecutionDecision(receipt)).toBe(true);
     await writer.stop();
 
     expect(errors).toEqual([]);
     expect(
       listExecutionDecisionFactsForContext({
-        contextId: receipt.contextId,
+        context: receipt,
         offset: 0,
         limit: 10,
         now: receipt.occurredAt,
