@@ -186,6 +186,14 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=7");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_INDEX_REPAIR_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
+    expect(result.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     expect(result.stdout).not.toContain("=missing");
     const firstReport = JSON.parse(fs.readFileSync(output, "utf8")) as ReliabilityReport;
     expect(firstReport.concurrentRestoresVerified).toBe(4);
