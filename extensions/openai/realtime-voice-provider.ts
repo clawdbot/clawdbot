@@ -1534,10 +1534,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         // is the sole execution boundary.
         return;
 
-      case "response.done":
-        // Handled before the generic bridge event so typed hosts own settlement.
-        return;
-
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
         const rejectedEventId = readRealtimeErrorEventId(event.error);

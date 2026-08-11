@@ -316,6 +316,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
               providerId: resolution.provider.id,
               sessionKey,
               connId: ownerConnId!,
+              context,
               runAgentConsult: consultRunner.runArgs,
               appendTranscript: ({ entryId, role, text }) =>
                 appendClientVoiceTranscript({
@@ -340,15 +341,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
                   config: runtimeConfig,
                 });
               },
-              onTalkEvent: (talkEvent) => {
-                context.broadcastToConnIds(
-                  "talk.event",
-                  { voiceSessionId: activeVoiceSessionId!, talkEvent },
-                  new Set([ownerConnId!]),
-                  { dropIfSlow: talkEvent.final !== true },
-                );
-              },
-              warn: (message) => context.logGateway.warn(message),
             })
           : undefined;
         const browserSessionRequest: InternalRealtimeVoiceBrowserSessionCreateRequest = {

@@ -315,7 +315,6 @@ export function createTalkRealtimeRelaySession(
       ) {
         currentOutputItemId = event.itemId ?? currentOutputItemId;
         currentOutputResponseId = event.responseId ?? currentOutputResponseId;
-        return;
       }
     },
     onResponseDone: (outcome) => {

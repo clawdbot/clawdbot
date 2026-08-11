@@ -299,6 +299,7 @@ export function createTalkClientGatewayControlOwner(params: {
   providerId?: string;
   sessionKey: string;
   connId: string;
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway">;
   runAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
   appendTranscript: (entry: {
     entryId: string;
@@ -307,13 +308,11 @@ export function createTalkClientGatewayControlOwner(params: {
   }) => Promise<void>;
   flushTranscript: () => Promise<void>;
   closeLogicalSession: () => Promise<void>;
-  onTalkEvent?: (event: TalkEvent) => void;
   controlAgentRun?: (params: {
     sessionKey: string;
     text: string;
     mode?: unknown;
   }) => Promise<RealtimeVoiceAgentControlResult>;
-  warn: (message: string) => void;
 }): GatewayControlOwner {
   let bridge: RealtimeVoiceBridge | undefined;
   let closeProvider: (() => Promise<void>) | undefined;
@@ -323,6 +322,7 @@ export function createTalkClientGatewayControlOwner(params: {
   const entryPrefix = `gateway-${randomUUID()}`;
   const consultQueue = createRealtimeControlQueue();
   const consultControllers = new Map<string, AbortController>();
+  const warn = (message: string) => params.context.logGateway.warn(message);
   const talkPayload = () => ({ voiceSessionId: params.voiceSessionId });
   const harness = createRealtimeVoiceSessionHarness({
     talk: {
@@ -340,7 +340,13 @@ export function createTalkClientGatewayControlOwner(params: {
       outputAudioDelta: (audio) => ({ ...talkPayload(), byteLength: audio.byteLength }),
       outputAudioDone: (reason) => ({ ...talkPayload(), reason }),
     },
-    onTalkEvent: params.onTalkEvent,
+    onTalkEvent: (talkEvent: TalkEvent) =>
+      params.context.broadcastToConnIds(
+        "talk.event",
+        { voiceSessionId: params.voiceSessionId, talkEvent },
+        new Set([params.connId]),
+        { dropIfSlow: talkEvent.final !== true },
+      ),
     captureBridgeEvents: false,
   });
 
@@ -397,7 +403,7 @@ export function createTalkClientGatewayControlOwner(params: {
     hasActiveRun: () => consultControllers.size > 0,
     execute: applyControl,
     speak: (message) => bridge?.sendUserMessage?.(message),
-    warn: params.warn,
+    warn,
   });
 
   const handleToolCall = (event: RealtimeVoiceToolCallEvent): void => {
@@ -414,7 +420,7 @@ export function createTalkClientGatewayControlOwner(params: {
         return;
       }
       void admission.completion.catch((error: unknown) => {
-        params.warn(`talk Gateway control consult failed: ${formatError(error)}`);
+        warn(`talk Gateway control consult failed: ${formatError(error)}`);
       });
       return;
     }
@@ -432,7 +438,7 @@ export function createTalkClientGatewayControlOwner(params: {
     void submit(event.callId, {
       error: `Unsupported realtime Talk tool: ${event.name}`,
     }).catch((error: unknown) => {
-      params.warn(`talk Gateway control rejection failed: ${formatError(error)}`);
+      warn(`talk Gateway control rejection failed: ${formatError(error)}`);
     });
   };
 
@@ -460,7 +466,7 @@ export function createTalkClientGatewayControlOwner(params: {
     transcriptSequence += 1;
     const entryId = `${entryPrefix}-${transcriptSequence}`;
     void params.appendTranscript({ entryId, role, text }).catch((error: unknown) => {
-      params.warn(`talk Gateway control transcript failed: ${formatError(error)}`);
+      warn(`talk Gateway control transcript failed: ${formatError(error)}`);
     });
     if (role === "user") {
       runControl.handleSpoken(text, params.flushTranscript());
@@ -480,7 +486,7 @@ export function createTalkClientGatewayControlOwner(params: {
           legacyOutcome &&
           (legacyOutcome.status === "failed" || legacyOutcome.status === "incomplete")
         ) {
-          params.warn(`talk Gateway control ${legacyOutcome.message}`);
+          warn(`talk Gateway control ${legacyOutcome.message}`);
         }
         if (
           event.direction === "server" &&
@@ -497,12 +503,12 @@ export function createTalkClientGatewayControlOwner(params: {
       onResponseDone: (outcome) => {
         const terminal = harness.finishResponse(outcome);
         if (terminal.ok && (outcome.status === "failed" || outcome.status === "incomplete")) {
-          params.warn(`talk Gateway control ${outcome.message}`);
+          warn(`talk Gateway control ${outcome.message}`);
         }
       },
       onReady: () => harness.emit({ type: "session.ready", payload: talkPayload() }),
       onError: (error) => {
-        params.warn(`talk Gateway control provider error: ${error.message}`);
+        warn(`talk Gateway control provider error: ${error.message}`);
         harness.emit({
           type: "session.error",
           payload: { ...talkPayload(), message: error.message },
@@ -513,7 +519,7 @@ export function createTalkClientGatewayControlOwner(params: {
         harness.emit({ type: "session.closed", payload: talkPayload(), final: true });
         harness.close();
         void owner.close({ skipProvider: true }).catch((error: unknown) => {
-          params.warn(`talk Gateway control close failed: ${formatError(error)}`);
+          warn(`talk Gateway control close failed: ${formatError(error)}`);
         });
       },
     },
@@ -525,14 +531,14 @@ export function createTalkClientGatewayControlOwner(params: {
         void previous
           .close({ preserveLogicalSession: true, preserveRuns: true })
           .catch((error: unknown) => {
-            params.warn(`talk replaced Gateway transport close failed: ${formatError(error)}`);
+            warn(`talk replaced Gateway transport close failed: ${formatError(error)}`);
           });
       }
       registerTalkConnectionCleanup(params.connId, "browser-control", () => {
         for (const current of owners.values()) {
           if (current.connId === params.connId) {
             void current.close().catch((error: unknown) => {
-              params.warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
+              warn(`talk disconnected Gateway control close failed: ${formatError(error)}`);
             });
           }
         }

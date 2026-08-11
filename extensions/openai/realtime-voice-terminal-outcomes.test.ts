@@ -17,7 +17,9 @@ type CapturedOutcome = {
 
 function signal() {
   let resolve = () => {};
-  const promise = new Promise<void>((done) => (resolve = done));
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -83,7 +85,9 @@ async function capture(
       });
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const port = (server.address() as AddressInfo).port;
   const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
     providerConfig: { apiKey: "fixture-value", azureEndpoint: `http://127.0.0.1:${port}` },
@@ -137,8 +141,12 @@ async function capture(
     for (const socket of sockets) {
       socket.terminate();
     }
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
