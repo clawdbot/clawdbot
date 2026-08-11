@@ -5,7 +5,9 @@ import {
   formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
+  PREFLIGHT_UNRESOLVED_OVERFLOW_REASON,
   resolveCompactionFailureReason,
+  resolvePreflightRequiredCompactionReason,
 } from "./compact-reasons.js";
 
 describe("resolveCompactionFailureReason", () => {
@@ -126,6 +128,50 @@ describe("isBenignCompactionSkipReason", () => {
       expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
     },
   );
+});
+
+describe("resolvePreflightRequiredCompactionReason", () => {
+  it("rewrites already-compacted into an unresolved-overflow failure for required preflights", () => {
+    // The budget gate only requires preflight after measuring the session over
+    // budget, so "nothing new to compact" means fixed overhead, not a fine session.
+    expect(
+      resolvePreflightRequiredCompactionReason({
+        reason: "Already compacted",
+        preflightRequired: true,
+      }),
+    ).toBe(PREFLIGHT_UNRESOLVED_OVERFLOW_REASON);
+    expect(classifyCompactionReason(PREFLIGHT_UNRESOLVED_OVERFLOW_REASON)).toBe(
+      "live_context_still_exceeds_target",
+    );
+    expect(
+      isBenignCompactionSkipResult({
+        ok: false,
+        compacted: false,
+        reason: PREFLIGHT_UNRESOLVED_OVERFLOW_REASON,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the benign already-compacted skip for non-required compaction", () => {
+    expect(
+      resolvePreflightRequiredCompactionReason({
+        reason: "Already compacted",
+        preflightRequired: false,
+      }),
+    ).toBe("Already compacted");
+    expect(resolvePreflightRequiredCompactionReason({ reason: "Already compacted" })).toBe(
+      "Already compacted",
+    );
+  });
+
+  it("leaves other failure reasons untouched for required preflights", () => {
+    expect(
+      resolvePreflightRequiredCompactionReason({
+        reason: "Compaction timed out",
+        preflightRequired: true,
+      }),
+    ).toBe("Compaction timed out");
+  });
 });
 
 describe("formatUnknownCompactionReasonDetail", () => {

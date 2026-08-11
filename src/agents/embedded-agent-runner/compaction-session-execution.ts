@@ -27,7 +27,10 @@ import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compa
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
-import { resolveCompactionFailureReason } from "./compact-reasons.js";
+import {
+  resolveCompactionFailureReason,
+  resolvePreflightRequiredCompactionReason,
+} from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   containsRealConversationMessages,
@@ -558,9 +561,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       await runtime.disposeToolRuntimes();
     }
   } catch (err) {
-    const reason = resolveCompactionFailureReason({
-      reason: formatErrorMessage(err),
-      safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
+    const reason = resolvePreflightRequiredCompactionReason({
+      reason: resolveCompactionFailureReason({
+        reason: formatErrorMessage(err),
+        safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
+      }),
+      // A required preflight that reports "already compacted" leaves the
+      // over-budget session unresolved; surface it as a distinct failure so the
+      // budget gate rejects instead of skipping (openclaw#121617).
+      preflightRequired: params.preflightRequired,
     });
     return fail(reason, err);
   } finally {
