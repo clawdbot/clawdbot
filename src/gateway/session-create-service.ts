@@ -760,13 +760,7 @@ export async function createGatewaySession(params: {
       : undefined;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
     let currentParentSessionEntry = parentSessionEntry;
-    if (
-      canonicalParentSessionKey &&
-      parentSessionTarget &&
-      (params.emitCommandHooks === true ||
-        params.fork === true ||
-        params.authorizedPluginId !== undefined)
-    ) {
+    if (canonicalParentSessionKey && parentSessionTarget) {
       const currentParent = loadSessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -1264,14 +1258,7 @@ export async function createGatewaySession(params: {
       identities: [creationTarget.canonicalKey],
     },
   ];
-  if (
-    canonicalParentSessionKey &&
-    parentSessionEntry?.sessionId &&
-    parentSessionTarget &&
-    (params.emitCommandHooks === true ||
-      params.fork === true ||
-      params.authorizedPluginId !== undefined)
-  ) {
+  if (canonicalParentSessionKey && parentSessionEntry?.sessionId && parentSessionTarget) {
     lifecycleTargets.push({
       scope: parentSessionTarget.storePath,
       identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],

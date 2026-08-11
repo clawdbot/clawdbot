@@ -89,8 +89,13 @@ vi.mock("./dashboard-session-title.js", async (importOriginal) => {
   return { ...actual, generateDashboardSessionTitle: dashboardTitleMocks.generate };
 });
 
-const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
-  setupGatewaySessionsTestHarness();
+const {
+  createConfiguredGlobalAgentSessionStore,
+  createSessionStoreDir,
+  createSelectedGlobalSessionStore,
+  openClient,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -613,6 +618,52 @@ test("sessions.create preserves explicit and parent-derived agent routing", asyn
   });
   expect(explicit.ok, JSON.stringify(explicit.error)).toBe(true);
   expect(explicit.payload?.key).toMatch(/^agent:main:dashboard:/u);
+});
+
+test("createGatewaySession rejects a parent replaced after preflight routing", async () => {
+  const globalFixture = await createConfiguredGlobalAgentSessionStore();
+  const { workStorePath } = globalFixture;
+  const parentSessionKey = "agent:work:dashboard:preflight-parent";
+  try {
+    await writeSessionStore({
+      agentId: "work",
+      storePath: workStorePath,
+      entries: { [parentSessionKey]: sessionStoreEntry("original-parent") },
+    });
+    const { createGatewaySession, resolveGatewaySessionCreateAgentRouting } =
+      await import("./session-create-service.js");
+    const cfg = globalFixture.getRuntimeConfig();
+    const agentRouting = resolveGatewaySessionCreateAgentRouting({ cfg, parentSessionKey });
+    expect(agentRouting.ok).toBe(true);
+    if (!agentRouting.ok) {
+      throw new Error(agentRouting.error.message);
+    }
+
+    await writeSessionStore({
+      agentId: "work",
+      storePath: workStorePath,
+      entries: { [parentSessionKey]: sessionStoreEntry("replacement-parent") },
+    });
+
+    await expect(
+      createGatewaySession({
+        cfg,
+        parentSessionKey,
+        preflightAgentRouting: agentRouting.routing,
+        commandSource: "test",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `Parent session ${parentSessionKey} changed before /new; retry.`,
+      },
+    });
+  } finally {
+    await resetConfiguredGlobalAgentSessionStore(globalFixture);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+  }
 });
 
 test("createGatewaySession persists a generated title only for a new session", async () => {
