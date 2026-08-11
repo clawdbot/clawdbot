@@ -3311,7 +3311,10 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
   });
 
-  it("marks failed separate progress once when final delivery throws", async () => {
+  it.each([
+    { label: "the final delivery throws", progressReceiptIncomplete: false },
+    { label: "the progress flush loses its provider receipt", progressReceiptIncomplete: true },
+  ])("marks failed separate progress when $label", async ({ progressReceiptIncomplete }) => {
     const progressConfig: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -3330,14 +3333,23 @@ describe("mattermost inbound user posts", () => {
     };
     mockState.runtimeCore = createRuntimeCore(progressConfig);
     const retainTerminalText = vi.fn(async () => true);
+    const discardPending = vi.fn(async () => {
+      if (progressReceiptIncomplete) {
+        throw createChannelPartialDeliveryError(new Error("progress receipt was unreadable"), {
+          messageIds: [],
+          visibleReplySent: true,
+          content: "Working...",
+        });
+      }
+    });
     mockState.createMattermostDraftStream.mockReturnValue({
       update: vi.fn(),
       updateAssistantText: vi.fn(),
       forceNewMessage: vi.fn(async () => {}),
       flush: vi.fn(async () => {}),
-      postId: vi.fn(() => "progress-post-1"),
+      postId: vi.fn(() => (progressReceiptIncomplete ? undefined : "progress-post-1")),
       clear: vi.fn(async () => {}),
-      discardPending: vi.fn(async () => {}),
+      discardPending,
       retainTerminalText,
       seal: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -3367,12 +3379,14 @@ describe("mattermost inbound user posts", () => {
     await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
     socket.emitOpen();
     await emitMattermostChannelPost(socket, {
-      id: "post-separate-final-failure",
+      id: `post-separate-final-failure-${progressReceiptIncomplete ? "partial" : "ordinary"}`,
       message: "run this",
     });
     socket.emitClose(1000);
     await monitor;
 
+    expect(discardPending).toHaveBeenCalledOnce();
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledOnce();
     expect(retainTerminalText).toHaveBeenCalledExactlyOnceWith("Working\n\nFailed.");
   });
 

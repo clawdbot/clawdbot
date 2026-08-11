@@ -427,6 +427,35 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 
+  it("does not treat a provider-accepted progress flush as the final reply", async () => {
+    const draftStream = createDraftStreamMock();
+    draftStream.discardPending.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("progress receipt was unreadable"), {
+        messageIds: [],
+        visibleReplySent: true,
+        content: "Working...",
+      }),
+    );
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("final send failed");
+    });
+    const recordSuccessfulFinal = vi.fn();
+
+    await expect(
+      deliverDraftPreview({
+        payload: { text: "Final answer" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        recordSuccessfulFinal,
+        deliverPayload: deliverFinal,
+      }),
+    ).rejects.toThrow("final send failed");
+
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "Final answer" });
+    expect(recordSuccessfulFinal).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("latches provider-accepted partial finals before progress cleanup", async () => {
     const draftStream = createDraftStreamMock("progress-post-1");
     const finalReceipt = createMattermostReceipt("accepted-final-1", "text");

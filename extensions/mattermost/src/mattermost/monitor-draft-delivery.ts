@@ -10,6 +10,7 @@ import {
   listMessageReceiptPlatformIds,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -149,9 +150,22 @@ async function deliverMattermostSeparateProgressFinal(
 
   let normalDeliveryResult: MattermostReplyDeliveryResult | undefined;
   try {
-    // The progress artifact has its own lifecycle. Stop pending edits before the
-    // durable final send, then delete only after provider-confirmed visibility.
+    // A provider-accepted progress post can lose its response receipt while this
+    // quiesces the draft. The stream is already stopped in that case, so the
+    // durable final remains safe to attempt, but the progress receipt must never
+    // be mistaken for evidence that the final sender ran.
     await params.draftStream.discardPending();
+  } catch (error: unknown) {
+    if (!isChannelPartialDeliveryError(error)) {
+      throw error;
+    }
+    params.logVerboseMessage(
+      `mattermost separate progress receipt incomplete before final delivery: ${formatErrorMessage(error)}`,
+    );
+  }
+  try {
+    // The progress artifact has its own lifecycle. Delete it only after the
+    // durable final sender has produced provider-confirmed visibility.
     normalDeliveryResult = await params.deliverPayload(params.payload);
     if (normalDeliveryResult.visibleReplySent && params.payload.isError !== true) {
       params.recordSuccessfulFinal?.();
