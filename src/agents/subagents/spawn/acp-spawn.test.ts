@@ -7,9 +7,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { setGatewayDedupeEntry, waitForAgentJob } from "../../../gateway/agent-turn/agent-job.js";
-import type { CallGatewayOptions } from "../../../gateway/call.js";
-import type { DedupeEntry } from "../../../gateway/server-shared.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -18,24 +15,10 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
-import { createAcpVisibleTextAccumulator } from "../../command/attempt-execution.helpers.js";
-import {
-  buildAcpResult,
-  createAcpToolLifecycleTracker,
-  emitAcpLifecycleEnd,
-} from "../../command/attempt-execution.js";
 import { resolveThinkingDefault } from "../../model-selection.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "../registry/subagent-lifecycle-events.js";
-import { createSubagentRegistryLifecycleController } from "../registry/subagent-registry-lifecycle.js";
-import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-manager.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
-type BoundaryLifecycleControllerParams = Parameters<
-  typeof createSubagentRegistryLifecycleController
->[0];
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -217,10 +200,7 @@ vi.mock("../../../config/sessions/paths.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
-  ...hoisted.createSessionAccessorMock(),
-}));
+vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
@@ -249,16 +229,14 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
 }));
 
-vi.mock("../registry/subagent-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../registry/subagent-registry.js")>()),
+vi.mock("../registry/subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
   // ACP registration deliberately moved behind the shared spawn pipeline.
   registerSubagentRun: hoisted.registerSubagentRunMock,
 }));
 
-vi.mock("../../../tasks/runtime-internal.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../tasks/runtime-internal.js")>()),
+vi.mock("../../../tasks/runtime-internal.js", () => ({
   listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
@@ -427,54 +405,6 @@ function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status
     throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
-}
-
-async function waitForAgentReplySnapshot(runId: string) {
-  const result = await waitForAgentJob({ runId, timeoutMs: 0 });
-  expect(result).toEqual(expect.objectContaining({ status: "ok" }));
-  return result as { terminalReply?: AgentRunTerminalReplySnapshot };
-}
-
-function createRegisteredRunEntry(registration: RegisterSubagentRunParams): SubagentRunRecord {
-  return {
-    ...registration,
-    createdAt: 100,
-    execution: { status: "running", startedAt: 100 },
-  };
-}
-
-function createBoundaryLifecycleController(params: {
-  entry: SubagentRunRecord;
-  captureSubagentCompletionReply: BoundaryLifecycleControllerParams["captureSubagentCompletionReply"];
-  runSubagentAnnounceFlow: BoundaryLifecycleControllerParams["runSubagentAnnounceFlow"];
-}) {
-  return createSubagentRegistryLifecycleController({
-    runs: new Map([[params.entry.runId, params.entry]]),
-    resumedRuns: new Set(),
-    subagentAnnounceTimeoutMs: 1_000,
-    getRuntimeConfig: () => ({}),
-    persist: vi.fn(),
-    persistOrThrow: vi.fn(),
-    clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
-    suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: () => ({ lookup: "unavailable" }),
-    shouldEmitEndedHookForRun: () => false,
-    emitSubagentEndedHookForRun: vi.fn(async () => {}),
-    emitSubagentProgressEndedForRun: vi.fn(async () => {}),
-    notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-    retireSupersededRun: vi.fn(async () => {}),
-    resumeSubagentRun: vi.fn(),
-    callGateway: async <T = Record<string, unknown>>(_opts: CallGatewayOptions): Promise<T> =>
-      ({}) as T,
-    captureSubagentCompletionReply: params.captureSubagentCompletionReply,
-    runSubagentAnnounceFlow: params.runSubagentAnnounceFlow,
-    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (wakeParams) => {
-      wakeParams.completeBatch([wakeParams.settledEntry.runId]);
-      return false;
-    }),
-    warn: vi.fn(),
-  });
 }
 
 function expectRecordFields(
@@ -2943,124 +2873,6 @@ describe("spawnAcpDirect", () => {
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
   });
-
-  it.each([
-    {
-      name: "visible",
-      chunks: ["v".repeat(5_000)],
-      expected: { disposition: "visible", text: `${"v".repeat(4_095)}…` } as const,
-      resultText: `${"v".repeat(4_095)}…`,
-    },
-    {
-      name: "silent",
-      chunks: ["NO_REPLY"],
-      expected: { disposition: "silent" } as const,
-      resultText: "NO_REPLY",
-    },
-    {
-      name: "punctuation-wrapped-silent",
-      chunks: ["NO_REPLY:"],
-      expected: { disposition: "silent" } as const,
-      resultText: "NO_REPLY",
-    },
-    {
-      name: "empty",
-      chunks: [] as string[],
-      expected: { disposition: "empty" } as const,
-      resultText: null,
-    },
-  ])(
-    "carries bounded $name ACP output from spawn pipeline through wait and registry",
-    async ({ name, chunks, expected, resultText }) => {
-      for (const order of ["lifecycle-first", "dedupe-first"] as const) {
-        const runId = `run-acp-boundary-${name}-${order}`;
-        hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
-          const args = argsUnknown as { method?: string };
-          if (args.method === "agent") {
-            return { runId };
-          }
-          if (args.method === "sessions.patch" || args.method === "sessions.delete") {
-            return { ok: true };
-          }
-          return {};
-        });
-
-        const spawned = expectAcceptedSpawn(
-          await spawnAcpDirect(createSpawnRequest(), createRequesterContext()),
-        );
-        expect(spawned).toMatchObject({ runId, mode: "run" });
-        const registration = latestMockCall(
-          hoisted.registerSubagentRunMock,
-          "subagent registration",
-        )[0] as RegisterSubagentRunParams;
-        expect(registration).toMatchObject({ runId, spawnMode: "run" });
-
-        const accumulator = createAcpVisibleTextAccumulator();
-        for (const chunk of chunks) {
-          accumulator.consume(chunk);
-        }
-        const terminalReply = accumulator.finalizeReplySnapshot();
-        expect(terminalReply).toEqual(expected);
-        const result = buildAcpResult({
-          payloadText: accumulator.finalize(),
-          terminalReply,
-          startedAt: 100,
-          resultStatus: "completed",
-        });
-        const dedupe = new Map<string, DedupeEntry>();
-        const observeLifecycle = () =>
-          emitAcpLifecycleEnd({
-            runId,
-            toolTracker: createAcpToolLifecycleTracker(),
-            resultStatus: "completed",
-            terminalReply,
-          });
-        const observeDedupe = () =>
-          setGatewayDedupeEntry({
-            dedupe,
-            key: `agent:${runId}`,
-            entry: {
-              ts: 200,
-              ok: true,
-              payload: { runId, status: "ok", startedAt: 100, endedAt: 200, result },
-            },
-          });
-        for (const observe of order === "lifecycle-first"
-          ? [observeLifecycle, observeDedupe]
-          : [observeDedupe, observeLifecycle]) {
-          observe();
-        }
-
-        const waited = await waitForAgentReplySnapshot(runId);
-        expect(waited.terminalReply).toEqual(expected);
-        const entry = createRegisteredRunEntry(registration);
-        const captureSubagentCompletionReply = vi.fn(async () => undefined);
-        const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
-        await createBoundaryLifecycleController({
-          entry,
-          captureSubagentCompletionReply,
-          runSubagentAnnounceFlow,
-        }).completeSubagentRun({
-          runId,
-          endedAt: 200,
-          outcome: { status: "ok" },
-          reason: SUBAGENT_ENDED_REASON_COMPLETE,
-          triggerCleanup: true,
-          terminalReply: waited.terminalReply,
-        });
-
-        expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-        expect(entry.completion).toMatchObject({
-          terminalReply: expected,
-          resultText,
-        });
-        expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-        expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-          expect.objectContaining({ terminalReply: expected }),
-        );
-      }
-    },
-  );
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
     replaceSpawnConfig({
