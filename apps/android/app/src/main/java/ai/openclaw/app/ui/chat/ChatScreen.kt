@@ -2006,7 +2006,6 @@ private fun SubagentActivityRow(
       AnimatedContent(
         targetState = summary,
         modifier = Modifier.weight(1f),
-        label = "subagent activity snippet",
       ) { text ->
         SubagentActivitySnippet(text)
       }
@@ -2035,8 +2034,12 @@ private fun SubagentActivitySnippet(
 @Composable
 private fun DiffStatChips(diff: ChatDiffStat) {
   Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-    if (diff.added > 0) DiffStatChip(text = "+${diff.added}", color = ClawTheme.colors.success, background = ClawTheme.colors.successSoft)
-    if (diff.removed > 0) DiffStatChip(text = "−${diff.removed}", color = ClawTheme.colors.danger, background = ClawTheme.colors.dangerSoft)
+    if (diff.added > 0) {
+      DiffStatChip(text = nativeString("+\${diff.added}", diff.added), color = ClawTheme.colors.success, background = ClawTheme.colors.successSoft)
+    }
+    if (diff.removed > 0) {
+      DiffStatChip(text = nativeString("−\${diff.removed}", diff.removed), color = ClawTheme.colors.danger, background = ClawTheme.colors.dangerSoft)
+    }
   }
 }
 
