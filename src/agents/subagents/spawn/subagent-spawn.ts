@@ -26,7 +26,6 @@ import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler
 import {
   materializeSubagentAttachments,
   type SubagentAttachmentCleanupClaim,
-  type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import {
@@ -275,14 +274,7 @@ export async function spawnSubagentDirect(
     }
 
     let retainOnSessionKeep = false;
-    let attachmentsReceipt:
-      | {
-          count: number;
-          totalBytes: number;
-          files: SubagentAttachmentReceiptFile[];
-          relDir: string;
-        }
-      | undefined;
+    let attachmentsReceipt: SubagentAttachmentCleanupClaim["receipt"] | undefined;
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
     let attachmentSandboxDir: string | undefined;
