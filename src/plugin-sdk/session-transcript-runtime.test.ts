@@ -488,7 +488,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const reply = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -531,7 +531,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {

@@ -12,7 +12,7 @@ import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/clien
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
@@ -2042,7 +2042,7 @@ describe("projectRecentChatDisplayMessages", () => {
       storePath,
     };
     try {
-      await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
       // Pre-upgrade era: a reasoning reply followed by a fieldless mirror,
       // written in the exact shape Telegram persisted before this fix, with

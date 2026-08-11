@@ -11,7 +11,7 @@ import {
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
@@ -317,7 +317,7 @@ export function displayTextForDuplicateCheck(message: Record<string, unknown>): 
   // same final-answer-preferring extractor the append-time mirror tag is
   // computed with, so a commentary-plus-final reply that gets tagged still
   // compares equal to its mirror's final-answer-only text.
-  const text = extractAssistantVisibleText(message)?.trim();
+  const text = extractAssistantPhaseText(message)?.trim();
   return text ? text : undefined;
 }
 
