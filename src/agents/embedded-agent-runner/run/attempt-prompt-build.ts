@@ -29,7 +29,7 @@ import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   leasePendingAgentSteeringItems,
   prependAgentSteeringPrompt,
-} from "../../subagent-registry.js";
+} from "../../subagents/registry/subagent-registry.js";
 import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,

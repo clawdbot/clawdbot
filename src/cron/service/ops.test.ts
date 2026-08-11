@@ -760,7 +760,7 @@ describe("cron service ops seam coverage", () => {
         const taskRunId =
           reservationOffsetMs === undefined
             ? tryCreateCronTaskRun({ state, job, startedAt })
-            : taskExecutor.createRunningTaskRun({
+            : taskExecutor.createRunningTaskRunCore({
                 runtime: "cron",
                 sourceId: job.id,
                 ownerKey: "",
@@ -1334,7 +1334,7 @@ describe("cron service ops seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskExecutor, "createRunningTaskRun")
+      .spyOn(taskExecutor, "createRunningTaskRunCore")
       .mockImplementation(() => {
         throw new Error("disk full");
       });
@@ -1357,7 +1357,7 @@ describe("cron service ops seam coverage", () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
 
       const updateTaskRecordSpy = vi
-        .spyOn(taskExecutor, "finalizeTaskRunByRunId")
+        .spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
         .mockImplementation(() => {
           throw new Error("disk full");
         });

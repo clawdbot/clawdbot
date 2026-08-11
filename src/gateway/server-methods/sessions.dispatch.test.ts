@@ -187,25 +187,35 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects dispatch from a nonlocal placement", async () => {
-    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
-    const dispatch = vi.fn();
+  it("delegates a provisioning placement so the dispatcher can join an identical retry", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("dispatch retry is not in flight"));
     const respond = await invoke(
       makeContext({
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, { state: "requested" } as never]]),
+          getMany: () => new Map([[sessionId, { state: "provisioning" } as never]]),
         },
       }),
     );
 
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("placement requested"),
+        code: ErrorCodes.UNAVAILABLE,
+        message: "dispatch retry is not in flight",
       }),
     );
   });

@@ -120,6 +120,7 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 10
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -158,6 +159,7 @@ jobs:
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}

@@ -2,7 +2,11 @@ import {
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
 } from "../../shared/assistant-error-format.js";
-import type { AssistantMessage } from "../types.js";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type AssistantMessage,
+} from "../types.js";
 import { classifyRateLimitWindow } from "./rate-limit-window.js";
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
@@ -63,9 +67,25 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "resource[_ -]?exhausted",
 ]);
 
+const REPLAY_UNSAFE_ASSISTANT_ERROR_CODES = new Set([
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+]);
+
+/** True when replaying the failed assistant request could duplicate unknown provider output. */
+export function isReplayUnsafeAssistantError(
+  message: Pick<AssistantMessage, "errorCode"> | null | undefined,
+): boolean {
+  return Boolean(message?.errorCode && REPLAY_UNSAFE_ASSISTANT_ERROR_CODES.has(message.errorCode));
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
-  if (message.stopReason !== "error" || !message.errorMessage) {
+  if (
+    message.stopReason !== "error" ||
+    !message.errorMessage ||
+    isReplayUnsafeAssistantError(message)
+  ) {
     return false;
   }
   const errorMessage = message.errorMessage.trim();

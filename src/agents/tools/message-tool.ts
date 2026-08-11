@@ -23,7 +23,6 @@ import {
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
@@ -1460,14 +1459,16 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
     return false;
   }
   const prepared = params.preparedMessageToolCatalog?.getChannel(currentChannel);
-  if (prepared) {
-    return prepared.reconcilesUnknownSend;
+  if (params.preparedMessageToolCatalog) {
+    // The prepared catalog is the exact runtime-registry generation for this
+    // turn. A missing channel is an authoritative absence, not permission to
+    // rediscover bundled plugins on the request path.
+    return prepared?.reconcilesUnknownSend ?? false;
   }
-  const adapter = params.preparedMessageToolCatalog
-    ? getBundledChannelPlugin(currentChannel)?.message
-    : (getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
-        ?.message ??
-      getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message);
+  const adapter =
+    getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
+      ?.message ??
+    getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message;
   return (
     adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
     typeof adapter.durableFinal.reconcileUnknownSend === "function"

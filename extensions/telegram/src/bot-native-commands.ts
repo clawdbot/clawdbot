@@ -1780,7 +1780,7 @@ export const registerTelegramNativeCommands = ({
             },
           },
           delivery: {
-            deliverWithProviderMessageSending: async (payload, info) => {
+            deliverWithProviderMessageSending: async (payload) => {
               if (
                 shouldSuppressLocalTelegramExecApprovalPrompt({
                   cfg: runtimeCfg,
@@ -1805,7 +1805,6 @@ export const registerTelegramNativeCommands = ({
                 ],
                 ...deliveryBaseOptions,
                 silent: runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
-                onPlatformSendDispatch: info.onPlatformSendDispatch,
               });
               if (result.delivered) {
                 deliveryState.delivered = true;

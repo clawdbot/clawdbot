@@ -2366,6 +2366,27 @@ jobs:
               fi
               ;;
             dependencies)
+              # The beta.1 release commit backported this workflow-only helper after its
+              # Knip config was frozen. Register that exact executable root without
+              # weakening the target's remaining dead-code scan.
+              release_evidence_entry='"scripts/generate-dependency-release-evidence.mts!"'
+              if [[
+                "$FROZEN_TARGET" == "true" &&
+                -f scripts/generate-dependency-release-evidence.mts &&
+                -f config/knip.config.ts
+              ]] && ! grep -Fq "$release_evidence_entry" config/knip.config.ts; then
+                RELEASE_EVIDENCE_ENTRY="$release_evidence_entry" node --input-type=module -e '
+                  import { readFileSync, writeFileSync } from "node:fs";
+                  const configPath = "config/knip.config.ts";
+                  const marker = "const repositoryScriptEntries = [";
+                  const source = readFileSync(configPath, "utf8");
+                  if (!source.includes(marker)) throw new Error(`${configPath} is missing ${marker}`);
+                  writeFileSync(configPath, source.replace(
+                    marker,
+                    `${marker}\n  ${process.env.RELEASE_EVIDENCE_ENTRY},`,
+                  ));
+                '
+              fi
               if has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
                 # The three deadcode scripts spawn independent Knip scans over

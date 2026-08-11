@@ -16,7 +16,7 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
@@ -204,7 +204,7 @@ describe("Gateway agent and artifact APIs", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
     let server = await startGatewayServer(port, {
       bind: "loopback",

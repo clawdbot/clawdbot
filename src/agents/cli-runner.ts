@@ -197,6 +197,8 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return params.error.code === "cli_unknown_empty_failure";
     case "empty_response":
       return params.error.code === "cli_unknown_empty_failure";
+    case "format":
+      return params.error.code === "cli_synthetic_no_response";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
     case "context_overflow":
@@ -949,9 +951,7 @@ export async function runPreparedCliAgent(
   ): ReplyPayload[] => {
     return buildEmbeddedRunPayloads({
       assistantTexts: [],
-      toolMetas: [],
       lastAssistant: undefined,
-      inlineToolResultsAllowed: false,
       sessionKey: params.sessionKey ?? "",
       provider: params.provider,
       model: context.modelId,

@@ -39,6 +39,7 @@ import {
   startOAuthLoopbackCallbackServer,
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -267,19 +268,6 @@ function executableCandidates(command: string): string[] {
   return [command, ...extensions.map((extension) => `${command}${extension.toLowerCase()}`)];
 }
 
-function resolveEffectivePath(env: Record<string, string> | undefined): string {
-  if (!env) {
-    return process.env.PATH ?? "";
-  }
-  if (typeof env.PATH === "string") {
-    return env.PATH;
-  }
-  if (process.platform === "win32" && typeof env.Path === "string") {
-    return env.Path;
-  }
-  return process.env.PATH ?? "";
-}
-
 async function commandExists(
   command: string,
   cwd: unknown,
@@ -290,7 +278,9 @@ async function commandExists(
   if (hasPathSeparator) {
     return isExecutable(resolveConfiguredPath(command, cwd));
   }
-  const pathEntries = resolveEffectivePath(env)
+  const configuredPath =
+    process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
+  const pathEntries = (configuredPath ?? process.env.PATH ?? "")
     .split(path.delimiter)
     .map((entry) => entry.trim() || ".");
   for (const pathEntry of pathEntries) {

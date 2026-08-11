@@ -405,6 +405,7 @@ enum class GatewayMethod(
   CronRun("cron.run"),
   CronRuns("cron.runs"),
   GatewayIdentityGet("gateway.identity.get"),
+  GatewayRestartPreflight("gateway.restart.preflight"),
   GatewayRestartRequest("gateway.restart.request"),
   SystemPresence("system-presence"),
   SystemEvent("system-event"),
@@ -517,6 +518,9 @@ enum class GatewayMethod(
   UpdateHold("update.hold"),
   SessionsCatalogStartTerminal("sessions.catalog.startTerminal"),
   WorkerDesktopObserve("worker.desktop.observe"),
+  ProjectsList("projects.list"),
+  ProjectsRegister("projects.register"),
+  ProjectsRemove("projects.remove"),
 }
 
 enum class GatewayEvent(

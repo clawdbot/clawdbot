@@ -192,7 +192,7 @@ export type PolicySecretEvidence = {
   readonly kind: "input" | "provider";
   readonly source: string;
   readonly provenance?: "secretRef";
-  readonly refSource?: "env" | "file" | "exec";
+  readonly refSource?: "env" | "file" | "exec" | "store";
   readonly refProvider?: string;
   readonly providerSource?: string;
   readonly insecure?: readonly string[];
@@ -236,7 +236,7 @@ export type PolicyDataHandlingEvidence = {
 };
 
 export type SecretRefEvidence = {
-  readonly source: "env" | "file" | "exec";
+  readonly source: "env" | "file" | "exec" | "store";
   readonly provider: string;
   readonly id: string;
 };

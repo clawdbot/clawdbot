@@ -1908,6 +1908,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-release-pretag-pack-check.test.ts",
       ],
       "scripts/plan-release-workflow-matrix.mjs": [
+        "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/release-workflow-matrix-plan.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
       ],
@@ -3012,7 +3013,7 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       title: "routes changed source files to sibling tests when present",
-      changedPath: "src/agents/live-model-turn-probes.ts",
+      changedPath: "src/agents/test-helpers/live-model-turn-probes.ts",
       config: "test/vitest/vitest.unit-fast.config.ts",
       testPath: "src/agents/live-model-turn-probes.test.ts",
     },

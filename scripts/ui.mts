@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Routes UI package commands through the repo's Node/pnpm wrappers.
-import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -19,11 +19,12 @@ const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 type UiSpawnCall = {
   args: string[];
   command: string;
-  options: SpawnOptions & {
+  options: {
     cwd: string;
     env: NodeJS.ProcessEnv;
     shell: boolean;
     stdio: "inherit";
+    windowsVerbatimArguments?: boolean;
   };
 };
 
@@ -137,10 +138,11 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
     return;
   }
 
-  let forwardedSignal: NodeJS.Signals | null = null;
+  const forwardedSignals = ["SIGTERM", "SIGHUP"] as const;
+  let forwardedSignal: (typeof forwardedSignals)[number] | null = null;
   let forwardedSignalPids: number[] = [];
-  let forceKillTimer: NodeJS.Timeout | null = null;
-  let forwardedSignalDrainTimer: NodeJS.Timeout | null = null;
+  let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+  let forwardedSignalDrainTimer: ReturnType<typeof setInterval> | null = null;
   const clearForwardedSignalTimers = () => {
     if (forceKillTimer) {
       clearTimeout(forceKillTimer);
@@ -166,7 +168,6 @@ function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {
   // Keep UI dev children in the foreground process group for native TTY
   // resize/job-control behavior. Forward wrapper shutdown signals to the
   // captured child tree instead of using a detached process group.
-  const forwardedSignals: NodeJS.Signals[] = ["SIGTERM", "SIGHUP"];
   const signalHandlers = new Map(
     forwardedSignals.map((signal) => [
       signal,
@@ -338,10 +339,6 @@ function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
   return null;
 }
 
-export function assertUiBuildOutputRoot(params: { rootDir?: string; fs?: typeof fs } = {}): void {
-  assertRealOutputRoot(path.join(params.rootDir ?? repoRoot, "dist"), { fs: params.fs ?? fs });
-}
-
 function main(argv: string[] = process.argv.slice(2)): void {
   const [action, ...rest] = argv;
   if (!action) {
@@ -355,7 +352,7 @@ function main(argv: string[] = process.argv.slice(2)): void {
     process.exit(2);
   }
   if (action === "build") {
-    assertUiBuildOutputRoot();
+    assertRealOutputRoot(path.join(repoRoot, "dist"));
   }
 
   if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {

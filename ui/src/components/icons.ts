@@ -43,6 +43,16 @@ export const icons = {
     <line x1="10" x2="8" y1="9" y2="9" />`),
   file: strokeIcon(svg` <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <polyline points="14 2 14 8 20 8" />`),
+  // Lucide file-diff. The outline keeps the cut corner but drops the fold line
+  // the other file glyphs draw: at the header's 18px the fold collides with the
+  // plus stroke and both marks turn to mush, and the missing fold is also what
+  // separates this silhouette from fileText beside it in the same action row.
+  fileDiff: strokeIcon(svg` <path
+      d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.7.71l3.59 3.58A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"
+    />
+    <path d="M9 10h6" />
+    <path d="M12 13V7" />
+    <path d="M9 17h6" />`),
   mail: strokeIcon(svg` <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
     <polyline points="22,6 12,13 2,6" />`),
   star: strokeIcon(
@@ -205,6 +215,13 @@ export const icons = {
   listFilter: strokeIcon(svg` <path d="M3 6h18" />
     <path d="M7 12h10" />
     <path d="M10 18h4" />`),
+  // Filled dots: strokeIcon()'s shell sets fill="none", so each dot opts back in.
+  gripVertical: strokeIcon(svg` <circle cx="9" cy="6" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="9" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="9" cy="18" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="6" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none" />`),
   arrowDown: strokeIcon(svg`<path d="M12 5v14m7-7-7 7-7-7" />`),
   arrowUp: strokeIcon(svg`<path d="M12 19V5m-7 7 7-7 7 7" />`),
   chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),

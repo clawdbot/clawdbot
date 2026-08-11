@@ -9,12 +9,12 @@ import {
   abortEmbeddedAgentRun,
   resolveActiveEmbeddedRunSessionId,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { killControlledSubagentRun } from "../../agents/subagent-control.js";
+import { killControlledSubagentRun } from "../../agents/subagents/registry/subagent-control.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../../agents/subagent-registry.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+} from "../../agents/subagents/registry/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,

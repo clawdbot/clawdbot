@@ -31,10 +31,9 @@ export type { ProviderRuntimeFailureKind } from "./embedded-agent-helpers/provid
 export {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
-  formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+} from "./failover/user-copy.js";
 export {
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,
@@ -42,14 +41,11 @@ export {
 export {
   classifyFailoverReason,
   isAuthErrorMessage,
-  isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
   isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isTransientHttpError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";

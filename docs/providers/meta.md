@@ -94,7 +94,7 @@ Capabilities:
 
 ```json5
 {
-  env: { MODEL_API_KEY: "<key>" },
+  env: { vars: { MODEL_API_KEY: "<key>" } },
   agents: {
     defaults: {
       model: { primary: "meta/muse-spark-1.1" },

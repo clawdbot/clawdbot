@@ -50,6 +50,7 @@ export async function runCodexSettledTurnFinalization(
     isolation: "private-stdio",
     historyItems,
     requireNoExternalCapabilities: true,
+    allowEmptyText: true,
   });
   let promptEchoSeen = false;
   let unexpectedItem: CodexThreadItem | undefined;
@@ -79,7 +80,17 @@ export async function runCodexSettledTurnFinalization(
     );
   }
   const text = bounded.text.trim();
-  if (!text || isSilentReplyText(text)) {
+  if (!text) {
+    return {
+      assistant: createAssistantMessage(attempt, "", {
+        tokenUsage: bounded.usage,
+        aborted: false,
+        promptError: null,
+      }),
+      ...(bounded.usage ? { usage: bounded.usage } : {}),
+    };
+  }
+  if (isSilentReplyText(text)) {
     throw new Error("Codex settled-turn finalization completed without a visible answer");
   }
 

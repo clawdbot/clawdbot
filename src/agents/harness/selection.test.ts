@@ -485,7 +485,10 @@ describe("runAgentHarnessAttempt", () => {
     await expect(
       runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
     ).resolves.toMatchObject({
-      assistant: { content: [{ type: "text", text: "final answer" }] },
+      outcome: "answered",
+      result: {
+        assistant: { content: [{ type: "text", text: "final answer" }] },
+      },
     });
     expect(runAttempt).not.toHaveBeenCalled();
     expect(hostAuthorityActive).toBe(false);
@@ -695,7 +698,13 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(
       contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
-    ).toHaveBeenCalledWith({ admission, isHeartbeat: false, lease });
+    ).toHaveBeenCalledWith({
+      admission,
+      isHeartbeat: false,
+      lease,
+      recorder: params.userTurnTranscriptRecorder,
+      sessionTarget: undefined,
+    });
     expect(order).toEqual(["drain", "begin", "run"]);
     expect(receivedContextEngines).toEqual([undefined]);
   });

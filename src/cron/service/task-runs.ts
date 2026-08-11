@@ -18,12 +18,12 @@ function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefin
 }
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
-  createRunningTaskRun,
+  createRunningTaskRunCore,
   finalizeTaskRunById,
-  finalizeTaskRunByRunId,
+  finalizeTaskRunByRunIdCore,
   findTaskByRunId,
   listTaskRecordsUnsorted,
-  recordTaskRunProgressByRunId,
+  recordTaskRunProgressByRunIdCore,
 } from "../../tasks/task-executor.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -105,7 +105,7 @@ export function tryUpdateCronTaskRunSession(
     return;
   }
   try {
-    const updated = recordTaskRunProgressByRunId({
+    const updated = recordTaskRunProgressByRunIdCore({
       runId: taskRunId,
       runtime: "cron",
       childSessionKey,
@@ -249,7 +249,7 @@ function tryCreateCronTaskRunRecord(params: {
     const effectiveJobAgentId = params.job
       ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
       : undefined;
-    const task = createRunningTaskRun({
+    const task = createRunningTaskRunCore({
       runtime: "cron",
       taskKind: CRON_TASK_KIND,
       sourceId: params.jobId,
@@ -310,7 +310,7 @@ export function tryFinishCronTaskRunWithoutHistory(
   }
   const error = result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined;
   try {
-    finalizeTaskRunByRunId({
+    finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
       runtime: "cron",
       status:
@@ -383,7 +383,7 @@ export function tryFinishCronTaskRun(
         "succeeded" | "failed" | "timed_out" | "cancelled"
       > = cronRunStatusToTaskStatus(entry),
     ) =>
-      finalizeTaskRunByRunId({
+      finalizeTaskRunByRunIdCore({
         runId,
         runtime: "cron",
         status,

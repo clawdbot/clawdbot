@@ -443,7 +443,7 @@ export async function prepareGatewayLifecycle(params: {
           return;
         }
         const { markRestartAbortedMainSessions } =
-          await import("../agents/main-session-restart-recovery.js");
+          await import("../agents/main-session-recovery/main-session-restart-recovery.js");
         await markRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
           sessionKeys,

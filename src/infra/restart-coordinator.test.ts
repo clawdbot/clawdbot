@@ -4,7 +4,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { requestSafeGatewayRestart } from "./restart-coordinator.js";
+import {
+  createSafeGatewayRestartPreflight,
+  requestSafeGatewayRestart,
+} from "./restart-coordinator.js";
 
 const scheduleGatewaySigusr1Restart = vi.hoisted(() => vi.fn());
 
@@ -32,7 +35,7 @@ afterEach(() => {
 describe("safe gateway restart coordinator", () => {
   const requestPreflight = (
     inspect: NonNullable<Parameters<typeof requestSafeGatewayRestart>[0]>["inspect"],
-  ) => requestSafeGatewayRestart({ inspect }).preflight;
+  ) => createSafeGatewayRestartPreflight(inspect);
 
   it("reports safe when no restart blockers are active", () => {
     const preflight = requestPreflight({

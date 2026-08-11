@@ -23,7 +23,7 @@ import {
   buildClaudeCliResumeContinuityProbe,
   createBootstrapWorkspace,
   ensurePairedTestGatewayClientIdentity,
-  getFreeGatewayPort,
+  getCliBackendPortBlock,
   matchesCliBackendReply,
   parseImageMode,
   parseJsonStringArray,
@@ -297,7 +297,7 @@ describeLive("gateway live (cli backend)", () => {
 
       const token = `test-${randomUUID()}`;
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-      const port = await getFreeGatewayPort();
+      const port = await getCliBackendPortBlock();
       logCliBackendLiveStep("env-ready", { port });
 
       const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;

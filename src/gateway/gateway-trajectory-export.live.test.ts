@@ -13,7 +13,7 @@ import {
   connectTestGatewayClient,
   createBootstrapWorkspace,
   ensurePairedTestGatewayClientIdentity,
-  getFreeGatewayPort,
+  getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -470,7 +470,7 @@ describeLive("gateway live trajectory export", () => {
       const { workspaceDir } = await createBootstrapWorkspace(tempDir);
       const configPath = path.join(tempDir, "openclaw.json");
       const token = `test-${randomUUID()}`;
-      const port = await getFreeGatewayPort();
+      const port = await getCliBackendPortBlock();
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
 
       clearRuntimeConfigSnapshot();

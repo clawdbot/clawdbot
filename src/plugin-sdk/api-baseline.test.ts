@@ -7,12 +7,13 @@ import ts from "typescript";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
 import {
-  formatPluginSdkApiTypeAlias,
   listPluginSdkApiBaselineEntrypoints,
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath,
   renderPluginSdkApiBaseline,
+  renderPluginSdkApiBaselineModules,
   writeRenderedPluginSdkApiBaselineArtifacts,
   type PluginSdkApiBaselineRender,
 } from "./api-baseline.js";
@@ -35,6 +36,31 @@ const TEST_ENTRYPOINTS = [
 ] as const;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function renderSourceFixture(
+  files: Readonly<Record<string, string>>,
+  entrypoints: readonly string[] = ["fixture"],
+) {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-");
+  const sourceDir = path.join(repoRoot, "src", "plugin-sdk");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, "tsconfig.json"),
+    `${JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        target: "ESNext",
+      },
+    })}\n`,
+  );
+  for (const [relativePath, content] of Object.entries(files)) {
+    const filePath = path.join(sourceDir, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
+  }
+  return renderPluginSdkApiBaseline({ repoRoot, entrypoints });
+}
 
 async function renderPrivateDeclarationFixture(params?: {
   optionalOption?: boolean;
@@ -137,8 +163,14 @@ describe("Plugin SDK API baseline", () => {
     const normalized = normalizePluginSdkApiDeclarationText(repoRoot, declaration);
 
     expect(normalized).not.toContain(repoRoot);
-    expect(normalized).toContain(
-      'import("src/agents/agent-model-discovery", { with: { "resolution-mode": "import" } })',
+    expect(normalized).toContain('import("<repo>", { with: { "resolution-mode": "import" } })');
+    expect(
+      normalizePluginSdkApiDeclarationText(
+        repoRoot,
+        'type Owned = import("src/x").Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("src/x"); type ExternalNamespace = typeof import("node_modules/pkg/x");',
+      ),
+    ).toBe(
+      'type Owned = Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("<repo>"); type ExternalNamespace = typeof import("node_modules/pkg/x");',
     );
   });
 
@@ -257,9 +289,11 @@ describe("Plugin SDK API baseline", () => {
     expect(findDeclaration("SqliteTrajectoryRuntimeEventForTest")).toContain(
       "export type SqliteTrajectoryRuntimeEventForTest =",
     );
-    expect(findDeclaration("definePluginEntry")).toMatch(
-      /^\/\/ declaration closure: [a-f0-9]{64}/u,
-    );
+    expect(
+      rendered.baseline.modules
+        .flatMap((moduleSurface) => moduleSurface.exports)
+        .find((exportSurface) => exportSurface.exportName === "definePluginEntry")?.closureHash,
+    ).toMatch(/^[a-f0-9]{64}$/u);
     expect(findDeclaration("definePluginEntry")).toContain("DefinePluginEntryOptions");
     expect(findDeclaration("definePluginEntry")).toContain("DefinedPluginEntry");
     expect(findDeclaration("ProviderSelection")).toContain(
@@ -270,7 +304,42 @@ describe("Plugin SDK API baseline", () => {
     );
     expect(findDeclaration("SessionCatalogEntrySummary")).toContain("entry: SessionEntry;");
     expect(rendered.json).not.toContain('"line":');
+    expect(rendered.json).toContain('"source": {');
     expect(rendered.jsonl).not.toContain('"sourceLine":');
+    expect(rendered.jsonl).not.toContain('"sourcePath":');
+    expect(rendered.jsonl).toContain('"closureHash":"');
+    expect(rendered.jsonl).not.toContain("// declaration closure:");
+  });
+
+  it("renders snapshots independently of entrypoint discovery order", () => {
+    const reverse = renderPluginSdkApiBaselineModules(rendered.baseline.modules.toReversed());
+
+    expect(reverse.json).toBe(rendered.json);
+    expect(reverse.jsonl).toBe(rendered.jsonl);
+  });
+
+  it("keeps unrelated JSONL records byte-identical when one export changes", () => {
+    const target = rendered.baseline.modules[0];
+    expect(target?.exports.length).toBeGreaterThan(0);
+    const changed = renderPluginSdkApiBaselineModules(
+      rendered.baseline.modules.map((moduleSurface) =>
+        moduleSurface === target
+          ? {
+              ...moduleSurface,
+              exports: moduleSurface.exports.map((exportSurface, index) =>
+                index === 0
+                  ? { ...exportSurface, declaration: `${exportSurface.declaration ?? ""} changed` }
+                  : exportSurface,
+              ),
+            }
+          : moduleSurface,
+      ),
+    );
+    const before = rendered.jsonl.split("\n");
+    const after = changed.jsonl.split("\n");
+
+    expect(after[1]).not.toBe(before[1]);
+    expect(after.slice(2)).toEqual(before.slice(2));
   });
 
   it("renders byte-identical JSONL deterministically", async () => {
@@ -312,6 +381,123 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
+  it("keeps hashes stable when reachable declarations move", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": [
+        'import type { Leaf } from "./dep/leaf.js";',
+        "export declare function createFixture(value: Leaf): Leaf;",
+      ].join("\n"),
+      "dep/leaf.ts": "export type Leaf = { value: string };\n",
+    });
+    const moved = await renderSourceFixture({
+      "fixture.ts": [
+        'import type { Leaf } from "./moved/leaf.js";',
+        "export declare function createFixture(value: Leaf): Leaf;",
+      ].join("\n"),
+      "moved/leaf.ts": "export type Leaf = { value: string };\n",
+    });
+
+    expect(moved.jsonl).toBe(baseline.jsonl);
+  });
+
+  it("includes globals from side-effect imports in closure hashes", async () => {
+    const render = (optionalValue: boolean) =>
+      renderSourceFixture({
+        "fixture.ts": [
+          'import "./ambient.js";',
+          "export declare function createFixture(value: OpenClawBaselineFixtureGlobal): void;",
+        ].join("\n"),
+        "ambient.ts": [
+          "declare global {",
+          `  interface OpenClawBaselineFixtureGlobal { value${optionalValue ? "?" : ""}: string }`,
+          "}",
+          "export {};",
+        ].join("\n"),
+      });
+    const baseline = await render(false);
+    const changed = await render(true);
+
+    expect(changed.baseline.modules[0]?.exports[0]?.closureHash).not.toBe(
+      baseline.baseline.modules[0]?.exports[0]?.closureHash,
+    );
+  });
+
+  it("keeps hashes stable when unqualified repo import types move", async () => {
+    const baseline = await renderSourceFixture({
+      "fixture.ts": 'export declare const fixture: typeof import("./dep/mod.js");\n',
+      "dep/mod.ts": "export const value = 1;\n",
+    });
+    const moved = await renderSourceFixture({
+      "fixture.ts": 'export declare const fixture: typeof import("./moved/mod.js");\n',
+      "moved/mod.ts": "export const value = 1;\n",
+    });
+
+    expect(moved.jsonl).toBe(baseline.jsonl);
+  });
+
+  it("ignores unreachable transitive declaration changes", async () => {
+    const render = (extra = "") =>
+      renderSourceFixture({
+        "fixture.ts": [
+          'import type { Bridge } from "./bridge.js";',
+          "export declare function createFixture(value: Bridge): Bridge;",
+        ].join("\n"),
+        "bridge.ts": [
+          'import type { Shared } from "./shared.js";',
+          "export type Bridge = { shared: Shared };",
+        ].join("\n"),
+        "shared.ts": `export type Shared = { value: string };\n${extra}`,
+      });
+    const baseline = await render();
+    const unrelated = await render("export type TelegramProbe = { ignored: boolean };\n");
+
+    expect(unrelated.jsonl).toBe(baseline.jsonl);
+  });
+
+  it("keeps cycle members complete across cached export walks", async () => {
+    const render = (optionalMarker: boolean) =>
+      renderSourceFixture(
+        {
+          "cycle-a.ts": [
+            'import type { A } from "./a.js";',
+            "export declare function first(value: A): A;",
+          ].join("\n"),
+          "cycle-b.ts": [
+            'import type { B } from "./b.js";',
+            "export declare function second(value: B): B;",
+          ].join("\n"),
+          "a.ts": [
+            'import type { B } from "./b.js";',
+            `export type A = { marker${optionalMarker ? "?" : ""}: string; b?: B };`,
+          ].join("\n"),
+          "b.ts": [
+            'import type { A } from "./a.js";',
+            "export type B = { value: string; a?: A };",
+          ].join("\n"),
+        },
+        ["cycle-a", "cycle-b"],
+      );
+    const baseline = await render(false);
+    const changed = await render(true);
+    const closureHash = (result: PluginSdkApiBaselineRender) =>
+      result.baseline.modules.find((moduleSurface) => moduleSurface.entrypoint === "cycle-b")
+        ?.exports[0]?.closureHash;
+
+    expect(closureHash(changed)).not.toBe(closureHash(baseline));
+  });
+
+  it("ignores unrelated declarations beside an aliased re-export", async () => {
+    const render = (extra = "") =>
+      renderSourceFixture({
+        "fixture.ts": 'export { internalLeaf as publicLeaf } from "./dep.js";\n',
+        "dep.ts": `export type internalLeaf = { value: string };\n${extra}`,
+      });
+    const baseline = await render();
+    const unrelated = await render("export type Unrelated = { ignored: boolean };\n");
+
+    expect(unrelated.jsonl).toBe(baseline.jsonl);
+  });
+
   it("captures transitive private declaration changes deterministically", async () => {
     const baseline = await renderPrivateDeclarationFixture();
     const optionChanged = await renderPrivateDeclarationFixture({ optionalOption: true });
@@ -325,7 +511,7 @@ describe("Plugin SDK API baseline", () => {
         source: { path: "src/plugin-sdk/fixture.ts" },
       }),
     );
-    expect(declaration?.declaration).toMatch(/^\/\/ declaration closure: [a-f0-9]{64}/u);
+    expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(declaration?.declaration).toContain("FixtureOptions");
     expect(declaration?.declaration).toContain("FixtureResult");
     expect(declaration?.declaration).not.toContain("required: string;");
@@ -333,9 +519,11 @@ describe("Plugin SDK API baseline", () => {
     expect(declaration?.declaration).not.toContain("externalOnly: string;");
 
     for (const changed of [optionChanged, resultChanged]) {
-      expect(changed.baseline.modules[0]?.exports[0]?.declaration).not.toBe(
-        declaration?.declaration,
+      expect(changed.baseline.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);
+      expect(changed.baseline.modules[0]?.exports[0]?.closureHash).not.toBe(
+        declaration?.closureHash,
       );
+      expect(changed.jsonl).not.toBe(baseline.jsonl);
     }
   });
 });

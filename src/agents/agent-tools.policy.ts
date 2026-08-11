@@ -34,7 +34,7 @@ import {
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
   type SubagentSessionRole,
-} from "./subagent-capabilities.js";
+} from "./subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";

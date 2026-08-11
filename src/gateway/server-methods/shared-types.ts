@@ -181,23 +181,14 @@ type GatewaySystemAgentSession = {
   pendingApproval?: { id: string; proposalHash: string };
 };
 
-/** Runtime services and mutable gateway state available to request handlers. */
-export type GatewayRequestContext = {
+/** Kernel-owned services and state that can be constructed without binding sockets. */
+type GatewayKernelContext = {
   deps: CliDeps;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
-  controlUiSessionPullRequests?: ReturnType<
-    typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
-  >;
-  sessionViewerPresence?: ReturnType<
-    typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
-  >;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
-  notifyPluginMetadataChanged: () => void;
-  getMcpAppSandboxPort?: () => number | undefined;
-  ensureSandboxHostPort?: () => Promise<number>;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
@@ -241,14 +232,51 @@ export type GatewayRequestContext = {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult>;
   getHealthCache: () => HealthSummary | null;
-  refreshHealthSnapshot: (opts?: {
-    probe?: boolean;
-    includeSensitive?: boolean;
-  }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
+  /** Instance-local native approval subscribers; never derived from a network client. */
+  approvalEvents?: GatewayApprovalEventPublisher;
+  recoveryRuntime?: GatewayRecoveryRuntime;
+  enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
+  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
+  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
+  nodeRegistry: NodeRegistry;
+  agentRunSeq: Map<string, number>;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  /** Cancel identities for turns waiting in the followup/collect queue. */
+  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
+  chatRunState: ChatRunState;
+  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => ChatRunEntry | undefined;
+  dedupe: Map<string, DedupeEntry>;
+  wizardSessions: Map<string, WizardSession>;
+  systemAgentSessions: Map<string, GatewaySystemAgentSession>;
+  findRunningWizard: () => string | null;
+  purgeWizardSession: (id: string) => void;
+  wizardRunner: (
+    opts: import("../../commands/onboard-types.js").OnboardOptions,
+    runtime: import("../../runtime.js").RuntimeEnv,
+    prompter: import("../../wizard/prompts.js").WizardPrompter,
+  ) => Promise<void>;
+  channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
+  unavailableGatewayMethods?: ReadonlySet<string>;
+};
+
+/** Socket-bound services and connection state supplied by the Gateway transports. */
+type GatewayTransportContext = {
+  getMcpAppSandboxPort?: () => number | undefined;
+  ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
@@ -259,9 +287,6 @@ export type GatewayRequestContext = {
   hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
-  /** Instance-local native approval subscribers; never derived from a network client. */
-  approvalEvents?: GatewayApprovalEventPublisher;
-  recoveryRuntime?: GatewayRecoveryRuntime;
   getApprovalClientConnIds?: <TPayload>(params?: {
     approvalKind?: "exec" | "plugin" | "system-agent";
     excludeConnId?: string;
@@ -282,36 +307,9 @@ export type GatewayRequestContext = {
     updatedAt: number;
   }) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
-  enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
-  nodeRegistry: NodeRegistry;
-  /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
-  workerEnvironmentService?: WorkerEnvironmentServiceContract;
-  /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
-  workerSessionPlacementService?: WorkerSessionPlacementReader &
-    Partial<WorkerSessionPlacementRetirementService>;
-  /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
-  workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   // Operator terminal session store. Absent in local/in-process contexts where
   // no PTY surface is served.
   terminalSessions?: TerminalSessionManager;
-  agentRunSeq: Map<string, number>;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  /** Cancel identities for turns waiting in the followup/collect queue. */
-  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
-  chatRunState: ChatRunState;
-  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
-  removeChatRun: (
-    sessionId: string,
-    clientRunId: string,
-    sessionKey?: string,
-  ) => ChatRunEntry | undefined;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (
@@ -323,11 +321,28 @@ export type GatewayRequestContext = {
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
-  dedupe: Map<string, DedupeEntry>;
-  wizardSessions: Map<string, WizardSession>;
-  systemAgentSessions: Map<string, GatewaySystemAgentSession>;
-  findRunningWizard: () => string | null;
-  purgeWizardSession: (id: string) => void;
+};
+
+/** Resident-owned services bridged into request handling by the server lifecycle. */
+type GatewayResidentBridgeContext = {
+  controlUiSessionPullRequests?: ReturnType<
+    typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
+  >;
+  sessionViewerPresence?: ReturnType<
+    typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
+  >;
+  notifyPluginMetadataChanged: () => void;
+  refreshHealthSnapshot: (opts?: {
+    probe?: boolean;
+    includeSensitive?: boolean;
+  }) => Promise<HealthSummary>;
+  /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
+  workerEnvironmentService?: WorkerEnvironmentServiceContract;
+  /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
+  workerSessionPlacementService?: WorkerSessionPlacementReader &
+    Partial<WorkerSessionPlacementRetirementService>;
+  /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
+  workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
@@ -345,18 +360,16 @@ export type GatewayRequestContext = {
     cleared: boolean,
     accountId?: string,
   ) => void;
-  wizardRunner: (
-    opts: import("../../commands/onboard-types.js").OnboardOptions,
-    runtime: import("../../runtime.js").RuntimeEnv,
-    prompter: import("../../wizard/prompts.js").WizardPrompter,
-  ) => Promise<void>;
-  channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
   broadcastVoiceWakeRoutingChanged: (
     config: import("../../infra/voicewake-routing.js").VoiceWakeRoutingConfig,
   ) => void;
-  unavailableGatewayMethods?: ReadonlySet<string>;
 };
+
+/** Complete runtime context available to gateway request handlers. */
+export type GatewayRequestContext = GatewayKernelContext &
+  GatewayTransportContext &
+  GatewayResidentBridgeContext;
 
 /** Full dispatch context for raw request frames before params are normalized. */
 export type GatewayRequestOptions = {

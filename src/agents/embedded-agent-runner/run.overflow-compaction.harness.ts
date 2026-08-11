@@ -821,6 +821,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   // Runtime preparation already carries the fixture's provider facts. Keep the
   // real handle shape without rediscovering every bundled provider plugin.
   vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    attachModelProviderRuntimePluginHandle: (model: object) => model,
     resolveProviderRuntimePluginHandle: vi.fn((params: Record<string, unknown>) => params),
   }));
   vi.doMock("../auth-profiles.js", () => ({

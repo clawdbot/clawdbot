@@ -210,7 +210,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
-      if (platformQueueId && queuedPreSendState !== "acked") {
+      // Once any payload returns an identity, unknown-after-send protects the whole batch.
+      // A later payload dispatch must not regress that durable evidence to attempt-started.
+      if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
           if (producerClaimId) {
             await markDeliveryPlatformSendDispatched(
@@ -301,13 +303,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (!queueId) {
       if (params.deliveryCompletion) {
         if (results.length > 0) {
-          await completeDurableDelivery(
-            params.deliveryCompletion,
-            results.at(-1)!,
-            platformQueueStateDir,
-          );
+          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
         } else {
-          await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
+          suppressDurableDelivery(params.deliveryCompletion);
         }
       }
       if (!params.deferCommitHooks) {
@@ -365,13 +363,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       } else {
         if (params.deliveryCompletion) {
           if (results.length > 0) {
-            await completeDurableDelivery(
-              params.deliveryCompletion,
-              results.at(-1)!,
-              platformQueueStateDir,
-            );
+            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
           } else {
-            await suppressDurableDelivery(params.deliveryCompletion, platformQueueStateDir);
+            suppressDurableDelivery(params.deliveryCompletion);
           }
         }
         const postSendState =
@@ -568,11 +562,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 terminalRejectionHandled = true;
               } else {
                 if (params.deliveryCompletion) {
-                  await rejectDurableDelivery(
-                    params.deliveryCompletion,
-                    permanentRejection.message,
-                    platformQueueStateDir,
-                  );
+                  rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
                   ownerRejected = true;
                 }
                 await (producerClaimId

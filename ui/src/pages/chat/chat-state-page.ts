@@ -12,6 +12,7 @@ import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
+  moveQueuedChatMessage,
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
@@ -290,6 +291,10 @@ export function createPageState(
   };
   state.steerQueuedChatMessage = async (id) => {
     await steerQueuedChatMessage(state, id);
+    renderLifecycle.invalidate();
+  };
+  state.moveQueuedChatMessage = (id, toIndex) => {
+    moveQueuedChatMessage(state, id, toIndex);
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {

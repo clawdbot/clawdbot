@@ -16,6 +16,7 @@ import {
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
+import { cronFailureDetailLines } from "../cron/failure-notification-text.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
@@ -586,16 +587,16 @@ function dispatchCronFailureDestinationNotifications(params: {
   }
 
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
+  const failureAlertText = [
+    `Automation "${job.name}" failed`,
+    ...cronFailureDetailLines(job.state.lastErrorReason),
+  ].join("\n");
   dispatchDetachedCronNotification({
     jobId: job.id,
     logger: params.logger,
     deliver: () =>
       sendFailureNotificationAnnounce(params.deps, runtimeConfig, agentId, job.id, announceTarget, {
-        text: appendCronRunStarted(
-          `⚠️ ${failurePayload.message}`,
-          params.evt.runAtMs,
-          runtimeConfig,
-        ),
+        text: appendCronRunStarted(`⚠️ ${failureAlertText}`, params.evt.runAtMs, runtimeConfig),
       }),
   });
 }

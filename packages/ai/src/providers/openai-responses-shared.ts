@@ -41,6 +41,7 @@ import type {
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   createFirstStreamEventAbortController,
@@ -601,7 +602,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     replayMode: OpenAIResponsesReplayMode,
   ) => ResponsesLifecycleRequest;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
-  formatError: (error: unknown) => string;
 }): Promise<void> {
   const { stream, output, options } = params;
 
@@ -680,9 +680,9 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     stream.end();
   } catch (error) {
     cleanStreamingScratchBuffers(output);
-    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = params.formatError(error);
-    stream.push({ type: "error", reason: output.stopReason, error: output });
+    const terminal = projectProviderError(error, options?.signal);
+    Object.assign(output, terminal);
+    stream.push({ type: "error", reason: terminal.stopReason, error: output });
     stream.end();
   } finally {
     firstEventAbort?.dispose();

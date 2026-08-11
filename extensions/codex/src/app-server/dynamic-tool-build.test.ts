@@ -443,7 +443,7 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("forwards the task-suggestion delivery mode", async () => {
-    // Regression: spawn_task/dismiss_task silently never existed on the Codex
+    // Regression: suggest_task/dismiss_task silently never existed on the Codex
     // app-server path because this harness dropped params.taskSuggestionDeliveryMode.
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -2095,35 +2095,28 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(false);
   });
 
-  it("exposes the final delivery control only on Codex message-tool-only schemas", async () => {
+  it("preserves the core final delivery control only on message-tool-only schemas", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    // Mirror production createOpenClawCodingTools: attempt-fresh tool instances
-    // per build, never a shared object reused across delivery modes.
-    setOpenClawCodingToolsFactoryForTests(() => [
-      {
-        ...createRuntimeDynamicTool("message"),
-        parameters: {
-          type: "object",
-          properties: { message: { type: "string" } },
-          additionalProperties: false,
-        },
-      },
-    ]);
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools(options).filter((tool) => tool.name === "message"),
+    );
 
     params.sourceReplyDeliveryMode = "message_tool_only";
     const sourceReplyTools = await buildDynamicToolsForTest(params, workspaceDir);
     const sourceReplySchema = sourceReplyTools[0]?.parameters as {
       properties?: Record<string, unknown>;
-      additionalProperties?: unknown;
     };
 
     expect(sourceReplySchema.properties).toMatchObject({
-      final: { type: "boolean" },
+      final: {
+        type: "boolean",
+        description:
+          "Set false for progress. Set true, or omit, for the completed current-source reply.",
+      },
     });
-    expect(sourceReplySchema.additionalProperties).toBe(false);
 
     params.sourceReplyDeliveryMode = "automatic";
     const automaticTools = await buildDynamicToolsForTest(params, workspaceDir);

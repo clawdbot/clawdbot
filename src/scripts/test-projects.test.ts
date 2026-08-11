@@ -518,27 +518,6 @@ describe("test-projects args", () => {
     );
   });
 
-  it("splits an explicit Vitest filesystem module cache root", () => {
-    const [spec] = applyParallelVitestCachePaths(
-      [
-        {
-          config: "test/vitest/vitest.gateway.config.ts",
-          env: {},
-        },
-      ],
-      {
-        cwd: "/repo",
-        env: {
-          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
-        },
-      },
-    );
-
-    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
-      "/tmp/cache/0-test-vitest-vitest.gateway.config.ts",
-    );
-  });
-
   it("routes plugin targets to the plugins config", () => {
     expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
       {
@@ -699,6 +678,16 @@ describe("test-projects args", () => {
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
     ).toStrictEqual([]);
+  });
+
+  it("routes bundled plugin manifest changes through the docs config audit", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/voice-call/openclaw.plugin.json"])).toEqual({
+      mode: "targets",
+      targets: [
+        "extensions/voice-call/openclaw.plugin.json",
+        "src/config/docs-config-examples.test.ts",
+      ],
+    });
   });
 
   it("routes auth setup script changes to the focused auth monitor test", () => {
@@ -871,21 +860,6 @@ describe("test-projects args", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("routes explicit test-support helper files to affected tests", () => {
-    expect(
-      findUnmatchedExplicitTestTargets(["src/commands/onboard-non-interactive.test-helpers.ts"]),
-    ).toEqual([]);
-
-    expect(buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.commands.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/onboard-non-interactive.gateway.test.ts"],
-        watchMode: false,
-      },
-    ]);
   });
 
   it("accepts explicit Vitest config targets routed as whole config runs", () => {

@@ -10,7 +10,7 @@ import {
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
+import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";

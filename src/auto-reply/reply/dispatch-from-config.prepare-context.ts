@@ -12,7 +12,7 @@ import {
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
-} from "../../agents/subagent-capabilities.js";
+} from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { resolveConversationBindingRecord } from "../../bindings/records.js";

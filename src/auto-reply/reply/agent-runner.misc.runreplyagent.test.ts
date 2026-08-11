@@ -225,8 +225,9 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
+vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
   return {
     ...actual,
     getSwarmRunByLaunchReplayKey: () => undefined,

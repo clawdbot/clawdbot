@@ -232,11 +232,6 @@ export function createPlacementFailureActions(deps: {
     environment: ReturnType<WorkerEnvironmentService["get"]>,
     claimedTurnError: Error,
   ): Promise<void> => {
-    if (placement.turnClaim) {
-      const draining = startDrain(placement);
-      await failDraining(draining, claimedTurnError, { forceClaimFence: true });
-      return;
-    }
     const draining = startDrain(placement);
     if (draining.turnClaim) {
       await failDraining(draining, claimedTurnError, { forceClaimFence: true });

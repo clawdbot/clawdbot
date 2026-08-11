@@ -38,6 +38,7 @@ describe("startup run repair auto-disable", () => {
         nextRunAtMs: runningAtMs,
         runningAtMs,
         consecutiveErrors: 9,
+        lastErrorReason: "timeout",
       },
     };
     const deferredNotifications: Array<() => void> = [];
@@ -67,6 +68,10 @@ describe("startup run repair auto-disable", () => {
 
     deferredNotifications[0]?.();
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain(
+      "Check automation history for details.",
+    );
+    expect(enqueueSystemEvent.mock.calls[0]?.[0]).not.toContain("timeout");
     expect(requestHeartbeat).toHaveBeenCalledOnce();
   });
 

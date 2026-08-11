@@ -49,7 +49,9 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       const firstRow = page.locator(`[data-session-key="${firstKey}"]`);
       const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
+      );
       await firstRow.waitFor({ state: "visible", timeout: 10_000 });
       await secondRow.waitFor({ state: "visible" });
       await composer.waitFor({ state: "visible" });
@@ -487,7 +489,7 @@ suite.define(() => {
       await expect
         .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
         .toBe(socketsBefore + 1);
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", { includeLastMessage: true });
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect

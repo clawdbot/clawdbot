@@ -288,14 +288,12 @@ async function sendMessageTelegramWithContext(
           withTelegramNativeQuoteFallback({
             label,
             requestParams,
-            request: async (effectiveParams, effectiveLabel) => {
-              await opts.onPlatformSendDispatch?.();
-              return await requestWithChatNotFound(
+            request: (effectiveParams, effectiveLabel) =>
+              requestWithChatNotFound(
                 () => sender(effectiveParams),
                 effectiveLabel,
                 shouldLog ? { shouldLog } : undefined,
-              );
-            },
+              ),
           }),
       });
     };

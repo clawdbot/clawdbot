@@ -8,6 +8,7 @@ import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
+import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
@@ -20,6 +21,7 @@ import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classificati
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
+  hasCompletedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
 } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
@@ -571,7 +573,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
 
   const assistant = params.assistant;
-  if (!assistant || assistant.stopReason !== "error") {
+  if (!assistant || assistant.stopReason !== "error" || isReplayUnsafeAssistantError(assistant)) {
     return false;
   }
 
@@ -864,7 +866,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (hasMessagingToolDeliveryEvidence(params.attempt)) {
+  if (hasCompletedMessagingToolDeliveryEvidence(params.attempt)) {
     return null;
   }
   if (

@@ -1,7 +1,7 @@
 /**
  * Repairs malformed tool-call arguments in embedded-agent stream results.
  */
-import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";

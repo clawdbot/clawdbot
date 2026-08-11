@@ -77,7 +77,6 @@ async function resolveTelegramSendContext(params: {
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
   >[0]["onDeliveryResult"];
-  onPlatformSendDispatch?: () => Promise<void>;
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
   send: TelegramSendFn;
@@ -94,7 +93,6 @@ async function resolveTelegramSendContext(params: {
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
     onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-    onPlatformSendDispatch?: TelegramSendOpts["onPlatformSendDispatch"];
   };
 }> {
   const send = await params.resolveSend(params.deps);
@@ -115,7 +113,6 @@ async function resolveTelegramSendContext(params: {
             await params.onDeliveryResult?.(attachChannelToResult("telegram", result));
           }
         : undefined,
-      onPlatformSendDispatch: params.onPlatformSendDispatch,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
     },
@@ -386,7 +383,6 @@ export async function sendTelegramPayloadMessages(params: {
     if (typeof replyToMessageId !== "number") {
       throw new Error("Telegram reaction requires a reply target");
     }
-    await params.baseOpts.onPlatformSendDispatch?.();
     const reactionResult = await params.react(params.to, replyToMessageId, reactionEmoji, {
       cfg: params.baseOpts.cfg,
       accountId: params.baseOpts.accountId,
@@ -601,7 +597,6 @@ export function createTelegramOutboundAdapter(
       silent,
       isAnonymous,
       gatewayClientScopes,
-      onPlatformSendDispatch,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
       const { sendPollTelegram } = await loadSendModule();
@@ -612,7 +607,6 @@ export function createTelegramOutboundAdapter(
         silent: silent ?? undefined,
         isAnonymous: isAnonymous ?? undefined,
         gatewayClientScopes,
-        onPlatformSendDispatch,
       });
     },
   };

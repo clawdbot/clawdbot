@@ -1214,14 +1214,22 @@ describe("update-startup", () => {
     });
   });
 
-  it("continues automatic dev campaigns from receipt-backed detached HEAD", async () => {
+  it.each([
+    { name: "successful install", status: "ok", reason: undefined },
+    {
+      name: "failed handoff",
+      status: "error",
+      reason: "managed-service-handoff-failed",
+    },
+  ] as const)("continues automatic dev campaigns from a $name receipt", async (testCase) => {
     runOpenClawStateWriteTransaction(({ db }) => {
       writeUpdateInstallReceiptRowSync(db, {
         kind: "update",
-        status: "ok",
+        status: testCase.status,
         ts: Date.now() - 60_000,
         stats: {
           mode: "git",
+          ...(testCase.reason ? { reason: testCase.reason } : {}),
           root: "/opt/openclaw",
           after: {
             sha: "current-sha",

@@ -612,14 +612,30 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
-  const plugin =
-    params.allowRuntimePluginLoad === false
+  const plugin = params.runtimeHandle
+    ? ensureProviderRuntimePluginHandle(params).plugin
+    : params.allowRuntimePluginLoad === false
       ? resolveLoadedProviderRuntimePlugin(params)
       : resolveProviderRuntimePlugin(params);
-  return plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
+  const turnState = plugin?.resolveTransportTurnState?.(params.context) ?? undefined;
+  if (params.context.transport !== "websocket") {
+    return turnState;
+  }
+  const legacyPolicy = plugin?.resolveWebSocketSessionPolicy?.(params.context);
+  if (!legacyPolicy) {
+    return turnState;
+  }
+  return {
+    ...turnState,
+    websocket: {
+      ...legacyPolicy,
+      ...turnState?.websocket,
+    },
+  };
 }
 
 export async function createProviderEmbeddingProvider(params: {

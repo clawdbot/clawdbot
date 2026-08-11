@@ -1,5 +1,9 @@
 import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import {
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  renderControlUiAgentFailureCopy,
+} from "../../agents/failover/user-copy.js";
+import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
@@ -9,7 +13,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
-import { buildControlUiAgentFailureText } from "./agent-runner-failure-copy.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
 import type {
@@ -17,10 +20,6 @@ import type {
   AgentFallbackCycleResult,
 } from "./agent-runner-fallback-cycle.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
-import {
-  classifyProviderRequestError,
-  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-} from "./provider-request-error-classifier.js";
 import {
   isReplyOperationRestartAbort,
   isReplyOperationUserAbort,
@@ -60,7 +59,7 @@ export async function settleAgentFallbackCycle(params: {
         provider: attempt.provider,
         model: attempt.model,
         error: attempt.error,
-        reason: attempt.reason || undefined,
+        reason: attempt.reason ?? "unknown",
         status: typeof attempt.status === "number" ? attempt.status : undefined,
         code: attempt.code || undefined,
       }))
@@ -114,15 +113,14 @@ export async function settleAgentFallbackCycle(params: {
   }
   if (embeddedError?.kind === "role_ordering") {
     emitSettledLifecycleError(new Error(terminalErrorMessage ?? "Agent run failed"));
-    const providerRequestError = classifyProviderRequestError(embeddedError);
     turn.replyOperation?.fail("run_failed", embeddedError);
     const embeddedErrorText = formatErrorMessage(embeddedError);
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: cycle.shouldSurfaceToControlUi
-          ? buildControlUiAgentFailureText(embeddedErrorText)
-          : (providerRequestError?.userMessage ?? PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE),
+          ? renderControlUiAgentFailureCopy(embeddedErrorText)
+          : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       }),
     };
   }

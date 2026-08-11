@@ -211,10 +211,6 @@ const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 // A committed short transcript can legitimately remain at maxOffset=0. Give
 // initial measurement one second before treating that zero range as final.
 const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
-// Keep the active transcript plus two recent sessions. Eviction always tears
-// down observers first; otherwise a discarded host would leak row observers.
-const CHAT_TRANSCRIPT_VIRTUALIZER_CACHE_LIMIT = 3;
-
 function initialTranscriptRect(host: ReactiveControllerHost) {
   const width = host instanceof HTMLElement ? host.clientWidth : 0;
   const height = host instanceof HTMLElement ? host.clientHeight : 0;
@@ -698,7 +694,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
 export class ChatTranscriptController implements ReactiveController {
   private activeSessionKey: string | null = null;
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
-  private readonly sessionVirtualizers = new Map<string, ChatSessionVirtualizerHost>();
   private connected = false;
 
   constructor(private readonly host: ReactiveControllerHost) {
@@ -715,37 +710,19 @@ export class ChatTranscriptController implements ReactiveController {
       this.activeSessionKey === null ||
       !areUiSessionKeysEquivalent(this.activeSessionKey, props.sessionKey)
     ) {
-      this.sessionVirtualizer?.disconnect();
-      let cachedKey: string | null = null;
-      let nextVirtualizer: ChatSessionVirtualizerHost | null = null;
-      for (const [sessionKey, virtualizer] of this.sessionVirtualizers) {
-        if (areUiSessionKeysEquivalent(sessionKey, props.sessionKey)) {
-          cachedKey = sessionKey;
-          nextVirtualizer = virtualizer;
-          break;
-        }
-      }
-      if (cachedKey !== null && nextVirtualizer) {
-        this.sessionVirtualizers.delete(cachedKey);
-      } else {
-        const savedPosition = getChatSessionScrollPosition(props.paneId, props.sessionKey);
-        const initialOffset = savedPosition?.anchorToEnd
-          ? null
-          : (savedPosition?.scrollTop ?? null);
-        nextVirtualizer = new ChatSessionVirtualizerHost(
-          this.host,
-          initialOffset,
-          initialOffset === null
-            ? undefined
-            : (position) => {
-                saveChatSessionScrollPosition(props.paneId, props.sessionKey, position);
-              },
-        );
-      }
+      this.sessionVirtualizer?.dispose();
+      const savedPosition = getChatSessionScrollPosition(props.paneId, props.sessionKey);
+      const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = props.sessionKey;
-      this.sessionVirtualizer = nextVirtualizer;
-      this.sessionVirtualizers.set(props.sessionKey, nextVirtualizer);
-      this.evictInactiveVirtualizers();
+      this.sessionVirtualizer = new ChatSessionVirtualizerHost(
+        this.host,
+        initialOffset,
+        initialOffset === null
+          ? undefined
+          : (position) => {
+              saveChatSessionScrollPosition(props.paneId, props.sessionKey, position);
+            },
+      );
       if (this.connected) {
         this.sessionVirtualizer.connect();
       }
@@ -787,23 +764,7 @@ export class ChatTranscriptController implements ReactiveController {
 
   hostDisconnected(): void {
     this.connected = false;
-    for (const virtualizer of this.sessionVirtualizers.values()) {
-      virtualizer.disconnect();
-    }
-  }
-
-  private evictInactiveVirtualizers(): void {
-    while (this.sessionVirtualizers.size > CHAT_TRANSCRIPT_VIRTUALIZER_CACHE_LIMIT) {
-      const oldest = this.sessionVirtualizers.entries().next().value as
-        | [string, ChatSessionVirtualizerHost]
-        | undefined;
-      if (!oldest) {
-        return;
-      }
-      const [sessionKey, virtualizer] = oldest;
-      this.sessionVirtualizers.delete(sessionKey);
-      virtualizer.dispose();
-    }
+    this.sessionVirtualizer?.disconnect();
   }
 }
 
@@ -1892,7 +1853,7 @@ function renderChatThreadContents(
       <span
         class="chat-transcript-announcement agent-chat__sr-only"
         role="status"
-        aria-live="polite"
+        aria-live=${props.announceTranscript !== false ? "polite" : "off"}
         aria-atomic="true"
         >${transcript.liveAnnouncementText}</span
       >

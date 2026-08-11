@@ -693,7 +693,8 @@ describe("runEmbeddedAgent", () => {
     };
     resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) => {
       if (provider === "openai" && modelId === "gpt-5.5") {
-        return createResolvedEmbeddedRunnerModel(provider, modelId);
+        const resolved = createResolvedEmbeddedRunnerModel(provider, modelId);
+        return { ...resolved, model: { ...resolved.model, contextWindow: 272_000 } };
       }
       return {
         error: `Unknown model: ${provider}/${modelId}`,
@@ -709,10 +710,11 @@ describe("runEmbeddedAgent", () => {
         lastAssistant: buildEmbeddedRunnerAssistant({
           content: [{ type: "text", text: "ok" }],
         }),
+        contextTokens: 1_050_000,
       }),
     );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       sessionId: "codex-runtime-model",
       sessionFile,
       workspaceDir,
@@ -740,6 +742,7 @@ describe("runEmbeddedAgent", () => {
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
+    expect(result.meta.agentMeta?.contextTokens).toBe(1_050_000);
   });
 
   it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {

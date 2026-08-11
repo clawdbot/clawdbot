@@ -90,6 +90,13 @@ describe("gateway startup import boundaries", () => {
     );
   });
 
+  it("keeps channel startup maintenance on the loaded-only registry", () => {
+    const lifecycleStartup = readSource("src/channels/plugins/lifecycle-startup.ts");
+
+    expect(lifecycleStartup).toContain('from "./registry-loaded.js"');
+    expect(lifecycleStartup).not.toContain('from "./registry.js"');
+  });
+
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");

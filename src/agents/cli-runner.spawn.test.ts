@@ -363,6 +363,54 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("surfaces a node-placed Claude synthetic empty terminal through the shared parser", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        [
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: "No response requested." }],
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            session_id: "node-synthetic-empty",
+            result: "",
+          }),
+          "",
+        ].join("\n"),
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildClaudeLiveRunContext({
+      model: "claude-opus-4-8",
+      runId: "run-node-synthetic-empty",
+      prompt: "current turn",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      code: "cli_synthetic_no_response",
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a truncated node stream that lost the terminal result", async () => {
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
       params.onProgress(
@@ -4588,6 +4636,45 @@ describe("runCliAgent spawn path", () => {
         backend: {
           liveSession: "claude-stdio",
           args: ["-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions"],
+        },
+      },
+      expectedPermissionMode: "default",
+    },
+    {
+      name: "denies tools when session exec security overrides broader config",
+      requestId: "req-session-security-deny",
+      toolUseId: "tool-session-security-deny-1",
+      input: { command: "ls" },
+      expected: { behavior: "deny", messageIncludes: "security=deny" },
+      context: {
+        sessionKey: "agent:main:main",
+        sessionEntry: { execSecurity: "deny" } as PreparedCliRunContext["params"]["sessionEntry"],
+        config: {
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            entries: {
+              main: { default: true, tools: { exec: { security: "full", ask: "off" } } },
+            },
+          },
+        },
+      },
+      expectedPermissionMode: "default",
+    },
+    {
+      name: "denies tools when a partial agent exec block inherits restrictive global security",
+      requestId: "req-partial-agent-global-deny",
+      toolUseId: "tool-partial-agent-global-deny-1",
+      input: { command: "ls" },
+      expected: { behavior: "deny", messageIncludes: "security=deny" },
+      context: {
+        sessionKey: "agent:main:main",
+        config: {
+          tools: { exec: { security: "deny", ask: "off" } },
+          agents: {
+            entries: {
+              main: { default: true, tools: { exec: { ask: "off" } } },
+            },
+          },
         },
       },
       expectedPermissionMode: "default",

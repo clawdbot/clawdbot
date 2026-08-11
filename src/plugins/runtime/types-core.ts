@@ -294,8 +294,13 @@ export type LlmCompleteResult = {
   };
 };
 
+type RuntimeRunEmbeddedAgentParams = Omit<
+  import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  "skillWorkshopCollectionReconcile"
+>;
+
 type RuntimeRunEmbeddedAgent = (
-  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  params: RuntimeRunEmbeddedAgentParams,
 ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */

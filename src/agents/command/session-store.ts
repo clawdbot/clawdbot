@@ -20,7 +20,7 @@ import {
   setCliSessionId,
 } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
+import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 

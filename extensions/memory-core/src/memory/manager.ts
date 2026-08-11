@@ -1490,18 +1490,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? Math.min(200, Math.max(maxResults, maxResults * 4))
       : maxResults;
     const candidateMinScore = hasActiveProject ? minScore / 1.15 : minScore;
-    const results = await this.searchUnranked(normalizedQuery, {
+    const results = await this.searchCandidates(normalizedQuery, {
       ...opts,
       maxResults: candidateMaxResults,
       minScore: candidateMinScore,
     });
-    const ranked = applyProjectRanking(results, opts?.activeProjectKeys);
     return hasActiveProject
-      ? ranked.filter((entry) => entry.score >= minScore).slice(0, maxResults)
-      : ranked;
+      ? results.filter((entry) => entry.score >= minScore).slice(0, maxResults)
+      : results;
   }
 
-  private async searchUnranked(
+  private async searchCandidates(
     normalizedQuery: string,
     opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
@@ -1674,6 +1673,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           temporalDecay: hybrid.temporalDecay,
           maxResults,
           minScore,
+          activeProjectKeys: opts?.activeProjectKeys,
         });
       }
       let semanticProvider = this.provider;
@@ -1713,6 +1713,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             temporalDecay: hybrid.temporalDecay,
             maxResults,
             minScore,
+            activeProjectKeys: opts?.activeProjectKeys,
           });
         }
         try {
@@ -1786,6 +1787,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               temporalDecay: hybrid.temporalDecay,
               maxResults,
               minScore,
+              activeProjectKeys: opts?.activeProjectKeys,
             });
           } else {
             throw err;
@@ -1813,14 +1815,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
         });
-        return applyImportanceMultiplier(decayed)
-          .toSorted(
-            (left, right) =>
-              right.score - left.score ||
-              left.path.localeCompare(right.path) ||
-              left.startLine - right.startLine ||
-              left.endLine - right.endLine,
-          )
+        return applyProjectRanking(applyImportanceMultiplier(decayed), opts?.activeProjectKeys)
           .filter((entry) => entry.score >= minScore)
           .slice(0, maxResults);
       }
@@ -1833,6 +1828,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         textWeight: hybrid.textWeight,
         mmr: hybrid.mmr,
         temporalDecay: hybrid.temporalDecay,
+        activeProjectKeys: opts?.activeProjectKeys,
       });
       const strict = merged.filter((entry) => entry.score >= minScore);
       if (strict.length > 0 || keywordResults.length === 0) {
@@ -1937,6 +1933,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
     maxResults: number;
     minScore: number;
+    activeProjectKeys?: readonly string[];
   }): Promise<MemorySearchResult[]> {
     const appliesTemporalDecay = params.temporalDecay?.enabled === true;
     const decayInputs = appliesTemporalDecay
@@ -1953,9 +1950,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
     });
-    const ranked = this.rankKeywordOnlyResults(
-      applyImportanceMultiplier(decayed),
-      !appliesTemporalDecay,
+    const ranked = applyProjectRanking(
+      this.rankKeywordOnlyResults(applyImportanceMultiplier(decayed), !appliesTemporalDecay),
+      params.activeProjectKeys,
     );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
@@ -2248,6 +2245,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    activeProjectKeys?: readonly string[];
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
@@ -2286,6 +2284,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
+      activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }

@@ -279,7 +279,7 @@ test("sessions.reset keeps watching a replacement registered after waiter settle
   });
 });
 
-test("sessions.reset installs a new watcher while prior MCP retirement is still disposing", async () => {
+test("sessions.reset reuses the watcher while prior MCP retirement is still disposing", async () => {
   await seedActiveMainSession();
   embeddedRunMock.waitResults.set("sess-main", false);
   let releaseFirstRetirement = () => {};
@@ -308,18 +308,15 @@ test("sessions.reset installs a new watcher while prior MCP retirement is still 
   embeddedRunMock.activeIds.add("sess-main");
   const retry = await resetMainSession();
   expect(retry.ok).toBe(false);
-  await vi.waitFor(() => {
-    expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main", "sess-main"]);
-  });
+  expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main"]);
 
   embeddedRunMock.activeIds.delete("sess-main");
-  embeddedRunMock.endWaiters.get("sess-main")?.(true);
   releaseFirstRetirement();
   await vi.waitFor(() => {
     const completedRetirements = bundleMcpRuntimeMocks.retireSessionMcpRuntime.mock.calls.filter(
       ([params]) => params.retainAcrossReuse === false,
     );
-    expect(completedRetirements).toHaveLength(2);
+    expect(completedRetirements).toHaveLength(1);
   });
 });
 

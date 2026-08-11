@@ -441,7 +441,7 @@ export function createExecApprovalHandlers(
       if (!resolveParams) {
         return;
       }
-      const { inputId, decision } = resolveParams;
+      const { inputId, decision, reviewer } = resolveParams;
       let autoReviewResolution = false;
       await handleApprovalResolve({
         approvalKind: "exec",
@@ -451,6 +451,7 @@ export function createExecApprovalHandlers(
         respond,
         context,
         client,
+        reviewer,
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
           const autoReviewIdentity =
@@ -481,10 +482,15 @@ export function createExecApprovalHandlers(
                 details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
               };
         },
-        resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy }) =>
-          autoReviewResolution
-            ? manager.resolveAutoReview(approvalId, resolvedBy)
-            : manager.resolve(approvalId, decisionLocal, resolvedBy),
+        resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy, resolver }) => {
+          if (autoReviewResolution) {
+            return manager.resolveAutoReview(approvalId, resolvedBy);
+          }
+          return resolver
+            ? manager.resolveDetailed(approvalId, decisionLocal, resolver, resolvedBy).outcome ===
+                "resolved"
+            : manager.resolve(approvalId, decisionLocal, resolvedBy);
+        },
         forwardResolved: (resolvedEvent) => opts?.forwarder?.handleResolved(resolvedEvent),
         forwardResolvedErrorLabel: "exec approvals: forward resolve failed",
         extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved

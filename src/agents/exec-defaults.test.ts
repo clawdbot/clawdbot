@@ -302,6 +302,26 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("uses the configured default agent for an unscoped session", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            entries: {
+              main: {},
+              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
+            },
+          },
+        },
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      security: "deny",
+      ask: "always",
+    });
+  });
+
   it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
     expect(
       resolveNodeExecEligibility({

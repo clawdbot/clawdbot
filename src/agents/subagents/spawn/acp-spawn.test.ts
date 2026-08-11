@@ -27,10 +27,10 @@ import {
   emitAcpLifecycleEnd,
 } from "../../command/attempt-execution.js";
 import { resolveThinkingDefault } from "../../model-selection.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagent-lifecycle-events.js";
-import { createSubagentRegistryLifecycleController } from "../../subagent-registry-lifecycle.js";
-import type { RegisterSubagentRunParams } from "../../subagent-registry-run-manager.js";
-import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "../registry/subagent-lifecycle-events.js";
+import { createSubagentRegistryLifecycleController } from "../registry/subagent-registry-lifecycle.js";
+import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-manager.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 type BoundaryLifecycleControllerParams = Parameters<
@@ -249,8 +249,8 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
 }));
 
-vi.mock("../../subagent-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../subagent-registry.js")>()),
+vi.mock("../registry/subagent-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../registry/subagent-registry.js")>()),
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
   // ACP registration deliberately moved behind the shared spawn pipeline.

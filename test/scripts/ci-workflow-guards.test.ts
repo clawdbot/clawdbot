@@ -782,12 +782,19 @@ function writeExecutable(filePath: string, lines: string[]): void {
 
 function writeProtocolDescriptor(
   repo: string,
-  additions: Array<{ name: string; since?: string }> = [],
+  additions: Array<{
+    name: string;
+    since?: string;
+    compatibilityRestored?: boolean;
+  }> = [],
 ): void {
-  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(({ name, since }) => {
-    const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
-    return `  { name: ${JSON.stringify(name)}${sinceProperty} },`;
-  });
+  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(
+    ({ name, since, compatibilityRestored }) => {
+      const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
+      const compatibilityProperty = compatibilityRestored ? ", compatibilityRestored: true" : "";
+      return `  { name: ${JSON.stringify(name)}${sinceProperty}${compatibilityProperty} },`;
+    },
+  );
   const descriptor = path.join(repo, "src/gateway/methods/core-descriptors.ts");
   mkdirSync(path.dirname(descriptor), { recursive: true });
   writeFileSync(
@@ -827,6 +834,29 @@ function createQaProtocolTopology() {
   writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
   commitProtocolFixture(origin, "advance main");
 
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/restore", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.preflight",
+      since: "<=2026.7",
+      compatibilityRestored: true,
+    },
+  ]);
+  const compatibilityHead = commitProtocolFixture(origin, "restore compatibility method");
+
+  runGit(origin, ["checkout", "-q", "-b", "compatibility/invalid", mainBase]);
+  writeProtocolDescriptor(origin, [
+    {
+      name: "gateway.restart.invalid",
+      since: "2026.8",
+      compatibilityRestored: true,
+    },
+  ]);
+  const invalidCompatibilityHead = commitProtocolFixture(
+    origin,
+    "mislabel new method as compatibility",
+  );
+
   runGit(origin, ["checkout", "-q", "-b", releaseBranch, mainBase]);
   writeProtocolDescriptor(origin, [{ name: "sessions.releaseOnly" }]);
   const releaseHead = commitProtocolFixture(origin, "add release protocol method");
@@ -848,8 +878,10 @@ function createQaProtocolTopology() {
 
   return {
     checkout,
+    compatibilityHead,
     fakeBin,
     featureHead,
+    invalidCompatibilityHead,
     mainBase,
     mainHead,
     mainReleaseTag,
@@ -938,7 +970,11 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   });
 }
 
-function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts: string[] }): {
+function runDependencyCheckFixture(options: {
+  historicalTarget: boolean;
+  releaseToolingEntry?: boolean;
+  scripts: string[];
+}): {
   calls: string[];
   output: string;
   status: number | null;
@@ -954,9 +990,23 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
         scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
       })}\n`,
     );
+    if (options.releaseToolingEntry) {
+      mkdirSync(path.join(root, "config"), { recursive: true });
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(
+        path.join(root, "config/knip.config.ts"),
+        "const repositoryScriptEntries = [\n] as const;\n",
+      );
+      writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
+    }
     writeExecutable(path.join(fakeBin, "pnpm"), [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
+      "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
+      '  echo "release-only helper is missing from Knip entries" >&2',
+      "  exit 1",
+      "fi",
       'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ]);
     const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
@@ -967,6 +1017,8 @@ function runDependencyCheckFixture(options: { historicalTarget: boolean; scripts
       encoding: "utf8",
       env: {
         ...process.env,
+        EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
+        FROZEN_TARGET: options.historicalTarget ? "true" : "false",
         FORMAT_CHECK: "false",
         HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
@@ -1363,6 +1415,18 @@ NODE
     expect(activityRun).toMatch(
       /push: \(if \$event_name == "push" then \{\s+before: \.before,\s+after: \.after,\s+ref: \.ref,\s+compare: \.compare,\s+head_commit: \.head_commit\.id\s+\} else null end\)/u,
     );
+
+    const exactReviewStep = expectDefined(
+      steps.find((step) => step.name === "Dispatch exact ClawSweeper review"),
+      "ClawSweeper exact-review dispatch",
+    );
+    expect(exactReviewStep.env?.TARGET_BRANCH).toBe(
+      "${{ github.event.repository.default_branch }}",
+    );
+    expect(exactReviewStep.run).toContain('--arg target_branch "$TARGET_BRANCH"');
+    expect(exactReviewStep.run).toContain("target_branch:$target_branch");
+    expect(exactReviewStep.run).toContain('ingress_route:"target_dispatcher"');
+    expect(exactReviewStep.run).toContain("ingress_fingerprint:$ingress_fingerprint");
   });
 
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
@@ -4798,6 +4862,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     const frozenWithExports = runDependencyCheckFixture({
       historicalTarget: true,
+      releaseToolingEntry: true,
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
@@ -6056,6 +6121,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(mainCheck.status, `${mainCheck.stdout}${mainCheck.stderr}`).toBe(0);
       expect(mainCheck.stdout).toContain("1 new core method");
 
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.compatibilityHead]);
+      const compatibilityCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+      expect(
+        compatibilityCheck.status,
+        `${compatibilityCheck.stdout}${compatibilityCheck.stderr}`,
+      ).toBe(0);
+      expect(compatibilityCheck.stdout).toContain("1 restored compatibility method");
+
+      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.invalidCompatibilityHead]);
+      const invalidCompatibilityCheck = runProtocolSinceFixture(
+        topology.checkout,
+        topology.mainBase,
+      );
+      expect(invalidCompatibilityCheck.status).not.toBe(0);
+      expect(invalidCompatibilityCheck.stderr).toContain(
+        "restored compatibility methods must retain <= vintage metadata",
+      );
+
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.releaseHead]);
       const releaseCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
       expect(releaseCheck.status).not.toBe(0);
@@ -7001,6 +7084,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(destinationSymlink.escaped).toBe("outside\n");
     },
   );
+
+  it("pins transient validation refs before trusted Telegram QA dispatch", () => {
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const dispatchStep = releaseWorkflow.jobs.qa_live_telegram_release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and await trusted Telegram QA",
+    );
+
+    expect(dispatchStep.env.TARGET_REF).toBe("${{ needs.resolve_target.outputs.ref }}");
+    expect(dispatchStep.env.TARGET_SHA).toBe("${{ needs.resolve_target.outputs.revision }}");
+    expect(dispatchStep.run).toContain('telegram_target_ref="$TARGET_REF"');
+    expect(dispatchStep.run).toContain("validation/target-* | refs/heads/validation/target-*)");
+    expect(dispatchStep.run).toContain('telegram_target_ref="$TARGET_SHA"');
+    expect(dispatchStep.run).toContain('-f target_ref="$telegram_target_ref"');
+    expect(dispatchStep.run).not.toContain("release/* | refs/heads/release/*)");
+  });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
     const releaseWorkflow = readReleaseChecksWorkflow();

@@ -18,6 +18,7 @@ const GPT_56_ULTRA_MODEL_IDS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
 const GPT_56_MAX_MODEL_IDS = new Set([...GPT_56_ULTRA_MODEL_IDS, "gpt-5.6-luna"]);
 const MODERN_CODEX_MODEL_IDS = new Set([
   ...GPT_56_MAX_MODEL_IDS,
+  "gpt-5.6",
   "gpt-5.5",
   "gpt-5.5-pro",
   "gpt-5.4",

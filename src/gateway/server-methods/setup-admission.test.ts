@@ -15,6 +15,7 @@ vi.mock("../../config/paths.js", async () => ({
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
+  whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 
 describe("setup admission", () => {
@@ -69,7 +70,7 @@ describe("setup admission", () => {
 
   it("holds an admitted session lease until its runner settles", async () => {
     const settled = createDeferred();
-    await createAdmittedWizardSession(() => ({
+    const session = await createAdmittedWizardSession(() => ({
       whenSettled: () => settled.promise,
     }));
 
@@ -77,14 +78,12 @@ describe("setup admission", () => {
       createAdmittedWizardSession(() => ({ whenSettled: () => Promise.resolve() })),
     ).resolves.toBeUndefined();
     settled.resolve();
-    await settled.promise;
-    await vi.waitFor(async () => {
-      const next = await createAdmittedWizardSession(() => ({
-        whenSettled: () => Promise.resolve(),
-      }));
-      expect(next).toBeDefined();
-      await next?.whenSettled();
-    });
+    await whenAdmittedWizardSessionSettled(session!);
+    const next = await createAdmittedWizardSession(() => ({
+      whenSettled: () => Promise.resolve(),
+    }));
+    expect(next).toBeDefined();
+    await whenAdmittedWizardSessionSettled(next!);
   });
 
   it("releases an admitted session lease when construction fails", async () => {
@@ -93,9 +92,11 @@ describe("setup admission", () => {
         throw new Error("construction failed");
       }),
     ).rejects.toThrow("construction failed");
-    await expect(
-      createAdmittedWizardSession(() => ({ whenSettled: () => Promise.resolve() })),
-    ).resolves.toBeDefined();
+    const recovered = await createAdmittedWizardSession(() => ({
+      whenSettled: () => Promise.resolve(),
+    }));
+    expect(recovered).toBeDefined();
+    await whenAdmittedWizardSessionSettled(recovered!);
   });
 
   it("reserves wizard admission while setup waits to acquire its target lock", async () => {

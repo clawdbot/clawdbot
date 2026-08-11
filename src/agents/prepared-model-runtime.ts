@@ -36,6 +36,7 @@ import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
 } from "./prepared-model-runtime.publication-events.js";
+import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -271,7 +272,10 @@ async function activateStandalonePreparedModelRuntimeNow(
 async function acquirePreparedModelRuntimeLease(
   rawInput: PreparedModelRuntimeInput,
   provenance: "run" | "ephemeral",
-  options: { retainIdleRunOwner?: boolean } = {},
+  options: {
+    retainIdleRunOwner?: boolean;
+    catalogMode?: PreparedModelRuntimeCatalogMode;
+  } = {},
 ): Promise<PreparedModelRuntimeLease> {
   let input = normalizePreparedModelRuntimeInput({
     ...rawInput,
@@ -337,11 +341,15 @@ async function acquirePreparedModelRuntimeLease(
           modelRuntimeBuildTimeoutMs,
           undefined,
           provenance,
+          options.catalogMode,
         );
       } else if (existing) {
         snapshot = await prepareModelRuntimeSnapshot(input);
       } else {
-        snapshot = await publishPreparedModelRuntimeSnapshot(input, { provenance });
+        snapshot = await publishPreparedModelRuntimeSnapshot(input, {
+          provenance,
+          catalogMode: options.catalogMode,
+        });
       }
     } catch (error) {
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {
@@ -394,7 +402,10 @@ async function acquirePreparedModelRuntimeLease(
 /** Acquires the exact writable workspace generation at agent-run admission. */
 export async function acquireAgentRunPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  options: { retainIdleRunOwner?: boolean } = {},
+  options: {
+    retainIdleRunOwner?: boolean;
+    catalogMode?: PreparedModelRuntimeCatalogMode;
+  } = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLease(rawInput, "run", options);
 }

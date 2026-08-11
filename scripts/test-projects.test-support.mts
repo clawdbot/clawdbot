@@ -538,6 +538,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ],
   ],
 ]);
+const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];
 const RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS = [
   ...RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS,
@@ -692,7 +693,14 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
-  ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/commitments/model-selection.runtime.ts",
+    ["src/commitments/runtime.test.ts", "src/agents/model-selection.test.ts"],
+  ],
+  [
+    "src/agents/test-helpers/live-model-turn-probes.ts",
+    ["src/agents/live-model-turn-probes.test.ts"],
+  ],
   [
     "src/plugins/provider-auth-choice.ts",
     ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
@@ -2471,6 +2479,16 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, "plugin-clawhub-new-workflow"],
   ],
   [
+    new RegExp(
+      [
+        "^(?:scripts\\/materialize-vercel-cli\\.sh|",
+        "\\.github\\/release\\/vercel-cli\\/package(?:-lock)?\\.json)$",
+      ].join(""),
+      "u",
+    ),
+    ["test/scripts/vercel-container-registry-publish.test.ts"],
+  ],
+  [
     /^scripts\/lib\/generated-text-asset\.mts$/u,
     [
       "extensions/browser/scripts/build-copilot-runtime.test.ts",
@@ -2942,6 +2960,9 @@ function resolvePreciseChangedTestTargets(
   const cwd = options.cwd ?? process.cwd();
   const mappedTargets =
     SOURCE_TEST_TARGETS.get(changedPath) ??
+    (/^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(changedPath)
+      ? [changedPath, DOCS_CONFIG_EXAMPLES_TEST_TARGET]
+      : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
     resolvePromptSnapshotFixtureTargets(changedPath);

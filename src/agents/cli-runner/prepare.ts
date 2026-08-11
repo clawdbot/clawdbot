@@ -1679,6 +1679,8 @@ export async function prepareCliRunContext(
         admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
         isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         lease: params.contextEngineLogicalTurnLease,
+        recorder: params.userTurnTranscriptRecorder,
+        sessionTarget: params.sessionTarget,
       });
       resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
     } else {

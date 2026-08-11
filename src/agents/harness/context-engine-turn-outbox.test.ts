@@ -11,6 +11,7 @@ import type {
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -137,7 +138,7 @@ describe("context-engine turn outbox", () => {
     ).toBeUndefined();
   });
 
-  it("recovers an accepted terminal transcript when finalization crashed", async () => {
+  it("drains prior work before fresh-turn assembly and records dispatch admission", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-recovery-"));
     tempDirs.push(stateDir);
     const target = {
@@ -199,6 +200,11 @@ describe("context-engine turn outbox", () => {
       logicalTurnId: "current-logical-turn",
       role: "user" as const,
     } satisfies TranscriptTurnAdmission;
+    const currentMessage = { role: "user" as const, content: "second", timestamp: 3_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
     const commitTurn = vi.fn(async () => ({ status: "committed" as const }));
     const engine = {
       info: {
@@ -229,9 +235,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngineLogicalTurnLease;
 
     await drainPendingContextEngineTurnsBeforeRun({
-      admission: currentAdmission,
+      admission: undefined,
       isHeartbeat: false,
       lease,
+      recorder,
+      sessionTarget: target,
     });
 
     expect(commitTurn).toHaveBeenCalledOnce();
@@ -246,6 +254,11 @@ describe("context-engine turn outbox", () => {
         prePromptMessageCount: 0,
       }),
     );
+    expect(
+      database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
+    ).toHaveLength(0);
+
+    recorder.markRuntimePersisted(currentMessage, currentAdmission);
     const queued = database.db
       .prepare("SELECT advancement_key, payload_json FROM context_engine_turn_outbox")
       .all() as Array<{ advancement_key: string; payload_json: string }>;
@@ -255,6 +268,9 @@ describe("context-engine turn outbox", () => {
       state: "admitted",
       isHeartbeat: false,
     });
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+
+    await drainPendingContextEngineTurnsBeforeRun({ admission: undefined, lease });
     expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
   });
 
@@ -383,9 +399,9 @@ describe("context-engine turn outbox", () => {
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
-      currentAdmission: payload.boundary.admission,
       database,
       engineId: "test",
+      sessionId: payload.boundary.admission.sessionId,
       warn,
     });
 

@@ -650,6 +650,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     normalizeEntry?: (raw: string) => string;
     inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
+  dmRouting?: ChannelSecurityAdapter<TResolvedAccount>["dmRouting"];
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
   collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
@@ -760,6 +761,7 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         inheritSharedDefaultsFromDefaultAccount:
           security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),
+    ...(security.dmRouting ? { dmRouting: security.dmRouting } : {}),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
     ...(security.collectAuditFindings
       ? { collectAuditFindings: security.collectAuditFindings }

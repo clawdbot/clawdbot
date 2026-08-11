@@ -7092,6 +7092,42 @@ describe("handleSendChat", () => {
     ).toHaveProperty("expectedLeafEntryId", null);
   });
 
+  it("waits for terminal history reconciliation before sending a follow-up", async () => {
+    const history = createDeferred<unknown>();
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "reconciled follow-up payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-terminal",
+      chatMessage: "immediate follow-up",
+    });
+    const historyLoad = loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+
+    const sending = handleSendChat(host);
+    await Promise.resolve();
+    const sendsBeforeHistory = host.request.mock.calls.filter(
+      ([method]) => method === "chat.send",
+    ).length;
+    history.resolve({
+      messages: [],
+      sessionInfo: {
+        activeLeafEntryId: "leaf-after-terminal",
+        key: "agent:main",
+        sessionId: "session-main",
+      },
+    });
+    await Promise.all([historyLoad, sending]);
+
+    expect(sendsBeforeHistory).toBe(0);
+    expect(
+      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "follow-up send"),
+    ).toMatchObject({ expectedLeafEntryId: "leaf-after-terminal" });
+  });
+
   it("omits the active leaf when draining a restored outbox", async () => {
     const host = makeChatHost({
       client: null,

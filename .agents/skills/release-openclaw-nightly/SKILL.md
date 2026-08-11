@@ -226,6 +226,7 @@ BRANCH="$(git branch --show-current)"
 
 "$GH" workflow run full-release-validation.yml --repo openclaw/openclaw --ref "$BRANCH" \
   -f ref="$BRANCH" \
+  -f expected_sha="$SHA" \
   -f release_profile=beta \
   -f rerun_group=all
 

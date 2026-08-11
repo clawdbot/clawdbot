@@ -11,7 +11,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -83,7 +83,7 @@ function createInitializationContext(): ApplicationContext {
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
     initialUserMessage: createInitialUserMessageHandoff(),
-    browserAnnotationHandoff: createBrowserAnnotationHandoff(),
+    chatAttachmentHandoff: createChatAttachmentHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
 }
@@ -511,10 +511,16 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     pane.sessionKey = "main";
     state.sessionKey = canonicalSessionKey;
+    state.settings = {
+      sessionKey: canonicalSessionKey,
+      lastActiveSessionKey: canonicalSessionKey,
+    } as ChatPageHost["settings"];
     state.hello = hello;
     state.loadAssistantIdentity = vi.fn(async () => {});
     pane.connectedClient = null;
     pane.onPaneSessionChange = navigate;
+    pane.active = true;
+    pane.presented = true;
 
     pane.applyGatewaySnapshot(snapshot);
 
@@ -555,11 +561,6 @@ describe("chat pane initialization", () => {
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
     pane.sessionKey = canonicalSessionKey;
-    const switchPaneSession = vi.spyOn(pane, "switchPaneSession").mockImplementation((next) => {
-      state.sessionKey = next;
-      state.chatRunId = null;
-      state.chatStream = null;
-    });
 
     (
       pane as TestChatPane & {
@@ -568,7 +569,6 @@ describe("chat pane initialization", () => {
     ).willUpdate(new Map([["sessionKey", "main"]]));
 
     expect(state.sessionKey).toBe(canonicalSessionKey);
-    expect(switchPaneSession).not.toHaveBeenCalled();
     expect(state.chatRunId).toBe("run-reconnected");
     expect(state.chatStream).toBe("The response survived navigation.");
   });

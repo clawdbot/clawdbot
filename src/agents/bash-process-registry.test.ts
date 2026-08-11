@@ -10,13 +10,13 @@ import {
   acknowledgeNotifyOnExit,
   addSession,
   appendOutput,
-  createSessionSlug,
   deleteSession,
   drainFinishedSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   getFinishedSessionForProcess,
+  isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
@@ -28,6 +28,7 @@ import {
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createSessionSlug } from "./session-slug.js";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),
@@ -370,11 +371,11 @@ describe("bash process registry", () => {
     addSession(session);
     markBackgrounded(session);
     deleteSession(session.id);
-    expect(createSessionSlug()).toBe("amber-atlas-2");
+    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
 
     session.backgrounded = false;
     markExited(session, 0, null, "completed");
-    expect(createSessionSlug()).toBe("amber-atlas");
+    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
   });
 
   it("clears background activity in the test reset", () => {

@@ -169,10 +169,15 @@ const mocks = vi.hoisted(() => {
 vi.unmock("./server-restart-sentinel.js");
 vi.resetModules();
 
-vi.mock("../agents/subagent-completion-delivery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/subagent-completion-delivery.js")>()),
-  settleCorrelatedSubagentDelivery: mocks.settleCorrelatedSubagentDelivery,
-}));
+vi.mock(
+  "../agents/subagents/completion/subagent-completion-delivery.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/completion/subagent-completion-delivery.js")
+    >()),
+    settleCorrelatedSubagentDelivery: mocks.settleCorrelatedSubagentDelivery,
+  }),
+);
 
 vi.mock("../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(

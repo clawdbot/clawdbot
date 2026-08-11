@@ -40,7 +40,6 @@ type DiscordWebhookSendOpts = {
   username?: string;
   avatarUrl?: string;
   wait?: boolean;
-  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 function resolveWebhookExecutionUrl(params: {
@@ -155,7 +154,6 @@ export async function sendWebhookMessageDiscord(
   try {
     const response = await request(
       async () => {
-        await opts.onPlatformSendDispatch?.();
         const attemptResponse = await (proxyFetch ?? fetch)(url, {
           method: "POST",
           headers: {
