@@ -43,6 +43,59 @@ describe("vLLM provider thinking policy", () => {
     });
   });
 
+  it("exposes a binary profile for underscore-prefixed Nemotron served-model-name aliases", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "yk_nemotron-3-super",
+        reasoning: true,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low", label: "on" }],
+      defaultLevel: "off",
+    });
+  });
+
+  it("exposes a three-level profile for self-hosted DeepSeek V4 reasoning models", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "deepseek-ai/DeepSeek-V4-Pro",
+        reasoning: true,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "deepseek-v4-flash",
+        reasoning: true,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+  });
+
+  // Regression: served-model-name aliases joined with "_" (e.g. vLLM's
+  // `--served-model-name yk_deepseek_v4`) put a word character directly
+  // before "deepseek", so a leading `\b` in the id matcher would silently
+  // never match and reasoning would never activate for that alias.
+  it("exposes a three-level profile for underscore-prefixed served-model-name aliases", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "yk_deepseek_v4",
+        reasoning: true,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+  });
+
   it("does not flatten unconfigured or non-reasoning vLLM models", () => {
     expect(
       resolveThinkingProfile({
@@ -57,6 +110,19 @@ describe("vLLM provider thinking policy", () => {
         modelId: "Qwen/Qwen3-8B",
         reasoning: false,
         compat: { thinkingFormat: "qwen-chat-template" },
+      }),
+    ).toBeNull();
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "deepseek-v4-flash",
+      }),
+    ).toBeNull();
+    expect(
+      resolveThinkingProfile({
+        provider: "vllm",
+        modelId: "deepseek-v4-flash",
+        reasoning: false,
       }),
     ).toBeNull();
   });

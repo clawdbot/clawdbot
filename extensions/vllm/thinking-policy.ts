@@ -12,6 +12,11 @@ const VLLM_BINARY_THINKING_PROFILE = {
   defaultLevel: "off",
 } satisfies ProviderThinkingProfile;
 
+const VLLM_DEEPSEEK_V4_THINKING_PROFILE = {
+  levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+  defaultLevel: "off",
+} satisfies ProviderThinkingProfile;
+
 function normalizeVllmQwenThinkingFormat(value: unknown): VllmQwenThinkingFormat | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -44,7 +49,11 @@ export function resolveVllmQwenThinkingFormatFromCompat(
 }
 
 function isVllmNemotronThinkingModel(modelId: string): boolean {
-  return /\bnemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(modelId);
+  return /nemotron-3(?:[-_](?:nano|super|ultra))?\b/i.test(modelId);
+}
+
+export function isVllmDeepSeekV4ThinkingModel(modelId: string): boolean {
+  return /deepseek[-_]?v4(?:[-_](?:pro|flash))?\b/i.test(modelId);
 }
 
 export function resolveThinkingProfile(
@@ -59,6 +68,9 @@ export function resolveThinkingProfile(
   const qwenFormat = resolveVllmQwenThinkingFormatFromCompat(ctx.compat);
   if (qwenFormat || (ctx.reasoning === true && isVllmNemotronThinkingModel(ctx.modelId))) {
     return VLLM_BINARY_THINKING_PROFILE;
+  }
+  if (ctx.reasoning === true && isVllmDeepSeekV4ThinkingModel(ctx.modelId)) {
+    return VLLM_DEEPSEEK_V4_THINKING_PROFILE;
   }
   return null;
 }

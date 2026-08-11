@@ -208,6 +208,168 @@ describe("vLLM provider thinking composition", () => {
       }),
     ).toStrictEqual({});
   });
+
+  // Regression: see the matching DeepSeek V4 alias test below for why a
+  // leading `\b` anchor breaks "_"-joined served-model-name aliases.
+  it("injects Nemotron 3 chat-template kwargs for underscore-prefixed aliases", () => {
+    const aliasId = "yk_nemotron-3-super";
+    expect(
+      captureProviderPayload({
+        thinkingLevel: "off",
+        contextModelId: aliasId,
+        model: { id: aliasId },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        force_nonempty_content: true,
+      },
+    });
+  });
+});
+
+describe("vLLM DeepSeek-V4 thinking composition", () => {
+  function captureDeepSeekV4Payload(params: {
+    thinkingLevel?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+    initialPayload?: Record<string, unknown>;
+    modelId?: string;
+  }): Record<string, unknown> {
+    let captured: Record<string, unknown> = {};
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload = { ...params.initialPayload };
+      options?.onPayload?.(payload, _model);
+      captured = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const modelId = params.modelId ?? "deepseek-ai/DeepSeek-V4-Flash";
+    const model = {
+      api: "openai-completions",
+      provider: "vllm",
+      id: modelId,
+      reasoning: true,
+    } as Model<"openai-completions">;
+    const wrapped = wrapVllmProviderStream({
+      provider: "vllm",
+      modelId,
+      model,
+      thinkingLevel: params.thinkingLevel ?? "high",
+      streamFn: baseStreamFn,
+    } as never);
+    void wrapped?.(model, { messages: [] } as Context, {});
+
+    return captured;
+  }
+
+  it("injects Think High chat-template kwargs", () => {
+    expect(captureDeepSeekV4Payload({ thinkingLevel: "high" })).toEqual({
+      chat_template_kwargs: {
+        thinking: true,
+        reasoning_effort: "high",
+      },
+    });
+  });
+
+  it("injects Think Max chat-template kwargs", () => {
+    expect(captureDeepSeekV4Payload({ thinkingLevel: "max" })).toEqual({
+      chat_template_kwargs: {
+        thinking: true,
+        reasoning_effort: "max",
+      },
+    });
+    expect(captureDeepSeekV4Payload({ thinkingLevel: "xhigh" })).toEqual({
+      chat_template_kwargs: {
+        thinking: true,
+        reasoning_effort: "max",
+      },
+    });
+  });
+
+  it("does not inject chat-template kwargs when thinking is off (vLLM default is non-think)", () => {
+    expect(captureDeepSeekV4Payload({ thinkingLevel: "off" })).toStrictEqual({});
+  });
+
+  it("preserves existing chat-template kwargs over generated defaults", () => {
+    expect(
+      captureDeepSeekV4Payload({
+        thinkingLevel: "high",
+        initialPayload: {
+          chat_template_kwargs: {
+            reasoning_effort: "max",
+          },
+        },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        thinking: true,
+        reasoning_effort: "max",
+      },
+    });
+  });
+
+  it("matches self-hosted DeepSeek V4 Pro/Flash ids case-insensitively", () => {
+    for (const modelId of ["deepseek-v4-pro", "DeepSeek-V4-Flash-0731", "deepseek_v4_pro"]) {
+      expect(captureDeepSeekV4Payload({ thinkingLevel: "high", modelId })).toEqual({
+        chat_template_kwargs: {
+          thinking: true,
+          reasoning_effort: "high",
+        },
+      });
+    }
+  });
+
+  // Regression: vLLM's --served-model-name lets operators alias the upstream
+  // checkpoint id however they like, and joining an org/user tag with "_"
+  // (e.g. "yk_deepseek_v4") is common. "_" is a regex word character, so a
+  // leading `\b` anchor in the id matcher would sit right at that alias
+  // boundary and never match, silently disabling reasoning for the alias.
+  it("matches underscore-prefixed served-model-name aliases like yk_deepseek_v4", () => {
+    for (const modelId of ["yk_deepseek_v4", "yk_deepseek_v4_pro", "team_deepseek-v4-flash"]) {
+      expect(captureDeepSeekV4Payload({ thinkingLevel: "high", modelId })).toEqual({
+        chat_template_kwargs: {
+          thinking: true,
+          reasoning_effort: "high",
+        },
+      });
+    }
+  });
+
+  it("skips non-DeepSeek-V4 vLLM models", () => {
+    expect(
+      captureDeepSeekV4Payload({ thinkingLevel: "high", modelId: "Qwen/Qwen3-8B" }),
+    ).toStrictEqual({});
+  });
+
+  // Regression coverage: this wrapper must stay registered (non-undefined) at
+  // every thinking level, including "off"/unset. extra-params.ts only skips
+  // its own DeepSeek V4 fallback (which sends the hosted-API `thinking: {
+  // type }` shape vLLM chat templates reject) when this plugin's wrapper is
+  // defined and distinct from the unwrapped base stream function. Gating
+  // registration on a non-off thinking level would leave the default "off"
+  // request path routed through that incompatible fallback.
+  it.each([{ thinkingLevel: "off" as const }, { thinkingLevel: undefined }])(
+    "stays registered for DeepSeek-V4 models at thinkingLevel=$thinkingLevel",
+    ({ thinkingLevel }) => {
+      const modelId = "deepseek-ai/DeepSeek-V4-Pro";
+      const model = {
+        api: "openai-completions",
+        provider: "vllm",
+        id: modelId,
+        reasoning: true,
+      } as Model<"openai-completions">;
+      const baseStreamFn: StreamFn = () => ({}) as ReturnType<StreamFn>;
+      const wrapped = wrapVllmProviderStream({
+        provider: "vllm",
+        modelId,
+        model,
+        thinkingLevel,
+        streamFn: baseStreamFn,
+      } as never);
+
+      expect(wrapped).toBeTypeOf("function");
+      expect(wrapped).not.toBe(baseStreamFn);
+    },
+  );
 });
 
 describe("wrapVllmProviderStream", () => {
