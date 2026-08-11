@@ -246,7 +246,7 @@ export async function buildTestPlan(params: {
         agentId: "openclaw",
         routeAgentId: route.agentId,
         agentDir: route.agentDir,
-        ...(route.runner === "embedded"
+        ...(route.runner === "embedded" && route.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride }
           : {}),
         ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),

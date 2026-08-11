@@ -363,7 +363,9 @@ async function activateSetupInferenceUnredacted(
         ...testPlan,
         config: stagedExecutionRoute.runConfig,
         agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
-        agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride,
+        ...(stagedRoute.agentHarnessRuntimeOverride
+          ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
+          : {}),
       };
     } else {
       testPlan = {
@@ -479,10 +481,12 @@ async function activateSetupInferenceUnredacted(
     }
     if (testPlan.runner === "embedded") {
       const successfulHarnessId = test.auth.agentHarnessId?.trim();
+      const configuredHarnessId = testPlan.agentHarnessRuntimeOverride?.trim();
       if (
         !successfulHarnessId ||
-        (testPlan.agentHarnessRuntimeOverride !== "auto" &&
-          successfulHarnessId !== testPlan.agentHarnessRuntimeOverride)
+        (configuredHarnessId !== undefined &&
+          configuredHarnessId !== "auto" &&
+          successfulHarnessId !== configuredHarnessId)
       ) {
         return {
           ok: false,

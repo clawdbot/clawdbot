@@ -1136,6 +1136,7 @@ export class SystemAgentChatEngine {
         session: this.agentSession,
       });
     } catch (error) {
+      log.warn(`agent turn failed before planner fallback: ${formatErrorMessage(error)}`);
       agentFailure = error;
       loopReply = null;
     }

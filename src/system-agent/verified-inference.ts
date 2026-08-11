@@ -48,6 +48,11 @@ type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
   "runConfig" | "authProfileId"
 >;
+type SystemAgentVerifiedExecutionRoute =
+  | Extract<SystemAgentConfiguredRoute, { runner: "cli" }>
+  | (Extract<SystemAgentConfiguredRoute, { runner: "embedded" }> & {
+      agentHarnessRuntimeOverride: string;
+    });
 
 type SystemAgentVerifiedExecutionFingerprint = {
   route: unknown;
@@ -106,7 +111,7 @@ type SystemAgentOwnerPluginRegistryLoader = (params: {
 /** Server-local proof returned only after the exact route completes a live turn. */
 export type SystemAgentVerifiedInferenceBinding = Readonly<{
   configuredRoute: SystemAgentConfiguredRouteIdentity;
-  execution: SystemAgentConfiguredRoute;
+  execution: SystemAgentVerifiedExecutionRoute;
   executionFingerprint: SystemAgentVerifiedExecutionFingerprint;
   ownerPluginIds: readonly string[];
   ownerPluginArtifacts: readonly SystemAgentOwnerPluginArtifactIdentity[];
@@ -212,7 +217,7 @@ function systemAgentRouteIdentity(
 }
 
 async function resolveCurrentRuntimeOwnerFingerprint(params: {
-  route: SystemAgentConfiguredRoute;
+  route: SystemAgentVerifiedExecutionRoute;
   kind: OpaqueRuntimeOwnerKind;
   runtimeOwnerId: string;
   authProfileId?: string;
@@ -400,7 +405,7 @@ function projectOwnerPluginArtifacts(params: {
 }
 async function projectVerifiedExecutionFingerprint(
   config: OpenClawConfig,
-  route: SystemAgentConfiguredRoute,
+  route: SystemAgentVerifiedExecutionRoute,
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
@@ -431,7 +436,11 @@ function resolveRouteHarnessOwnerPluginIds(
   config: OpenClawConfig,
   route: SystemAgentConfiguredRoute,
 ): string[] {
-  if (route.runner !== "embedded" || route.agentHarnessRuntimeOverride === "openclaw") {
+  if (
+    route.runner !== "embedded" ||
+    !route.agentHarnessRuntimeOverride ||
+    route.agentHarnessRuntimeOverride === "openclaw"
+  ) {
     return [];
   }
   const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId, process.env);
@@ -487,7 +496,7 @@ export function captureSystemAgentOwnerPluginArtifacts(params: {
 }
 
 async function resolveCurrentAuthFingerprint(params: {
-  route: SystemAgentConfiguredRoute;
+  route: SystemAgentVerifiedExecutionRoute;
   authProfileId?: string;
   modelId?: string;
   modelApi?: string;
@@ -645,12 +654,15 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const deps = params.deps ?? {};
   const runConfig = structuredClone(params.executionRoute.runConfig);
-  const execution = { ...params.executionRoute, runConfig } as SystemAgentConfiguredRoute;
-  const authProfileId = params.auth.authProfileId ?? execution.authProfileId;
+  const configuredExecution = {
+    ...params.executionRoute,
+    runConfig,
+  } as SystemAgentConfiguredRoute;
+  const authProfileId = params.auth.authProfileId ?? configuredExecution.authProfileId;
   const modelId = params.auth.modelId?.trim();
   const modelApi = params.auth.modelApi?.trim();
   if (authProfileId) {
-    execution.authProfileId = authProfileId;
+    configuredExecution.authProfileId = authProfileId;
   }
   const proofKind = params.auth.runtimeOwnerFingerprint ? "runtime-owner" : "credential";
   if (
@@ -664,17 +676,15 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     throw new Error("The successful inference run did not report its exact runtime owner.");
   }
   let successfulHarnessId: string | undefined;
-  if (execution.runner === "embedded") {
-    const configuredHarnessId = execution.agentHarnessRuntimeOverride.trim();
+  if (configuredExecution.runner === "embedded") {
+    const configuredHarnessId = configuredExecution.agentHarnessRuntimeOverride?.trim();
     const reportedHarnessId = params.auth.agentHarnessId?.trim();
-    if (!configuredHarnessId) {
-      throw new Error("The configured inference route did not select an agent harness.");
-    }
-    if (configuredHarnessId === "auto" && !reportedHarnessId) {
+    if ((!configuredHarnessId || configuredHarnessId === "auto") && !reportedHarnessId) {
       throw new Error("The successful inference run did not report its exact agent harness.");
     }
     if (
       reportedHarnessId &&
+      configuredHarnessId &&
       configuredHarnessId !== "auto" &&
       reportedHarnessId !== configuredHarnessId
     ) {
@@ -683,8 +693,14 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
       );
     }
     successfulHarnessId = reportedHarnessId ?? configuredHarnessId;
-    execution.agentHarnessRuntimeOverride = successfulHarnessId;
   }
+  const execution =
+    configuredExecution.runner === "embedded"
+      ? ({
+          ...configuredExecution,
+          agentHarnessRuntimeOverride: successfulHarnessId!,
+        } satisfies SystemAgentVerifiedExecutionRoute)
+      : configuredExecution;
   let currentRuntimeArtifactFingerprint: string | undefined;
   if (execution.runner === "cli") {
     if (!params.auth.runtimeArtifactFingerprint || !params.auth.runtimeArtifactId?.trim()) {
@@ -840,7 +856,7 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
 export async function resolveSystemAgentVerifiedInferenceRoute(
   binding: SystemAgentVerifiedInferenceBinding,
   deps: SystemAgentVerifiedInferenceDeps = {},
-): Promise<SystemAgentConfiguredRoute | null> {
+): Promise<SystemAgentVerifiedExecutionRoute | null> {
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
   const snapshot = await readSnapshot();
@@ -861,7 +877,7 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
   }
   // Keep the live-tested runner/harness selection frozen, but reproject its
   // owner through current config so policy/backend changes cannot reuse proof.
-  const currentExecution: SystemAgentConfiguredRoute = {
+  const currentExecution: SystemAgentVerifiedExecutionRoute = {
     ...binding.execution,
     runConfig: currentRoute.runConfig,
   };
