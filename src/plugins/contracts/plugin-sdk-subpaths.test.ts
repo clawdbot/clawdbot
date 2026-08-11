@@ -799,7 +799,7 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["extractProjectKeysFromCuratedEntry"],
     });
     expectSourceContract("memory-core-host-engine-fs", {
-      mentions: ["resolveUserPath", 'from "../../infra/fs-safe.js"'],
+      mentions: ["resolveUserPath", 'from "../infra/fs-safe.js"'],
     });
     expectSourceContract("memory-core-host-engine-schema", {
       mentions: ["ensureMemoryIndexSchema", "loadSqliteVecExtension"],
