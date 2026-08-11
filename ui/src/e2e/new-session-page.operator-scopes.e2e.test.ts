@@ -32,7 +32,10 @@ async function openDraft(
 
 suite.define(() => {
   it("keeps read-scoped operators out of new-session entry and submission paths", async () => {
-    const { context, gateway, page } = await openDraft(["operator.read"]);
+    const { context, gateway, page } = await openDraft(
+      ["operator.read"],
+      ["chat.metadata", "chat.startup", "projects.list", "sessions.create", "sessions.dispatch"],
+    );
     try {
       const sidebarCreate = page.locator(".sidebar-brand__new-thread");
       const submit = page.getByRole("button", { name: "Start session" });
@@ -45,6 +48,7 @@ suite.define(() => {
         "This action requires operator.admin access.",
       );
       await submit.click({ force: true });
+      expect(await gateway.getRequests("projects.list")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await context.close();
