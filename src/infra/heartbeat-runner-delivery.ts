@@ -66,6 +66,14 @@ export function classifyHeartbeatAgentOutcome(params: {
     params.agentRun;
   const replyMetadata = replyPayload ? getReplyPayloadMetadata(replyPayload) : undefined;
   const hasExplicitFailure = Boolean(heartbeatTerminalToolFailure || agentRunFailed);
+  const shouldSuppressSourceReply =
+    params.suppressUnmarkedSourceReplies &&
+    !params.hasRelayableExecCompletion &&
+    replyPayload &&
+    replyPayload.isError !== true &&
+    replyMetadata?.deliverDespiteSourceReplySuppression !== true &&
+    ((!hasExplicitFailure && !heartbeatToolResponse) ||
+      (agentRunFailed && !heartbeatTerminalToolFailure));
   if (heartbeatToolResponse && !heartbeatToolResponse.notify && !hasExplicitFailure) {
     return {
       kind: "ack",
@@ -74,15 +82,7 @@ export function classifyHeartbeatAgentOutcome(params: {
       response: heartbeatToolResponse,
     } as const;
   }
-  if (
-    params.suppressUnmarkedSourceReplies &&
-    !params.hasRelayableExecCompletion &&
-    !heartbeatToolResponse &&
-    !hasExplicitFailure &&
-    replyPayload &&
-    replyPayload.isError !== true &&
-    replyMetadata?.deliverDespiteSourceReplySuppression !== true
-  ) {
+  if (shouldSuppressSourceReply && !hasExplicitFailure) {
     // Message-tool privacy never makes an ordinary assistant final outbound;
     // marked operator notices and terminal failures keep their visible paths.
     return { kind: "ack", eventStatus: "ok-token", silent: true } as const;
@@ -94,8 +94,14 @@ export function classifyHeartbeatAgentOutcome(params: {
   ) {
     return { kind: "ack", eventStatus: "ok-empty" } as const;
   }
-  const normalized =
-    hasExplicitFailure && replyPayload
+  const normalized = shouldSuppressSourceReply
+    ? {
+        shouldSkip: true,
+        text: "",
+        hasMedia: false,
+        isInternalPlaceholderOnly: false,
+      }
+    : hasExplicitFailure && replyPayload
       ? normalizeHeartbeatReply(replyPayload, params.responsePrefix, params.ackMaxChars)
       : heartbeatToolResponse
         ? normalizeHeartbeatToolNotification(heartbeatToolResponse, params.responsePrefix)
@@ -127,7 +133,7 @@ export function classifyHeartbeatAgentOutcome(params: {
       normalized.silent = true;
     }
   }
-  if (agentRunFailed && !heartbeatToolResponse) {
+  if (agentRunFailed) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {
       normalized.text = replacement.text;
@@ -135,6 +141,7 @@ export function classifyHeartbeatAgentOutcome(params: {
     }
   }
   const hasStructuredReplyContent =
+    !shouldSuppressSourceReply &&
     !heartbeatToolResponse &&
     replyPayload !== undefined &&
     hasOutboundReplyContent({

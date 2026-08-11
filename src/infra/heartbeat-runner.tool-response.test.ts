@@ -875,6 +875,63 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it("keeps an unmarked runner failure private while retaining inspected work", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({
+        tmpDir,
+        storePath,
+        visibleReplies: "message_tool",
+      });
+      const sessionKey = await seedTelegramSession(storePath, cfg);
+      enqueueSystemEvent("exec finished: private retryable failure", { sessionKey });
+      const inspectedEvents = peekSystemEventEntries(sessionKey);
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setAgentTurnStatus(options, "failed");
+        return {
+          text: "Private heartbeat reasoning.",
+          mediaUrl: "https://example.test/private.png",
+        };
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeat(cfg, replySpy, sendTelegram);
+
+      expect(result).toEqual({ status: "failed", reason: "agent-runner-failure" });
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-runner-failure",
+        silent: true,
+      });
+    });
+  });
+
+  it("rewrites a runner failure after an earlier heartbeat response", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedTelegramSession(storePath, cfg);
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setAgentTurnStatus(options, "failed");
+        return [
+          createHeartbeatToolResponsePayload({
+            outcome: "no_change",
+            notify: false,
+            summary: "Nothing needs attention.",
+          }),
+          { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true },
+        ];
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeat(cfg, replySpy, sendTelegram);
+
+      expect(result).toEqual({ status: "failed", reason: "agent-runner-failure" });
+      expectTelegramSend(sendTelegram, { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, cfg });
+      expect(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT).not.toContain("/new");
+    });
+  });
+
   it("keeps a silent failed agent turn out of heartbeat ack paths", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
