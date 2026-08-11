@@ -462,6 +462,39 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 });
 
 describe("validateConfigObjectWithPlugins DM policy warnings", () => {
+  // #120332 round 53 (P2): DM-policy modes are keyed by CANONICAL channel identity. A manifest
+  // declaring a variant spelling ("QQBot") admits the canonical authored key, but a raw-key
+  // mode lookup missed and downgraded the nested-only channel to the default top-only shape —
+  // false DM-policy warnings on a valid config.
+  it("skips nested-only shapes when the manifest declares a variant channel spelling", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        channels: {
+          qqbot: {
+            dm: {
+              policy: "open",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createDmPolicyRegistry({
+            channelId: "QQBot",
+            dmAllowFromMode: "nestedOnly",
+          }),
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(
+        result.warnings.filter((warning) => warning.path.startsWith("channels.qqbot")),
+      ).toEqual([]);
+    }
+  });
+
   it("uses manifest metadata to skip nested-only DM config shapes", () => {
     const result = validateConfigObjectWithPlugins(
       {

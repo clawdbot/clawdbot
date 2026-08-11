@@ -7,6 +7,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
+import { normalizeManifestChannelId } from "./channel-claimant-plugins.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   type DmPolicyAllowFromViolation,
@@ -146,7 +147,9 @@ export function collectChannelDmPolicyDependencyWarnings(
     ) {
       continue;
     }
-    const mode = options.dmAllowFromModes?.get(channelId) ?? "topOnly";
+    // Canonical lookup: the modes map is keyed by canonical channel identity while the authored
+    // key may be any admitted variant spelling.
+    const mode = options.dmAllowFromModes?.get(normalizeManifestChannelId(channelId)) ?? "topOnly";
     if (mode === "nestedOnly") {
       continue;
     }

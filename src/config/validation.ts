@@ -36,6 +36,7 @@ import {
   hashRuntimeConfigValue,
 } from "./runtime-snapshot.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
+import { settleDefaultedChannelSchemas } from "./validation-channel-defaults.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
@@ -403,50 +404,19 @@ function validateConfigObjectWithPluginsBase(
     if (!info.channelSchemas) {
       const planBaseConfig = ensureCompatConfig();
       let schemas = buildChannelSchemas(planBaseConfig);
-      // Schema defaults can make an authored `{}` channel meaningfully configured, and gateway
-      // auto-enable consumes the DEFAULTED config: iterate default hydration and ownership
-      // planning to STABILITY — one channel's default can flip a second channel's owner, whose
-      // own default then configures that channel and flips a third. Each pass applies defaults
-      // with the current owners and replans; each productive pass settles at least one channel,
-      // so the authored channel count bounds convergence. The loop accepts schemas only when
-      // they were built from the very record they hydrate to — a pass that REMOVES defaults (a
-      // flipped owner's schema no longer hydrates a channel) rebuilds from the de-hydrated
-      // record before accepting instead of exiting with the hydrated build.
+      // Gateway auto-enable consumes the DEFAULTED config: settle default hydration and
+      // ownership planning to a fixpoint (or deterministically on the authored record when
+      // hydration oscillates) — see `settleDefaultedChannelSchemas`.
       const channelsRecord = isRecord(config.channels) ? config.channels : undefined;
       if (channelsRecord) {
         const compatChannels = isRecord(planBaseConfig.channels) ? planBaseConfig.channels : {};
-        const maxPasses = Object.keys(channelsRecord).length + 1;
-        let schemasSource = JSON.stringify(compatChannels);
-        for (let pass = 0; pass < maxPasses; pass += 1) {
-          const defaultedChannels: Record<string, unknown> = { ...compatChannels };
-          for (const [key, value] of Object.entries(channelsRecord)) {
-            const trimmed = key.trim();
-            const schema = trimmed
-              ? schemas.get(normalizeManifestChannelId(trimmed))?.schema
-              : undefined;
-            if (!schema) {
-              continue;
-            }
-            const result = validateJsonSchemaValue({
-              schema,
-              cacheKey: `channel:${trimmed}`,
-              value,
-              applyDefaults: true,
-            });
-            if (result.ok && JSON.stringify(result.value) !== JSON.stringify(value)) {
-              defaultedChannels[key] = result.value;
-            }
-          }
-          const hydrated = JSON.stringify(defaultedChannels);
-          if (hydrated === schemasSource) {
-            break;
-          }
-          schemas = buildChannelSchemas({
-            ...planBaseConfig,
-            channels: defaultedChannels,
-          } as OpenClawConfig);
-          schemasSource = hydrated;
-        }
+        schemas = settleDefaultedChannelSchemas({
+          channelsRecord,
+          compatChannels,
+          initialSchemas: schemas,
+          buildSchemas: (channels) =>
+            buildChannelSchemas({ ...planBaseConfig, channels } as OpenClawConfig),
+        });
       }
       info.channelSchemas = schemas;
     }
@@ -455,9 +425,15 @@ function validateConfigObjectWithPluginsBase(
 
   const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
     const info = ensureLoadedRegistryInfo();
+    // Keyed by CANONICAL channel identity: the metadata carries the manifest's declared
+    // spelling while authored config keys may be the canonical (or another admitted) variant,
+    // and a raw-key miss silently downgrades a nested-only channel to the default top-only
+    // shape — false DM-policy warnings on a valid config.
     info.channelDmAllowFromModes ??= new Map(
       collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
-        entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
+        entry.dmAllowFromMode
+          ? [[normalizeManifestChannelId(entry.id), entry.dmAllowFromMode] as const]
+          : [],
       ),
     );
     return info.channelDmAllowFromModes;

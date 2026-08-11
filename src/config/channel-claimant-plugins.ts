@@ -357,6 +357,17 @@ export function createChannelClaimantResolution(params: {
   const sourceForbidden = (pluginId: string): boolean =>
     isPluginPolicyDenied(params.config, pluginId, params.registry) ||
     isPluginPolicyDisabled(params.config, pluginId, params.registry);
+  // Capability-backed liveness is seeded BEFORE any channel claim resolves: a capability
+  // candidate enables its plugin unconditionally (decide() below never supersedes one), so the
+  // fact is order-invariant — but channel candidates are decided first, and a claim whose
+  // superseder was killed on another channel would otherwise resolve against a dead fate the
+  // later capability candidate revives, leaving both that claim and its planned replacement
+  // unsuppressed to race first-wins registration.
+  for (const candidate of params.candidates) {
+    if (candidate.channelClaim === false && !sourceForbidden(candidate.pluginId)) {
+      fates.set(normalizePluginPolicyId(candidate.pluginId), "enable");
+    }
+  }
   const declaresPreferenceOver = (claimant: ChannelClaimCandidate, pluginId: string): boolean =>
     declaresPluginPreferenceOver(
       resolveChannelClaimPreferOver({

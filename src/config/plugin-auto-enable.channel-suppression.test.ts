@@ -216,3 +216,48 @@ describe("duplicate channel presence signals keep supersession", () => {
     expect(suppressed.has(channelClaimSuppressionKey("qqbot-aa-inc", "qqbot"))).toBe(true);
   });
 });
+
+// #120332 round 53 (P1): capability-backed liveness is seeded before any channel claim
+// resolves. A plugin whose early channel claim died to a replacement stays loaded for a
+// configured provider capability; deciding a later channel against its momentarily-dead fate
+// enables the very claimant its declared replacement supersedes, and the revival then leaves
+// BOTH claims unsuppressed to race first-wins registration.
+describe("capability-backed liveness seeds channel claim decisions", () => {
+  const D_KILLER: RegistryPlugins[number] = {
+    id: "acme-d-killer",
+    origin: "global",
+    channels: ["xch1"],
+    channelConfigs: { xch1: { schema: { type: "object" }, preferOver: ["acme-b-cap"] } },
+  };
+  const B_CAP: RegistryPlugins[number] = {
+    id: "acme-b-cap",
+    origin: "global",
+    channels: ["xch1", "ych1"],
+    channelConfigs: {
+      xch1: { schema: { type: "object" } },
+      ych1: { schema: { type: "object" }, preferOver: ["acme-a-inc"] },
+    },
+    autoEnableWhenConfiguredProviders: ["acme-prov"],
+  };
+  const A_INC: RegistryPlugins[number] = {
+    id: "acme-a-inc",
+    origin: "global",
+    channels: ["ych1"],
+    channelConfigs: { ych1: { schema: { type: "object" } } },
+  };
+
+  it("suppresses the victim of a capability-revived superseder", () => {
+    const registry = makeRegistry([A_INC, B_CAP, D_KILLER]);
+    const config: OpenClawConfig = {
+      channels: { xch1: { token: "x" }, ych1: { token: "y" } },
+      auth: { profiles: { "acme-prov:default": { provider: "acme-prov", mode: "api_key" } } },
+    };
+    const env = makeIsolatedEnv();
+    const suppressed = collectSupersededChannelClaims({ config, env, manifestRegistry: registry });
+
+    // B loses xch1 to its own replacement but stays live through the configured provider, so
+    // its ych1 preference must supersede the first-discovered incumbent.
+    expect(suppressed.has(channelClaimSuppressionKey("acme-b-cap", "xch1"))).toBe(true);
+    expect(suppressed.has(channelClaimSuppressionKey("acme-a-inc", "ych1"))).toBe(true);
+  });
+});

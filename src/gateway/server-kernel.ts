@@ -1,8 +1,9 @@
 import { isNixMode } from "../config/paths.js";
-import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -180,9 +181,14 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     if (lifecycleRuntime) {
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
-      clearGatewayAgentCliShim();
       clearSecretsRuntimeSnapshotState();
       clearPluginMetadataLifecycleCaches();
+      // Kernel state prep activates the process-global plugin registry and pins the runtime
+      // config snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear both,
+      // or later validation (and a same-process retry) treats registrations from a Gateway
+      // that never started as LANDED channel owners and applies stale schemas.
+      await clearActivePluginRegistry();
+      clearRuntimeConfigSnapshot();
     }
     throw error;
   }
