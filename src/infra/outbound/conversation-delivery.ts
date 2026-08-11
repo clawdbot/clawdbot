@@ -77,26 +77,15 @@ function resolveConversationDeliveryStoreScope(
   };
 }
 
-function readMessageIdFromActionResult(result: MessageActionResult): string | undefined {
+function readPlatformReceiptIdFromActionResult(result: MessageActionResult): string | undefined {
   if (result.kind !== "send") {
     return undefined;
   }
   const sendResult = result.sendResult?.result;
-  if (sendResult && "receipt" in sendResult && sendResult.receipt) {
-    const receiptId = resolveMessageReceiptPrimaryId(sendResult.receipt);
-    if (receiptId) {
-      return receiptId;
-    }
+  if (!sendResult || !("receipt" in sendResult) || !sendResult.receipt) {
+    return undefined;
   }
-  if (sendResult && "messageId" in sendResult && typeof sendResult.messageId === "string") {
-    return sendResult.messageId.trim() || undefined;
-  }
-  const payload = result.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const messageId = (payload as { messageId?: unknown }).messageId;
-    return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
-  }
-  return undefined;
+  return resolveMessageReceiptPrimaryId(sendResult.receipt);
 }
 
 function resultFromExistingOperation(
@@ -217,7 +206,7 @@ export async function sendGatewayConversationMessage(params: {
     if (action.handledBy !== "core" || !action.sendResult) {
       throw new Error("Conversation delivery did not return a core platform send result");
     }
-    const messageId = readMessageIdFromActionResult(action);
+    const platformMessageId = readPlatformReceiptIdFromActionResult(action);
     if (action.sendResult.deliveryStatus === "suppressed") {
       const operation = params.deps.markSuppressed(scope, begun.record.operationId);
       return { deliveryStatus: "suppressed", operation };
@@ -231,9 +220,9 @@ export async function sendGatewayConversationMessage(params: {
     const operation =
       authoritativeOperation.status === "sent" || authoritativeOperation.status === "replied"
         ? authoritativeOperation
-        : params.deps.markSent(scope, begun.record.operationId, messageId);
+        : params.deps.markSent(scope, begun.record.operationId, platformMessageId);
     const confirmedMessageId =
-      messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
+      platformMessageId ?? operation.platformMessageId ?? operation.preparedMessageId;
     return {
       deliveryStatus: "sent",
       operation,

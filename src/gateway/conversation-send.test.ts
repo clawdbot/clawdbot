@@ -23,20 +23,36 @@ const conversation = {
   lastSeenAt: 200,
 };
 
-function sentResult(): Extract<MessageActionResult, { kind: "send" }> {
+function sentResult(
+  evidence: "receipt" | "bare" | "payload" = "receipt",
+): Extract<MessageActionResult, { kind: "send" }> {
   return {
     kind: "send",
     channel: "reef",
     action: "send",
     to: conversation.target,
     handledBy: "core",
-    payload: {},
+    payload: evidence === "payload" ? { messageId: "reef-payload-fallback" } : {},
     sendResult: {
       channel: "reef",
       to: conversation.target,
       via: "direct",
       mediaUrl: null,
-      result: { messageId: "reef-outbound-1" },
+      result:
+        evidence === "receipt"
+          ? {
+              channel: "reef",
+              messageId: "reef-outbound-1",
+              receipt: {
+                primaryPlatformMessageId: "reef-outbound-1",
+                platformMessageIds: ["reef-outbound-1"],
+                parts: [{ platformMessageId: "reef-outbound-1", kind: "text", index: 0 }],
+                sentAt: 100,
+              },
+            }
+          : evidence === "bare"
+            ? { messageId: "reef-outbound-1" }
+            : undefined,
       deliveryStatus: "sent",
     },
     dryRun: false,
@@ -176,6 +192,51 @@ describe("runGatewayConversationSend", () => {
       queueId: "queue-1",
     });
   });
+
+  it.each(["bare", "payload"] as const)(
+    "does not promote %s legacy message identity to platform receipt evidence",
+    async (evidence) => {
+      const deps = createDeps();
+      deps.runMessageActionMock.mockImplementationOnce(
+        async (actionInput: Record<string, unknown>) => {
+          const onDeliveryIntent = actionInput.onDeliveryIntent as (intent: {
+            id: string;
+            channel: string;
+            to: string;
+            durability: "required";
+          }) => void;
+          onDeliveryIntent({
+            id: `queue-${evidence}`,
+            channel: "reef",
+            to: "molty",
+            durability: "required",
+          });
+          return sentResult(evidence);
+        },
+      );
+
+      const operationId = `send-${evidence}-legacy`;
+      const result = await runGatewayConversationSend(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          operationId,
+          conversationRef: conversation.conversationRef,
+          message: "hello molty",
+        },
+        deps,
+      );
+
+      expect(result).toEqual({
+        status: "sent",
+        conversationRef: conversation.conversationRef,
+        channel: "reef",
+        queueId: `queue-${evidence}`,
+      });
+      expect(deps.operations.get(operationId)).not.toHaveProperty("platformMessageId");
+    },
+  );
 
   it("returns durable completed state without recipient-visible I/O", async () => {
     const deps = createDeps();
