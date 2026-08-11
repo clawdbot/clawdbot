@@ -1,4 +1,3 @@
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provider-auth.js";
@@ -14,6 +13,8 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import {
   shouldRefreshContextWindowCache,
