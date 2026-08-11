@@ -167,6 +167,7 @@ const broadUnitFastCandidateGlobs = [
 ];
 const ownerRoutedUnitTestPatterns = [
   ...cliProcessTestFiles,
+  "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
