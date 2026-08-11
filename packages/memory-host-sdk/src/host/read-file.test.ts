@@ -19,7 +19,7 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
 }
 
 describe("readMemoryFile", () => {
-  it("returns empty text for missing files under extra path directories", async () => {
+  it("returns empty text for absent extra paths and rejects non-directory parents", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
     try {
       const workspaceDir = path.join(tmpRoot, "workspace");
@@ -47,10 +47,7 @@ describe("readMemoryFile", () => {
           extraPaths: [extraDir],
           relPath: nonDirectoryParentPath,
         }),
-      ).resolves.toEqual({
-        text: "",
-        path: path.relative(workspaceDir, nonDirectoryParentPath).replace(/\\/g, "/"),
-      });
+      ).rejects.toThrow("path required");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
