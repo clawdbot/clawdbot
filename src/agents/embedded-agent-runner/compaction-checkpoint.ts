@@ -1,5 +1,5 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 /** Owns the shared checkpoint lifecycle around both compaction entry points. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
