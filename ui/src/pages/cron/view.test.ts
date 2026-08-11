@@ -1062,6 +1062,7 @@ describe("cron view native selects", () => {
     const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
     const sort = getElement(activity, "select.cron-run-sort", HTMLSelectElement);
     expect(sort.value).toBe("asc");
+    expect(sort.querySelector('option[value="asc"]')?.hasAttribute("selected")).toBe(true);
     const tasks = renderView({ jobsLastStatusFilter: "error" });
     const lastStatus = getElement(
       tasks,

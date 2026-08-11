@@ -44,6 +44,15 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
+        await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+        const sort = page.locator("select.cron-run-sort");
+        await sort.waitFor({ state: "visible" });
+        await sort.selectOption("asc");
+        await expect(sort).toHaveValue("asc");
+        // Switching tabs recreates the select with the persisted non-first value.
+        await page.locator('[data-test-id="cron-list-tab-tasks"]').click();
+        await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+        await expect(page.locator("select.cron-run-sort")).toHaveValue("asc");
         await page.locator('[data-test-id="cron-new-task"]').click();
 
         const action = page.locator("select#cron-payload-kind");
