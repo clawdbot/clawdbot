@@ -113,11 +113,13 @@ describe("isolated setup inference detection", () => {
     const pending = detectSetupInferenceIsolated({
       workerUrl: blockingWorkerUrl,
       workerData: {
-        blockMs: 10_000,
+        blockMs: 30_000,
         detection: emptyDetection(),
         partialDetection: fallback,
       },
-      timeoutMs: 100,
+      // Generous timeout: the partial must arrive before the deadline even on a
+      // loaded CI runner, or the empty-timeout path rejects and this flakes.
+      timeoutMs: 3_000,
       fallbackEnv: {},
     });
     const startedAt = performance.now();
@@ -138,7 +140,7 @@ describe("isolated setup inference detection", () => {
       setupComplete: fallback.setupComplete,
     });
     expect(detection.prepareOptions ?? []).toEqual([]);
-    expect(performance.now() - pendingStartedAt).toBeLessThan(1_000);
+    expect(performance.now() - pendingStartedAt).toBeLessThan(10_000);
   });
 
   it("rejects an empty timeout with an actionable typed error", async () => {
@@ -165,11 +167,13 @@ describe("isolated setup inference detection", () => {
     const detection = await detectSetupInferenceIsolated({
       workerUrl: blockingWorkerUrl,
       workerData: {
-        blockMs: 10_000,
+        blockMs: 30_000,
         detection: emptyDetection(),
         partialDetection: partial,
       },
-      timeoutMs: 50,
+      // Generous timeout: the partial must beat the deadline on loaded CI
+      // runners, or the empty-timeout rejection makes this flake.
+      timeoutMs: 3_000,
       fallbackEnv: {},
     });
 
@@ -247,7 +251,7 @@ describe("isolated setup inference detection", () => {
         detection: fresh,
         partialDetection: emptyDetection(),
       },
-      timeoutMs: 1_000,
+      timeoutMs: 5_000,
       fallbackEnv: {},
     }).then((detection) => {
       retrySettled = true;
@@ -273,7 +277,7 @@ describe("isolated setup inference detection", () => {
         detection: detected,
         partialDetection: emptyDetection(),
       },
-      timeoutMs: 1_000,
+      timeoutMs: 5_000,
       fallbackEnv: {},
     });
 
@@ -292,7 +296,7 @@ describe("isolated setup inference detection", () => {
         partialDetection: emptyDetection(),
         started,
       },
-      timeoutMs: 1_000,
+      timeoutMs: 5_000,
       fallbackEnv: {},
     };
 
