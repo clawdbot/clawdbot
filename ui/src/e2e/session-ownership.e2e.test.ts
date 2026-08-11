@@ -468,7 +468,7 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("keeps high-volume member lists compact while visibility stays pinned", async () => {
+  it("scrolls high-volume sharing through one compact menu", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -529,26 +529,53 @@ suite.define(() => {
 
     const beforeScroll = await dropdown.evaluate((element) => {
       const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-      const visibility = element.querySelector<HTMLElement>(".chat-pane__sharing-visibility-item");
+      const visibilityTitle = element.querySelector<HTMLElement>(
+        ".chat-pane__sharing-visibility-title",
+      );
+      const visibilityItems = [
+        ...element.querySelectorAll<HTMLElement>(".chat-pane__sharing-visibility-item"),
+      ];
       const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
       const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
+      const previousVisibilityRect = visibilityItems.at(-2)?.getBoundingClientRect();
+      const lastVisibilityRect = visibilityItems.at(-1)?.getBoundingClientRect();
+      const membersTitleRect = membersTitle?.getBoundingClientRect();
       return {
         menuHeight: menu?.getBoundingClientRect().height ?? 0,
+        menuTop: menu?.getBoundingClientRect().top ?? 0,
         scrollHeight: menu?.scrollHeight ?? 0,
         clientHeight: menu?.clientHeight ?? 0,
-        visibilityTop: visibility?.getBoundingClientRect().top ?? 0,
         firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
+        groupGap:
+          membersTitleRect && lastVisibilityRect
+            ? membersTitleRect.top - lastVisibilityRect.bottom
+            : 0,
+        rowGap:
+          previousVisibilityRect && lastVisibilityRect
+            ? lastVisibilityRect.top - previousVisibilityRect.bottom
+            : 0,
         membersTitleInset: Number.parseFloat(
           membersTitle ? getComputedStyle(membersTitle).paddingInlineStart : "0",
         ),
         firstMemberInset: Number.parseFloat(
           firstMember ? getComputedStyle(firstMember).paddingInlineStart : "0",
         ),
+        visibilityTitlePosition: visibilityTitle ? getComputedStyle(visibilityTitle).position : "",
+        membersTitlePosition: membersTitle ? getComputedStyle(membersTitle).position : "",
+        nestedScrollers: [...element.children].filter((child) => {
+          const node = child as HTMLElement;
+          return (
+            node.scrollHeight > node.clientHeight &&
+            ["auto", "scroll"].includes(getComputedStyle(node).overflowY)
+          );
+        }).length,
       };
     });
     const afterScroll = await dropdown.evaluate(async (element) => {
       const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-      const visibility = element.querySelector<HTMLElement>(".chat-pane__sharing-visibility-item");
+      const visibilityTitle = element.querySelector<HTMLElement>(
+        ".chat-pane__sharing-visibility-title",
+      );
       const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
       const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
       if (menu) {
@@ -559,7 +586,7 @@ suite.define(() => {
       });
       return {
         scrollTop: menu?.scrollTop ?? 0,
-        visibilityTop: visibility?.getBoundingClientRect().top ?? 0,
+        visibilityTitleBottom: visibilityTitle?.getBoundingClientRect().bottom ?? 0,
         membersTitleTop: membersTitle?.getBoundingClientRect().top ?? 0,
         firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
       };
@@ -568,10 +595,14 @@ suite.define(() => {
     expect(beforeScroll.menuHeight).toBeLessThanOrEqual(421);
     expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
     expect(beforeScroll.membersTitleInset).toBe(beforeScroll.firstMemberInset);
+    expect(beforeScroll.groupGap).toBeGreaterThanOrEqual(8);
+    expect(beforeScroll.groupGap).toBeGreaterThan(beforeScroll.rowGap + 6);
+    expect(beforeScroll.visibilityTitlePosition).not.toBe("sticky");
+    expect(beforeScroll.membersTitlePosition).not.toBe("sticky");
+    expect(beforeScroll.nestedScrollers).toBe(0);
     expect(afterScroll.scrollTop).toBeGreaterThan(0);
-    expect(Math.abs(afterScroll.visibilityTop - beforeScroll.visibilityTop)).toBeLessThan(1);
-    expect(afterScroll.membersTitleTop).toBeGreaterThan(afterScroll.visibilityTop);
-    expect(afterScroll.membersTitleTop).toBeLessThan(beforeScroll.firstMemberTop);
+    expect(afterScroll.visibilityTitleBottom).toBeLessThan(beforeScroll.menuTop);
+    expect(afterScroll.membersTitleTop).toBeLessThan(beforeScroll.menuTop);
     expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
     await expectBrowser(
       dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),

@@ -81,7 +81,6 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   return html`
     <wa-dropdown
       class="chat-pane__sharing-menu ${shouldCapMembers ? "chat-pane__sharing-menu--capped" : ""}"
-      style=${`--sharing-visibility-count: ${visibilityOptions.length}`}
       placement="bottom-end"
       @wa-show=${() => {
         if (!props.openDisabledReason) {
@@ -137,10 +136,9 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
         ${t("chat.sessionSharing.visibility")}
       </div>
       ${visibilityOptions.map(
-        (option, index) => html`
+        (option) => html`
           <wa-dropdown-item
             class="session-menu__item chat-pane__sharing-visibility-item"
-            style=${`--sharing-sticky-index: ${index}`}
             value=${`visibility:${option}`}
             ?disabled=${option === visibility || Boolean(props.visibilityDisabledReason)}
             title=${props.visibilityDisabledReason ?? nothing}
