@@ -148,9 +148,7 @@ function isExtensionTabsMessage(msg: RelayFrame): msg is RelayFrame & ExtensionT
   return msg.type === "tabs" && isRelayTabInfoArray(msg.tabs);
 }
 
-function isExtensionCdpEventMessage(
-  msg: RelayFrame,
-): msg is RelayFrame & ExtensionCdpEventMessage {
+function isExtensionCdpEventMessage(msg: RelayFrame): msg is RelayFrame & ExtensionCdpEventMessage {
   return (
     msg.type === "cdpEvent" &&
     isNonNegativeSafeInteger(msg.tabId) &&
@@ -165,17 +163,13 @@ function isExtensionResultMessage(msg: RelayFrame): msg is RelayFrame & Extensio
 
 function isExtensionErrorMessage(msg: RelayFrame): msg is RelayFrame & ExtensionErrorMessage {
   return (
-    msg.type === "error" &&
-    isNonNegativeSafeInteger(msg.seq) &&
-    typeof msg.message === "string"
+    msg.type === "error" && isNonNegativeSafeInteger(msg.seq) && typeof msg.message === "string"
   );
 }
 
 function isExtensionDetachedMessage(msg: RelayFrame): msg is RelayFrame & ExtensionDetachedMessage {
   return (
-    msg.type === "detached" &&
-    isNonNegativeSafeInteger(msg.tabId) &&
-    typeof msg.reason === "string"
+    msg.type === "detached" && isNonNegativeSafeInteger(msg.tabId) && typeof msg.reason === "string"
   );
 }
 
