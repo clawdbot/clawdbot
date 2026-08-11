@@ -21,6 +21,7 @@ import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { createGatewayResidentRegistry } from "./server-resident-registry.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -294,13 +295,25 @@ export async function prepareGatewayKernelState(params: {
   const systemAgentSessions: GatewayRequestContext["systemAgentSessions"] = new Map();
 
   const deps = createDefaultDeps();
+  const residentRegistry = createGatewayResidentRegistry();
   const runtimeStateRef: { current: GatewayServerLiveState | null } = { current: null };
   const cronStartState = { handled: false };
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
     loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
+  const eventLoopHealthState: {
+    current?: ReturnType<typeof createGatewayEventLoopHealthMonitor>;
+  } = {};
+  const eventLoopHealthResident = residentRegistry.register({
+    name: "event-loop-health",
+    start: () => {
+      eventLoopHealthState.current ??= createGatewayEventLoopHealthMonitor();
+      return eventLoopHealthState.current;
+    },
+    stop: () => eventLoopHealthState.current?.stop(),
+  });
+  const readinessEventLoopHealth = eventLoopHealthResident.start();
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
@@ -468,6 +481,7 @@ export async function prepareGatewayKernelState(params: {
     purgeWizardSession,
     systemAgentSessions,
     deps,
+    residentRegistry,
     runtimeStateRef,
     cronStartState,
     gatewayTls,
