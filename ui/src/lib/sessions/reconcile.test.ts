@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
+import {
+  preserveRosterPresentationMetadata,
+  reconcileSessionChanged,
+  reconcileSessionHistory,
+} from "./reconcile.ts";
 
 function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -12,6 +16,44 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
     sessions,
   };
 }
+
+describe("preserveRosterPresentationMetadata", () => {
+  it("preserves a newer archive over an older active-list row", () => {
+    const key = "agent:main:dashboard:archived";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "s1", updatedAt: 10, archived: false },
+        {
+          key,
+          kind: "direct",
+          sessionId: "s1",
+          updatedAt: 20,
+          archived: true,
+          archivedAt: 20,
+        },
+      ),
+    ).toMatchObject({ archived: true, archivedAt: 20 });
+  });
+
+  it("accepts an unarchive row newer than the prior archive", () => {
+    const key = "agent:main:dashboard:archived";
+
+    expect(
+      preserveRosterPresentationMetadata(
+        { key, kind: "direct", sessionId: "s1", updatedAt: 30, archived: false },
+        {
+          key,
+          kind: "direct",
+          sessionId: "s1",
+          updatedAt: 20,
+          archived: true,
+          archivedAt: 20,
+        },
+      ).archived,
+    ).toBe(false);
+  });
+});
 
 test("sessions.changed removes a label when the event carries null", () => {
   const result: SessionsListResult = {

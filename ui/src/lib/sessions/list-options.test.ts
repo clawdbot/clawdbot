@@ -133,6 +133,13 @@ describe("session list replacement options", () => {
     const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
 
     await sessions.refresh({ agentId: "main", includeDerivedTitles: true, force: true });
+    let observedArchive = false;
+    let archiveReverted = false;
+    const stop = sessions.subscribe((state) => {
+      const archived = state.result?.sessions.find((row) => row.key === key)?.archived;
+      observedArchive ||= archived === true;
+      archiveReverted ||= observedArchive && archived === false;
+    });
     const archive = sessions.patch(key, { archived: true }, { agentId: "main" });
     await archiveReplacementStarted.promise;
     const foreground = sessions.refresh({ agentId: "main", force: true });
@@ -157,6 +164,9 @@ describe("session list replacement options", () => {
     expect(listCalls[1]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
     expect(listCalls[2]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
     expect(sessions.state.result?.sessions[0]?.derivedTitle).toBe("Readable planning title");
+    expect(sessions.state.result?.sessions[0]?.archived).toBe(true);
+    expect(archiveReverted).toBe(false);
+    stop();
     sessions.dispose();
   });
 

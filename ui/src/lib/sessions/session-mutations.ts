@@ -303,9 +303,12 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (archivedPresentationRow) {
         const state = host.readState();
         if (state.result) {
+          const archivedAt = result.entry?.archivedAt ?? Date.now();
           const archivedRow = {
             ...archivedPresentationRow,
             archived: true,
+            archivedAt,
+            updatedAt: result.entry?.updatedAt ?? archivedPresentationRow.updatedAt,
             pinned: false,
             pinnedAt: undefined,
           };
