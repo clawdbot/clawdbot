@@ -160,15 +160,6 @@ function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
   return params.internalEvents as Array<Record<string, unknown>>;
 }
 
-function expectReplyInstructionContains(text: string) {
-  const event = getDeliveredInternalEvents().find(
-    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
-  );
-  if (!event) {
-    throw new Error(`Expected reply instruction containing ${text}`);
-  }
-}
-
 // Music background tests cover task-run creation, progress recording, and
 // completion delivery through the durable requester-agent handoff.
 describe("music generate background helpers", () => {
