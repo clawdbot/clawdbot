@@ -908,6 +908,43 @@ describe("createInboundDebouncer", () => {
     expect(completed).toEqual(["2", "1"]);
   });
 
+  it("hands pre-admission completion failures to the source lifecycle once", async () => {
+    const sessionError = new Error("Session changed while starting work. Retry.");
+    const onFailed = vi.fn(async () => {});
+    const onError = vi.fn();
+    let attempt = 0;
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: { onFailed },
+          dispatch: async (lifecycle) => {
+            attempt += 1;
+            if (attempt === 1) {
+              throw sessionError;
+            }
+            await lifecycle.onAdopted();
+            throw new Error("post-adoption failure");
+          },
+        }),
+      onError,
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "failed-before-admission" })).resolves.toBe(
+      undefined,
+    );
+    await expect(debouncer.enqueue({ key: "a", id: "failed-after-admission" })).resolves.toBe(
+      undefined,
+    );
+    await debouncer.drain();
+
+    expect(onFailed).toHaveBeenCalledOnce();
+    expect(onFailed).toHaveBeenCalledWith(sessionError);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError.mock.calls[0]?.[0]).toBe(sessionError);
+  });
+
   it("drains same-key flushes queued before their completion is tracked", async () => {
     const started: string[] = [];
     let releaseFirst!: () => void;
