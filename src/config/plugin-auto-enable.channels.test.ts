@@ -9,6 +9,8 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: logWarnSpy }),
 }));
 
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -58,6 +60,25 @@ function materializeEnvCatalogCandidates(
   });
 }
 
+// A mixed-case manifest id beside the lowercase policy key config normalization derives from it,
+// and the replacement that declares `preferOver` through that policy key.
+const MIXED_CASE_LEGACY_CHAT_PLUGIN = {
+  id: "Legacy-Chat",
+  channels: ["legacy-chat"],
+  channelConfigs: { "legacy-chat": { schema: { type: "object" }, label: "Legacy Chat" } },
+};
+const MODERN_CHAT_REPLACEMENT_PLUGIN = {
+  id: "openclaw-modern-chat",
+  channels: ["legacy-chat"],
+  channelConfigs: {
+    "legacy-chat": {
+      schema: { type: "object" },
+      label: "Modern Chat",
+      preferOver: ["legacy-chat"],
+    },
+  },
+};
+
 beforeEach(() => {
   resetPluginAutoEnableTestState();
 });
@@ -103,7 +124,7 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
   });
 
-  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+  it("parses the external catalog once per process for preferOver lookups", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
     fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
@@ -148,6 +169,10 @@ describe("applyPluginAutoEnable channels", () => {
     );
 
     const realpathSpy = vi.spyOn(fs, "realpathSync");
+    const countCatalogReads = () =>
+      realpathSpy.mock.calls.filter(([filePath]) =>
+        String(filePath).endsWith("plugins/catalog.json"),
+      ).length;
 
     try {
       materializeEnvCatalogCandidates(
@@ -159,11 +184,13 @@ describe("applyPluginAutoEnable channels", () => {
         })),
       );
 
-      expect(
-        realpathSpy.mock.calls.filter(([filePath]) =>
-          String(filePath).endsWith("plugins/catalog.json"),
-        ),
-      ).toHaveLength(2);
+      // The catalog file is process-stable plugin metadata: one bounded snapshot serves every
+      // claimant, channel, and pass until the plugin metadata lifecycle clears it.
+      expect(countCatalogReads()).toBe(1);
+
+      materializeEnvCatalogCandidates(stateDir);
+
+      expect(countCatalogReads()).toBe(1);
     } finally {
       realpathSpy.mockRestore();
     }
@@ -615,12 +642,109 @@ describe("applyPluginAutoEnable channels", () => {
       });
 
       expect(result.config.plugins?.entries?.primary?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.secondary?.enabled).toBe(false);
+      // #120332 round 30: `secondary` solely serves its own configured channel, so the
+      // cross-channel preferOver must not plugin-globally disable it — that would leave the
+      // configured `secondary` channel silently without an owner (no fallback exists and the
+      // re-grounding pin is vetoed by live `primary`). The sole-claimant anchor keeps it live.
+      expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("primary configured, enabled automatically.");
-      expect(result.changes.join("\n")).not.toContain(
-        "secondary configured, enabled automatically.",
-      );
+      expect(result.changes.join("\n")).toContain("secondary configured, enabled automatically.");
     });
+
+    // A manifest declares its id in whatever case its author chose, and plugin policy compares the
+    // derived lowercase key. `preferOver` must read that same contract, or a mixed-case incumbent
+    // stays enabled while config validation already applies the replacement's channel schema.
+    it("recognizes a preferOver entry that differs from the manifest id only in case", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "legacy-chat": { token: "legacy" } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          MIXED_CASE_LEGACY_CHAT_PLUGIN,
+          MODERN_CHAT_REPLACEMENT_PLUGIN,
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["Legacy-Chat"]?.enabled).toBe(false);
+      expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
+    });
+
+    // The operator selects that same mixed-case incumbent through the normalized policy key, the
+    // only spelling config normalization keeps. Explicit selection must compare through that key
+    // too: the case-folded `preferOver` path above now reaches this incumbent, so an exact-match
+    // read auto-disables the plugin the operator chose and hands its channel to the replacement.
+    for (const [order, plugins] of [
+      ["incumbent first", [MIXED_CASE_LEGACY_CHAT_PLUGIN, MODERN_CHAT_REPLACEMENT_PLUGIN]],
+      ["incumbent last", [MODERN_CHAT_REPLACEMENT_PLUGIN, MIXED_CASE_LEGACY_CHAT_PLUGIN]],
+    ] as const) {
+      for (const [selection, makeSelection] of [
+        ["allow", () => ({ allow: ["legacy-chat"] })],
+        ["entries", () => ({ entries: { "legacy-chat": { config: { token: "legacy" } } } })],
+      ] as const) {
+        it(`keeps a mixed-case incumbent selected through the normalized ${selection} key (${order})`, () => {
+          const result = applyPluginAutoEnable({
+            config: {
+              channels: { "legacy-chat": { token: "legacy" } },
+              plugins: makeSelection(),
+            },
+            env: makeIsolatedEnv(),
+            manifestRegistry: makeRegistry([...plugins]),
+          });
+
+          expect(result.config.plugins?.entries?.["Legacy-Chat"]).toBeUndefined();
+          expect(result.config.plugins?.entries?.["legacy-chat"]?.enabled).not.toBe(false);
+          expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
+        });
+      }
+    }
+
+    // Config normalization keys `plugins.entries` and `plugins.deny` by the same lowercase policy
+    // id, so an operator forbids that mixed-case incumbent through the normalized key. Auto-enable's
+    // own disable and deny reads must compare through it too: a declared-id read misses the
+    // operator's record and writes `enabled: true` under the mixed-case id, which normalization then
+    // folds over the operator's false and loads a plugin config forbids.
+    for (const [order, plugins] of [
+      ["incumbent first", [MIXED_CASE_LEGACY_CHAT_PLUGIN, MODERN_CHAT_REPLACEMENT_PLUGIN]],
+      ["incumbent last", [MODERN_CHAT_REPLACEMENT_PLUGIN, MIXED_CASE_LEGACY_CHAT_PLUGIN]],
+    ] as const) {
+      for (const [policy, makePolicy] of [
+        [
+          "entries",
+          () => ({
+            entries: {
+              "legacy-chat": { enabled: false },
+              "openclaw-modern-chat": { enabled: false },
+            },
+          }),
+        ],
+        [
+          "deny",
+          () => ({
+            deny: ["legacy-chat"],
+            entries: { "openclaw-modern-chat": { enabled: false } },
+          }),
+        ],
+      ] as const) {
+        it(`keeps a mixed-case incumbent forbidden through the normalized ${policy} key (${order})`, () => {
+          const result = applyPluginAutoEnable({
+            config: {
+              channels: { "legacy-chat": { token: "legacy" } },
+              plugins: makePolicy(),
+            },
+            env: makeIsolatedEnv(),
+            manifestRegistry: makeRegistry([...plugins]),
+          });
+
+          expect(result.config.plugins?.entries?.["Legacy-Chat"]).toBeUndefined();
+          expect(
+            normalizePluginsConfig(result.config.plugins).entries["legacy-chat"]?.enabled,
+          ).not.toBe(true);
+          expect(result.changes).toStrictEqual([]);
+        });
+      }
+    }
 
     it("auto-enables imessage when only imessage is configured", () => {
       const result = applyPluginAutoEnable({
@@ -633,5 +757,90 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
     });
+  });
+
+  // #120332 round 13: a supersede-keep claimant the completed config never activates must not
+  // count as a live superseder, or the pass disables every plugin it prefers over and a configured
+  // channel ends with no runtime owner — the silent-failure class.
+  describe("kept-but-inactive claimants do not suppress other claimants", () => {
+    // The kept claimant: workspace origin, so a material-only entry keeps it explicitly selected
+    // for the replacement policy while the completed config still leaves it unloaded. Mixed-case
+    // manifest id beside the normalized entry key the operator writes.
+    const KEPT_WORKSPACE_GUARD = {
+      id: "Acme-Kept-Guard",
+      origin: "workspace" as const,
+      channels: ["acme-chat", "acme-zap"],
+      channelConfigs: {
+        "acme-zap": { schema: { type: "object" } },
+        "acme-chat": { schema: { type: "object" }, preferOver: ["acme-chat-serv"] },
+      },
+    };
+    // The live replacement that supersedes the kept claimant on its other channel.
+    const MODERN_ZAP = {
+      id: "acme-modern-zap",
+      origin: "global" as const,
+      channels: ["acme-zap"],
+      channelConfigs: {
+        "acme-zap": { schema: { type: "object" }, preferOver: ["acme-kept-guard"] },
+      },
+    };
+    // The claimant the kept plugin prefers over — the only plugin left to serve acme-chat.
+    const CHAT_SERVER = {
+      id: "acme-chat-serv",
+      origin: "global" as const,
+      channels: ["acme-chat"],
+      channelConfigs: { "acme-chat": { schema: { type: "object" } } },
+    };
+
+    const REGISTRY_ORDERS = [
+      ["kept claimant first", [KEPT_WORKSPACE_GUARD, MODERN_ZAP, CHAT_SERVER]],
+      ["kept claimant last", [CHAT_SERVER, MODERN_ZAP, KEPT_WORKSPACE_GUARD]],
+    ] as const;
+    // Candidate order follows configured-channel order, so cover the claimant evaluated before and
+    // after its kept superseder's own supersession.
+    const CHANNEL_ORDERS = [
+      ["zap first", { "acme-zap": { token: "zap" }, "acme-chat": { token: "chat" } }],
+      ["chat first", { "acme-chat": { token: "chat" }, "acme-zap": { token: "zap" } }],
+    ] as const;
+
+    for (const [registryOrder, plugins] of REGISTRY_ORDERS) {
+      for (const [channelOrder, channels] of CHANNEL_ORDERS) {
+        it(`keeps the configured channel owned by an active claimant (${registryOrder}, ${channelOrder})`, () => {
+          const registry = makeRegistry([...plugins]);
+          const result = applyPluginAutoEnable({
+            config: {
+              channels,
+              plugins: { entries: { "acme-kept-guard": { config: { region: "eu" } } } },
+            },
+            env: makeIsolatedEnv(),
+            manifestRegistry: registry,
+          });
+
+          // The replacement is enabled and the kept claimant's material-only entry is untouched.
+          expect(result.config.plugins?.entries?.["acme-modern-zap"]?.enabled).toBe(true);
+          expect(result.config.plugins?.entries?.["acme-kept-guard"]).toStrictEqual({
+            config: { region: "eu" },
+          });
+          // The kept-but-unloaded claimant must not disable the plugin that serves acme-chat.
+          expect(result.config.plugins?.entries?.["acme-chat-serv"]?.enabled).toBe(true);
+
+          // The runtime proof: some claimant of the configured acme-chat channel is activated by
+          // the completed config the runtime loads from.
+          const completedPlugins = normalizePluginsConfig(result.config.plugins);
+          const chatClaimants = registry.plugins.filter((plugin) =>
+            plugin.channels.includes("acme-chat"),
+          );
+          expect(
+            chatClaimants.filter((plugin) =>
+              isActivatedManifestOwner({
+                plugin,
+                normalizedConfig: completedPlugins,
+                rootConfig: result.config,
+              }),
+            ),
+          ).toMatchObject([{ id: "acme-chat-serv" }]);
+        });
+      }
+    }
   });
 });

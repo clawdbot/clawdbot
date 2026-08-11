@@ -8,6 +8,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
@@ -42,7 +43,10 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     mockLoadPluginManifestRegistry(...args),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+// Partial mock: schema ownership planning still reaches real bindings such as
+// resolvePluginMetadataEnvFingerprint through the auto-enable detect path.
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (...args: unknown[]) => ({
     manifestRegistry: mockLoadPluginManifestRegistry(...args),
   }),
@@ -71,6 +75,27 @@ function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): Conf
     issues: params.valid ? [] : [{ path: "gateway", message: "invalid" }],
     warnings: [],
     legacyIssues: [],
+  };
+}
+
+function makeAcmeChatPlugin(params: { id: string; extraProperty: string; preferOver?: string[] }) {
+  return {
+    id: params.id,
+    origin: "global",
+    rootDir: `/fake/${params.id}`,
+    source: `/fake/${params.id}/index.js`,
+    manifestPath: `/fake/${params.id}/openclaw.plugin.json`,
+    channels: ["acmechat"],
+    channelConfigs: {
+      acmechat: {
+        ...(params.preferOver ? { preferOver: params.preferOver } : {}),
+        schema: {
+          type: "object",
+          properties: { [params.extraProperty]: { type: "string" } },
+          additionalProperties: false,
+        },
+      },
+    },
   };
 }
 
@@ -194,6 +219,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("readBestEffortRuntimeConfigSchema", () => {
@@ -473,6 +499,43 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("telegram");
     expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");
     expect(channelProps).toHaveProperty("matrix");
+  });
+
+  // Gateway startup publishes the auto-enabled runtime config as the active snapshot, so its
+  // generated `enabled: true` entries would read as operator selections and let the replacement
+  // win the tie that authored selection already decided for the plugin it supersedes.
+  it("ranks channel schema ownership from the published source config, not auto-enable's generated entries", () => {
+    const authoredSelection = {
+      ...explicitMainRoster(),
+      plugins: { entries: { "openclaw-acmechat": { config: {} } } },
+    };
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        makeAcmeChatPlugin({ id: "openclaw-acmechat", extraProperty: "legacyOption" }),
+        makeAcmeChatPlugin({
+          id: "acme-chat-thread-guard",
+          extraProperty: "threadGuard",
+          preferOver: ["openclaw-acmechat"],
+        }),
+      ],
+    });
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: {
+        entries: {
+          "openclaw-acmechat": { config: {} },
+          "acme-chat-thread-guard": { enabled: true },
+        },
+      },
+    });
+    setRuntimeConfigSnapshot(mockLoadConfig(), authoredSelection);
+
+    const result = loadGatewayRuntimeConfigSchema();
+    const schema = result.schema as { properties?: Record<string, unknown> };
+    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
+
+    expect(JSON.stringify(channels.properties?.acmechat)).toContain("legacyOption");
   });
 
   it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {

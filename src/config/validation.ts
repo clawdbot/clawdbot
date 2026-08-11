@@ -319,7 +319,11 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
+      for (const entry of collectChannelSchemaMetadataWithOwnership(
+        info.registry,
+        ensureCompatConfig(),
+        opts.env,
+      )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {

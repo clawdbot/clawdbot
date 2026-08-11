@@ -22,6 +22,7 @@ import {
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type { PluginActivationSource };
@@ -178,6 +179,52 @@ export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): bo
     return true;
   }
   return false;
+}
+
+/**
+ * True when a raw `plugins.entries.<id>` record carries material operator configuration. Auto-enable
+ * treats such an entry as an explicit operator selection and refuses to supersede it, so every
+ * policy that asks "did the operator choose this plugin?" must read this one definition. Normalized
+ * entries drop `apiKey`/`env`, so callers pass the raw entry.
+ */
+export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  return (
+    entry.enabled === true ||
+    isRecord(entry.config) ||
+    isRecord(entry.hooks) ||
+    isRecord(entry.subagent) ||
+    isRecord(entry.llm) ||
+    entry.apiKey !== undefined ||
+    entry.env !== undefined
+  );
+}
+
+/**
+ * True when config explicitly selects a plugin the way auto-enable's `preferOver` policy honors:
+ * an allowlist entry or a material `plugins.entries` record. Auto-enable refuses to disable such a
+ * plugin for a replacement, so every policy that mirrors channel replacement must read this one
+ * definition. The activation resolver's explicit set is deliberately wider — it also counts bundled
+ * channel enablement and slot selection, which do not stop a replacement from taking the channel.
+ *
+ * Both sides compare through the derived policy key the rest of plugin policy uses: a manifest
+ * keeps whatever case its author declared, while an operator writes the normalized key. Comparing
+ * declared ids here lets the case-folded `preferOver` path disable a plugin the operator selected.
+ */
+export function isPluginExplicitlySelected(
+  plugins: OpenClawConfig["plugins"],
+  pluginId: string,
+): boolean {
+  const policyId = normalizePluginPolicyId(pluginId);
+  const matchesPolicyId = (id: string): boolean => normalizePluginPolicyId(id) === policyId;
+  return (
+    (Array.isArray(plugins?.allow) && plugins.allow.some(matchesPolicyId)) ||
+    Object.entries(plugins?.entries ?? {}).some(
+      ([entryId, entry]) => matchesPolicyId(entryId) && hasMaterialPluginEntryConfig(entry),
+    )
+  );
 }
 
 export function applyTestPluginDefaults(

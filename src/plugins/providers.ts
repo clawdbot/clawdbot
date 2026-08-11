@@ -6,7 +6,9 @@ import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type { PluginLoadOptions } from "./loader.js";
+// Type-only need: import the leaf contract, not the loader barrel, so config metadata modules
+// consuming auto-enable planning do not close a static cycle through loader -> config io.
+import type { PluginLoadOptions } from "./loader-types.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,

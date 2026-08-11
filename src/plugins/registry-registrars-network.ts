@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { channelClaimSuppressionKey } from "../config/channel-claimant-plugins.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
@@ -42,8 +43,13 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 }
 
 export function createNetworkRegistrars(state: PluginRegistryState) {
-  const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
-    state;
+  const {
+    registry,
+    coreGatewayMethods,
+    pluginsWithChannelRegistrationConflict,
+    pushDiagnostic,
+    registryParams,
+  } = state;
   let reportedLegacyCatalogSkip = false;
 
   const registerGatewayMethod = (
@@ -298,6 +304,13 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registry.mcpServerConnectionResolvers.push(registration);
   };
 
+  const stashedSuppressedChannelClaims: Array<{
+    record: PluginRecord;
+    registration: OpenClawPluginChannelRegistration | ChannelPlugin;
+    mode: PluginRegistrationMode;
+    channelId: string;
+  }> = [];
+
   const registerChannel = (
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
@@ -328,6 +341,19 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const id = plugin.id;
+    if (state.supersededChannelClaims.has(channelClaimSuppressionKey(record.id, id))) {
+      // Auto-enable superseded this plugin's claim on the channel while the plugin stays loaded
+      // for its other capabilities. Suppress the registration instead of racing first-wins: the
+      // replacement owns the channel in any load order, and the suppressed claim must not count
+      // as a conflict that would drop the plugin's remaining tool registrations. The stash keeps
+      // the claim restorable: a planned replacement whose load or registration fails must not
+      // leave the configured channel with no owner at all.
+      registryParams.logger.info(
+        `[plugins] channel claim superseded by replacement, registration suppressed: ${id} (${record.id})`,
+      );
+      stashedSuppressedChannelClaims.push({ record, registration, mode, channelId: id });
+      return;
+    }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
     if (registrationCapabilities.runtimeChannel && existingRuntime) {
       if (existingRuntime.pluginId === record.id) {
@@ -403,6 +429,40 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     });
   };
 
+  // Suppression is reconciled against the registrations that actually landed: a planned
+  // replacement can fail its import, config validation, or registration (tolerated and rolled
+  // back by the loader), or a scoped load can exclude it entirely. After the load loop, any
+  // suppressed claim whose channel ended up with no registered owner is restored in load order
+  // so the configured channel keeps a live runtime owner.
+  const restoreUnservedSuppressedChannelClaims = () => {
+    for (const stashed of stashedSuppressedChannelClaims.splice(0)) {
+      // Skip only when ANOTHER plugin owns the channel: a claim already restored for this same
+      // plugin must still replay later same-owner registrations, which update the existing
+      // registration in place — otherwise the fallback serves the first call's stale callbacks
+      // instead of the plugin's final registration.
+      const servedByOther = registry.channelSetups.some(
+        (entry) => entry.plugin.id === stashed.channelId && entry.pluginId !== stashed.record.id,
+      );
+      if (servedByOther) {
+        continue;
+      }
+      // A stashed claim from a plugin whose registration later failed was rolled back with the
+      // plugin's other contributions; restoring it would expose callbacks from a plugin whose
+      // required registrations no longer exist.
+      const owner = registry.plugins.find((plugin) => plugin.id === stashed.record.id);
+      if (!owner || owner.status !== "loaded" || owner.failedAt != null) {
+        continue;
+      }
+      state.supersededChannelClaims.delete(
+        channelClaimSuppressionKey(stashed.record.id, stashed.channelId),
+      );
+      registryParams.logger.info(
+        `[plugins] planned replacement did not register, restoring suppressed channel claim: ${stashed.channelId} (${stashed.record.id})`,
+      );
+      registerChannel(stashed.record, stashed.registration, stashed.mode);
+    }
+  };
+
   return {
     registerGatewayMethod,
     registerSessionCatalog,
@@ -410,5 +470,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerHostedMediaResolver,
     registerMcpServerConnectionResolver,
     registerChannel,
+    restoreUnservedSuppressedChannelClaims,
   };
 }

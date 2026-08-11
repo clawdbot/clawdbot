@@ -540,6 +540,7 @@ export function loadGatewayPlugins(params: {
     allowProcessHomeSessionCatalogs,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
     workspaceDir: params.workspaceDir,
     onlyPluginIds: pluginIds,
     logger: createGatewayPluginRegistrationLogger({

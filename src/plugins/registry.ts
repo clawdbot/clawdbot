@@ -118,13 +118,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
   };
 
+  // Discovery resolves after this builder exists, so the loader supplies the plan-derived
+  // suppression set through this narrow filler rather than through construction params.
+  const setSupersededChannelClaims = (claims: ReadonlySet<string>) => {
+    for (const key of claims) {
+      state.supersededChannelClaims.add(key);
+    }
+  };
+
   return {
     registry: state.registry,
     createApi,
     rollbackPluginGlobalSideEffects,
+    setSupersededChannelClaims,
     pushDiagnostic: state.pushDiagnostic,
     registerTool: registrars.registerTool,
     registerChannel: registrars.registerChannel,
+    restoreUnservedSuppressedChannelClaims: registrars.restoreUnservedSuppressedChannelClaims,
     registerHostedMediaResolver: registrars.registerHostedMediaResolver,
     registerMcpServerConnectionResolver: registrars.registerMcpServerConnectionResolver,
     registerProvider: registrars.registerProvider,

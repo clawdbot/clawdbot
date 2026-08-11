@@ -1,4 +1,4 @@
-// Resolves plugin auto-enable preference ordering across candidate plugins.
+// Resolves the preferOver replacement declarations a channel claim can carry.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,9 +7,8 @@ import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registr
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
-import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Maximum bytes to read from an external catalog file before rejecting it. */
 const MAX_EXTERNAL_CATALOG_BYTES = 16 * 1024 * 1024;
@@ -77,40 +76,61 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
   return channels;
 }
 
-function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
-  for (const rawPath of resolveExternalCatalogPaths(env)) {
-    const resolved = resolveUserPath(rawPath, env);
-    if (!fs.existsSync(resolved)) {
-      continue;
-    }
-    try {
-      // Resolve symlinks so a catalog file that points to a regular file
-      // keeps working while the bounded regular-file read still rejects
-      // directories, FIFOs, and oversized targets.
-      const resolvedRealPath = fs.realpathSync(resolved);
-      const { buffer } = readRegularFileSync({
-        filePath: resolvedRealPath,
-        maxBytes: MAX_EXTERNAL_CATALOG_BYTES,
-      });
-      const payload = JSON.parse(buffer.toString("utf-8")) as unknown;
-      const channel = parseExternalCatalogChannelEntries(payload).find(
-        (entry) => entry.id === channelId,
-      );
-      if (channel) {
-        return channel.preferOver;
+// External catalog files are process-stable plugin metadata (restart or the plugin metadata
+// lifecycle clear picks up changes), so one bounded single-slot snapshot per resolved path list
+// replaces per-claimant rereads of up to 16 MiB per schema build.
+let externalCatalogSnapshot: { key: string; preferOverByChannelId: Map<string, string[]> } | null =
+  null;
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  externalCatalogSnapshot = null;
+});
+
+function loadExternalCatalogSnapshot(env: NodeJS.ProcessEnv): Map<string, string[]> {
+  const paths = resolveExternalCatalogPaths(env).map((rawPath) => resolveUserPath(rawPath, env));
+  const key = paths.join("\n");
+  let snapshot = externalCatalogSnapshot;
+  if (snapshot?.key !== key) {
+    const preferOverByChannelId = new Map<string, string[]>();
+    for (const resolved of paths) {
+      if (!fs.existsSync(resolved)) {
+        continue;
       }
-    } catch (err) {
-      // Surface oversized catalogs so operators know a configured file was
-      // skipped — unlike parse or permission errors which mean the file is
-      // genuinely unusable.
-      if (err instanceof Error && err.message.startsWith("File exceeds")) {
-        log.warn(
-          `skipping oversized external catalog file (max ${MAX_EXTERNAL_CATALOG_BYTES} bytes): ${resolved}`,
-        );
+      try {
+        // Resolve symlinks so a catalog file that points to a regular file
+        // keeps working while the bounded regular-file read still rejects
+        // directories, FIFOs, and oversized targets.
+        const resolvedRealPath = fs.realpathSync(resolved);
+        const { buffer } = readRegularFileSync({
+          filePath: resolvedRealPath,
+          maxBytes: MAX_EXTERNAL_CATALOG_BYTES,
+        });
+        const payload = JSON.parse(buffer.toString("utf-8")) as unknown;
+        for (const entry of parseExternalCatalogChannelEntries(payload)) {
+          // The earliest path listing a channel wins, matching the previous per-lookup file order.
+          if (!preferOverByChannelId.has(entry.id)) {
+            preferOverByChannelId.set(entry.id, entry.preferOver);
+          }
+        }
+      } catch (err) {
+        // Surface oversized catalogs so operators know a configured file was
+        // skipped — unlike parse or permission errors which mean the file is
+        // genuinely unusable.
+        if (err instanceof Error && err.message.startsWith("File exceeds")) {
+          log.warn(
+            `skipping oversized external catalog file (max ${MAX_EXTERNAL_CATALOG_BYTES} bytes): ${resolved}`,
+          );
+        }
       }
     }
+    snapshot = { key, preferOverByChannelId };
+    externalCatalogSnapshot = snapshot;
   }
-  return [];
+  return snapshot.preferOverByChannelId;
+}
+
+function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
+  return loadExternalCatalogSnapshot(env).get(channelId) ?? [];
 }
 
 function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
@@ -121,67 +141,41 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
   return findChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
-function resolvePreferredOverIds(
-  candidate: PluginAutoEnableCandidate,
-  env: NodeJS.ProcessEnv,
-  registry: PluginManifestRegistry,
-): string[] {
-  const channelId =
-    candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
-  const installedPlugin = registry.plugins.find((record) => record.id === candidate.pluginId);
-  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[channelId]?.preferOver;
-  if (manifestChannelPreferOver?.length) {
-    return [...manifestChannelPreferOver];
-  }
-  const installedChannelMeta = installedPlugin?.channelCatalogMeta;
-  if (installedChannelMeta?.preferOver?.length) {
-    return [...installedChannelMeta.preferOver];
-  }
-  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
-  if (builtInChannelPreferOver.length) {
-    return [...builtInChannelPreferOver];
-  }
-  return resolveExternalCatalogPreferOver(channelId, env);
-}
-
-function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
-  return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
-}
-
-export function shouldSkipPreferredPluginAutoEnable(params: {
-  config: OpenClawConfig;
-  entry: PluginAutoEnableCandidate;
-  configured: readonly PluginAutoEnableCandidate[];
+/**
+ * Resolves the replacement declarations one channel claim carries: manifest channel config first,
+ * then the plugin's catalog metadata, the built-in channel's metadata, and external catalog files.
+ * Auto-enable's supersession and the channel schema collector both read this one chain, so a claim
+ * cannot supersede a plugin at activation time while validation still ranks it as unrelated.
+ */
+export function resolveChannelClaimPreferOver(params: {
+  pluginId: string;
+  channelId: string;
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
-  isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
-  isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
-  preferOverCache: Map<string, string[]>;
-}): boolean {
-  const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
-    const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
-    const cached = params.preferOverCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
-    params.preferOverCache.set(cacheKey, resolved);
-    return resolved;
-  };
-
-  for (const other of params.configured) {
-    if (other.pluginId === params.entry.pluginId) {
-      continue;
-    }
-    if (
-      params.isPluginDenied(params.config, other.pluginId) ||
-      params.isPluginExplicitlyDisabled(params.config, other.pluginId)
-    ) {
-      continue;
-    }
-    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
-      return true;
-    }
+  cache: Map<string, string[]>;
+}): string[] {
+  const cacheKey = `${params.pluginId}:${params.channelId}`;
+  const cached = params.cache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
-  return false;
+  const installedPlugin = params.registry.plugins.find((record) => record.id === params.pluginId);
+  const resolved = (() => {
+    const manifestChannelPreferOver =
+      installedPlugin?.channelConfigs?.[params.channelId]?.preferOver;
+    if (manifestChannelPreferOver?.length) {
+      return [...manifestChannelPreferOver];
+    }
+    const installedChannelMeta = installedPlugin?.channelCatalogMeta;
+    if (installedChannelMeta?.preferOver?.length) {
+      return [...installedChannelMeta.preferOver];
+    }
+    const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(params.channelId);
+    if (builtInChannelPreferOver.length) {
+      return [...builtInChannelPreferOver];
+    }
+    return resolveExternalCatalogPreferOver(params.channelId, params.env);
+  })();
+  params.cache.set(cacheKey, resolved);
+  return resolved;
 }

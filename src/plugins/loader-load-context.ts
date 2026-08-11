@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  hasMeaningfulChannelConfig,
+  listPotentialConfiguredChannelPresenceSignals,
+  type AmbientEnvTriggerPolicy,
+} from "../channels/config-presence.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +17,7 @@ import { resolvePluginActivationSourceConfig } from "./activation-source-config.
 import {
   applyTestPluginDefaults,
   createPluginActivationSource,
+  hasMaterialPluginEntryConfig,
   normalizePluginsConfig,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
@@ -135,6 +141,8 @@ function resolveBundledPackageCacheIdentity(
 function buildActivationMetadataHash(params: {
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
+  env: NodeJS.ProcessEnv;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string {
   const enabledSourceChannels = Object.entries(
     (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
@@ -150,9 +158,53 @@ function buildActivationMetadataHash(params: {
   const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
     .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
+  // Channel PRESENCE (not just literal `enabled: true`) feeds the load's superseded-claim
+  // suppression plan: configured channels usually carry only credentials/settings, and two
+  // loads differing in one such channel must not share a cached registry whose suppressed or
+  // unsuppressed claimant reflects the other's plan.
+  const configuredSourceChannels = Object.entries(
+    (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
+  )
+    .filter(([, value]) => Boolean(value) && typeof value === "object" && !Array.isArray(value))
+    .map(([channelId, value]) => {
+      // Presence tri-state must match config-presence: a bare `{}` entry is not a configured
+      // channel and plans no supersession, while a credential-bearing one does.
+      const state =
+        (value as { enabled?: unknown }).enabled === false
+          ? "off"
+          : hasMeaningfulChannelConfig(value)
+            ? "configured"
+            : "empty";
+      return [channelId, state] as const;
+    })
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  // Material selection (config/hooks/apiKey/env fields on a RAW authored entry) flips a
+  // supersession from disable to keep in the suppression plan, but normalized entries drop
+  // those fields — fingerprint materiality from the raw authored entries so two loads
+  // differing only in one never share a cached registry.
+  const materialSourceEntries = Object.entries(
+    (params.activationSource.rootConfig?.plugins?.entries as Record<string, unknown>) ?? {},
+  )
+    .map(([pluginId, entry]) => [pluginId, hasMaterialPluginEntryConfig(entry)] as const)
+    .toSorted(([left], [right]) => left.localeCompare(right));
   const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
     .map(([pluginId, reasons]) => [pluginId, [...reasons]] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
+  // Env-derived channel presence and the ambient-trigger policy feed the suppression plan the
+  // same way authored channels do — a credential env var appearing, the policy flipping, or an
+  // external catalog path changing a preferOver edge all change the plan, so each keys the
+  // cache. Signals come from the same collector the plan's candidate detection consumes.
+  const envPresenceSignals = listPotentialConfiguredChannelPresenceSignals(
+    (params.activationSource.rootConfig ?? {}) as OpenClawConfig,
+    params.env,
+    {
+      includePersistedAuthState: false,
+      ambientEnvTriggers: params.ambientEnvTriggers ?? "allow",
+    },
+  )
+    .filter((signal) => signal.source === "env")
+    .map((signal) => signal.channelId)
+    .toSorted((left, right) => left.localeCompare(right));
 
   return createHash("sha256")
     .update(
@@ -163,6 +215,14 @@ function buildActivationMetadataHash(params: {
         memorySlot: params.activationSource.plugins.slots.memory,
         entries: pluginEntryStates,
         enabledChannels: enabledSourceChannels,
+        configuredChannels: configuredSourceChannels,
+        envPresenceChannels: envPresenceSignals,
+        ambientEnvTriggers: params.ambientEnvTriggers ?? "allow",
+        catalogPathsEnv: [
+          params.env.OPENCLAW_PLUGIN_CATALOG_PATHS ?? "",
+          params.env.OPENCLAW_MPM_CATALOG_PATHS ?? "",
+        ],
+        materialEntries: materialSourceEntries,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
@@ -372,6 +432,8 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
+      env,
+      ...(options.ambientEnvTriggers ? { ambientEnvTriggers: options.ambientEnvTriggers } : {}),
     }),
     installs: installRecords,
     env,

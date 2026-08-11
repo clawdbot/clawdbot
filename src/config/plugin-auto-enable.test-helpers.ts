@@ -53,6 +53,10 @@ export function makeRegistry(
       string,
       { schema: Record<string, unknown>; label?: string; preferOver?: string[] }
     >;
+    channelCatalogMeta?: { id: string; preferOver?: readonly string[] };
+    setup?: import("../plugins/manifest-registry.js").PluginManifestRecord["setup"];
+    setupSource?: string;
+    legacyPluginIds?: string[];
   }>,
 ): PluginManifestRegistry {
   return {
@@ -65,6 +69,10 @@ export function makeRegistry(
       contracts: plugin.contracts,
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
+      channelCatalogMeta: plugin.channelCatalogMeta,
+      setup: plugin.setup,
+      setupSource: plugin.setupSource,
+      legacyPluginIds: plugin.legacyPluginIds,
       providers: plugin.providers ?? [],
       cliBackends: plugin.cliBackends ?? [],
       skills: [],

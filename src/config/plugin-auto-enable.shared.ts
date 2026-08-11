@@ -21,20 +21,38 @@ import {
 } from "../channels/plugins/configured-state.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { hasMaterialPluginEntryConfig, normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  declaresPluginPreferenceOver,
+  normalizePluginPolicyId,
+} from "../plugins/plugin-policy-id.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
+import {
+  collectPluginIdsForConfiguredChannel,
+  collectPluginSelectionPolicyIds,
+  createChannelClaimantResolution,
+  isPluginPolicyDenied,
+  isPluginPolicyDisabled,
+  isPluginSelectedWithAliases,
+  normalizeManifestChannelId,
+  normalizePluginsConfigWithManifestAliases,
+  resolveFoldedPluginEntry,
+  type ChannelClaimCandidate,
+  type ChannelClaimantDecision,
+} from "./channel-claimant-plugins.js";
 import { isChannelConfigured } from "./channel-configured.js";
-import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
+import { resolveChannelClaimPreferOver } from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
@@ -135,13 +153,24 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   return false;
 }
 
-function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+// Capability detection reads the folded entry: the operator's config lives under the policy
+// key while a manifest keeps its author's case, and a missed entry means no capability
+// candidate — the channel-replacement capability preservation never engages.
+function hasPluginOwnedWebSearchConfig(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  registry: PluginManifestRegistry,
+): boolean {
+  const pluginConfig = resolveFoldedPluginEntry(cfg, pluginId, registry)?.config;
   return isRecord(pluginConfig) && isRecord(pluginConfig.webSearch);
 }
 
-function hasPluginOwnedWebFetchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+function hasPluginOwnedWebFetchConfig(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  registry: PluginManifestRegistry,
+): boolean {
+  const pluginConfig = resolveFoldedPluginEntry(cfg, pluginId, registry)?.config;
   return isRecord(pluginConfig) && isRecord(pluginConfig.webFetch);
 }
 
@@ -156,8 +185,12 @@ function resolvePluginOwnedToolConfigKeys(plugin: PluginManifestRecord): string[
   return Object.keys(properties).filter((key) => key !== "webSearch" && key !== "webFetch");
 }
 
-function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[plugin.id]?.config;
+function hasPluginOwnedToolConfig(
+  cfg: OpenClawConfig,
+  plugin: PluginManifestRecord,
+  registry: PluginManifestRegistry,
+): boolean {
+  const pluginConfig = resolveFoldedPluginEntry(cfg, plugin.id, registry)?.config;
   if (!isRecord(pluginConfig)) {
     return false;
   }
@@ -234,62 +267,6 @@ function resolvePluginIdForConfiguredWebSearchProvider(
       (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
     ),
   )?.id;
-}
-
-function normalizeManifestChannelId(channelId: string): string {
-  return normalizeChatChannelId(channelId) ?? channelId;
-}
-
-function getManifestChannelPreferOver(
-  plugin: PluginManifestRecord,
-  channelId: string,
-): readonly string[] {
-  return plugin.channelConfigs?.[channelId]?.preferOver ?? [];
-}
-
-function collectPluginIdsForConfiguredChannel(
-  channelId: string,
-  registry: PluginManifestRegistry,
-): string[] {
-  const normalizedChannelId = normalizeManifestChannelId(channelId);
-  const builtInId = normalizeChatChannelId(normalizedChannelId);
-  const claims: Array<{ plugin: PluginManifestRecord; preferOver: readonly string[] }> = [];
-  for (const record of registry.plugins) {
-    if (
-      (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === normalizedChannelId)
-    ) {
-      claims.push({
-        plugin: record,
-        preferOver: getManifestChannelPreferOver(record, normalizedChannelId),
-      });
-    }
-  }
-
-  if (claims.length === 0) {
-    return builtInId ? [builtInId] : [];
-  }
-
-  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
-  if (builtInId) {
-    claimIds.add(builtInId);
-  }
-  const preferredIds = new Set<string>();
-  for (const claim of claims) {
-    for (const preferredOverId of claim.preferOver) {
-      if (claimIds.has(preferredOverId)) {
-        // Keep both sides as candidates. The preferOver filter later disables
-        // the lower-priority plugin unless the preferred plugin is explicitly
-        // disabled/denied, preserving fallback to bundled channel support.
-        preferredIds.add(claim.plugin.id);
-        preferredIds.add(preferredOverId);
-      }
-    }
-  }
-
-  if (preferredIds.size > 0) {
-    return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
-  }
-  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
 }
 
 function collectConfiguredChannelIds(
@@ -474,12 +451,51 @@ function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] 
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * True when this config could produce setup-derived auto-enable candidates at all — the same
+ * gate the pass uses before running setup probes. When false, a probe-skipping plan is exactly
+ * the plan the runtime executes, so the ownership projection may treat its completed activation
+ * facts as exhaustive.
+ */
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   return (
     hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
     hasAcpxSetupAutoEnableRelevantConfig(cfg) ||
     hasXaiSetupAutoEnableRelevantConfig(cfg) ||
     hasConfiguredPluginConfigEntry(cfg)
+  );
+}
+
+/**
+ * True when this config could produce setup-derived candidates for a plugin that actually
+ * declares a setup surface — the only candidates a probe-skipping plan can miss. The pass's own
+ * probe gate above stays coarse (probes are cheap reads there); the ownership projection needs
+ * the sharp form, or an unrelated configured entry flips its exact-plan accounting off.
+ */
+export function hasRelevantSetupCandidateConfig(
+  cfg: OpenClawConfig,
+  registry: PluginManifestRegistry,
+): boolean {
+  if (
+    hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
+    hasAcpxSetupAutoEnableRelevantConfig(cfg) ||
+    hasXaiSetupAutoEnableRelevantConfig(cfg)
+  ) {
+    return true;
+  }
+  const entries = asOptionalObjectRecord(cfg.plugins?.entries);
+  if (!entries) {
+    return false;
+  }
+  const entryPolicyIds = new Set(Object.keys(entries).map(normalizePluginPolicyId));
+  return registry.plugins.some(
+    (record) =>
+      (record.setup !== undefined || record.setupSource !== undefined) &&
+      // A runtime-disabled setup descriptor is categorically skipped before any probe resolves
+      // (setup-registry), so it can never yield a probe-derived candidate a probe-skipping
+      // plan would miss — treating it as relevant hands ownership back to predictive tiers.
+      record.setup?.requiresRuntime !== false &&
+      entryPolicyIds.has(normalizePluginPolicyId(record.id)),
   );
 }
 
@@ -562,11 +578,19 @@ export function configMayNeedPluginAutoEnable(
   return resolvePluginAutoEnableReadiness(cfg, env).mayNeedAutoEnable;
 }
 
+/**
+ * Whether detection may execute plugin setup modules to ask their auto-enable probes. Validation
+ * and schema projections pass "skip": they must never run plugin code, and a throwing probe must
+ * never abort them.
+ */
+export type PluginSetupProbePolicy = "execute" | "skip";
+
 export function resolvePluginAutoEnableReadiness(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
   ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  setupProbes: PluginSetupProbePolicy = "execute",
 ): { mayNeedAutoEnable: boolean; configuredChannelIds: string[] } {
   if (arePluginsGloballyDisabled(cfg)) {
     return { mayNeedAutoEnable: false, configuredChannelIds: [] };
@@ -597,7 +621,7 @@ export function resolvePluginAutoEnableReadiness(
   ) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
-  if (!hasSetupAutoEnableRelevantConfig(cfg)) {
+  if (setupProbes === "skip" || !hasSetupAutoEnableRelevantConfig(cfg)) {
     return { mayNeedAutoEnable: false, configuredChannelIds };
   }
   return {
@@ -650,11 +674,16 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
   configuredChannelIds?: readonly string[];
+  setupProbes?: PluginSetupProbePolicy;
 }): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
   for (const channelId of params.configuredChannelIds ??
     collectConfiguredChannelIds(params.config, params.env)) {
-    for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
+    for (const pluginId of collectPluginIdsForConfiguredChannel(
+      channelId,
+      params.registry,
+      params.env,
+    )) {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }
   }
@@ -751,26 +780,26 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
 
   for (const plugin of resolveProviderPluginsWithOwnedWebSearch(params.registry)) {
     const pluginId = plugin.id;
-    if (hasPluginOwnedWebSearchConfig(params.config, pluginId)) {
+    if (hasPluginOwnedWebSearchConfig(params.config, pluginId, params.registry)) {
       changes.push({ pluginId, kind: "plugin-web-search-configured" });
     }
   }
 
   for (const plugin of resolvePluginsWithOwnedToolConfig(params.registry)) {
     const pluginId = plugin.id;
-    if (hasPluginOwnedToolConfig(params.config, plugin)) {
+    if (hasPluginOwnedToolConfig(params.config, plugin, params.registry)) {
       changes.push({ pluginId, kind: "plugin-tool-configured" });
     }
   }
 
   for (const plugin of resolveProviderPluginsWithOwnedWebFetch(params.registry)) {
     const pluginId = plugin.id;
-    if (hasPluginOwnedWebFetchConfig(params.config, pluginId)) {
+    if (hasPluginOwnedWebFetchConfig(params.config, pluginId, params.registry)) {
       changes.push({ pluginId, kind: "plugin-web-fetch-configured" });
     }
   }
 
-  if (hasSetupAutoEnableRelevantConfig(params.config)) {
+  if (params.setupProbes !== "skip" && hasSetupAutoEnableRelevantConfig(params.config)) {
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
     const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
       (pluginId) => !manifestMatchedPluginIds.has(pluginId),
@@ -791,39 +820,41 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   return changes;
 }
 
-function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  const builtInChannelId = normalizeChatChannelId(pluginId);
-  if (builtInChannelId) {
-    const channels = cfg.channels as Record<string, unknown> | undefined;
-    if (asOptionalRecord(channels?.[builtInChannelId])?.enabled === false) {
-      return true;
+/**
+ * The config key an apply-phase write must land on. Operator entries are keyed by the derived
+ * policy id while a manifest keeps its author's case: an exact declared-id write beside an
+ * existing case-variant key creates a duplicate whose normalization order can fold an appended
+ * `enabled: true` over the operator's `enabled: false`. Reuse the operator's key when one
+ * matches through the policy id; otherwise keep the declared id.
+ */
+function resolvePluginEntryKey(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  registry: PluginManifestRegistry,
+): string {
+  const entries = asOptionalObjectRecord(cfg.plugins?.entries);
+  if (!entries || Object.hasOwn(entries, pluginId)) {
+    return pluginId;
+  }
+  // Legacy aliases included: an operator's entry under a manifest's documented legacyPluginIds
+  // key IS this plugin's entry once the runtime normalizer folds them, so a write beside it
+  // would mint a duplicate the folding can invert.
+  const selectionIds = collectPluginSelectionPolicyIds(registry, pluginId);
+  for (const key of Object.keys(entries)) {
+    if (selectionIds.has(normalizePluginPolicyId(key))) {
+      return key;
     }
   }
-  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
-}
-
-function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
-  const deny = cfg.plugins?.deny;
-  return Array.isArray(deny) && deny.includes(pluginId);
-}
-
-function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
-  const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
-    return true;
-  }
-  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
+  return pluginId;
 }
 
 function disableImplicitPreferredOverPlugin(params: {
   config: OpenClawConfig;
-  originalConfig: OpenClawConfig;
   pluginId: string;
   manifestRegistry: PluginManifestRegistry;
 }): OpenClawConfig {
-  if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
-    return params.config;
-  }
+  // Upstream's explicit-selection guard lives in the resolver here: explicitly selected
+  // plugins land `supersede-keep`, which the apply loop never routes to this disable write.
   // A built-in channel id can remain in the static channel catalog after its
   // bundled plugin has been externalized. Do not synthesize a disabled entry
   // for that owner unless it is still present in the runtime manifest set.
@@ -838,14 +869,15 @@ function disableImplicitPreferredOverPlugin(params: {
   ) {
     return params.config;
   }
-  const existingEntry = params.config.plugins?.entries?.[params.pluginId];
+  const entryKey = resolvePluginEntryKey(params.config, params.pluginId, params.manifestRegistry);
+  const existingEntry = params.config.plugins?.entries?.[entryKey];
   return {
     ...params.config,
     plugins: {
       ...params.config.plugins,
       entries: {
         ...params.config.plugins?.entries,
-        [params.pluginId]: {
+        [entryKey]: {
           ...asOptionalObjectRecord(existingEntry),
           enabled: false,
         },
@@ -914,14 +946,15 @@ function registerPluginEntry(
     };
   }
 
+  const entryKey = resolvePluginEntryKey(cfg, entry.pluginId, manifestRegistry);
   return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
       entries: {
         ...cfg.plugins?.entries,
-        [entry.pluginId]: {
-          ...(cfg.plugins?.entries?.[entry.pluginId] as Record<string, unknown> | undefined),
+        [entryKey]: {
+          ...(cfg.plugins?.entries?.[entryKey] as Record<string, unknown> | undefined),
           enabled: true,
         },
       },
@@ -929,27 +962,17 @@ function registerPluginEntry(
   };
 }
 
-function hasMaterialPluginEntryConfig(entry: unknown): boolean {
-  if (!isRecord(entry)) {
-    return false;
-  }
-  return (
-    entry.enabled === true ||
-    isRecord(entry.config) ||
-    isRecord(entry.hooks) ||
-    isRecord(entry.subagent) ||
-    isRecord(entry.llm) ||
-    entry.apiKey !== undefined ||
-    entry.env !== undefined
-  );
-}
-
 function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegistry): boolean {
   if (normalizeChatChannelId(pluginId)) {
     return true;
   }
+  // Config entries and policy lists are keyed by the derived policy id while a manifest keeps
+  // its author's case, so known-ness must compare that key: an exact read rejects the operator's
+  // normalized entry for a mixed-case install and the allowlist repair skips the very plugin the
+  // operator configured.
+  const policyId = normalizePluginPolicyId(pluginId);
   return (
-    manifestRegistry.plugins.some((plugin) => plugin.id === pluginId) ||
+    manifestRegistry.plugins.some((plugin) => normalizePluginPolicyId(plugin.id) === policyId) ||
     isOfficialExternalPluginId(pluginId)
   );
 }
@@ -970,11 +993,15 @@ function materializeConfiguredPluginEntryAllowlist(params: {
     left.localeCompare(right),
   )) {
     const entry = entries[pluginId];
+    const selectionIds = collectPluginSelectionPolicyIds(params.manifestRegistry, pluginId);
     if (
       !hasMaterialPluginEntryConfig(entry) ||
-      isPluginDenied(next, pluginId) ||
-      isPluginExplicitlyDisabled(next, pluginId) ||
-      allow.includes(pluginId) ||
+      isPluginPolicyDenied(next, pluginId, params.manifestRegistry) ||
+      isPluginPolicyDisabled(next, pluginId, params.manifestRegistry) ||
+      // Loading compares allow entries through the plugin's selection policy ids — legacy
+      // aliases included — so a case-variant or legacy allow entry already admits this plugin;
+      // appending the entry key would only duplicate it.
+      allow.some((allowedId) => selectionIds.has(normalizePluginPolicyId(allowedId))) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
       continue;
@@ -1052,64 +1079,563 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   );
 }
 
-export function materializePluginAutoEnableCandidatesInternal(params: {
+/** Auto-enable's completed activation pass plus the channel claimant decisions it took. */
+type PluginAutoEnablePlan = PluginAutoEnableResult & {
+  channelDecisions: ReadonlyMap<string, ReadonlyMap<string, ChannelClaimantDecision>>;
+  // Plugin-level end-state liveness from the completed resolution: capability candidates decide
+  // a plugin's fate globally without a per-channel decision, and the ownership projection needs
+  // that fact to rank such claimants by load order.
+  isClaimantLive: (pluginId: string) => boolean;
+};
+
+type ChannelFallbackReselection = { index: number; candidate: PluginAutoEnableCandidate };
+
+/** True when the channel's own config carries `enabled: false` — the operator turned it off. */
+const isChannelExplicitlyDisabled = (cfg: OpenClawConfig, channelId: string): boolean =>
+  asOptionalRecord((cfg.channels as Record<string, unknown> | undefined)?.[channelId])?.enabled ===
+  false;
+
+type ChannelCandidateGroup = {
+  channelId: string;
+  lastIndex: number;
+  live: boolean;
+  policyIds: Set<string>;
+  /** Non-forbidden claimants the pass killed, in candidate order — re-grounding pin targets. */
+  deadClaimantPolicyIds: string[];
+};
+
+/**
+ * Selects a live anchor for a configured channel no remedy could serve: the group is unowned,
+ * fallback re-selection found no other claimant, its re-grounding pin was rejected, and the
+ * registry holds exactly one activatable claimant for it. That claimant must not stay
+ * plugin-globally disabled by a supersession from a sibling channel — its death orphans this
+ * channel with no recourse.
+ */
+function selectSoleClaimantAnchor(params: {
+  groups: ReadonlyMap<string, ChannelCandidateGroup>;
+  config: OpenClawConfig;
+  registry: PluginManifestRegistry;
+  env: NodeJS.ProcessEnv;
+  preferOverCache: Map<string, string[]>;
+  anchored: ReadonlySet<string>;
+  isClaimantLive: (pluginId: string) => boolean;
+}): string | null {
+  const sourceForbidden = (pluginId: string): boolean =>
+    isPluginPolicyDenied(params.config, pluginId, params.registry) ||
+    isPluginPolicyDisabled(params.config, pluginId, params.registry);
+  // preferOver edges between ACTIVATABLE claimants over CONFIGURED channels, by policy id. A
+  // victim inside a replacement cycle stands down with its grounded cycle — its channel is
+  // legal-unowned by the seniority grounding design, and anchoring it would flip-flop the
+  // grounded assignment. Only a victim whose killers it cannot reach back (a non-cyclic kill)
+  // anchors. Forbidden plugins and unconfigured channel claims never participate in resolution,
+  // so edges through either are synthetic: they must not fabricate a cycle that suppresses the
+  // anchor and orphans the channel.
+  let edges: Map<string, Set<string>> | undefined;
+  const edgesByPolicyId = (): Map<string, Set<string>> => {
+    if (edges) {
+      return edges;
+    }
+    edges = new Map();
+    for (const record of params.registry.plugins) {
+      if (sourceForbidden(record.id)) {
+        continue;
+      }
+      const from = normalizePluginPolicyId(record.id);
+      for (const channelId of record.channels ?? []) {
+        const groupId = normalizeManifestChannelId(channelId);
+        // Only claims that became CANDIDATES participate: a registry claimant a channel's
+        // collection omitted (first-claimant selection picked another) was never decided, so
+        // its edges cannot ground a cycle.
+        if (!params.groups.get(groupId)?.policyIds.has(from)) {
+          continue;
+        }
+        for (const target of resolveChannelClaimPreferOver({
+          pluginId: record.id,
+          channelId: groupId,
+          env: params.env,
+          registry: params.registry,
+          cache: params.preferOverCache,
+        })) {
+          if (sourceForbidden(target)) {
+            continue;
+          }
+          const into = edges.get(from) ?? new Set();
+          into.add(normalizePluginPolicyId(target));
+          edges.set(from, into);
+        }
+      }
+    }
+    return edges;
+  };
+  // A kill is cycle-grounded — and the anchor stands down — only when the victim shares a
+  // replacement cycle (an SCC of the participating-claim digraph) with a LIVE killer and that
+  // cycle is intact: every dead member died to in-cycle edges. A dead relay with a live killer
+  // OUTSIDE the cycle can never re-form the loop at runtime, so such an externally broken
+  // cycle must not suppress the last-resort anchor.
+  const reachableFrom = (start: string, graph: Map<string, Set<string>>): Set<string> => {
+    const reachable = new Set<string>();
+    const frontier = [...(graph.get(start) ?? [])];
+    while (frontier.length > 0) {
+      const nextId = frontier.pop();
+      if (nextId === undefined || reachable.has(nextId)) {
+        continue;
+      }
+      reachable.add(nextId);
+      frontier.push(...(graph.get(nextId) ?? []));
+    }
+    return reachable;
+  };
+  const isCyclicKill = (policyId: string): boolean => {
+    const graph = edgesByPolicyId();
+    const reversed = new Map<string, Set<string>>();
+    for (const [from, targets] of graph) {
+      for (const target of targets) {
+        const into = reversed.get(target) ?? new Set<string>();
+        into.add(from);
+        reversed.set(target, into);
+      }
+    }
+    const forward = reachableFrom(policyId, graph);
+    const backward = reachableFrom(policyId, reversed);
+    const cycleMembers = new Set([policyId, ...[...forward].filter((id) => backward.has(id))]);
+    // SCC membership alone establishes the cycle: mid-worklist liveness inside a grounded
+    // cycle shifts with each re-resolve, so the killer's liveness must not gate suppression.
+    const killerInCycle = [...cycleMembers].some(
+      (member) => member !== policyId && graph.get(member)?.has(policyId) === true,
+    );
+    if (!killerInCycle) {
+      return false;
+    }
+    // The victim itself counts: a live out-of-cycle plugin killing the victim directly breaks
+    // the cycle just as an external kill of any relay does.
+    const externallyBroken = [...cycleMembers].some(
+      (member) =>
+        !params.isClaimantLive(member) &&
+        [...(reversed.get(member) ?? [])].some(
+          (killer) => !cycleMembers.has(killer) && params.isClaimantLive(killer),
+        ),
+    );
+    return !externallyBroken;
+  };
+  for (const [groupId, group] of params.groups) {
+    if (!isUnownedGroup(group)) {
+      continue;
+    }
+    const claimants = params.registry.plugins.filter(
+      (record) =>
+        (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === groupId) &&
+        !sourceForbidden(record.id),
+    );
+    // Preserve at least one owner: the first activatable claimant in discovery order whose kill
+    // is non-cyclic — the same seniority the runtime's load order grants it. Several claimants
+    // can all die to distinct sibling-channel edges with every pin vetoed; restricting the
+    // anchor to a sole registry claimant left such a channel orphaned all the same.
+    for (const claimant of claimants) {
+      const policyId = normalizePluginPolicyId(claimant.id);
+      if (!params.anchored.has(policyId) && !isCyclicKill(policyId)) {
+        return policyId;
+      }
+    }
+  }
+  return null;
+}
+
+/** Configured-channel candidate groups with their end-state liveness, in first-seen order. */
+function scanConfiguredChannelGroups(params: {
+  candidates: readonly PluginAutoEnableCandidate[];
+  isClaimantLive: (pluginId: string) => boolean;
+  config: OpenClawConfig;
+  registry: PluginManifestRegistry;
+}): Map<string, ChannelCandidateGroup> {
+  const sourceForbidden = (pluginId: string): boolean =>
+    isPluginPolicyDenied(params.config, pluginId, params.registry) ||
+    isPluginPolicyDisabled(params.config, pluginId, params.registry);
+  const groups = new Map<string, ChannelCandidateGroup>();
+  for (const [index, entry] of params.candidates.entries()) {
+    if (entry.kind !== "channel-configured") {
+      continue;
+    }
+    const groupId = normalizeManifestChannelId(entry.channelId);
+    const group = groups.get(groupId) ?? {
+      channelId: entry.channelId,
+      lastIndex: index,
+      live: false,
+      policyIds: new Set<string>(),
+      deadClaimantPolicyIds: [],
+    };
+    group.lastIndex = index;
+    const policyId = normalizePluginPolicyId(entry.pluginId);
+    group.policyIds.add(policyId);
+    // Liveness reads the plugin's END-STATE fate, not this claim's own decision: a claimant
+    // whose channel claim died can end enabled through a later capability candidate, and a live
+    // plugin serves every channel it claims — its channels need no fallback re-selection.
+    if (params.isClaimantLive(entry.pluginId)) {
+      group.live = true;
+    } else if (!sourceForbidden(entry.pluginId)) {
+      if (!group.deadClaimantPolicyIds.includes(policyId)) {
+        group.deadClaimantPolicyIds.push(policyId);
+      }
+    }
+    groups.set(groupId, group);
+  }
+  return groups;
+}
+
+// A configured channel with no live claimant is unowned regardless of HOW its candidates died:
+// operator-forbidden candidates also leave it unowned while an allowed uncollected claimant may
+// exist — disabling specific plugins is not disabling the channel. Both remedies stay
+// operator-faithful on their own: re-selection skips forbidden registry claimants and pins target
+// only pass-killed claimants, so a channel whose every claimant the operator forbade is left
+// exactly as forbidden.
+const isUnownedGroup = (group: ChannelCandidateGroup): boolean => !group.live;
+
+/**
+ * Selects the next claimant for a configured channel whose collected candidates all landed dead
+ * through the pass itself. `collectPluginIdsForConfiguredChannel` collects only the
+ * discovery-first claimant when no same-channel replacement edge exists, so a cross-channel
+ * supersession can kill a channel's only candidate while an activatable claimant was never
+ * considered — the channel would end silently unowned. The next claimant in discovery order joins
+ * the channel's candidates, exactly the selection the pass would have made had the dead claimant
+ * not been collected first. This fires for operator-forbidden candidates too (forbidding a plugin
+ * is not forbidding its channel); the registry scan below skips forbidden claimants, so a channel
+ * whose every claimant the operator forbade stays untouched.
+ */
+function selectChannelFallbackReselection(params: {
+  groups: ReadonlyMap<string, ChannelCandidateGroup>;
+  config: OpenClawConfig;
+  registry: PluginManifestRegistry;
+  isClaimantActive: (record: PluginManifestRecord) => boolean;
+}): ChannelFallbackReselection | null {
+  const sourceForbidden = (pluginId: string): boolean =>
+    isPluginPolicyDenied(params.config, pluginId, params.registry) ||
+    isPluginPolicyDisabled(params.config, pluginId, params.registry);
+  for (const [groupId, group] of params.groups) {
+    if (!isUnownedGroup(group)) {
+      continue;
+    }
+    const eligible = params.registry.plugins.filter(
+      (record) =>
+        (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === groupId) &&
+        !group.policyIds.has(normalizePluginPolicyId(record.id)) &&
+        !sourceForbidden(record.id),
+    );
+    // An omitted claimant that is ALREADY active in the completed config outranks discovery
+    // order: selecting an earlier-registry inactive fallback beside it would double-register the
+    // channel and validate keys for a plugin the runtime never picks.
+    const record = eligible.find(params.isClaimantActive) ?? eligible[0];
+    if (record) {
+      return {
+        index: group.lastIndex + 1,
+        candidate: { pluginId: record.id, kind: "channel-configured", channelId: group.channelId },
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Selects a re-grounding pin for a configured channel that stays unowned after fallback
+ * re-selection exhausts the registry: grounding a replacement cycle by discovery order can
+ * plugin-globally disable the sole claimant of a sibling configured channel, while grounding the
+ * same cycle on that claimant keeps every channel served. The pass replays with the dead claimant
+ * pinned live; the planner accepts the replay only when the channel revives and no channel that
+ * was owned goes unowned, so a rejected pin can never trade one served channel for another.
+ */
+function selectCycleGroundingPin(params: {
+  groups: ReadonlyMap<string, ChannelCandidateGroup>;
+  pinnedLive: ReadonlySet<string>;
+  rejectedPins: ReadonlySet<string>;
+}): { groupId: string; pin: string } | null {
+  for (const [groupId, group] of params.groups) {
+    if (!isUnownedGroup(group)) {
+      continue;
+    }
+    for (const policyId of group.deadClaimantPolicyIds) {
+      if (!params.pinnedLive.has(policyId) && !params.rejectedPins.has(policyId)) {
+        return { groupId, pin: policyId };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Executes auto-enable's ordered pass in two phases. The resolve phase decides every candidate
+ * against one coherent end state (`createChannelClaimantResolution`); the apply phase then writes
+ * enables, supersede-disables, and the material-entry allowlist repair in candidate order.
+ * Auto-enable applies the returned config; the channel schema collector projects validation
+ * ownership from `channelDecisions` instead of re-deriving each channel in isolation against the
+ * unchanged source config.
+ */
+export function planPluginAutoEnable(params: {
   config?: OpenClawConfig;
   candidates: readonly PluginAutoEnableCandidate[];
   env: NodeJS.ProcessEnv;
   manifestRegistry: PluginManifestRegistry;
-}): PluginAutoEnableResult {
-  let next = params.config ?? {};
+  /**
+   * Config whose entries count as OPERATOR selections. The loader replans over the completed
+   * config, where the pass's own generated `enabled: true` entries would read as explicit
+   * choices and turn every implicit supersession into a keep; it passes the authored activation
+   * source instead. Defaults to `config` for the validation projection and the apply pass.
+   */
+  selectionConfig?: OpenClawConfig;
+}): PluginAutoEnablePlan {
+  const sourceConfig = params.config ?? {};
+  const selectionConfig = params.selectionConfig ?? sourceConfig;
+  let next = sourceConfig;
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
+  const channelDecisions = new Map<string, Map<string, ChannelClaimantDecision>>();
 
   if (next.plugins?.enabled === false) {
-    return { config: next, changes, autoEnabledReasons: {} };
+    return {
+      config: next,
+      changes,
+      autoEnabledReasons: {},
+      channelDecisions,
+      isClaimantLive: () => false,
+    };
   }
 
-  const preferOverCache = new Map<string, string[]>();
+  // A candidate that names no channel resolves supersession through its plugin id, the key its
+  // catalog and built-in replacement metadata are declared under.
+  const toClaimCandidate = (entry: PluginAutoEnableCandidate): ChannelClaimCandidate => ({
+    pluginId: entry.pluginId,
+    channelId: entry.kind === "channel-configured" ? entry.channelId : entry.pluginId,
+    channelClaim: entry.kind === "channel-configured",
+  });
 
-  for (const entry of params.candidates) {
+  // Kept-claim liveness must read the activation state the COMPLETED config produces, and the
+  // final allowlist repair below can activate a kept claimant. Dry-running the repair on the
+  // source config yields the same additions the post-loop run lands: a material entry makes a
+  // plugin explicitly selected, so the pass can only keep it — never disable it or enable it
+  // without allowlisting it inline — and entries the pass creates are either non-material
+  // (enabled: false) or already allowlisted.
+  const keptActivationConfig = materializeConfiguredPluginEntryAllowlist({
+    config: sourceConfig,
+    changes: [],
+    manifestRegistry: params.manifestRegistry,
+  });
+  // Alias-aware like every completed-activation read: an entry under a documented legacy id
+  // folds onto the current plugin before the activation check below consumes it.
+  const keptActivationPlugins = normalizePluginsConfigWithManifestAliases(
+    keptActivationConfig.plugins,
+    params.manifestRegistry,
+  );
+  // "Already active" for re-selection preference means operator-signaled: an explicit entry the
+  // completed config activates, or a configured capability candidacy this pass enables. Default
+  // activation (a global install with no entry) does not count — preferring it would freeze the
+  // discovery-order selection the remedies exist to complete.
+  const isPreferredFallbackClaimant = (record: PluginManifestRecord): boolean =>
+    (isPluginSelectedWithAliases(sourceConfig.plugins, record.id, params.manifestRegistry) &&
+      isActivatedManifestOwner({
+        plugin: record,
+        normalizedConfig: keptActivationPlugins,
+        rootConfig: keptActivationConfig,
+      })) ||
+    capabilityPolicyIds.has(normalizePluginPolicyId(record.id));
+  const resolveDecisions = (
+    claims: readonly ChannelClaimCandidate[],
+    pinnedLive: ReadonlySet<string>,
+  ) => {
+    const resolution = createChannelClaimantResolution({
+      candidates: claims,
+      config: sourceConfig,
+      selectionConfig,
+      keptActivationConfig,
+      env: params.env,
+      registry: params.manifestRegistry,
+      pinnedLiveClaimants: pinnedLive,
+    });
+    return {
+      decisions: claims.map((claim) => resolution.decide(claim)),
+      isLiveDecision: resolution.isLiveDecision,
+      isClaimantLive: resolution.isClaimantLive,
+    };
+  };
+
+  // Decisions are a pure function of the candidate list, pins, and the fixed configs above, so
+  // the worklist recomputes them until every configured channel is live or both remedies exhaust:
+  // fallback re-selection appends a never-considered claimant first; when the registry has none,
+  // a re-grounding pin replays the pass with a pass-killed claimant live, accepted only when the
+  // unowned channel revives and every owned channel stays owned.
+  // A channel the operator explicitly disabled contributes no claims at all: the runtime never
+  // starts it, so its claimants are neither enabled on its behalf nor allowed to supersede
+  // plugins serving enabled channels. Filtering before the pass — not just in repair scanning —
+  // keeps a disabled channel's replacement claim from globally disabling a sibling channel's
+  // sole claimant (whose re-grounding pin the live killer would rightly veto).
+  const candidates = params.candidates.filter(
+    (entry) =>
+      entry.kind !== "channel-configured" ||
+      !isChannelExplicitlyDisabled(sourceConfig, entry.channelId),
+  );
+  // Plugins with a configured capability candidate: their channel claims may lose ownership, but the
+  // capability keeps them loaded: no supersede-disable write, and re-selection treats them as
+  // already-active claimants.
+  const capabilityPolicyIds = new Set(
+    candidates
+      .filter((entry) => entry.kind !== "channel-configured")
+      .map((entry) => normalizePluginPolicyId(entry.pluginId)),
+  );
+
+  // Last-resort orphan guard: when a configured channel stays unowned after fallback
+  // re-selection and re-grounding both exhaust, and its only activatable registry claimant was
+  // pass-killed from a sibling channel, that claimant anchors live. Enablement is plugin-global,
+  // so the takeover that killed it simply fails — exactly what the runtime's first-wins
+  // registration does. Anchors stay out of the worklist's pin set so pin acceptance never
+  // evaluates them as trial pins, and they never fire while the ordinary remedies can serve.
+  const anchoredLive = new Set<string>();
+  const withSoleClaimantAnchors = (pins: ReadonlySet<string>): ReadonlySet<string> =>
+    anchoredLive.size === 0 ? pins : new Set([...anchoredLive, ...pins]);
+
+  const pinnedLive = new Set<string>();
+  const rejectedPins = new Set<string>();
+  const pinPreferOverCache = new Map<string, string[]>();
+  let resolved = resolveDecisions(
+    candidates.map(toClaimCandidate),
+    withSoleClaimantAnchors(pinnedLive),
+  );
+  const scanGroups = (scanned: typeof resolved) =>
+    scanConfiguredChannelGroups({
+      candidates,
+      isClaimantLive: scanned.isClaimantLive,
+      config: sourceConfig,
+      registry: params.manifestRegistry,
+    });
+  for (;;) {
+    const groups = scanGroups(resolved);
+    const fallback = selectChannelFallbackReselection({
+      groups,
+      config: sourceConfig,
+      registry: params.manifestRegistry,
+      isClaimantActive: isPreferredFallbackClaimant,
+    });
+    if (fallback) {
+      candidates.splice(fallback.index, 0, fallback.candidate);
+      resolved = resolveDecisions(
+        candidates.map(toClaimCandidate),
+        withSoleClaimantAnchors(pinnedLive),
+      );
+      continue;
+    }
+    const grounding = selectCycleGroundingPin({ groups, pinnedLive, rejectedPins });
+    if (!grounding) {
+      const anchor = selectSoleClaimantAnchor({
+        groups,
+        config: sourceConfig,
+        registry: params.manifestRegistry,
+        env: params.env,
+        preferOverCache: pinPreferOverCache,
+        anchored: anchoredLive,
+        isClaimantLive: resolved.isClaimantLive,
+      });
+      if (!anchor) {
+        break;
+      }
+      anchoredLive.add(anchor);
+      resolved = resolveDecisions(
+        candidates.map(toClaimCandidate),
+        withSoleClaimantAnchors(pinnedLive),
+      );
+      continue;
+    }
+    const trialPins = new Set([...pinnedLive, grounding.pin]);
+    const trialClaims = candidates.map(toClaimCandidate);
+    const trial = resolveDecisions(trialClaims, withSoleClaimantAnchors(trialPins));
+    const trialGroups = scanGroups(trial);
+    // A pin sticks only when every claim that prefers over a pinned plugin ends dead: a live
+    // preferring claim means the runtime's next pass would supersede the pinned plugin again, so
+    // accepting the replay would record a liveness the completed state itself contradicts.
+    const pinContradicted = trialClaims.some((claim, index) => {
+      const decision = expectDefined(trial.decisions[index], "trial decision at claim index");
+      if (!trial.isLiveDecision(claim, decision)) {
+        return false;
+      }
+      const preferOver = resolveChannelClaimPreferOver({
+        pluginId: claim.pluginId,
+        channelId: claim.channelId,
+        env: params.env,
+        registry: params.manifestRegistry,
+        cache: pinPreferOverCache,
+      });
+      return [...trialPins].some((pin) => declaresPluginPreferenceOver(preferOver, pin));
+    });
+    const acceptable =
+      !pinContradicted &&
+      !isUnownedGroup(expectDefined(trialGroups.get(grounding.groupId), "pinned group")) &&
+      [...groups.entries()].every(
+        ([groupId, group]) =>
+          isUnownedGroup(group) ||
+          !isUnownedGroup(expectDefined(trialGroups.get(groupId), "trial group")),
+      );
+    if (acceptable) {
+      pinnedLive.add(grounding.pin);
+      resolved = trial;
+    } else {
+      rejectedPins.add(grounding.pin);
+    }
+  }
+
+  for (const [index, entry] of candidates.entries()) {
     const builtInChannelId = resolveAutoEnableChannelId({
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
+    const decision = expectDefined(resolved.decisions[index], "decision at candidate index");
+    // Only channel claims project schema ownership; other kinds shape decisions through the
+    // shared candidate set, and a pluginId-keyed bucket must not mask a channel's claimants.
+    // A duplicate candidate re-evaluates against the fates earlier occurrences landed, so the
+    // last decision reflects the completed state.
+    if (entry.kind === "channel-configured") {
+      const channelId = normalizeManifestChannelId(entry.channelId);
+      const decisions = channelDecisions.get(channelId) ?? new Map();
+      decisions.set(entry.pluginId, decision);
+      channelDecisions.set(channelId, decisions);
+    }
+    if (decision === "forbidden" || decision === "supersede-keep") {
       continue;
     }
-    if (
-      shouldSkipPreferredPluginAutoEnable({
-        config: next,
-        entry,
-        configured: params.candidates,
-        env: params.env,
-        registry: params.manifestRegistry,
-        isPluginDenied,
-        isPluginExplicitlyDisabled,
-        preferOverCache,
-      })
-    ) {
-      next = disableImplicitPreferredOverPlugin({
-        config: next,
-        originalConfig: params.config ?? {},
-        pluginId: entry.pluginId,
-        manifestRegistry: params.manifestRegistry,
-      });
+    if (decision === "supersede-disable") {
+      // A plugin with a configured capability candidate stays loaded: the replacement takes the
+      // channel (this claim's decision stands for ownership) while the capability's own enable
+      // keeps the plugin — writing `enabled: false` here would silently remove a provider or
+      // tool the operator configured.
+      if (!capabilityPolicyIds.has(normalizePluginPolicyId(entry.pluginId))) {
+        next = disableImplicitPreferredOverPlugin({
+          config: next,
+          pluginId: entry.pluginId,
+          manifestRegistry: params.manifestRegistry,
+        });
+      }
       continue;
     }
 
     const allow = next.plugins?.allow;
     const hasRestrictiveAllowlist = Array.isArray(allow) && allow.length > 0;
-    const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
+    // Allow entries are keyed by the derived policy id once config is normalized, so membership
+    // must compare the plugin's selection policy ids — legacy aliases included: an exact read
+    // misses the operator's normalized or legacy-keyed entry and appends a duplicate beside it
+    // that outlives the operator's original entry.
+    const entrySelectionIds = collectPluginSelectionPolicyIds(
+      params.manifestRegistry,
+      entry.pluginId,
+    );
+    const allowMissing =
+      hasRestrictiveAllowlist &&
+      !allow.some((allowed) => entrySelectionIds.has(normalizePluginPolicyId(allowed)));
     const alreadyEnabled =
       builtInChannelId != null
         ? isBuiltInChannelAlreadyEnabled(next, builtInChannelId)
-        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+        : resolveFoldedPluginEntry(next, entry.pluginId, params.manifestRegistry)?.enabled === true;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
 
     next = registerPluginEntry(next, entry, params.manifestRegistry);
-    if (hasRestrictiveAllowlist) {
+    // allowMissing already compared the alias-aware selection ids: an allow entry under a
+    // documented legacy id admits the plugin at load, so appending the current id beside it
+    // would leave the plugin allowed even after the operator removes their original entry.
+    if (allowMissing) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }
     const reason = resolvePluginAutoEnableCandidateReason(entry);
@@ -1133,6 +1659,12 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     }
   }
 
-  return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
+  return {
+    config: next,
+    changes,
+    autoEnabledReasons: autoEnabledReasonRecord,
+    channelDecisions,
+    isClaimantLive: resolved.isClaimantLive,
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

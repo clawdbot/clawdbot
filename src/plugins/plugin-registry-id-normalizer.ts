@@ -21,7 +21,15 @@ function collectObjectKeys(value: Record<string, unknown> | undefined): readonly
   return value ? Object.keys(value) : [];
 }
 
-function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
+/**
+ * Every id the registry normalizer folds onto a plugin: contribution ids (providers, channels,
+ * setup providers, CLI backends, catalog keys, auth aliases) plus documented legacy plugin ids.
+ * Config-policy alias folds must consume this same list, or validation and the runtime resolve
+ * one operator key to different plugins.
+ */
+export function listPluginRegistryNormalizerAliases(
+  plugin: PluginManifestRecord,
+): readonly string[] {
   return [
     plugin.id,
     ...(plugin.providers ?? []),

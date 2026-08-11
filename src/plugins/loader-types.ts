@@ -15,6 +15,8 @@ export type ChannelPluginLoadIntent = "full" | "setup";
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  /** Ambient env-trigger policy the caller's auto-enable plan used; keys the load cache. */
+  ambientEnvTriggers?: import("../channels/config-presence.js").AmbientEnvTriggerPolicy;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
   installRecords?: Record<string, PluginInstallRecord>;

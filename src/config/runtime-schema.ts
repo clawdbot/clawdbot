@@ -6,6 +6,7 @@ import {
 import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
+import { getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
@@ -22,7 +23,10 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const registry = loadManifestRegistry(config);
   return buildConfigSchemaCore({
     plugins: collectPluginSchemaMetadataCore(registry),
-    channels: collectChannelSchemaMetadataCore(registry),
+    // Gateway startup publishes the auto-enabled config as the runtime snapshot, so ranking
+    // ownership from it would read auto-enable's generated entries as operator selections. Rank
+    // from the authored source published alongside it, the same config validation ranks from.
+    channels: collectChannelSchemaMetadataCore(registry, getRuntimeConfigSourceSnapshot() ?? config),
   });
 }
 
@@ -34,6 +38,6 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const registry = loadManifestRegistry(config);
   return buildConfigSchemaCore({
     plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
-    channels: collectChannelSchemaMetadataCore(registry),
+    channels: collectChannelSchemaMetadataCore(registry, config),
   });
 }

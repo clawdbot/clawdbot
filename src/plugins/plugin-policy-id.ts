@@ -11,3 +11,21 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 export function normalizePluginPolicyId(id: string): string {
   return normalizeOptionalLowercaseString(id) ?? "";
 }
+
+/**
+ * True when a channel `preferOver` declaration names a plugin. Manifest ids and `preferOver`
+ * entries are authored independently, so both sides compare through the derived policy key above.
+ * Schema ownership and auto-enable's replacement selection must read this one predicate: comparing
+ * declared ids in either place lets config validation apply a replacement's channel schema while
+ * the runtime keeps serving the incumbent, accepting keys the running channel does not own.
+ */
+export function declaresPluginPreferenceOver(
+  preferOver: readonly string[] | undefined,
+  pluginId: string | undefined,
+): boolean {
+  const target = normalizeOptionalLowercaseString(pluginId);
+  if (!target) {
+    return false;
+  }
+  return (preferOver ?? []).some((entry) => normalizePluginPolicyId(entry) === target);
+}

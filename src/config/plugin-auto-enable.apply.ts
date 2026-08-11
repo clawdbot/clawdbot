@@ -3,9 +3,10 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
+import { channelClaimSuppressionKey } from "./channel-claimant-plugins.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
-  materializePluginAutoEnableCandidatesInternal,
+  planPluginAutoEnable,
   resolvePluginAutoEnableManifestRegistry,
 } from "./plugin-auto-enable.shared.js";
 import type {
@@ -163,12 +164,20 @@ export function materializePluginAutoEnableCandidates(params: {
     env,
     manifestRegistry: params.manifestRegistry,
   });
-  return materializePluginAutoEnableCandidatesInternal({
+  // Return the declared public shape only: the plan's projection extras (per-channel decisions,
+  // the claimant-liveness closure) are for the schema-ownership collector, and a closure in the
+  // result would defeat same-turn cache result equality.
+  const plan = planPluginAutoEnable({
     config,
     candidates: params.candidates,
     env,
     manifestRegistry,
   });
+  return {
+    config: plan.config,
+    changes: plan.changes,
+    autoEnabledReasons: plan.autoEnabledReasons,
+  };
 }
 
 export function applyPluginAutoEnable(params: {
@@ -240,4 +249,53 @@ export function applyPluginAutoEnable(params: {
     env: params.env,
     manifestRegistry: params.manifestRegistry,
   });
+}
+
+/**
+ * Channel claims auto-enable superseded WITHOUT an explicit operator selection, keyed by
+ * `channelClaimSuppressionKey`. The loader suppresses these claims' channel registrations: an
+ * implicitly superseded plugin can stay loaded for its provider capability, and without
+ * suppression its dead claim either wins first-wins registration over the planned replacement or
+ * lands in the channel-conflict set and silently drops the plugin's remaining tool
+ * registrations. `supersede-keep` claims are deliberately NOT suppressed: the manifest contract
+ * preserves both explicitly selected plugins and reports duplicate channel/tool diagnostics
+ * instead of silently changing the requested plugin set. Probe-less like the validation
+ * projection, so runtime suppression and projected ownership can only diverge from the applied
+ * pass together.
+ */
+export function collectSupersededChannelClaims(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
+  /** Authored config whose entries count as operator selections (see `planPluginAutoEnable`). */
+  selectionConfig?: OpenClawConfig;
+  /** Ambient env-trigger policy of the pass being mirrored; env-only channels obey it. */
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}): ReadonlySet<string> {
+  const suppressed = new Set<string>();
+  if (params.config.plugins?.enabled === false) {
+    return suppressed;
+  }
+  const candidates = detectPluginAutoEnableCandidates({
+    config: params.config,
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+    setupProbes: "skip",
+    ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
+  });
+  const plan = planPluginAutoEnable({
+    config: params.config,
+    candidates,
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+    ...(params.selectionConfig ? { selectionConfig: params.selectionConfig } : {}),
+  });
+  for (const [channelId, decisions] of plan.channelDecisions) {
+    for (const [pluginId, decision] of decisions) {
+      if (decision === "supersede-disable") {
+        suppressed.add(channelClaimSuppressionKey(pluginId, channelId));
+      }
+    }
+  }
+  return suppressed;
 }

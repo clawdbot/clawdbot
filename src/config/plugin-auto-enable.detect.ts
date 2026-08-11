@@ -6,6 +6,7 @@ import {
   resolveConfiguredPluginAutoEnableCandidates,
   resolvePluginAutoEnableReadiness,
   resolvePluginAutoEnableManifestRegistry,
+  type PluginSetupProbePolicy,
 } from "./plugin-auto-enable.shared.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -17,6 +18,7 @@ export function detectPluginAutoEnableCandidates(params: {
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  setupProbes?: PluginSetupProbePolicy;
 }): PluginAutoEnableCandidate[] {
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
@@ -25,6 +27,7 @@ export function detectPluginAutoEnableCandidates(params: {
     env,
     params.discovery,
     params.ambientEnvTriggers,
+    params.setupProbes,
   );
   if (!readiness.mayNeedAutoEnable) {
     return [];
@@ -39,5 +42,6 @@ export function detectPluginAutoEnableCandidates(params: {
     env,
     registry,
     configuredChannelIds: readiness.configuredChannelIds,
+    setupProbes: params.setupProbes,
   });
 }

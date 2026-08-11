@@ -82,6 +82,11 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     coreGatewayMethods: new Set(coreGatewayMethodNames),
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
+    // Channel claims auto-enable superseded (channelClaimSuppressionKey-keyed). The loader fills
+    // this after discovery; registerChannel suppresses these claims instead of racing first-wins,
+    // so a capability-preserved plugin keeps its tool registrations while its replacement owns
+    // the channel in any load order.
+    supersededChannelClaims: new Set<string>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),
     pushDiagnostic,
     ...modelCatalogRegistrars,

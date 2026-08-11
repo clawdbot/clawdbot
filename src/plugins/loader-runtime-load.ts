@@ -1,3 +1,4 @@
+import { collectSupersededChannelClaims } from "../config/plugin-auto-enable.apply.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import {
@@ -172,6 +173,23 @@ function loadOpenClawPluginsInternal(
         warningCacheKey: context.cacheKey,
         suppliedManifestRegistry: options.manifestRegistry,
       });
+    // Plan-aware channel replacement: claims auto-enable superseded must not race first-wins
+    // registration. Computed once per load from the same probe-less plan config validation
+    // projects ownership from, so the served channel and the validated schema stay one plugin.
+    registryBuilder.setSupersededChannelClaims(
+      collectSupersededChannelClaims({
+        config: context.cfg,
+        env: context.env,
+        manifestRegistry,
+        // The authored activation source: the completed config's generated `enabled: true`
+        // entries must not read as operator selections, or every implicit supersession replans
+        // as an operator keep and nothing suppresses.
+        selectionConfig: context.activationSourceConfig,
+        // Mirror the caller's plan policy: a startup that suppresses ambient env triggers must
+        // not have this replan resurrect env-only channels and their supersessions.
+        ...(options.ambientEnvTriggers ? { ambientEnvTriggers: options.ambientEnvTriggers } : {}),
+      }),
+    );
     const selectedMiddlewareOwnerManifests = new Map<
       string,
       (typeof manifestRegistry.plugins)[number]
@@ -245,6 +263,10 @@ function loadOpenClawPluginsInternal(
         `[plugins] loaded ${registry.plugins.length} plugin(s) (${state.pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
       );
     }
+    // A suppressed claim's planned replacement may have failed to load or register (tolerated
+    // and rolled back above) or been excluded by a scoped load; restore any suppressed claim
+    // whose channel ended this load with no registered owner.
+    registryBuilder.restoreUnservedSuppressedChannelClaims();
     // Scoped snapshots may omit the configured memory plugin intentionally.
     if (!onlyPluginIdSet && typeof memorySlot === "string" && !state.memorySlotMatched) {
       registry.diagnostics.push({
