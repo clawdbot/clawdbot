@@ -475,7 +475,7 @@ describe("plugin npm package manifest staging", () => {
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
-  it("packs and loads both mapped channel-state probes from one installed plugin", () => {
+  it("packs and loads both mapped channel-state probes from one package artifact", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-state-runtime-");
     const packageDir = writePublishablePluginPackage(repoDir);
     const sourcePackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
@@ -564,7 +564,7 @@ describe("plugin npm package manifest staging", () => {
       );
       expect(extract.status, extract.stderr).toBe(0);
 
-      const installedRoot = join(consumerDir, "package");
+      const packageRoot = join(consumerDir, "package");
       const load = spawnSync(
         process.execPath,
         [
@@ -573,24 +573,24 @@ describe("plugin npm package manifest staging", () => {
           `
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-const root = ${JSON.stringify(installedRoot)};
+const root = ${JSON.stringify(packageRoot)};
 const pkg = JSON.parse(fs.readFileSync(root + "/package.json", "utf8"));
 for (const key of ["configuredState", "persistedAuthState"]) {
   const state = pkg.openclaw.channel[key];
   const loaded = await import(new URL(state.specifier, pathToFileURL(root + "/")));
-  if (loaded[state.exportName]?.() !== true) throw new Error("installed state checker failed: " + key);
+  if (loaded[state.exportName]?.() !== true) throw new Error("packed state checker failed: " + key);
 }
-process.stdout.write("INSTALLED_PLUGIN_CHANNEL_STATE_OK\\n");
+process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
 `,
         ],
         {
-          cwd: installedRoot,
+          cwd: packageRoot,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
       expect(load.status, load.stderr).toBe(0);
-      expect(load.stdout).toBe("INSTALLED_PLUGIN_CHANNEL_STATE_OK\n");
+      expect(load.stdout).toBe("PACKED_PLUGIN_CHANNEL_STATE_OK\n");
     });
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
