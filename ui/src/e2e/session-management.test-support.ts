@@ -121,8 +121,33 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-export async function activateMenuItem(item: Locator): Promise<void> {
-  await item.evaluate((element) => (element as HTMLElement).click());
+/** Dispatches before a successful action can remove its own control from the DOM. */
+export async function activateSelfRemovingControl(control: Locator): Promise<void> {
+  await control.evaluate((element) => {
+    const target = element as HTMLElement & { disabled?: boolean };
+    const style = getComputedStyle(target);
+    const bounds = target.getBoundingClientRect();
+    const root = target.getRootNode();
+    const hitTestRoot = root instanceof ShadowRoot ? root : document;
+    const hitTarget = hitTestRoot.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    if (
+      !target.isConnected ||
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      bounds.width <= 0 ||
+      bounds.height <= 0 ||
+      target.disabled === true ||
+      target.getAttribute("aria-disabled") === "true" ||
+      !hitTarget ||
+      (hitTarget !== target && !target.contains(hitTarget))
+    ) {
+      throw new Error("Self-removing control must be visible and enabled before activation");
+    }
+    target.click();
+  });
 }
 
 export function trimmedTextContents(locator: Locator): Promise<string[]> {

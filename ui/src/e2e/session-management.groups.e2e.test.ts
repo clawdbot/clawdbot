@@ -2,7 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   actionOpacity,
-  activateMenuItem,
+  activateSelfRemovingControl,
   captureUiProof,
   captureUiProofEnabled,
   collapsedSessionSectionsStorageKey,
@@ -317,7 +317,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
       await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Archive session" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -572,7 +572,7 @@ suite.define(() => {
       await groupMenuButton.click();
       await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-group-menu.png");
-      await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group…" }));
       // The rename runs in the owned dialog, prefilled with the name it is
       // changing; a native prompt here would be a regression.
       const renameDialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
@@ -606,7 +606,7 @@ suite.define(() => {
       });
       await projectsGroup.locator(".sidebar-recent-sessions__head").hover();
       await projectsMenuButton.click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Delete group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Delete group…" }));
       // The confirm names the group and what happens to its sessions, and only
       // the operator's answer sends sessions.groups.delete.
       await page
@@ -648,7 +648,7 @@ suite.define(() => {
       const showAutomationSessions = page.getByRole("menuitemcheckbox", {
         name: "Show automation sessions",
       });
-      await activateMenuItem(showAutomationSessions);
+      await activateSelfRemovingControl(showAutomationSessions);
       await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
 
       await sortSessionsButton.click();
@@ -683,7 +683,7 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-groupby-sort-menu-closed.png");
 
       await sortSessionsButton.click();
-      await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
+      await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
     } finally {
@@ -743,7 +743,7 @@ suite.define(() => {
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Rename group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group…" }));
       await submitInputDialog(page, "Projects");
       await gateway.waitForRequest("sessions.groups.rename");
       await gateway.rejectDeferred("sessions.groups.rename", {
@@ -824,7 +824,7 @@ suite.define(() => {
       await sessionTen.hover();
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
       await openSessionMenuSubmenu(page, "Move to group");
-      await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
       await submitInputDialog(page, "Gamma");
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
@@ -913,7 +913,7 @@ suite.define(() => {
       const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
       await sortSessionsButton.locator("..").hover();
       await sortSessionsButton.click();
-      await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
+      await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
@@ -954,7 +954,7 @@ suite.define(() => {
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
       await submitInputDialog(page, "Second group");
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
