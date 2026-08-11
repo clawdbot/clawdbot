@@ -174,11 +174,11 @@ describe("prepared harness source delivery", () => {
       };
       const followupRun = createFollowupRun();
       followupRun.run.sessionKey = undefined;
-      followupRun.run.sessionFile = undefined;
+      followupRun.run.sessionFile = followupRun.run.sessionId;
       followupRun.run.sourceReplyDeliveryMode = runtimeOpts.sourceReplyDeliveryMode;
       setSourceReplyDeliveryModeOrigin(followupRun.run, runtimeOpts.sourceReplyDeliveryModeOrigin);
-      // Dispatch already captured its session snapshot; the embedded fixture has
-      // no durable transcript row and should therefore skip writer admission.
+      // Dispatch already captured its session snapshot; the embedded fixture uses
+      // a SQLite compatibility key and has no durable row for writer admission.
       sessionStoreMocks.currentEntry = undefined;
       const execution = await executeAgentTurn({
         commandBody: "hello",
@@ -211,7 +211,11 @@ describe("prepared harness source delivery", () => {
           `expected settled fallback execution: ${embeddedErrorText}; ${JSON.stringify({ execution, failedParams })}`,
         );
       }
-      return execution.runResult.payloads[0] satisfies ReplyPayload;
+      const payload = execution.runResult.payloads?.[0];
+      if (!payload) {
+        throw new Error("expected settled fallback payload");
+      }
+      return payload satisfies ReplyPayload;
     });
     const deliver = vi.fn(async () => {});
     const onPartialReply = vi.fn(async () => {});
