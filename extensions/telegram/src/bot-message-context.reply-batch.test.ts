@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH } from "./message-cache.js";
 
 const CHAT = { id: 999, type: "private" as const, first_name: "Alice" };
 const SENDER = { id: 42, first_name: "Alice", is_bot: false as const };
@@ -25,6 +26,29 @@ function quotingMessage(messageId: number, text: string) {
     reply_to_message: REPLY_TARGET,
     quote: { text: QUOTED_LINE, position: 0 },
   };
+}
+
+/** A quoting message whose reply target is unique, so none of them dedupe away. */
+function quotingDistinctSource(messageId: number) {
+  const sourceText = `distinct source ${messageId}`;
+  return {
+    message_id: messageId,
+    date: 1_700_000_000 + messageId,
+    chat: CHAT,
+    from: SENDER,
+    text: `ask ${messageId}`,
+    reply_to_message: { ...REPLY_TARGET, message_id: 500 + messageId, text: sourceText },
+    quote: { text: sourceText, position: 0 },
+  };
+}
+
+function countReplyChainEntries(body: string): number {
+  const block = body.match(/\[Reply chain - nearest first\]\n([\s\S]*?)\n\[\/Reply chain\]/)?.[1];
+  if (!block) {
+    return 0;
+  }
+  // Entries render as `[1. Bob id:501]` followed by their body lines.
+  return block.split("\n").filter((line) => /^\[\d+\. /.test(line)).length;
 }
 
 function plainMessage(messageId: number, text: string) {
@@ -67,5 +91,21 @@ describe("buildTelegramMessageContext reply/quote debounce batches", () => {
     const body = context?.ctxPayload.Body ?? "";
     expect(body).toContain(QUOTED_LINE);
     expect(body.split(QUOTED_LINE).length - 1).toBe(1);
+  });
+
+  // A debounce window has no per-item cap of its own, so without a bound here a
+  // burst of distinct quote-replies would grow model-visible context without limit.
+  it("caps batch-derived reply targets at the canonical chain depth", async () => {
+    const burst = Array.from({ length: TELEGRAM_REPLY_CHAIN_MAX_DEPTH * 2 + 2 }, (_, i) =>
+      quotingDistinctSource(i + 1),
+    );
+    const context = await buildTelegramMessageContextForTest({
+      message: plainMessage(99, burst.map((entry) => entry.text).join("\n")),
+      options: { inboundDebounceMessages: burst },
+    });
+
+    const entries = countReplyChainEntries(context?.ctxPayload.Body ?? "");
+    expect(entries).toBeGreaterThan(0);
+    expect(entries).toBeLessThanOrEqual(TELEGRAM_REPLY_CHAIN_MAX_DEPTH);
   });
 });

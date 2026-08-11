@@ -65,7 +65,7 @@ import {
   recordTelegramGroupHistoryEntry,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
-import type { TelegramReplyChainEntry } from "./message-cache.js";
+import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH, type TelegramReplyChainEntry } from "./message-cache.js";
 
 type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
@@ -383,11 +383,16 @@ export async function buildTelegramInboundContextPayload(params: {
   ];
   // A batch carries one reply target per buffered message, but the synthetic
   // message inherits only the first one. Append the targets the merge dropped,
-  // keyed by id so a re-quoted source is not listed twice.
+  // keyed by id so a re-quoted source is not listed twice, and stop at the
+  // canonical chain depth -- a debounce window has no item cap of its own, so
+  // an unbounded append here would grow model-visible context without limit.
   const seenReplyMessageIds = new Set(rawReplyChain.map((entry) => entry.messageId));
   for (const debouncedMessage of hasMultiMessageDebounceBatch
     ? (options?.inboundDebounceMessages ?? [])
     : []) {
+    if (rawReplyChain.length >= TELEGRAM_REPLY_CHAIN_MAX_DEPTH) {
+      break;
+    }
     const visible = resolveVisibleReplyTarget(describeReplyTarget(debouncedMessage));
     const entry = visible ? replyTargetToChainEntry(visible) : undefined;
     if (entry?.messageId === undefined || seenReplyMessageIds.has(entry.messageId)) {
