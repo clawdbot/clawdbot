@@ -115,7 +115,10 @@ function sanitizeContextJsonValue(
         budgetExhausted = true;
         continue;
       }
-      const sanitized = sanitizeContextJsonValue(entry, budget, depth + 1);
+      // Sanitize against a scratch budget; this parent commits the retained
+      // element's serialized size exactly once below.
+      const scratch: ContextJsonBudget = { remaining: budget.remaining };
+      const sanitized = sanitizeContextJsonValue(entry, scratch, depth + 1);
       budget.remaining -= serializedLength(sanitized);
       result.push(sanitized);
     }
@@ -147,7 +150,13 @@ function sanitizeContextJsonValue(
     // Keys are channel-controlled text too: cap them like string values and
     // charge them to the budget so key fan-out cannot bypass the total.
     const safeKey = neutralizeMarkdownFences(truncateContextJsonString(key));
-    const sanitized = sanitizeContextJsonValue(entry, budget, depth + 1);
+    // Reserve the nested value against a scratch budget: the recursion debits
+    // as it works, and the property is committed to the shared budget only
+    // when accepted whole. Debiting the shared budget during recursion and
+    // then again for the retained value would charge nested containers twice
+    // and drop properties that actually fit.
+    const scratch: ContextJsonBudget = { remaining: budget.remaining };
+    const sanitized = sanitizeContextJsonValue(entry, scratch, depth + 1);
     // Reserve the property's serialized size before appending: JSON.stringify
     // emits the key with quotes and escapes (a key of N raw chars can emit ~2N
     // chars), so charging raw key length would let escaped keys push the block

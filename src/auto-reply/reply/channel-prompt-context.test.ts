@@ -167,11 +167,55 @@ describe("formatContextJsonBlock", () => {
     expect(() => parseContextJsonBlock(block)).not.toThrow();
   });
 
+  it("charges a nested value to the budget once, not during recursion and again on retain", () => {
+    // Adversarial shape from review: the recursion debited the shared budget
+    // while sanitizing the nested array, then the retained property was
+    // charged its full serialized size against the already-reduced budget, so
+    // a payload that fits under 50,000 chars lost `payload` entirely.
+    const payload = { payload: Array(20).fill("x".repeat(2_000)) as string[] };
+    expect(JSON.stringify(payload).length).toBeLessThan(50_000);
+
+    const parsed = parseContextJsonBlock(formatContextJsonBlock("Context:", payload)) as {
+      payload: string[];
+    };
+
+    expect(parsed.payload).toEqual(payload.payload);
+  });
+
+  it("preserves nested array entries when their serialized size fits the budget", () => {
+    const payload = Array.from({ length: 4 }, (_object, objectIndex) =>
+      Object.fromEntries(
+        Array.from({ length: 5 }, (_key, keyIndex) => [
+          `key-${objectIndex}-${keyIndex}`,
+          "x".repeat(2_000),
+        ]),
+      ),
+    );
+    expect(JSON.stringify(payload).length).toBeLessThan(50_000);
+
+    const parsed = parseContextJsonBlock(formatContextJsonBlock("Context:", payload)) as Array<
+      Record<string, string> | string
+    >;
+
+    expect(parsed.every((entry) => typeof entry === "object")).toBe(true);
+    expect(parsed).toEqual(payload);
+  });
+
   it("bounds nesting depth and flags the cut", () => {
     let payload: unknown = "leaf";
     for (let level = 0; level < 12; level++) {
       payload = { nested: payload };
     }
+
+    const block = formatContextJsonBlock("Context:", payload);
+
+    expect(block).toContain("…[truncated: max depth reached]");
+    expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+
+  it("cuts cyclic values at the depth limit and keeps valid JSON", () => {
+    const payload: Record<string, unknown> = {};
+    payload.self = payload;
 
     const block = formatContextJsonBlock("Context:", payload);
 
