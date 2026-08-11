@@ -425,4 +425,3 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 }
 
 export type WorkerEnvironmentService = ReturnType<typeof createWorkerEnvironmentService>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
