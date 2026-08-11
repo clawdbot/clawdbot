@@ -268,6 +268,15 @@ export async function applySessionsPatchToStore(params: {
     const raw = patch.execNode;
     if (raw === null) {
       delete next.execNode;
+      if (!("execHost" in patch)) {
+        delete next.execHost;
+      }
+      if (!("execSecurity" in patch)) {
+        delete next.execSecurity;
+      }
+      if (!("execAsk" in patch)) {
+        delete next.execAsk;
+      }
     } else if (raw !== undefined) {
       const trimmed = String(raw).trim();
       if (!trimmed) {

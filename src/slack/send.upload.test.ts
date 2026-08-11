@@ -109,4 +109,38 @@ describe("sendMessageSlack file upload with user IDs", () => {
       expect.objectContaining({ channel_id: "D99RESOLVED" }),
     );
   });
+
+  it("uppercases lowercase bare user ID before conversations.open", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("u2zh3mfsr", "screenshot", {
+      token: "xoxb-test",
+      client,
+      mediaUrl: "/tmp/screenshot.png",
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledWith({
+      users: "U2ZH3MFSR",
+    });
+    expect(client.files.uploadV2).toHaveBeenCalledWith(
+      expect.objectContaining({ channel_id: "D99RESOLVED" }),
+    );
+  });
+
+  it("uppercases lowercase prefixed user ID before conversations.open", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("user:uabc123", "image", {
+      token: "xoxb-test",
+      client,
+      mediaUrl: "/tmp/photo.png",
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledWith({
+      users: "UABC123",
+    });
+    expect(client.files.uploadV2).toHaveBeenCalledWith(
+      expect.objectContaining({ channel_id: "D99RESOLVED" }),
+    );
+  });
 });
