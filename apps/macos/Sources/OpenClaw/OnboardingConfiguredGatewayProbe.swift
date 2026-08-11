@@ -30,8 +30,17 @@ final class OnboardingConfiguredGatewayProbe {
         }
     }
 
+    enum LiveVerification: Equatable {
+        case verified
+        case failed(status: String?, error: String?)
+        case unsupported
+        case unavailable
+        case superseded
+    }
+
     private let gateway: GatewayConnection
     private let timeoutMs: Double
+    private let verificationTimeoutMs: Double
     private var generation: UInt64 = 0
     private var activeProbeCount = 0
     private var reconnectPending = false
@@ -41,10 +50,12 @@ final class OnboardingConfiguredGatewayProbe {
 
     init(
         gateway: GatewayConnection = .shared,
-        timeoutMs: Double = 15000)
+        timeoutMs: Double = 15000,
+        verificationTimeoutMs: Double = 150_000)
     {
         self.gateway = gateway
         self.timeoutMs = timeoutMs
+        self.verificationTimeoutMs = verificationTimeoutMs
     }
 
     /// Allocate before queuing async work so user-event order, not Task start
@@ -155,6 +166,44 @@ final class OnboardingConfiguredGatewayProbe {
 
     func isCurrent(_ route: BoundRoute) async -> Bool {
         await self.gateway.isCurrentRoute(route.route)
+    }
+
+    /// A configured model string only proves config exists, not that the route
+    /// can complete a turn: a migrated OAuth profile can be permanently
+    /// expired. Prove inference on the bound route before onboarding hands off
+    /// to the dashboard. Gateways too old to advertise the verification RPC
+    /// keep the config-only handoff.
+    func verifyConfiguredRoute(
+        _ route: BoundRoute,
+        attempt: Attempt) async -> LiveVerification
+    {
+        guard self.isCurrent(attempt) else { return .superseded }
+        guard let supported = await self.gateway.supportsServerMethod(
+            "openclaw.setup.verify",
+            ifCurrentRoute: route.route)
+        else { return .superseded }
+        guard supported else { return .unsupported }
+        do {
+            let data = try await gateway.request(
+                method: "openclaw.setup.verify",
+                params: [:],
+                timeoutMs: self.verificationTimeoutMs,
+                ifCurrentRoute: route.route)
+            guard await self.gateway.isCurrentRoute(route.route),
+                  self.isCurrent(attempt)
+            else { return .superseded }
+            let result = try JSONDecoder().decode(OnboardingAISetupModel.ActivateResult.self, from: data)
+            return result.ok
+                ? .verified
+                : .failed(status: result.status, error: result.error)
+        } catch is CancellationError {
+            return .superseded
+        } catch {
+            guard await self.gateway.isCurrentRoute(route.route),
+                  self.isCurrent(attempt)
+            else { return .superseded }
+            return .unavailable
+        }
     }
 
     func consumeReconnects(onReconnect: @escaping @MainActor () -> Void) async {

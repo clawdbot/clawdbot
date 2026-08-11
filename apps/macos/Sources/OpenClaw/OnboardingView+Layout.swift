@@ -184,7 +184,7 @@ extension OnboardingView {
             self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
-            case let .configured(modelRef, _):
+            case let .configured(modelRef, route):
                 switch pendingState {
                 case .activating, .activationExpired, .completed:
                     // A live setup/verification already owns this marker. A
@@ -208,17 +208,18 @@ extension OnboardingView {
                     }
                 }
                 guard Self.shouldOpenConfiguredGatewayDashboard(
-                    onboardingVisible: self.onboardingVisible,
+                    onboardingVisible: knownVisible || self.onboardingVisible,
                     expectedMode: expectedMode,
                     currentMode: self.state.connectionMode,
                     systemAgentResumePending: systemAgentResumePending,
                     setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
                 else { return }
-                self.onboardingVisible = false
-                self.configuredGatewayProbe.invalidate()
-                OnboardingController.markComplete()
-                OnboardingController.shared.close()
-                AppNavigationActions.openDashboard()
+                await self.verifyAndCompleteConfiguredGatewayHandoff(
+                    route: route,
+                    attempt: probeAttempt,
+                    expectedMode: expectedMode,
+                    expectedRouteIdentity: expectedRouteIdentity,
+                    knownVisible: knownVisible)
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -256,6 +257,56 @@ extension OnboardingView {
                 break
             }
         }
+    }
+
+    /// A configured model string is not proof that the route can complete a
+    /// turn: a migrated OAuth profile can be permanently expired. Prove
+    /// inference live before the dashboard handoff.
+    private func verifyAndCompleteConfiguredGatewayHandoff(
+        route: OnboardingConfiguredGatewayProbe.BoundRoute,
+        attempt: OnboardingConfiguredGatewayProbe.Attempt,
+        expectedMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        knownVisible: Bool) async
+    {
+        let verification = await self.configuredGatewayProbe.verifyConfiguredRoute(
+            route,
+            attempt: attempt)
+        guard self.configuredGatewayProbe.isCurrent(attempt),
+              await self.configuredGatewayProbe.isCurrent(route),
+              self.aiSetupRouteIdentityProvider() == expectedRouteIdentity
+        else { return }
+        switch verification {
+        case .verified, .unsupported:
+            // Gateways too old for the verification RPC keep the config-only handoff.
+            break
+        case .failed:
+            // The route answered but cannot complete a turn. Stay in
+            // onboarding and enter the standard AI setup recovery flow.
+            self.resumePendingInferenceSetup()
+            return
+        case .unavailable:
+            self.showConfiguredGatewayProbeBlocker(.unavailable)
+            return
+        case .superseded:
+            return
+        }
+        // The verification round-trip can overlap a user-started setup or a
+        // fresh activation marker; re-gate before the handoff.
+        guard Self.shouldOpenConfiguredGatewayDashboard(
+            onboardingVisible: knownVisible || self.onboardingVisible,
+            expectedMode: expectedMode,
+            currentMode: self.state.connectionMode,
+            systemAgentResumePending: OnboardingSystemAgentResumeStore.pendingState(
+                for: expectedRouteIdentity,
+                defaults: self.systemAgentDefaults) != .none,
+            setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
+        else { return }
+        self.onboardingVisible = false
+        self.configuredGatewayProbe.invalidate()
+        OnboardingController.markComplete()
+        OnboardingController.shared.close()
+        AppNavigationActions.openDashboard()
     }
 
     private func showConfiguredGatewayProbeBlocker(

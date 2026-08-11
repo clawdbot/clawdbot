@@ -2344,6 +2344,94 @@ struct OnboardingAISetupTests {
         #expect(isPending(defaults))
     }
 
+    @Test func `failed configured route verification enters AI setup recovery instead of handing off`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyRecoveryTests"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list":
+                    return configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify":
+                    return rejectedSetupVerificationResponse(id: request.id)
+                case "openclaw.setup.detect":
+                    return detectedSetupResponse(id: request.id)
+                case "openclaw.setup.activate":
+                    return failedActivationResponse(id: request.id)
+                default:
+                    return nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        let view = harness.view(state: appState, defaults: defaults, routeIdentityProvider: { "local" })
+        view.onboardingVisible = true
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await probe.value
+        let requests = await waitForAISetupRequests(harness.recorder, count: 3)
+        await settleQueuedAISetupTasks()
+
+        #expect(Array(requests.methods.prefix(3)) == [
+            "agents.list",
+            "openclaw.setup.verify",
+            "openclaw.setup.detect",
+        ])
+        // The failed route must not hand off; it enters AI setup recovery.
+        // (View @State does not read back on uninstalled views, so assert on
+        // the model and the recorded request sequence instead.)
+        #expect(view.aiSetup.phase != .idle)
+        #expect(!view.aiSetup.connected)
+        #expect(!view.aiSetup.configuredGatewayProbeUnavailable)
+    }
+
+    @Test func `configured route verification failure keeps onboarding on the probe blocker`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredVerifyUnavailableTests"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "agents.list":
+                    return configuredModelResponse(id: request.id)
+                case "openclaw.setup.verify":
+                    return unavailableGatewayResponse(id: request.id)
+                default:
+                    return nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.verify"]))
+            })
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        let view = harness.view(state: appState, defaults: defaults, routeIdentityProvider: { "local" })
+        view.onboardingVisible = true
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await probe.value
+        await settleQueuedAISetupTasks()
+
+        #expect(await (harness.recorder.snapshot()).methods == ["agents.list", "openclaw.setup.verify"])
+        #expect(view.aiSetup.configuredGatewayProbeUnavailable)
+        #expect(view.aiSetup.detectError != nil)
+        #expect(!view.aiSetup.connected)
+    }
+
     @Test func `verified configured model stays read only until pending deadline`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingPendingConfiguredVerificationTests"))
         let url = try #require(URL(string: "ws://localhost:18789"))

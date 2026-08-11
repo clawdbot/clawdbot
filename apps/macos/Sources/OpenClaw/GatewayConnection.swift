@@ -765,6 +765,18 @@ extension GatewayConnection {
 
     func supportsServerMethod(
         _ method: String,
+        ifCurrentRoute route: Route) async -> Bool?
+    {
+        guard let endpoint = try? await currentEndpoint() else { return nil }
+        guard self.routeMatchesCurrentState(route, endpoint: endpoint),
+              let snapshot = lastSnapshot
+        else { return nil }
+        let methods = snapshot.features["methods"]?.value as? [AnyCodable] ?? []
+        return methods.contains { ($0.value as? String) == method }
+    }
+
+    func supportsServerMethod(
+        _ method: String,
         ifCurrentServerLease lease: ServerLease) async -> Bool?
     {
         guard await self.isCurrentServerLease(lease),
