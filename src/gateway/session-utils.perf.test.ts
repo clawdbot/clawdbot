@@ -95,9 +95,10 @@ describe("listSessionsFromStore resolver cache", () => {
         expect(result.sessions.length).toBe(rowCount);
 
         // The cache keys on rowContext are (provider, model) or
-        // (agentId, provider, model). With K=5 unique tuples we must see K
-        // resolver calls, not O(N=30).
-        expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
+        // (agentId, provider, model). Thinking resolves one request default
+        // plus K=5 cached row tuples; cost resolves only the K row tuples.
+        // Both stay O(K), not O(N=30).
+        expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length + 1);
         expect(costSpy).toHaveBeenCalledTimes(tuples.length);
       } finally {
         thinkingSpy.mockRestore();
