@@ -310,7 +310,7 @@
    bubbles; --bg-muted/--border-strong separate in both modes without an override. */
 .chat-text :where(:not(pre, a.markdown-file-link) > code) {
   background: var(--bg-muted);
-  padding: 0.15em 0.35em;
+  padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   overflow-wrap: anywhere;
