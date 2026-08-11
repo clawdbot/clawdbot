@@ -77,7 +77,9 @@ function resolveConversationDeliveryStoreScope(
   };
 }
 
-function readPlatformReceiptIdFromActionResult(result: MessageActionResult): string | undefined {
+function readPlatformReceiptEvidenceFromActionResult(
+  result: MessageActionResult,
+): { messageId: string; source: "receipt" } | undefined {
   if (result.kind !== "send") {
     return undefined;
   }
@@ -85,7 +87,8 @@ function readPlatformReceiptIdFromActionResult(result: MessageActionResult): str
   if (!sendResult || !("receipt" in sendResult) || !sendResult.receipt) {
     return undefined;
   }
-  return resolveMessageReceiptPrimaryId(sendResult.receipt);
+  const messageId = resolveMessageReceiptPrimaryId(sendResult.receipt);
+  return messageId ? { messageId, source: "receipt" } : undefined;
 }
 
 function resultFromExistingOperation(
@@ -97,8 +100,14 @@ function resultFromExistingOperation(
       return {
         deliveryStatus: "sent",
         operation,
-        ...(operation.platformMessageId || operation.preparedMessageId
-          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
+        ...((operation.platformMessageIdSource === "receipt" && operation.platformMessageId) ||
+        operation.preparedMessageId
+          ? {
+              messageId:
+                operation.platformMessageIdSource === "receipt"
+                  ? operation.platformMessageId
+                  : operation.preparedMessageId,
+            }
           : {}),
       };
     case "queued":
@@ -206,7 +215,7 @@ export async function sendGatewayConversationMessage(params: {
     if (action.handledBy !== "core" || !action.sendResult) {
       throw new Error("Conversation delivery did not return a core platform send result");
     }
-    const platformMessageId = readPlatformReceiptIdFromActionResult(action);
+    const platformEvidence = readPlatformReceiptEvidenceFromActionResult(action);
     if (action.sendResult.deliveryStatus === "suppressed") {
       const operation = params.deps.markSuppressed(scope, begun.record.operationId);
       return { deliveryStatus: "suppressed", operation };
@@ -220,9 +229,12 @@ export async function sendGatewayConversationMessage(params: {
     const operation =
       authoritativeOperation.status === "sent" || authoritativeOperation.status === "replied"
         ? authoritativeOperation
-        : params.deps.markSent(scope, begun.record.operationId, platformMessageId);
+        : params.deps.markSent(scope, begun.record.operationId, platformEvidence);
     const confirmedMessageId =
-      platformMessageId ?? operation.platformMessageId ?? operation.preparedMessageId;
+      platformEvidence?.messageId ??
+      (operation.platformMessageIdSource === "receipt"
+        ? operation.platformMessageId
+        : operation.preparedMessageId);
     return {
       deliveryStatus: "sent",
       operation,

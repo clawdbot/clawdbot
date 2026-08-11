@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { completeDurableDelivery } from "../../infra/outbound/delivery-completion.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -137,9 +138,15 @@ describe("conversation delivery store", () => {
         status: "queued",
         queueId: "queue-2",
       });
-      expect(markConversationDeliverySent(scope, "operation-2", "platform-2")).toMatchObject({
+      expect(
+        markConversationDeliverySent(scope, "operation-2", {
+          messageId: "platform-2",
+          source: "receipt",
+        }),
+      ).toMatchObject({
         status: "sent",
         platformMessageId: "platform-2",
+        platformMessageIdSource: "receipt",
       });
       const replied = markConversationDeliveryReplied(scope, {
         operationId: "operation-2",
@@ -164,7 +171,40 @@ describe("conversation delivery store", () => {
       expect(getConversationDeliveryOperation(scope, "operation-2")).toEqual(replied);
       // Late queue/sent callbacks cannot regress a completed correlated reply.
       expect(markConversationDeliveryQueued(scope, "operation-2", "queue-late")).toEqual(replied);
-      expect(markConversationDeliverySent(scope, "operation-2", "platform-late")).toEqual(replied);
+      expect(
+        markConversationDeliverySent(scope, "operation-2", {
+          messageId: "platform-late",
+          source: "receipt",
+        }),
+      ).toEqual(replied);
+    });
+  });
+
+  it("does not expose inbound reply evidence as a durable platform receipt", async () => {
+    await withConversationStore(async ({ scope, conversationRef }) => {
+      beginConversationDeliveryOperation(scope, {
+        operationId: "operation-inbound-evidence",
+        operationKind: "turn",
+        conversationRef,
+        message: "hello",
+        preparedMessageId: "prepared-inbound-evidence",
+      });
+      markConversationDeliverySent(scope, "operation-inbound-evidence", {
+        messageId: "inbound-reply-target",
+        source: "inbound-reply",
+      });
+
+      await expect(
+        completeDurableDelivery(
+          {
+            kind: "conversation",
+            agentId: scope.agentId,
+            operationId: "operation-inbound-evidence",
+            storePath: scope.storePath,
+          },
+          { channel: "reef", messageId: "bare-result-id" },
+        ),
+      ).resolves.toEqual({ state: "delivered" });
     });
   });
 
@@ -180,7 +220,12 @@ describe("conversation delivery store", () => {
 
       expect(unknown.status).toBe("unknown");
       expect(markConversationDeliveryQueued(scope, "operation-3", "queue-late")).toEqual(unknown);
-      expect(markConversationDeliverySent(scope, "operation-3", "platform-late")).toEqual(unknown);
+      expect(
+        markConversationDeliverySent(scope, "operation-3", {
+          messageId: "platform-late",
+          source: "receipt",
+        }),
+      ).toEqual(unknown);
     });
   });
 
@@ -205,9 +250,12 @@ describe("conversation delivery store", () => {
         queueId: "queue-rejected",
         rejectionError: "atomic message limit",
       });
-      expect(markConversationDeliverySent(scope, "operation-rejected", "platform-late")).toEqual(
-        rejected,
-      );
+      expect(
+        markConversationDeliverySent(scope, "operation-rejected", {
+          messageId: "platform-late",
+          source: "receipt",
+        }),
+      ).toEqual(rejected);
     });
   });
 
@@ -219,7 +267,10 @@ describe("conversation delivery store", () => {
         conversationRef,
         message: "hello",
       });
-      markConversationDeliverySent(scope, "operation-pruned-session", "platform-pruned");
+      markConversationDeliverySent(scope, "operation-pruned-session", {
+        messageId: "platform-pruned",
+        source: "receipt",
+      });
 
       await deleteSessionEntryLifecycle({
         agentId: scope.agentId,
@@ -258,7 +309,12 @@ describe("conversation delivery store", () => {
       const unknown = markConversationDeliveryUnknown(scope, "operation-4");
 
       expect(unknown).toMatchObject({ status: "unknown", queueId: "queue-4" });
-      expect(markConversationDeliverySent(scope, "operation-4", "platform-late")).toEqual(unknown);
+      expect(
+        markConversationDeliverySent(scope, "operation-4", {
+          messageId: "platform-late",
+          source: "receipt",
+        }),
+      ).toEqual(unknown);
     });
   });
 });

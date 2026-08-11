@@ -286,6 +286,17 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
   db.exec("ALTER TABLE conversations ADD COLUMN delivery_target TEXT NOT NULL DEFAULT '';");
 }
 
+/** Adds explicit provenance while leaving every preexisting platform id untrusted. */
+export function ensureConversationDeliveryReceiptSourceProjection(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "conversation_deliveries");
+  if (!columns || columns.has("platform_message_id_source")) {
+    return;
+  }
+  db.exec(
+    "ALTER TABLE conversation_deliveries ADD COLUMN platform_message_id_source TEXT CHECK (platform_message_id_source IS NULL OR platform_message_id_source IN ('receipt', 'inbound-reply'));",
+  );
+}
+
 /** Adds the validity projection and settles only rows left pending by older writers. */
 export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "session_nodes");

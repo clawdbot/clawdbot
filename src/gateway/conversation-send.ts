@@ -31,7 +31,7 @@ const defaultDeps: ConversationSendDeps = {
 function projectMessageId(
   operation: ConversationDeliveryRecord,
 ): { messageId: string; messageIdSource: "platform" | "prepared" } | Record<string, never> {
-  if (operation.platformMessageId) {
+  if (operation.platformMessageId && operation.platformMessageIdSource === "receipt") {
     return { messageId: operation.platformMessageId, messageIdSource: "platform" };
   }
   if (operation.preparedMessageId) {

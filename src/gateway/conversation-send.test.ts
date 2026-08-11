@@ -133,11 +133,21 @@ function createDeps() {
     markQueued: vi.fn((_scope: unknown, operationId: string, queueId: string) =>
       update(operationId, { status: "queued", queueId }),
     ),
-    markSent: vi.fn((_scope: unknown, operationId: string, platformMessageId?: string) =>
-      update(operationId, {
-        status: "sent",
-        ...(platformMessageId ? { platformMessageId } : {}),
-      }),
+    markSent: vi.fn(
+      (
+        _scope: unknown,
+        operationId: string,
+        platformEvidence?: { messageId: string; source: "receipt" | "inbound-reply" },
+      ) =>
+        update(operationId, {
+          status: "sent",
+          ...(platformEvidence
+            ? {
+                platformMessageId: platformEvidence.messageId,
+                platformMessageIdSource: platformEvidence.source,
+              }
+            : {}),
+        } as Partial<ConversationDeliveryRecord>),
     ),
     markSuppressed: vi.fn((_scope: unknown, operationId: string) =>
       update(operationId, { status: "suppressed" }),
@@ -191,6 +201,44 @@ describe("runGatewayConversationSend", () => {
       messageIdSource: "platform",
       queueId: "queue-1",
     });
+    expect(deps.operations.get("send-1")).toMatchObject({
+      platformMessageId: "reef-outbound-1",
+      platformMessageIdSource: "receipt",
+    });
+  });
+
+  it("classifies a legacy stored platform id without provenance as uncertain", async () => {
+    const deps = createDeps();
+    deps.operations.set("send-legacy-stored", {
+      operationId: "send-legacy-stored",
+      operationKind: "send",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello legacy",
+      status: "sent",
+      platformMessageId: "legacy-unproven-id",
+      createdAt: 100,
+      updatedAt: 101,
+    });
+
+    const result = await runGatewayConversationSend(
+      {
+        config: {},
+        agentId: "main",
+        senderIsOwner: true,
+        operationId: "send-legacy-stored",
+        conversationRef: conversation.conversationRef,
+        message: "hello legacy",
+      },
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: "sent",
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+    });
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
   it.each(["bare", "payload"] as const)(
@@ -248,6 +296,7 @@ describe("runGatewayConversationSend", () => {
       messageHash: "hello",
       status: "sent",
       platformMessageId: "reef-existing",
+      platformMessageIdSource: "receipt",
       queueId: "queue-existing",
       createdAt: 100,
       updatedAt: 200,

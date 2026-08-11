@@ -39,6 +39,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
+  ensureConversationDeliveryReceiptSourceProjection,
   ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
@@ -148,6 +149,11 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
       .get(),
   );
   return !sessionNodeColumns.has("entry_valid") || !hasContractTable;
+}
+
+function hasPendingConversationDeliveryReceiptSourceMigration(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "conversation_deliveries");
+  return Boolean(columns && !columns.has("platform_message_id_source"));
 }
 
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
@@ -538,8 +544,13 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
   const hasPendingSessionContractMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
     hasPendingSessionKeyContractSchemaMigration(database);
+  const hasPendingConversationReceiptSourceMigration =
+    userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
+    hasPendingConversationDeliveryReceiptSourceMigration(database);
   const hasPendingAdditiveMigration =
-    hasPendingMemoryMigration || hasPendingSessionContractMigration;
+    hasPendingMemoryMigration ||
+    hasPendingSessionContractMigration ||
+    hasPendingConversationReceiptSourceMigration;
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingAdditiveMigration) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
       allowMissingColumns: true,
@@ -597,6 +608,7 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion === targetVersion) {
+        ensureConversationDeliveryReceiptSourceProjection(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
@@ -624,6 +636,7 @@ function ensureAgentSchema(
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       migrateConversationDeliveryTargetColumn(db);
+      ensureConversationDeliveryReceiptSourceProjection(db);
       backfillOpenClawAgentSchema(db, previousVersion);
       // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.
       if (previousVersion < 11) {

@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS conversation_deliveries (
   reply_text TEXT,
   reply_timestamp INTEGER,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL, platform_message_id_source TEXT CHECK (platform_message_id_source IS NULL OR platform_message_id_source IN ('receipt', 'inbound-reply')),
   CHECK (
     (status = 'rejected' AND rejection_error IS NOT NULL) OR
     (status != 'rejected' AND rejection_error IS NULL)

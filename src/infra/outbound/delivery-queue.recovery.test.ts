@@ -9,6 +9,8 @@ import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
   markConversationDeliveryRejected,
+  markConversationDeliveryReplied,
+  markConversationDeliverySent,
   markConversationDeliverySuppressed,
 } from "../../config/sessions/conversation-delivery-store.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -304,7 +306,10 @@ describe("delivery-queue recovery", () => {
       vi.resetModules();
     }
   }
-  async function createConversationRecoveryFixture(operationId: string) {
+  async function createConversationRecoveryFixture(
+    operationId: string,
+    operationKind: "send" | "turn" = "send",
+  ) {
     const storePath = path.join(tmpDir(), "agent-sessions.json");
     const scope = { agentId: "main", storePath };
     const conversationRef = buildConversationRef({
@@ -331,7 +336,7 @@ describe("delivery-queue recovery", () => {
     );
     beginConversationDeliveryOperation(scope, {
       operationId,
-      operationKind: "send",
+      operationKind,
       conversationRef,
       message: "hello",
       preparedMessageId: "reef-prepared",
@@ -374,7 +379,16 @@ describe("delivery-queue recovery", () => {
   });
   it("finalizes a persisted conversation operation during queue recovery", async () => {
     const scope = await createConversationRecoveryFixture("operation-recovery");
-    const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
+    const deliveryResult = {
+      channel: "reef" as const,
+      messageId: "reef-platform",
+      receipt: {
+        primaryPlatformMessageId: "reef-platform",
+        platformMessageIds: ["reef-platform"],
+        parts: [{ platformMessageId: "reef-platform", kind: "text" as const, index: 0 }],
+        sentAt: 100,
+      },
+    };
     const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
@@ -386,7 +400,94 @@ describe("delivery-queue recovery", () => {
         status: "sent",
         queueId: "operation-recovery",
         platformMessageId: "reef-platform",
+        platformMessageIdSource: "receipt",
       });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+  it.each([
+    ["sent", false],
+    ["replied", true],
+  ] as const)(
+    "upgrades inbound-reply evidence to a canonical recovery receipt while preserving %s state",
+    async (_, replied) => {
+      const operationId = replied
+        ? "operation-recovery-inbound-replied"
+        : "operation-recovery-inbound-sent";
+      const scope = await createConversationRecoveryFixture(operationId, "turn");
+      const deliveryResult = {
+        channel: "reef" as const,
+        messageId: "reef-platform-receipt",
+        receipt: {
+          primaryPlatformMessageId: "reef-platform-receipt",
+          platformMessageIds: ["reef-platform-receipt"],
+          parts: [{ platformMessageId: "reef-platform-receipt", kind: "text" as const, index: 0 }],
+          sentAt: 100,
+        },
+      };
+      const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
+        markConversationDeliverySent(scope, operationId, {
+          messageId: "reef-inbound-reply-target",
+          source: "inbound-reply",
+        });
+        if (replied) {
+          markConversationDeliveryReplied(scope, {
+            operationId,
+            reply: {
+              messageId: "reef-inbound-reply",
+              replyToId: "reef-inbound-reply-target",
+              text: "ack",
+              timestamp: 101,
+            },
+          });
+        }
+        await params.onDeliveryResult?.(deliveryResult);
+        return [deliveryResult];
+      });
+      try {
+        const { result } = await runRecovery({ deliver });
+        expect(result.recovered).toBe(1);
+        expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+          status: replied ? "replied" : "sent",
+          platformMessageId: "reef-platform-receipt",
+          platformMessageIdSource: "receipt",
+          ...(replied
+            ? {
+                reply: {
+                  messageId: "reef-inbound-reply",
+                  replyToId: "reef-inbound-reply-target",
+                  text: "ack",
+                },
+              }
+            : {}),
+        });
+        expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+      }
+    },
+  );
+  it("keeps a bare recovered message id unproven", async () => {
+    const operationId = "operation-recovery-bare";
+    const scope = await createConversationRecoveryFixture(operationId);
+    const deliveryResult = { channel: "reef" as const, messageId: "reef-bare" };
+    const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
+      await params.onDeliveryResult?.(deliveryResult);
+      return [deliveryResult];
+    });
+    try {
+      const { result } = await runRecovery({ deliver });
+      expect(result.recovered).toBe(1);
+      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "sent",
+        queueId: operationId,
+        preparedMessageId: "reef-prepared",
+      });
+      expect(getConversationDeliveryOperation(scope, operationId)).not.toHaveProperty(
+        "platformMessageIdSource",
+      );
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     } finally {
       closeOpenClawAgentDatabasesForTest();

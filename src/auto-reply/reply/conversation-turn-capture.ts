@@ -167,7 +167,10 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
         // With no process-local waiter, ordinary inbound dispatch owns this
         // reply. It proves the outbound send, but must not become replayable as
         // an inline tool result on a later stable turn retry.
-        markConversationDeliverySent({ agentId, storePath }, operation.operationId, replyToId);
+        markConversationDeliverySent({ agentId, storePath }, operation.operationId, {
+          messageId: replyToId,
+          source: "inbound-reply",
+        });
       }
     }
     return false;
