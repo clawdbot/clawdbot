@@ -51,7 +51,12 @@ describe("chat thinking helpers", () => {
       },
     });
 
-    expect(state.currentOverride).toBe("ultra");
+    expect(state.selection).toEqual({
+      kind: "unanchored",
+      source: "override",
+      value: "ultra",
+      displayLabel: "Ultra",
+    });
     expect(state.options.map((option) => option.value)).toEqual(["max"]);
   });
 

@@ -29,6 +29,11 @@ const GatewayAgentRuntimeSchema = closedObject({
   ]),
 });
 
+const GatewayThinkingLevelOptionSchema = closedObject({
+  id: NonEmptyString,
+  label: NonEmptyString,
+});
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
@@ -37,6 +42,8 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
+  thinkingDefault: Type.Optional(NonEmptyString),
   supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
@@ -79,14 +86,7 @@ export const AgentSummarySchema = closedObject({
     }),
   ),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  thinkingLevels: Type.Optional(
-    Type.Array(
-      closedObject({
-        id: NonEmptyString,
-        label: NonEmptyString,
-      }),
-    ),
-  ),
+  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
 });

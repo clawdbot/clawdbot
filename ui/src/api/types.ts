@@ -815,6 +815,8 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingDefault?: string;
   supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
