@@ -7,9 +7,9 @@ import type { ClawAddPlan } from "../claws/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  applyPluginUninstallDirectoryRemoval,
-  buildPluginDiagnosticsReport,
-  buildPluginSnapshotReport,
+  applyPluginUninstallDirectoryRemovalMock,
+  buildPluginDiagnosticsReportMock,
+  buildPluginSnapshotReportMock,
   createTestInstalledPluginIndex,
   loadConfig,
   planPluginUninstall,
@@ -121,7 +121,7 @@ describe("plugins cli uninstall", () => {
     }
 
     expect(planPluginUninstall).not.toHaveBeenCalled();
-    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -146,7 +146,7 @@ describe("plugins cli uninstall", () => {
         },
       },
     } as OpenClawConfig);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -154,8 +154,8 @@ describe("plugins cli uninstall", () => {
 
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--dry-run"]);
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalledTimes(1);
-    expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
+    expect(buildPluginSnapshotReportMock).toHaveBeenCalledTimes(1);
+    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
     expect(planPluginUninstall).toHaveBeenCalledTimes(1);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -187,7 +187,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -252,7 +252,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         { id: "unrelated-plugin", name: "calendar" },
         { id: "calendar", name: "Real Calendar" },
@@ -292,7 +292,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         { id: "calendar-one", name: "calendar" },
         { id: "calendar-two", name: "calendar" },
@@ -307,7 +307,7 @@ describe("plugins cli uninstall", () => {
     expect(runtimeErrors.at(-1)).toContain('Plugin uninstall target "calendar" is ambiguous');
     expect(planPluginUninstall).not.toHaveBeenCalled();
     expect(promptYesNoMock).not.toHaveBeenCalled();
-    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
@@ -333,7 +333,7 @@ describe("plugins cli uninstall", () => {
       } as OpenClawConfig;
       loadConfig.mockReturnValue(baseConfig);
       setInstalledPluginIndexInstallRecords({ alpha: installRecord });
-      buildPluginSnapshotReport.mockReturnValue({
+      buildPluginSnapshotReportMock.mockReturnValue({
         plugins: [{ id: "alpha", name: "alpha" }],
         diagnostics: [],
       });
@@ -387,7 +387,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -404,7 +404,7 @@ describe("plugins cli uninstall", () => {
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
   });
 
   it("restores install records when the config write rejects during uninstall", async () => {
@@ -437,7 +437,7 @@ describe("plugins cli uninstall", () => {
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
     readPersistedInstalledPluginIndex.mockResolvedValue(previousPersistedIndex);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -458,7 +458,7 @@ describe("plugins cli uninstall", () => {
       }),
     );
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
   });
 
   it("removes plugin files only after config and index commit succeeds", async () => {
@@ -486,12 +486,12 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
     primeUninstallPlan(nextConfig, { directoryRemoval: { target: ALPHA_INSTALL_PATH } });
-    applyPluginUninstallDirectoryRemoval.mockResolvedValue({
+    applyPluginUninstallDirectoryRemovalMock.mockResolvedValue({
       directoryRemoved: true,
       warnings: [],
     });
@@ -500,18 +500,19 @@ describe("plugins cli uninstall", () => {
 
     const configWriteOrder = writeConfigFile.mock.invocationCallOrder[0] ?? 0;
     const deleteOrder =
-      applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+      applyPluginUninstallDirectoryRemovalMock.mock.invocationCallOrder[0] ??
+      Number.MAX_SAFE_INTEGER;
     const finalConfigWriteOrder =
       writeConfigFile.mock.invocationCallOrder[1] ?? Number.MAX_SAFE_INTEGER;
     const refreshOrder =
       refreshPluginRegistry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     expect(writeConfigFile).toHaveBeenCalledTimes(2);
-    expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledTimes(1);
+    expect(applyPluginUninstallDirectoryRemovalMock).toHaveBeenCalledTimes(1);
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(deleteOrder).toBeGreaterThan(configWriteOrder);
     expect(finalConfigWriteOrder).toBeGreaterThan(deleteOrder);
     expect(refreshOrder).toBeGreaterThan(finalConfigWriteOrder);
-    expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
+    expect(applyPluginUninstallDirectoryRemovalMock).toHaveBeenCalledWith({
       target: ALPHA_INSTALL_PATH,
     });
   });
@@ -535,14 +536,14 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
     primeUninstallPlan({ plugins: { entries: {}, installs: {} } } as OpenClawConfig, {
       directoryRemoval: { target: installPath },
     });
-    applyPluginUninstallDirectoryRemoval.mockResolvedValue({
+    applyPluginUninstallDirectoryRemovalMock.mockResolvedValue({
       directoryRemoved: false,
       warnings: ["simulated removal failure"],
     });
@@ -577,7 +578,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -609,7 +610,7 @@ describe("plugins cli uninstall", () => {
     const nextConfig = {} as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -665,7 +666,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         { id: pluginId, name: pluginId, status, channelIds },
         {
@@ -742,7 +743,7 @@ describe("plugins cli uninstall", () => {
 
     loadConfig.mockReturnValue(baseConfig);
     setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -768,7 +769,7 @@ describe("plugins cli uninstall", () => {
         installs: {},
       },
     } as OpenClawConfig);
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });

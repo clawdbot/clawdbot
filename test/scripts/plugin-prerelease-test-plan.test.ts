@@ -53,6 +53,9 @@ function timeoutForProfile(
   if (typeof timeout === "number") {
     return timeout;
   }
+  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
+    return 60;
+  }
   const match = timeout?.match(
     /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
   );

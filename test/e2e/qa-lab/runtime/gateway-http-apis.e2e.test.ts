@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../../src/config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../../../src/config/sessions.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
   testState,
@@ -118,11 +118,11 @@ describe("Gateway HTTP API product proof", () => {
         },
       };
       testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-      agentCommand
+      agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
 
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       gateway = await startTestGatewayServer(port, {
         host: "127.0.0.1",
         auth: { mode: "token", token: GATEWAY_TOKEN },
@@ -174,8 +174,8 @@ describe("Gateway HTTP API product proof", () => {
         type: "output_text",
         text: "qa responses response",
       });
-      expect(agentCommand).toHaveBeenCalledTimes(2);
-      expect(agentCommand.mock.calls.map((call) => call[0])).toEqual([
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(agentCommandMock.mock.calls.map((call) => call[0])).toEqual([
         expect.objectContaining({
           message: "qa chat request",
           sessionKey: expect.stringMatching(/^agent:main:openai:/),

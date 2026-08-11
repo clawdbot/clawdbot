@@ -5,13 +5,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
-import { createSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 import { resolveBundledPluginFile } from "./test-helpers/bundled-plugin-roots.js";
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 const bundledRepresentativeEntrypoints = ["browser-config"] as const;
-const bundleTempRootTracker = createSuiteTempRootTracker(
+const bundleTempRootTracker = createSyncSuiteTempRootTracker(
   "openclaw-plugin-sdk-build",
   path.join(process.cwd(), "node_modules", ".cache"),
 );

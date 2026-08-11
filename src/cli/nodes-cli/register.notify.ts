@@ -5,7 +5,7 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodePositiveInteger,
   resolveNodeId,
@@ -63,7 +63,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
             invokeParams.timeoutMs = invokeTimeout;
           }
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
             defaultRuntime.writeJson(result);
             return;

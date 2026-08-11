@@ -133,7 +133,7 @@ export function resolveSessionToolContext(opts?: {
 }
 
 /** Classifies a session key/gateway kind into the row category used by tools. */
-export function classifySessionKind(params: {
+export function classifySessionListKind(params: {
   key: string;
   gatewayKind?: string | null;
   alias: string;

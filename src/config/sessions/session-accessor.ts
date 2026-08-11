@@ -55,6 +55,7 @@ export type {
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
+  SessionEntryListScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,

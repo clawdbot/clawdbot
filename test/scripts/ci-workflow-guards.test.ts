@@ -3127,6 +3127,15 @@ NODE
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     });
+    const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
+      (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
+    );
+    expect(targetedGroupStep.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS).toBe(
+      "${{ inputs.published_upgrade_survivor_scenarios }}",
+    );
+    expect(releaseChecks.jobs.validate_docker_lanes["timeout-minutes"]).toBe(
+      "${{ matrix.group.timeout_minutes || 60 }}",
+    );
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {

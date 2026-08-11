@@ -22,7 +22,7 @@ import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcr
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
@@ -1327,7 +1327,7 @@ function truncatePreviewText(text: string, maxChars: number): string {
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
   const role = normalizeLowercaseStringOrEmpty(message.role);
   if (role === "assistant") {
-    const assistantText = extractAssistantVisibleText(message);
+    const assistantText = extractAssistantPhaseText(message);
     if (assistantText) {
       const normalized = stripInlineDirectiveTagsForDisplay(assistantText).text.trim();
       return normalized ? normalized : null;

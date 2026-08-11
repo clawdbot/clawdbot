@@ -134,7 +134,7 @@ vi.mock("../../config/runtime-schema.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/schema.js")>("../../config/schema.js");
   return {
-    loadGatewayRuntimeConfigSchema: () => actual.buildConfigSchema(),
+    loadGatewayRuntimeConfigSchema: () => actual.buildConfigSchemaCore(),
   };
 });
 

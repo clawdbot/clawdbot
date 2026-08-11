@@ -34,7 +34,7 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
 }));
 vi.mock("../../../gateway/session-transcript-readers.js", () => ({
   extractMessageRole: (message: { role?: string }) => message?.role,
-  extractMessageText: (message: { content?: string }) => message?.content ?? null,
+  extractSessionTranscriptText: (message: { content?: string }) => message?.content ?? null,
   readSessionMessagesAsync: mocks.readSessionMessages,
 }));
 

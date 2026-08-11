@@ -11,7 +11,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import {
-  extractAssistantVisibleText,
+  extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import {
@@ -171,7 +171,7 @@ function parseAssistantTranscriptText(
   ) {
     return undefined;
   }
-  const text = extractAssistantVisibleText(message)?.trim();
+  const text = extractAssistantPhaseText(message)?.trim();
   if (!text) {
     return undefined;
   }
@@ -232,7 +232,7 @@ function parseRecentConversationText(
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
   if (!text) {
     return undefined;

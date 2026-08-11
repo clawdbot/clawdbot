@@ -57,7 +57,6 @@ import type {
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
-  getDiagnosticSessionStateCountForTest as getDiagnosticSessionStateCountForTestImpl,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
   type SessionRef,
@@ -1506,7 +1505,7 @@ export function stopDiagnosticHeartbeat() {
 }
 
 export function getDiagnosticSessionStateCountForTest(): number {
-  return getDiagnosticSessionStateCountForTestImpl();
+  return diagnosticSessionStates.size;
 }
 
 export function resetDiagnosticStateForTest(): void {

@@ -36,7 +36,13 @@ import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
 } from "../plugins/plugin-command-runtime.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  resetPluginRuntimeStateForTest,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   enqueueCommandInLane,
@@ -863,8 +869,11 @@ async function withGatewayRestartSignal(
 // shared vitest worker imports those helpers before this file runs, the leaked
 // env routes reloads into the skip branch and channel restarts never fire.
 const testGatewayRestartListener = () => {};
+let pluginRegistrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach(() => {
+  pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+  stageActivePluginRegistry(createTestRegistry([]), null, "default");
   process.on("SIGUSR1", testGatewayRestartListener);
   resetGatewayWorkAdmission();
   resetProcessRegistryForTests();
@@ -874,6 +883,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
   process.removeListener("SIGUSR1", testGatewayRestartListener);
   setGatewaySigusr1RestartPolicy({ allowExternal: false });
   resetGatewayWorkAdmission();

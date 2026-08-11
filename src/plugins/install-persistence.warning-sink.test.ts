@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  applyExclusiveSlotSelection,
-  applyPluginUninstallDirectoryRemoval,
-  buildPluginSnapshotReport,
+  applyExclusiveSlotSelectionMock,
+  applyPluginUninstallDirectoryRemovalMock,
+  buildPluginSnapshotReportMock,
   loadPluginManifestRegistry,
   planPluginUninstall,
   refreshPluginRegistry,
@@ -85,7 +85,11 @@ describe("plugin install persistence warning audiences", () => {
       ],
       diagnostics: [],
     });
-    applyExclusiveSlotSelection.mockReturnValue({ config: {}, warnings: [warning], changed: true });
+    applyExclusiveSlotSelectionMock.mockReturnValue({
+      config: {},
+      warnings: [warning],
+      changed: true,
+    });
 
     await persistPluginInstall({
       snapshot,
@@ -119,12 +123,12 @@ describe("plugin install persistence warning audiences", () => {
         actions: {},
         directoryRemoval: { target: "/private/previous-source/workboard" },
       });
-      applyPluginUninstallDirectoryRemoval.mockResolvedValueOnce({
+      applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
         directoryRemoved: false,
         warnings: [cleanupDetail],
       });
       refreshPluginRegistry.mockRejectedValueOnce(new Error(refreshDetail));
-      buildPluginSnapshotReport.mockReturnValue({
+      buildPluginSnapshotReportMock.mockReturnValue({
         plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
         diagnostics: [],
       });
