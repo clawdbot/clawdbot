@@ -3047,7 +3047,30 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Follow up");
   });
 
-  it("keeps the persisted quoted preview when its source is outside loaded history", () => {
+  it("keeps unloaded persisted previews clickable for history navigation", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenReply = vi.fn();
+    renderGroupedMessage(
+      container,
+      createUserMessage("Follow up", {
+        __openclaw: {
+          replyToId: "unloaded-message",
+          replyToPreview: { senderLabel: "Marie", text: "The original answer" },
+        },
+      }),
+      "user",
+      { onOpenReply },
+    );
+
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Marie");
+    expect(preview?.textContent).toContain("The original answer");
+    expect(preview).toBeInstanceOf(HTMLButtonElement);
+    preview?.click();
+    expect(onOpenReply).toHaveBeenCalledWith("unloaded-message");
+  });
+
+  it("shows a busy state while loading history for a reply target", () => {
     const container = document.body.appendChild(document.createElement("div"));
     renderGroupedMessage(
       container,
@@ -3058,13 +3081,13 @@ describe("grouped chat rendering", () => {
         },
       }),
       "user",
-      {},
+      { onOpenReply: vi.fn(), replyNavigationId: "unloaded-message" },
     );
 
-    const preview = container.querySelector<HTMLElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Marie");
-    expect(preview?.textContent).toContain("The original answer");
-    expect(preview).not.toBeInstanceOf(HTMLButtonElement);
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.disabled).toBe(true);
+    expect(preview?.getAttribute("aria-busy")).toBe("true");
+    expect(preview?.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
   });
 
   it("notifies when assistant audio and video attachment metadata loads", async () => {

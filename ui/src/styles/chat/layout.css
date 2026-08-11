@@ -1541,6 +1541,11 @@ button.chat-reply-preview--message:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
+button.chat-reply-preview--message:disabled {
+  cursor: var(--cursor-default);
+  opacity: 0.8;
+}
+
 .chat-reply-preview--unavailable {
   border-color: var(--border);
   background: color-mix(in srgb, var(--bg) 70%, transparent);

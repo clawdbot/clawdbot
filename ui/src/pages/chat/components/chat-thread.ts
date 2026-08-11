@@ -39,6 +39,7 @@ import {
   buildMoreDetailsCompanionQuestion,
 } from "../../../lib/chat/companion-question.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
@@ -115,6 +116,14 @@ type ChatThreadState = {
   transcriptRenderContext: { onSetReply?: ChatThreadProps["onSetReply"] };
 };
 
+export type ChatReplyMessageAccess = {
+  revision: number;
+  navigationId: string | null;
+  read: (messageId: string) => unknown;
+  request: (messageId: string) => void;
+  open: (messageId: string) => void;
+};
+
 type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
@@ -179,6 +188,7 @@ type ChatThreadProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onSetReply?: (target: MessageReplyTarget) => void;
+  replyMessageAccess?: ChatReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
@@ -211,6 +221,35 @@ type LoadedReplySource = {
   rowKey: string;
   preview: MessageReplyTarget & { sourceMessageId: string };
 };
+
+function projectResolvedReplyPreview(
+  message: unknown,
+  replyToId: string,
+  props: Pick<ChatThreadProps, "assistantName" | "userAvatar" | "userId" | "userName">,
+): LoadedReplySource["preview"] | undefined {
+  const normalized = normalizeMessage(message);
+  const text = resolveMessageReplyText(message);
+  if (!text) {
+    return undefined;
+  }
+  const group: MessageGroup = {
+    kind: "group",
+    key: replyToId,
+    role: normalized.role,
+    senderLabel: normalized.senderLabel,
+    ...(normalized.sender ? { sender: normalized.sender } : {}),
+    messages: [{ key: replyToId, message }],
+    timestamp: normalized.timestamp,
+    isStreaming: false,
+  };
+  const sourceMessageId = persistedMessageEntryId(message) ?? replyToId;
+  return {
+    messageId: sourceMessageId,
+    sourceMessageId,
+    senderLabel: resolveMessageGroupSenderLabel(group, props),
+    text,
+  };
+}
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
@@ -324,6 +363,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
+  private messageRowKeysById = new Map<string, string>();
   private focusedRowKey: string | null = null;
   private announcementInitialized = false;
   private announcementKey: string | null = null;
@@ -465,6 +505,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.measureRowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
+    this.messageRowKeysById.clear();
     this.focusedRowKey = null;
     this.pendingScrollOffset = null;
   }
@@ -545,10 +586,18 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.virtualizerController.getVirtualizer().scrollToOffset(offset);
   }
 
-  revealMessage(rowKey: string, messageId: string): void {
+  syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void {
+    this.messageRowKeysById = new Map(messageRowKeysById);
+  }
+
+  revealMessage(messageId: string): boolean {
+    const rowKey = this.messageRowKeysById.get(messageId);
+    if (!rowKey) {
+      return false;
+    }
     const rowIndex = this.rowIndexesByKey.get(rowKey);
     if (rowIndex === undefined) {
-      return;
+      return false;
     }
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
     this.host.requestUpdate();
@@ -570,6 +619,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
         { once: true },
       );
     });
+    return true;
   }
 
   getScrollOffset(): number | null {
@@ -789,6 +839,10 @@ export class ChatTranscriptController implements ReactiveController {
 
   scrollToOffset(offset: number, onSettled?: (position: ChatSessionScrollPosition) => void): void {
     this.sessionVirtualizer?.restoreScrollOffset(offset, onSettled);
+  }
+
+  revealMessage(messageId: string): boolean {
+    return this.sessionVirtualizer?.revealMessage(messageId) ?? false;
   }
 
   pendingScrollOffsetFor(sessionKey: string): number | null {
@@ -1617,6 +1671,20 @@ function renderChatThreadContents(
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
+  const resolvedReplyPreviews = new Map<string, LoadedReplySource["preview"] | undefined>();
+  const resolveReplyPreview = (replyToId: string) => {
+    const loaded = loadedReplySources.get(replyToId)?.preview;
+    if (loaded) {
+      return loaded;
+    }
+    if (resolvedReplyPreviews.has(replyToId)) {
+      return resolvedReplyPreviews.get(replyToId);
+    }
+    const message = props.replyMessageAccess?.read(replyToId);
+    const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
+    resolvedReplyPreviews.set(replyToId, preview);
+    return preview;
+  };
   const sharedMessageRenderOptions = {
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
@@ -1681,13 +1749,17 @@ function renderChatThreadContents(
       onReply: props.onSetReply
         ? (target) => state.transcriptRenderContext.onSetReply?.(target)
         : undefined,
-      resolveReplyPreview: (replyToId: string) => loadedReplySources.get(replyToId)?.preview,
+      resolveReplyPreview,
+      onResolveReply: props.replyMessageAccess?.request,
       onOpenReply: (replyToId: string) => {
         const source = loadedReplySources.get(replyToId);
         if (source) {
-          transcript.revealMessage(source.rowKey, replyToId);
+          transcript.revealMessage(replyToId);
+          return;
         }
+        props.replyMessageAccess?.open(replyToId);
       },
+      replyNavigationId: props.replyMessageAccess?.navigationId,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1847,6 +1919,9 @@ function renderChatThreadContents(
       }
     }
   }
+  transcript.syncMessageRows(
+    new Map([...loadedReplySources].map(([messageId, source]) => [messageId, source.rowKey])),
+  );
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
@@ -1928,6 +2003,8 @@ function renderChatThreadContents(
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
     Boolean(props.onSetReply),
+    props.replyMessageAccess?.revision ?? 0,
+    props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;

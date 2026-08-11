@@ -210,6 +210,57 @@ describe("chat transcript row measurement", () => {
     transcript.hostDisconnected();
   });
 
+  it("hydrates an unloaded reply preview without inserting its source row", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    let resolvedMessage: unknown = undefined;
+    const request = vi.fn();
+    const open = vi.fn();
+    const props = {
+      ...threadProps("pane-reply-hydration", "agent:main:main", [
+        {
+          role: "user",
+          content: "Follow up",
+          __openclaw: { id: "reply-message", replyToId: "source-message" },
+          timestamp: 2_000,
+        },
+      ]),
+      replyMessageAccess: {
+        revision: 0,
+        navigationId: null,
+        read: () => resolvedMessage,
+        request,
+        open,
+      },
+    };
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+
+    expect(request).toHaveBeenCalledWith("source-message");
+    expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
+
+    resolvedMessage = {
+      role: "assistant",
+      content: "The original answer",
+      __openclaw: { id: "source-message" },
+      timestamp: 1_000,
+    };
+    props.replyMessageAccess.revision += 1;
+    rerender();
+
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Molty");
+    expect(preview?.textContent).toContain("The original answer");
+    preview?.click();
+    expect(open).toHaveBeenCalledWith("source-message");
+    transcript.hostDisconnected();
+  });
+
   it("loads a truncated assistant message once and keeps the full text visible", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));

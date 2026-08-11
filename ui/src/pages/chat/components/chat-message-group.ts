@@ -97,7 +97,9 @@ type RenderMessageGroupOptions = {
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+  onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
+  replyNavigationId?: string | null;
   onRewind?: () => void;
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
@@ -163,7 +165,9 @@ function buildGroupedMessageRenderOptions(
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
     resolveReplyPreview: opts.resolveReplyPreview,
+    onResolveReply: opts.onResolveReply,
     onOpenReply: opts.onOpenReply,
+    replyNavigationId: opts.replyNavigationId,
   };
 }
 
