@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../src/browser/bridge-server.js";
+import type { BrowserExecResult } from "../src/browser/browser-exec-engine.js";
+import { fetchBrowserJson } from "../src/browser/client-fetch.js";
+import { resolveBrowserConfig } from "../src/browser/config.js";
 import {
   chromeProductRoots,
   generateChromeExtensionIdForPath,
@@ -147,6 +151,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
     const stateDir = path.join(root, "custom-state");
     const configPath = path.join(root, "custom-config", "openclaw.json");
     const relayPort = await getFreePort();
+    const browserCdpPort = await getFreePort();
     const linuxConfigHome = path.join(homeDir, ".config");
     const chromeRootEnv =
       process.platform === "linux"
@@ -210,7 +215,10 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             headless: true,
             env: browserEnv,
             ignoreDefaultArgs: ["--disable-extensions"],
-            args: ["--enable-unsafe-extension-debugging"],
+            args: [
+              "--enable-unsafe-extension-debugging",
+              `--remote-debugging-port=${browserCdpPort}`,
+            ],
           });
         let context = await launchChromium();
         process.stderr.write("[browser-extension-e2e] chromium launched\n");
@@ -267,7 +275,13 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         expect(await waitForExtensionId(context, installed)).toBe(predictedId);
         process.stderr.write("[browser-extension-e2e] persisted extension reloaded\n");
         const controlled = await context.newPage();
-        await controlled.goto("data:text/html,<title>OpenClaw E2E</title><p>ready</p>");
+        const controlledHtml = [
+          "<title>OpenClaw E2E</title>",
+          '<button id="collect">Collect</button>',
+          '<output id="result">idle</output>',
+          '<script>document.querySelector("#collect").addEventListener("click", () => { document.querySelector("#result").textContent = "collected"; });</script>',
+        ].join("");
+        await controlled.goto(`data:text/html,${encodeURIComponent(controlledHtml)}`);
 
         const extensionPage = await context.newPage();
         await extensionPage.goto(`chrome-extension://${extensionId}/options.html`);
@@ -300,6 +314,59 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             cause: error,
           });
         }
+
+        const resolved = resolveBrowserConfig({
+          defaultProfile: "e2e",
+          profiles: {
+            e2e: {
+              cdpUrl: `http://127.0.0.1:${browserCdpPort}`,
+              attachOnly: true,
+            },
+          },
+        });
+        const browserBridge = await startBrowserBridgeServer({
+          resolved,
+          authToken: relayTestKey(4),
+        });
+        cleanups.push(async () => await stopBrowserBridgeServer(browserBridge.server));
+        const execResult = await fetchBrowserJson<BrowserExecResult>(
+          `${browserBridge.baseUrl}/exec?profile=e2e`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              timeoutMs: 30_000,
+              code: `
+                await log("before tabs");
+                const listed = await tabs();
+                await log("after tabs");
+                const tab = listed.tabs.find((entry) => entry.url.startsWith("data:text/html"));
+                if (!tab) throw new Error("data tab not found");
+                const page = await snapshot({ mode: "efficient", targetId: tab.targetId });
+                await log("after snapshot");
+                const button = Object.entries(page.refs ?? {}).find(([, ref]) => ref.role === "button" && ref.name === "Collect");
+                if (!button) throw new Error("Collect ref not found");
+                await act({ kind: "click", ref: button[0], targetId: tab.targetId });
+                await log("after click");
+                const readback = await act({
+                  kind: "evaluate",
+                  targetId: tab.targetId,
+                  fn: "() => document.body.innerText",
+                  timeoutMs: 5_000,
+                });
+                await log("after evaluate");
+                return { snapshot: page.snapshot.includes("Collect"), collected: readback.result.includes("collected") };
+              `,
+            }),
+            timeoutMs: 35_000,
+          },
+        );
+        expect(execResult).toEqual({
+          ok: true,
+          value: { snapshot: true, collected: true },
+          logs: ["before tabs", "after tabs", "after snapshot", "after click", "after evaluate"],
+        });
+        process.stderr.write("[browser-extension-e2e] browser_exec round-trip passed\n");
 
         const registration = status.registrations.find(
           (entry) => relevantManifestPaths.includes(entry.manifestPath) && entry.state === "owned",

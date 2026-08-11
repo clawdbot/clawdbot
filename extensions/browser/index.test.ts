@@ -16,6 +16,12 @@ import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
 const runtimeApiMocks = vi.hoisted(() => ({
+  createBrowserExecTool: vi.fn(() => ({
+    name: "browser_exec",
+    description: "browser exec",
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(async () => ({ type: "json", value: { ok: true } })),
+  })),
   createBrowserPluginService: vi.fn(() => ({ id: "browser-control", start: vi.fn() })),
   createBrowserTool: vi.fn(() => ({
     name: "browser",
@@ -30,12 +36,17 @@ const runtimeApiMocks = vi.hoisted(() => ({
   stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
+const runtimeConfigMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(() => ({ browser: { evaluateEnabled: true } })),
+}));
+
 vi.mock("./register.runtime.js", async () => {
   const actual =
     await vi.importActual<typeof import("./register.runtime.js")>("./register.runtime.js");
   return {
     ...actual,
     collectBrowserSecurityAuditFindings: runtimeApiMocks.collectBrowserSecurityAuditFindings,
+    createBrowserExecTool: runtimeApiMocks.createBrowserExecTool,
     createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,
     createBrowserTool: runtimeApiMocks.createBrowserTool,
     handleBrowserGatewayRequest: runtimeApiMocks.handleBrowserGatewayRequest,
@@ -47,6 +58,11 @@ vi.mock("./src/cli/browser-cli.js", () => ({
   registerBrowserCli: runtimeApiMocks.registerBrowserCli,
 }));
 
+vi.mock("./src/sdk-config.js", async () => {
+  const actual = await vi.importActual<typeof import("./src/sdk-config.js")>("./src/sdk-config.js");
+  return { ...actual, getRuntimeConfig: runtimeConfigMocks.getRuntimeConfig };
+});
+
 vi.mock("./src/control-service.js", () => ({
   stopBrowserControlService: runtimeApiMocks.stopBrowserControlService,
 }));
@@ -57,6 +73,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runtimeConfigMocks.getRuntimeConfig.mockReturnValue({
+    browser: { evaluateEnabled: true },
+  });
 });
 
 afterEach(() => {
@@ -234,6 +253,46 @@ describe("browser plugin", () => {
         chatType: "direct",
       },
     });
+  });
+
+  it("registers browser_exec lazily when browser evaluation is enabled", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool, 1);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register browser_exec factory");
+    }
+    const tool = factory({
+      browser: { sandboxBridgeUrl: "http://127.0.0.1:9999", allowHostControl: false },
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser_exec tool");
+    }
+
+    expect(mockCallArg(registerTool, 1, 1)).toEqual({ name: "browser_exec" });
+    expect(tool.name).toBe("browser_exec");
+    expect(tool.description).toContain("3+ dependent browser steps");
+    expect(runtimeApiMocks.createBrowserExecTool).not.toHaveBeenCalled();
+    await tool.execute("call-1", { code: "return 1" });
+    expect(runtimeApiMocks.createBrowserExecTool).toHaveBeenCalledWith({
+      sandboxBridgeUrl: "http://127.0.0.1:9999",
+      allowHostControl: false,
+    });
+  });
+
+  it("hides browser_exec when browser evaluation is disabled", () => {
+    runtimeConfigMocks.getRuntimeConfig.mockReturnValue({
+      browser: { evaluateEnabled: false },
+    });
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool, 1);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register browser_exec factory");
+    }
+    expect(factory({})).toBeNull();
   });
 
   it("passes runtime context needed for screenshot image understanding", async () => {

@@ -245,6 +245,52 @@ describe("browser.request profile selection", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
+  it("forces an explicit host browser target past connected nodes", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "POST",
+      path: "/exec",
+      target: "host",
+      body: { code: "return 1" },
+    });
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
+    expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
+  });
+
+  it("routes an explicit named node browser target", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/exec",
+        target: "node",
+        node: "Other Browser",
+        body: { code: "return 1" },
+      },
+      undefined,
+      [
+        {
+          nodeId: "node-1",
+          displayName: "Default Browser",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+        {
+          nodeId: "node-2",
+          displayName: "Other Browser",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+      ],
+    );
+
+    expect(invokeParams(nodeRegistry).nodeId).toBe("node-2");
+    expect(invokeParams(nodeRegistry).params?.path).toBe("/exec");
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
   it.each([
     {
       method: "POST",
