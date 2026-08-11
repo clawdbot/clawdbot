@@ -128,30 +128,34 @@ export async function terminateAcceptedSubagentRun(params: {
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-}): Promise<void> {
+  shouldRetry?: () => boolean;
+}): Promise<boolean> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
-  await retrySubagentCleanup(async () => {
-    try {
-      const response = await call({
-        method: "chat.abort",
-        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+  return await retrySubagentCleanup(
+    async () => {
+      try {
+        const response = await call({
+          method: "chat.abort",
+          params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+          timeoutMs,
+        });
+        if (isMatchingAbortResponse(response, params.gatewayRunId)) {
+          return true;
+        }
+      } catch {
+        // Fall through to exact-session deletion.
+      }
+      const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
+        deleteTranscript: true,
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        callGateway: call,
         timeoutMs,
       });
-      if (isMatchingAbortResponse(response, params.gatewayRunId)) {
-        return true;
-      }
-    } catch {
-      // Fall through to exact-session deletion.
-    }
-    const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
-      deleteTranscript: true,
-      expectedSessionId: params.expectedSessionId,
-      expectedLifecycleRevision: params.expectedLifecycleRevision,
-      callGateway: call,
-      timeoutMs,
-    });
-    // A changed lifecycle proves the accepted run no longer owns this session.
-    return cleanup !== "failed";
-  });
+      // A changed lifecycle proves the accepted run no longer owns this session.
+      return cleanup !== "failed";
+    },
+    { shouldRetry: params.shouldRetry },
+  );
 }

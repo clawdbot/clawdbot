@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -14,9 +15,7 @@ import {
 const callGatewayMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 
-let configOverride: Record<string, unknown> = {
-  ...createSubagentSpawnTestConfig(),
-};
+let configOverride = createSubagentSpawnTestConfig();
 let workspaceDirOverride = "";
 let subagentSpawnModule: Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
 
@@ -65,6 +64,26 @@ describe("spawnSubagentDirect filename validation", () => {
   };
 
   const validContent = Buffer.from("hello").toString("base64");
+
+  it.runIf(process.platform !== "win32")(
+    "creates a missing host workspace with private directory permissions",
+    async () => {
+      const workspaceDir = path.join(workspaceDirOverride, "missing-workspace");
+      const claimCleanupOwner = vi.fn();
+
+      const result = await materializeSubagentAttachments({
+        config: configOverride,
+        targetAgentId: "main",
+        workspaceDir,
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+        claimCleanupOwner,
+      });
+
+      expect(result).toEqual({ status: "ok" });
+      expect(claimCleanupOwner).toHaveBeenCalledOnce();
+      expect(fs.statSync(workspaceDir).mode & 0o777).toBe(0o700);
+    },
+  );
 
   async function spawnWithName(name: string) {
     const { spawnSubagentDirect } = subagentSpawnModule;
@@ -891,6 +910,55 @@ describe("spawnSubagentDirect filename validation", () => {
 
     expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
     expect(events).toEqual(["accepted", "aborted", "terminalized"]);
+  });
+
+  it("terminalizes the owner when accepted-child termination needs a later retry", async () => {
+    const events: string[] = [];
+    const gateway = vi.fn(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent") {
+        events.push("accepted");
+        return { runId: "accepted-child-run" };
+      }
+      if (method === "chat.abort") {
+        events.push("abort-failed");
+        throw new Error("abort unavailable");
+      }
+      if (method === "sessions.delete") {
+        events.push("delete-failed");
+        throw new Error("delete unavailable");
+      }
+      return { ok: true };
+    });
+    const settleFailedQueuedSubagentLaunchMock = vi.fn(() => {
+      events.push("terminalized");
+      return true;
+    });
+    const releaseSubagentRunMock = vi.fn(async () => undefined);
+    const module = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: gateway,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      startQueuedSubagentRunMock: vi.fn(() => {
+        throw new Error("activation persistence failed");
+      }),
+      settleFailedQueuedSubagentLaunchMock,
+      releaseSubagentRunMock,
+    });
+
+    const result = await module.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
+    expect(events).toEqual(["accepted", "abort-failed", "delete-failed", "terminalized"]);
+    expect(settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledOnce();
+    expect(releaseSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(

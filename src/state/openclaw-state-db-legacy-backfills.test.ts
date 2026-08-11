@@ -43,6 +43,13 @@ describe("retireLegacySubagentAttachmentCleanup", () => {
       }),
     );
     insert.run(
+      "collector-cleanup-pending",
+      JSON.stringify({
+        collectorLaunchCleanupPending: true,
+        execution: { status: "terminal" },
+      }),
+    );
+    insert.run(
       "sandbox-owned",
       JSON.stringify({
         attachmentsRootDir: legacyRootDir,
@@ -86,6 +93,13 @@ describe("retireLegacySubagentAttachmentCleanup", () => {
     expect(payloads.legacy).not.toHaveProperty("attachmentsDir");
     expect(payloads.legacy).not.toHaveProperty("attachmentsRootDir");
     expect(payloads.legacy).not.toHaveProperty("retainAttachmentsOnKeep");
+    expect(payloads["collector-cleanup-pending"]).toMatchObject({
+      launchCleanupPending: true,
+      execution: { status: "terminal", suppressSessionEffects: true },
+    });
+    expect(payloads["collector-cleanup-pending"]).not.toHaveProperty(
+      "collectorLaunchCleanupPending",
+    );
     expect(payloads["sandbox-owned"]?.attachmentsRootDir).toBe(legacyRootDir);
     expect(payloads.unexpected?.attachmentsRootDir).toBe(legacyRootDir);
   });

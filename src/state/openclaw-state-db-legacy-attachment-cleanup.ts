@@ -38,43 +38,61 @@ export function retireLegacySubagentAttachmentCleanup(db: DatabaseSync): void {
   const warnedRoots = new Set<string>();
   for (const row of rows) {
     const payload = parsePayload(row.payload_json);
-    const storedRoot = payload ? textField(payload, "attachmentsRootDir") : null;
-    const storedDir = payload ? textField(payload, "attachmentsDir") : null;
-    if (!payload || !storedRoot || !storedDir) {
+    if (!payload) {
       continue;
     }
+    let changed = false;
+    if (Object.hasOwn(payload, "collectorLaunchCleanupPending")) {
+      if (payload.collectorLaunchCleanupPending === true) {
+        payload.launchCleanupPending = true;
+        payload.execution = {
+          ...(asNullableRecord(payload.execution) ?? {}),
+          // The retired marker did not freeze the launch's session identity.
+          // Preserve resource cleanup without ever deleting a successor session.
+          suppressSessionEffects: true,
+        };
+      }
+      delete payload.collectorLaunchCleanupPending;
+      changed = true;
+    }
+    const storedRoot = textField(payload, "attachmentsRootDir");
+    const storedDir = textField(payload, "attachmentsDir");
     if (
-      Object.hasOwn(payload, "attachmentsSandboxSessionKey") ||
-      Object.hasOwn(payload, "attachmentsSandboxAgentId") ||
-      Object.hasOwn(payload, "attachmentsSandboxWorkspaceDir") ||
-      Object.hasOwn(payload, "attachmentsSandboxDir")
+      storedRoot &&
+      storedDir &&
+      !Object.hasOwn(payload, "attachmentsSandboxSessionKey") &&
+      !Object.hasOwn(payload, "attachmentsSandboxAgentId") &&
+      !Object.hasOwn(payload, "attachmentsSandboxWorkspaceDir") &&
+      !Object.hasOwn(payload, "attachmentsSandboxDir")
     ) {
+      const rootDir = path.resolve(storedRoot);
+      const attachmentsDir = path.resolve(storedDir);
+      const attachmentId = path.relative(rootDir, attachmentsDir);
+      if (
+        path.basename(rootDir) === "attachments" &&
+        path.basename(path.dirname(rootDir)) === ".openclaw" &&
+        path.dirname(attachmentId) === "." &&
+        GENERATED_SUBAGENT_ATTACHMENT_ID.test(attachmentId)
+      ) {
+        if (!warnedRoots.has(rootDir) && warnedRoots.size < 4) {
+          warnedRoots.add(rootDir);
+          legacyAttachmentLog.warn(
+            warnedRoots.size < 4
+              ? `Legacy subagent attachments may remain at ${rootDir}; inspect and remove them manually. Unsafe cleanup metadata is being retired.`
+              : "Additional legacy subagent attachment roots were omitted from this warning.",
+          );
+        }
+        // v2026.7.x stored no sandbox cleanup boundary. A host removal can race a
+        // writable sandbox. Warn before retiring the receipt without touching its path.
+        delete payload.attachmentsDir;
+        delete payload.attachmentsRootDir;
+        delete payload.retainAttachmentsOnKeep;
+        changed = true;
+      }
+    }
+    if (!changed) {
       continue;
     }
-    const rootDir = path.resolve(storedRoot);
-    const attachmentsDir = path.resolve(storedDir);
-    const attachmentId = path.relative(rootDir, attachmentsDir);
-    if (
-      path.basename(rootDir) !== "attachments" ||
-      path.basename(path.dirname(rootDir)) !== ".openclaw" ||
-      path.dirname(attachmentId) !== "." ||
-      !GENERATED_SUBAGENT_ATTACHMENT_ID.test(attachmentId)
-    ) {
-      continue;
-    }
-    if (!warnedRoots.has(rootDir) && warnedRoots.size < 4) {
-      warnedRoots.add(rootDir);
-      legacyAttachmentLog.warn(
-        warnedRoots.size < 4
-          ? `Legacy subagent attachments may remain at ${rootDir}; inspect and remove them manually. Unsafe cleanup metadata is being retired.`
-          : "Additional legacy subagent attachment roots were omitted from this warning.",
-      );
-    }
-    // v2026.7.x stored no sandbox cleanup boundary. A host removal can race a
-    // writable sandbox. Warn before retiring the receipt without touching its path.
-    delete payload.attachmentsDir;
-    delete payload.attachmentsRootDir;
-    delete payload.retainAttachmentsOnKeep;
     executeSqliteQuerySync(
       db,
       kysely

@@ -521,23 +521,24 @@ export async function spawnSubagentDirect(
         return { runId: readGatewayRunId(response) ?? childIdem };
       },
       async cleanupOnFailure({ phase, state, runId: acceptedRunId }) {
-        if (
+        const acceptedRunTerminationFailed =
           phase === "register" &&
           attachmentCleanupOwnerClaimed &&
           acceptedRunId &&
-          acceptedRunId !== childIdem
-        ) {
-          await terminateAcceptedSubagentRun({
+          acceptedRunId !== childIdem &&
+          !(await terminateAcceptedSubagentRun({
             childSessionKey,
             gatewayRunId: acceptedRunId,
             ...provisionalSessionIdentity,
-          });
-        }
+            shouldRetry: () => false,
+          }));
         if (attachmentCleanupOwnerClaimed) {
           await retrySubagentCleanup(() =>
             settleFailedQueuedSubagentLaunch(childIdem, `subagent ${phase} failed`),
           );
         }
+        // The sweeper retries exact-session deletion before removing resources.
+        if (acceptedRunTerminationFailed) return;
         if (phase !== "initialize") {
           await rollbackPreparedContextEngine(state?.contextEnginePreparation);
         }
