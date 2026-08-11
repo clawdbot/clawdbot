@@ -14,3 +14,10 @@ export function resolveChatRunOwnerAgentId(params: ChatRunOwner): string | undef
 export function chatRunBelongsToAgent(params: ChatRunOwner, agentId: string): boolean {
   return resolveChatRunOwnerAgentId(params) === normalizeAgentId(agentId);
 }
+
+export function chatRunBelongsToSelectedAgent(
+  params: ChatRunOwner & { selectedAgentId?: string },
+): boolean {
+  const selectedAgentId = normalizeOptionalString(params.selectedAgentId);
+  return selectedAgentId ? chatRunBelongsToAgent(params, selectedAgentId) : false;
+}

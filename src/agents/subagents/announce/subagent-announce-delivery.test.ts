@@ -36,7 +36,11 @@ import {
   dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
-import { testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.test-support.js";
+import {
+  testing,
+  deliverSubagentAnnouncement,
+  loadRequesterSessionEntry,
+} from "./subagent-announce-delivery.test-support.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -661,6 +665,32 @@ describe("resolveSubagentCompletionOrigin", () => {
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {
+  it("loads a custom main alias through its canonical requester key", () => {
+    const loadSessionEntry = vi.fn(() => ({ sessionId: "research-main", updatedAt: 1 }));
+    testing.setDepsForTest({
+      getRuntimeConfig: () =>
+        ({
+          session: { mainKey: "work", store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        }) as never,
+      loadSessionEntry,
+    });
+
+    expect(loadRequesterSessionEntry("work", "research")).toMatchObject({
+      canonicalKey: "agent:research:work",
+      entry: { sessionId: "research-main" },
+    });
+    expect(loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "research",
+      clone: false,
+      sessionKey: "agent:research:work",
+      storePath: "/stores/shared.sqlite",
+    });
+  });
+
   async function deliverSteeredAnnouncement(params: {
     mode?: "followup" | "collect" | "interrupt";
     announceTimeoutMs?: number;

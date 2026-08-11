@@ -3189,6 +3189,35 @@ describe("listSessionsFromStore selected model display", () => {
     });
   });
 
+  test("searches a selected agent's global row in an ownerless explicit fleet", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { model: { primary: "openai/gpt-5.4" } },
+          entries: {
+            main: { model: { primary: "openai/gpt-5.4" } },
+            work: { model: { primary: "anthropic/claude-opus-4-6" } },
+          },
+        },
+      } as OpenClawConfig,
+      storePath: "/tmp/sessions.json",
+      store: {
+        global: { sessionId: "global", updatedAt: now } as SessionEntry,
+      },
+      opts: { agentId: "work", includeGlobal: true, search: "claude-opus" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({
+      key: "global",
+      agentId: "work",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+  });
+
   test("filters phantom agent store placeholder rows from session lists", () => {
     const now = Date.now();
     const result = listSessionsFromStore({

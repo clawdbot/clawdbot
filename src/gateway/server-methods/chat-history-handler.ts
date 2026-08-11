@@ -11,12 +11,7 @@ import {
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import {
-  listAgentIds,
-  resolveDefaultAgentId,
-  resolveSessionAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
@@ -44,6 +39,7 @@ import {
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { scheduleChatHistoryManagedMediaCleanup } from "./chat-assistant-content.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
@@ -81,22 +77,22 @@ async function handleChatMetadataRequest({
   }
   const metadataParams = params;
   const cfg = context.getRuntimeConfig();
-  const requestedAgentId =
-    typeof metadataParams.agentId === "string" && metadataParams.agentId.trim()
-      ? normalizeAgentId(metadataParams.agentId)
-      : (tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg));
-  if (!listAgentIds(cfg).includes(requestedAgentId)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${metadataParams.agentId}"`),
-    );
+  const resolvedAgent = resolveAgentIdOrRespondError({
+    rawAgentId: metadataParams.agentId,
+    respond,
+    cfg,
+    normalize: (rawAgentId) =>
+      typeof rawAgentId === "string" && rawAgentId.trim()
+        ? normalizeAgentId(rawAgentId)
+        : undefined,
+  });
+  if (!resolvedAgent) {
     return;
   }
   respond(
     true,
     await context.readChatMetadata({
-      agentId: requestedAgentId,
+      agentId: resolvedAgent.agentId,
     }),
   );
 }

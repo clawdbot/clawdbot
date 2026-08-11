@@ -1252,12 +1252,18 @@ export const usageHandlers: GatewayRequestHandlers = {
           if (specificKey) {
             const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
               cfg: config,
-              agentId: effectiveAgentId ?? resolveSessionAgentId({ config }),
+              agentId:
+                effectiveAgentId ??
+                specificSessionOwner?.agentId ??
+                resolveSessionAgentId({ config }),
               sessionKey: specificKey,
             });
             const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
             const agentIdFromKey =
-              scopedParsed?.agentId ?? effectiveAgentId ?? resolveSessionAgentId({ config });
+              scopedParsed?.agentId ??
+              effectiveAgentId ??
+              specificSessionOwner?.agentId ??
+              resolveSessionAgentId({ config });
             const keyRest = scopedParsed?.rest ?? specificKey;
 
             // Prefer the store entry when available, even if the caller provides a discovered key

@@ -12,7 +12,7 @@ import {
   validateTalkSessionSteerParams,
   validateTalkSessionSubmitToolResultParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -156,15 +156,20 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const runtimeConfig = context.getRuntimeConfig();
+        const bareTalkAgentId =
+          requestedSessionKey && !parseAgentSessionKey(requestedSessionKey)
+            ? resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey)
+            : undefined;
         const requestedOwner = requestedSessionKey
-          ? resolveRequestedSessionAgentId(context.getRuntimeConfig(), requestedSessionKey)
+          ? resolveRequestedSessionAgentId(runtimeConfig, requestedSessionKey, bareTalkAgentId)
           : undefined;
         if (requestedOwner && !requestedOwner.ok) {
           respond(false, undefined, requestedOwner.error);
           return;
         }
         const resolvedSession = await resolveSessionKeyFromResolveParams({
-          cfg: context.getRuntimeConfig(),
+          cfg: runtimeConfig,
           client,
           p: {
             key: requestedSessionKey,
@@ -234,15 +239,21 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           defaults: realtimeConfig,
         });
         const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+        const bareTalkAgentId =
+          requestedSessionKey && !parseAgentSessionKey(requestedSessionKey)
+            ? resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey)
+            : undefined;
         const requestedOwner = requestedSessionKey
-          ? resolveRequestedSessionAgentId(runtimeConfig, requestedSessionKey)
+          ? resolveRequestedSessionAgentId(runtimeConfig, requestedSessionKey, bareTalkAgentId)
           : undefined;
         if (requestedOwner && !requestedOwner.ok) {
           respond(false, undefined, requestedOwner.error);
           return;
         }
         const agentId =
-          requestedOwner?.agentId ?? resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey);
+          requestedOwner?.agentId ??
+          bareTalkAgentId ??
+          resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey);
         const resolution = resolveConfiguredRealtimeVoiceProvider({
           configuredProviderId: realtimeConfig.provider,
           providerConfigs: realtimeConfig.providers,

@@ -1841,6 +1841,68 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("uses talk.agentId for a bare realtime session in an explicit fleet", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: {},
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-talk-owner",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      model: "gpt-realtime",
+      voice: "alloy",
+      expiresAt: 1_797_986_400,
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+      talk: {
+        agentId: "research",
+        realtime: {
+          provider: "openai",
+          providers: { openai: {} },
+        },
+      },
+    };
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.session.create", {
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        sessionKey: "incident-42",
+      },
+      respond,
+      context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
+    });
+
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research" }),
+    );
+    expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
+      agentId: "research",
+      sessionKey: "incident-42",
+    });
+    expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
+  });
+
   it.each([
     {
       label: "request override from a configured GA model",

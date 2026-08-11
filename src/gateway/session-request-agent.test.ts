@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 
 function fixedStoreConfig(owner: string): OpenClawConfig {
   return {
@@ -15,6 +18,9 @@ function fixedStoreConfig(owner: string): OpenClawConfig {
 
 describe("requested session agent ownership", () => {
   it("uses the configured persisted owner for a bare key", () => {
+    expect(tryResolveSessionCompatibilityOwnerAgentId(fixedStoreConfig("ops"), "global")).toBe(
+      "ops",
+    );
     expect(resolveRequestedSessionAgentId(fixedStoreConfig("ops"), "global")).toEqual({
       ok: true,
       agentId: "ops",
@@ -44,6 +50,7 @@ describe("requested session agent ownership", () => {
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     };
 
+    expect(tryResolveSessionCompatibilityOwnerAgentId(cfg, "global")).toBeUndefined();
     expect(resolveRequestedSessionAgentId(cfg, "global")).toMatchObject({
       ok: false,
       error: {

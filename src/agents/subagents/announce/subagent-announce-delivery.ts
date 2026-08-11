@@ -20,7 +20,11 @@ import {
   releaseSessionDeliveryClaim,
 } from "../../../infra/session-delivery-queue.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
@@ -630,9 +634,12 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
 
 export function loadRequesterSessionEntry(requesterSessionKey: string, explicitAgentId?: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const storageKey = requesterSessionKey.trim();
+  const rawStorageKey = requesterSessionKey.trim();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
-  const agentId = tryResolveRequesterAgentId(cfg, storageKey, explicitAgentId);
+  const configuredMainKey = normalizeMainKey(cfg.session?.mainKey);
+  const storageKey =
+    rawStorageKey === "main" || rawStorageKey === configuredMainKey ? canonicalKey : rawStorageKey;
+  const agentId = tryResolveRequesterAgentId(cfg, rawStorageKey, explicitAgentId);
   if (!agentId) {
     return { cfg, entry: undefined, canonicalKey };
   }

@@ -295,6 +295,7 @@ function filterSessionEntries(params: {
         shouldResolveDerivedSessionModelSearchFields(search) &&
         matchesSessionListSearch(
           resolveSessionListSearchModelFields({
+            ...(agentId ? { agentId } : {}),
             cfg,
             key,
             entry,

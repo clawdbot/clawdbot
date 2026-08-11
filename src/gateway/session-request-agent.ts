@@ -18,6 +18,20 @@ type RequestedSessionAgentIdResolution =
   | { ok: true; agentId: string }
   | { ok: false; error: ErrorShape };
 
+/** Resolves only stable implicit ownership for unscoped session rows and active runs. */
+export function tryResolveSessionCompatibilityOwnerAgentId(
+  cfg: OpenClawConfig,
+  key: string,
+): string | undefined {
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
+  if (persistedStoreOwner.kind === "configured") {
+    return persistedStoreOwner.agentId;
+  }
+  return persistedStoreOwner.kind === "retired"
+    ? undefined
+    : tryResolveLegacyCompatibilityAgentId(cfg);
+}
+
 export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
   key: string,
@@ -92,10 +106,7 @@ export function resolveRequestedSessionAgentId(
     }
     return { ok: true, agentId: normalizedRequestedAgentId };
   }
-  const inferredAgentId =
-    persistedStoreOwner.kind === "configured"
-      ? persistedStoreOwner.agentId
-      : tryResolveLegacyCompatibilityAgentId(cfg);
+  const inferredAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
   if (inferredAgentId) {
     return { ok: true, agentId: inferredAgentId };
   }

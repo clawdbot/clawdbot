@@ -1,12 +1,13 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   buildAbortedChatSendPayload,
@@ -23,6 +24,17 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
+
+export function resolveChatSendStopOwnerScope(params: {
+  cfg: OpenClawConfig;
+  selectedAgentId?: string;
+  sessionKey: string;
+}): { agentId?: string; defaultAgentId?: string } {
+  return {
+    agentId: params.selectedAgentId,
+    defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(params.cfg, params.sessionKey),
+  };
+}
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
@@ -90,22 +102,20 @@ export async function runChatSendPreAdmission(params: {
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const defaultAgentId =
-      (sessionKey === "global" ? selectedAgent.agentId : undefined) ??
-      tryResolveLegacyCompatibilityAgentId(cfg);
-    const stopAgentId =
-      sessionKey === "global"
-        ? (selectedAgent.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg))
-        : selectedAgent.agentId;
+    const stopOwnerScope = resolveChatSendStopOwnerScope({
+      cfg,
+      selectedAgentId: selectedAgent.agentId,
+      sessionKey,
+    });
     const res = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),
       sessionKey: rawSessionKey,
       sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-      agentId: stopAgentId,
+      agentId: stopOwnerScope.agentId,
       sessionId: entry?.sessionId,
       persistSessionKey: sessionKey,
-      defaultAgentId,
+      defaultAgentId: stopOwnerScope.defaultAgentId,
       abortOrigin: "stop-command",
       stopReason: "stop",
       requester: resolveChatAbortRequester(client),

@@ -148,6 +148,35 @@ describe("sessions tool", () => {
     });
   });
 
+  it.each(["patch", "reset", "delete"] as const)(
+    "does not treat another agent's bare global row as self for %s",
+    async (action) => {
+      const resolveGateway = vi.fn(async () => ({ agentId: "ops", key: "global" }));
+      sessionsResolutionTesting.setDepsForTest({ callGateway: resolveGateway as never });
+      const callGateway = vi.fn();
+      const tool = createSessionsTool({
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "research",
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        },
+        callGateway,
+      });
+
+      await expect(
+        tool.execute(`foreign-global-${action}`, {
+          action,
+          sessionKey: "2fb701ef-6425-4c48-9b6f-5a170aa2477e",
+          ...(action === "patch" ? { label: "Ops" } : {}),
+        }),
+      ).rejects.toThrow("Session status visibility is restricted");
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("cannot patch an incognito session through the cross-session tool", async () => {
     const sessionKey = "agent:main:dashboard:incognito-private";
     const callGateway = vi.fn();

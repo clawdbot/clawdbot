@@ -101,6 +101,7 @@ export function resolveSessionListRowContext(params: {
 }
 
 export function resolveSessionListSearchModelFields(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
@@ -108,7 +109,7 @@ export function resolveSessionListSearchModelFields(params: {
 }): Array<string | undefined> {
   const parsedAgent = parseAgentSessionKey(params.key);
   const agentId = normalizeAgentId(
-    parsedAgent?.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key),
+    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key),
   );
   const subagentRun = params.rowContext
     ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
