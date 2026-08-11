@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 129,
+      "line": 139,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/SkillManagement.kt",
       "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
       "surface": "android",
@@ -1835,7 +1835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 241,
+      "line": 251,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/SkillManagement.kt",
       "source": "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running.",
       "surface": "android",
@@ -10739,7 +10739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 133,
+      "line": 134,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Skills",
       "surface": "android",
@@ -10747,7 +10747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 134,
+      "line": 135,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Manage installed skills and add trusted releases from ClawHub.",
       "surface": "android",
@@ -10755,7 +10755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 148,
+      "line": 149,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Browse",
       "surface": "android",
@@ -10763,7 +10763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 166,
+      "line": 167,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
       "surface": "android",
@@ -10771,7 +10771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 232,
+      "line": 233,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Inspect and manage installed skill state.",
       "surface": "android",
@@ -10779,7 +10779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 240,
+      "line": 241,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Status",
       "surface": "android",
@@ -10787,7 +10787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 242,
+      "line": 243,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Missing",
       "surface": "android",
@@ -10795,7 +10795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 281,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Refresh",
       "surface": "android",
@@ -10803,7 +10803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 281,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Refreshing",
       "surface": "android",
@@ -10811,7 +10811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 375,
+      "line": 376,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Search installed skills",
       "surface": "android",
@@ -10819,7 +10819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 393,
+      "line": 394,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Connect the gateway to load skills.",
       "surface": "android",
@@ -10827,7 +10827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 398,
+      "line": 399,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "No skills installed.",
       "surface": "android",
@@ -10835,7 +10835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 399,
+      "line": 400,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Skills installed on the gateway will appear here.",
       "surface": "android",
@@ -10843,7 +10843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 404,
+      "line": 405,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "No installed skills match this search.",
       "surface": "android",
@@ -10851,7 +10851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 431,
+      "line": 432,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Gateway switch",
       "surface": "android",
@@ -10859,7 +10859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 433,
+      "line": 434,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Disabled for all agents.",
       "surface": "android",
@@ -10867,7 +10867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 433,
+      "line": 434,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Enabled for eligible agents.",
       "surface": "android",
@@ -10875,7 +10875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 464,
+      "line": 465,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Connect the gateway to load skill details.",
       "surface": "android",
@@ -10883,7 +10883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 470,
+      "line": 471,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Skill detail is not available in the current skills status.",
       "surface": "android",
@@ -10891,7 +10891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 477,
+      "line": 478,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Skill Key",
       "surface": "android",
@@ -10899,7 +10899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 478,
+      "line": 479,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Display",
       "surface": "android",
@@ -10907,7 +10907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 479,
+      "line": 480,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Source",
       "surface": "android",
@@ -10915,7 +10915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 480,
+      "line": 481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Install Options",
       "surface": "android",
@@ -10923,7 +10923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 486,
+      "line": 487,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Description",
       "surface": "android",
@@ -10931,7 +10931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 523,
+      "line": 524,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Open skill detail",
       "surface": "android",
@@ -10939,7 +10939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 554,
+      "line": 555,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Find on ClawHub",
       "surface": "android",
@@ -10947,7 +10947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 556,
+      "line": 557,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Search registry metadata. The Gateway verifies trust again before any download.",
       "surface": "android",
@@ -10955,7 +10955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 575,
+      "line": 576,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Search ClawHub",
       "surface": "android",
@@ -10963,7 +10963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 580,
+      "line": 581,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Search",
       "surface": "android",
@@ -10971,7 +10971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 580,
+      "line": 581,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Searching",
       "surface": "android",
@@ -10979,7 +10979,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 605,
+      "line": 607,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
+      "source": "Not scanned by ClawHub",
+      "surface": "android",
+      "id": "native.android.e8a0fa51d568cbfb"
+    },
+    {
+      "kind": "ui-call",
+      "line": 613,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Version $it",
       "surface": "android",
@@ -10987,7 +10995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 617,
+      "line": 626,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Installing",
       "surface": "android",
@@ -10995,7 +11003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 618,
+      "line": 627,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Loading",
       "surface": "android",
@@ -11003,7 +11011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 678,
+      "line": 687,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Needs attention",
       "surface": "android",
@@ -11011,7 +11019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 716,
+      "line": 725,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Review",
       "surface": "android",
@@ -11019,7 +11027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 722,
+      "line": 731,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Dismiss",
       "surface": "android",
@@ -11027,7 +11035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 729,
+      "line": 738,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Acknowledge Gateway warning and install",
       "surface": "android",
@@ -11035,7 +11043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 748,
+      "line": 757,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Review ClawHub skill",
       "surface": "android",
@@ -11043,7 +11051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 755,
+      "line": 764,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Version",
       "surface": "android",
@@ -11051,7 +11059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 756,
+      "line": 765,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Publisher",
       "surface": "android",
@@ -11059,7 +11067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 758,
+      "line": 767,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.",
       "surface": "android",
@@ -11067,7 +11075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 766,
+      "line": 775,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Verify and install",
       "surface": "android",
@@ -11075,7 +11083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 771,
+      "line": 780,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Cancel",
       "surface": "android",
@@ -11083,7 +11091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 813,
+      "line": 822,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "All",
       "surface": "android",
@@ -11091,7 +11099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 815,
+      "line": 824,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Needs Setup",
       "surface": "android",
@@ -11099,7 +11107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 832,
+      "line": 841,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Off",
       "surface": "android",
@@ -11107,7 +11115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 833,
+      "line": 842,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Setup",
       "surface": "android",
@@ -11115,7 +11123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 834,
+      "line": 843,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Ready",
       "surface": "android",
@@ -11123,7 +11131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 847,
+      "line": 856,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Disabled",
       "surface": "android",
@@ -11131,7 +11139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 848,
+      "line": 857,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Blocked",
       "surface": "android",
@@ -11139,7 +11147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 849,
+      "line": 858,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Not available to this agent",
       "surface": "android",
@@ -11147,7 +11155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 851,
+      "line": 860,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Needs setup",
       "surface": "android",
@@ -11155,7 +11163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 859,
+      "line": 868,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin.",
       "surface": "android",
@@ -11163,7 +11171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 860,
+      "line": 869,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI.",
       "surface": "android",
@@ -11171,7 +11179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 861,
+      "line": 870,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI.",
       "surface": "android",
@@ -11179,7 +11187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 863,
+      "line": 872,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "This skill is installed but not currently eligible to run. Use desktop or CLI for configuration changes.",
       "surface": "android",
@@ -11187,7 +11195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 864,
+      "line": 873,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI.",
       "surface": "android",
@@ -11195,7 +11203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 869,
+      "line": 878,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "No missing items",
       "surface": "android",
@@ -11203,7 +11211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 870,
+      "line": 879,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "1 missing item",
       "surface": "android",
@@ -11211,7 +11219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 871,
+      "line": 880,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "$count missing items",
       "surface": "android",
@@ -11219,7 +11227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 876,
+      "line": 885,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "This skill needs 1 setup item. Android shows what is installed; setup/config changes stay on desktop or CLI.",
       "surface": "android",
@@ -11227,7 +11235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 877,
+      "line": 886,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "This skill needs $count setup items. Android shows what is installed; setup/config changes stay on desktop or CLI.",
       "surface": "android",
@@ -11235,7 +11243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 882,
+      "line": 891,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Built-in",
       "surface": "android",
@@ -11243,7 +11251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 882,
+      "line": 891,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Bundled",
       "surface": "android",
@@ -11251,7 +11259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 883,
+      "line": 892,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Installed",
       "surface": "android",
@@ -11259,7 +11267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 884,
+      "line": 893,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Workspace",
       "surface": "android",
@@ -11267,7 +11275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 885,
+      "line": 894,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Extra",
       "surface": "android",
@@ -11275,7 +11283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 886,
+      "line": 895,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt",
       "source": "Skill",
       "surface": "android",
@@ -17554,6 +17562,14 @@
       "id": "native.apple.2cb500a4a64c9a05"
     },
     {
+      "kind": "conditional-branch",
+      "line": 279,
+      "path": "apps/ios/Sources/Design/AgentProModels.swift",
+      "source": "Not scanned by ClawHub",
+      "surface": "apple",
+      "id": "native.apple.ea31f81a49a94d3a"
+    },
+    {
       "kind": "ui-named-argument",
       "line": 41,
       "path": "apps/ios/Sources/Design/AgentProNodesDestination.swift",
@@ -18659,7 +18675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 188,
+      "line": 196,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Install %@",
       "surface": "apple",
@@ -18667,7 +18683,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 196,
+      "line": 204,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Installed Skills",
       "surface": "apple",
@@ -18675,7 +18691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 202,
+      "line": 210,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "No skills found",
       "surface": "apple",
@@ -18683,7 +18699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 202,
+      "line": 210,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skills unavailable",
       "surface": "apple",
@@ -18691,7 +18707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 204,
+      "line": 212,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Try a different search or refresh from the gateway.",
       "surface": "apple",
@@ -18699,7 +18715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 205,
+      "line": 213,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Connect a gateway to load workspace skills.",
       "surface": "apple",
@@ -18707,7 +18723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 317,
+      "line": 325,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Setup: %@",
       "surface": "apple",
@@ -18715,7 +18731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 339,
+      "line": 347,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Set up %@",
       "surface": "apple",
@@ -18723,7 +18739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 351,
+      "line": 359,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Edit %@",
       "surface": "apple",
@@ -18731,7 +18747,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 355,
+      "line": 363,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "saving",
       "surface": "apple",
@@ -18739,7 +18755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 418,
+      "line": 426,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill unavailable",
       "surface": "apple",
@@ -18747,7 +18763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 420,
+      "line": 428,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Return to the skills list and choose another skill.",
       "surface": "apple",
@@ -18755,7 +18771,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 427,
+      "line": 435,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill",
       "surface": "apple",
@@ -18763,7 +18779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 462,
+      "line": 470,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Close",
       "surface": "apple",
@@ -18771,7 +18787,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 482,
+      "line": 490,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Workspace skill",
       "surface": "apple",
@@ -18779,7 +18795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 497,
+      "line": 505,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Enabled globally",
       "surface": "apple",
@@ -18787,7 +18803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 507,
+      "line": 515,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "API key",
       "surface": "apple",
@@ -18795,7 +18811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 515,
+      "line": 523,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Save key",
       "surface": "apple",
@@ -18803,7 +18819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 522,
+      "line": 530,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Get key",
       "surface": "apple",
@@ -18811,7 +18827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 576,
+      "line": 584,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Off",
       "surface": "apple",
@@ -18819,7 +18835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 576,
+      "line": 584,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "On",
       "surface": "apple",
@@ -18827,7 +18843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 582,
+      "line": 590,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Setup",
       "surface": "apple",
@@ -18835,7 +18851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 586,
+      "line": 594,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Missing: %@",
       "surface": "apple",
@@ -18843,7 +18859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 591,
+      "line": 599,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "No missing requirements reported.",
       "surface": "apple",
@@ -18851,7 +18867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 614,
+      "line": 622,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Key",
       "surface": "apple",
@@ -18859,7 +18875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 615,
+      "line": 623,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Source",
       "surface": "apple",
@@ -18867,7 +18883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 698,
+      "line": 706,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill policy reset.",
       "surface": "apple",
@@ -18875,7 +18891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 698,
+      "line": 706,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill policy saved.",
       "surface": "apple",
@@ -18883,7 +18899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 711,
+      "line": 719,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill disabled.",
       "surface": "apple",
@@ -18891,7 +18907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 711,
+      "line": 719,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "Skill enabled.",
       "surface": "apple",
@@ -18899,7 +18915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 723,
+      "line": 731,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "API key cleared.",
       "surface": "apple",
@@ -18907,7 +18923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 724,
+      "line": 732,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "API key saved.",
       "surface": "apple",
@@ -18915,7 +18931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 879,
+      "line": 887,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "off",
       "surface": "apple",
@@ -18923,7 +18939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 881,
+      "line": 889,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "blocked",
       "surface": "apple",
@@ -18931,7 +18947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 883,
+      "line": 891,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "disabled",
       "surface": "apple",
@@ -18939,7 +18955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 885,
+      "line": 893,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "setup",
       "surface": "apple",
@@ -18947,7 +18963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 887,
+      "line": 895,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "enabled",
       "surface": "apple",
@@ -30771,7 +30787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 145,
+      "line": 150,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Installed",
       "surface": "apple",
@@ -30779,7 +30795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 145,
+      "line": 150,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review",
       "surface": "apple",
@@ -30787,7 +30803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 160,
+      "line": 165,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review ClawHub skill",
       "surface": "apple",
@@ -30795,7 +30811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 162,
+      "line": 167,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "The Gateway will verify this exact release with ClawHub before download.",
       "surface": "apple",
@@ -30803,7 +30819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 168,
+      "line": 173,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Verify and install",
       "surface": "apple",
@@ -30811,7 +30827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 189,
+      "line": 194,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Gateway warning",
       "surface": "apple",
@@ -30819,7 +30835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 194,
+      "line": 199,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Review warning details",
       "surface": "apple",
@@ -30827,7 +30843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 200,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Expand and review the Gateway warning before acknowledging this exact version.",
       "surface": "apple",
@@ -30835,7 +30851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 205,
+      "line": 210,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -30843,7 +30859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 206,
+      "line": 211,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Acknowledge and install",
       "surface": "apple",
@@ -30851,7 +30867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 225,
+      "line": 230,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Version",
       "surface": "apple",
@@ -30859,7 +30875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 226,
+      "line": 231,
       "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift",
       "source": "Publisher",
       "surface": "apple",
@@ -43075,7 +43091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 355,
+      "line": 368,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/SkillManagement.swift",
       "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
       "surface": "apple",

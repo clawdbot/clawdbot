@@ -32,6 +32,16 @@ struct SkillManagementTests {
         #expect(search.results.map(\.id) == ["@alice/email", "@bob/email", "orphan"])
     }
 
+    @Test func `unscanned external sources carry a trust label`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"email","installRef":"skills-sh:acme/tools/email","displayName":"Email","trustState":"not-scanned-by-clawhub"},{"slug":"email","installRef":"@alice/email","displayName":"Email"}]}"#
+                .utf8)
+        let search = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data)
+
+        // A registry result must not be labelled; only the unscanned external source is.
+        #expect(search.results.map(\.trustLabel) == ["Not scanned by ClawHub", nil])
+    }
+
     @Test func `risk acknowledgement stays bound to reviewed version`() {
         let matching = GatewayResponseError(
             method: "skills.install",

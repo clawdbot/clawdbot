@@ -173,6 +173,14 @@ extension AgentProTab {
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                // Install here is one tap with no review step, so an unscanned external source
+                // has to be visible in the row itself.
+                if let trustLabel = result.trustLabel {
+                    Text(trustLabel)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Button {

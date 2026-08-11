@@ -220,6 +220,12 @@
   grid-column: 1 / -1;
 }
 
+/* Unscanned external sources must read as a warning, not as more row metadata. */
+.clawhub-skill-result__trust {
+  color: var(--warn);
+  font-size: var(--control-ui-text-sm);
+}
+
 .clawhub-skill-icon {
   width: 40px;
   height: 40px;

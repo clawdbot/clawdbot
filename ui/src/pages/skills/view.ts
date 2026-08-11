@@ -34,7 +34,11 @@ import {
   isSkillAvailable,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import { clawHubSkillRef, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
+import {
+  clawHubSkillRef,
+  clawHubTrustLabel,
+  type ClawHubSearchResult,
+} from "../../lib/skills/clawhub-search.ts";
 import {
   clawhubVerdictKey,
   type ClawHubSkillSecurityVerdict,
@@ -474,6 +478,9 @@ function renderClawHubResults(props: SkillsProps) {
               <span class="settings-row__desc">
                 ${r.summary ? `${clampText(r.summary, 100)} · ${ref}` : ref}
               </span>
+              ${clawHubTrustLabel(r)
+                ? html`<span class="clawhub-skill-result__trust">${clawHubTrustLabel(r)}</span>`
+                : nothing}
             </span>
           </button>
           <div class="settings-row__control">

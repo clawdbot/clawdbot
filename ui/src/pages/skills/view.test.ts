@@ -877,6 +877,43 @@ describe("renderSkills", () => {
     ]);
   });
 
+  it("labels an unscanned external source in the search row", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "imap-smtp-email",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "imap-smtp-email",
+              installRef: "skills-sh:acme/tools/imap-smtp-email",
+              displayName: "imap-smtp-email",
+              trustState: "not-scanned-by-clawhub",
+            },
+            {
+              score: 1,
+              slug: "imap-smtp-email",
+              installRef: "@gzlicanyi/imap-smtp-email",
+              displayName: "imap-smtp-email",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // The operator must see the unscanned state on the row itself, before acting on it.
+    const rows = [...container.querySelectorAll<HTMLElement>(".clawhub-skill-result__button")];
+    expect(
+      rows.map((row) => row.querySelector(".clawhub-skill-result__trust")?.textContent?.trim()),
+    ).toEqual(["Not scanned by ClawHub", undefined]);
+  });
+
   it("renders ClawHub acknowledgement retry actions", async () => {
     const container = document.createElement("div");
     document.body.append(container);

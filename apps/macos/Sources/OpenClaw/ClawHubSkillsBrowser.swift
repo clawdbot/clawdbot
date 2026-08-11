@@ -142,6 +142,11 @@ private struct ClawHubSkillResultRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            if let trustLabel = self.skill.trustLabel {
+                Text(trustLabel)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
             Button(self.installed ? "Installed" : "Review", action: self.onReview)
                 .buttonStyle(.bordered)
                 .disabled(self.isBusy || self.installed)

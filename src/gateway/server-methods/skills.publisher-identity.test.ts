@@ -35,14 +35,26 @@ const PUBLISHERS = ["gzlicanyi", "wangchenyu8"] as const;
 
 function searchPayload() {
   return {
-    results: PUBLISHERS.map((ownerHandle, index) => ({
-      score: 6120 - index,
-      slug: SLUG,
-      ownerHandle,
-      displayName: SLUG,
-      summary: `Email skill by ${ownerHandle}`,
-      version: "1.0.0",
-    })),
+    results: [
+      ...PUBLISHERS.map((ownerHandle, index) => ({
+        score: 6120 - index,
+        slug: SLUG,
+        ownerHandle,
+        displayName: SLUG,
+        summary: `Email skill by ${ownerHandle}`,
+        version: "1.0.0",
+      })),
+      // An external source ClawHub has not scanned, which names its own reference.
+      {
+        score: 6100,
+        slug: SLUG,
+        installRef: `skills-sh:acme/tools/${SLUG}`,
+        trustState: "not-scanned-by-clawhub",
+        displayName: SLUG,
+        summary: "Email skill from skills.sh",
+        version: "1.0.0",
+      },
+    ],
   };
 }
 
@@ -94,7 +106,25 @@ describe("ClawHub publisher identity across skills.search, skills.detail, and sk
     expect(ok).toBe(true);
     expect(
       (response as { results: { installRef?: string }[] }).results.map((r) => r.installRef),
-    ).toEqual([`@gzlicanyi/${SLUG}`, `@wangchenyu8/${SLUG}`]);
+    ).toEqual([`@gzlicanyi/${SLUG}`, `@wangchenyu8/${SLUG}`, `skills-sh:acme/tools/${SLUG}`]);
+  });
+
+  it("carries the unscanned trust state to clients so install cannot be offered blind", async () => {
+    const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG });
+
+    expect(ok).toBe(true);
+    // Clients render this before offering install; without it on the wire a client can only
+    // decode the reference and would install an unscanned source silently.
+    expect(
+      (response as { results: { installRef?: string; trustState?: string }[] }).results.map((r) => [
+        r.installRef,
+        r.trustState,
+      ]),
+    ).toEqual([
+      [`@gzlicanyi/${SLUG}`, undefined],
+      [`@wangchenyu8/${SLUG}`, undefined],
+      [`skills-sh:acme/tools/${SLUG}`, "not-scanned-by-clawhub"],
+    ]);
   });
 
   it.each(PUBLISHERS)("reads detail for the selected publisher %s", async (ownerHandle) => {

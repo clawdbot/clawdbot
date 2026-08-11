@@ -218,17 +218,30 @@ public struct ClawHubInstalledSkillLink: Codable, Sendable {
     public let reason: String?
 }
 
+/// Mirrors the Gateway's `trustState` contract and the CLI's wording so every surface labels an
+/// unscanned external source identically.
+public enum ClawHubSkillTrust {
+    public static let notScannedState = "not-scanned-by-clawhub"
+    public static let notScannedLabel = "Not scanned by ClawHub"
+}
+
 public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
     public let slug: String
     public let installRef: String?
     public let displayName: String
     public let summary: String?
     public let version: String?
+    public let trustState: String?
 
     /// Several publishers can share one slug, so the Gateway-supplied reference is what identifies
     /// a result, what distinguishes rows, and what detail and install must send back.
     public var reference: String {
         self.installRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? self.slug
+    }
+
+    /// Results from sources ClawHub has not scanned must say so before install is offered.
+    public var trustLabel: String? {
+        self.trustState == ClawHubSkillTrust.notScannedState ? ClawHubSkillTrust.notScannedLabel : nil
     }
 
     public var id: String {

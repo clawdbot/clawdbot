@@ -267,10 +267,16 @@ struct ClawHubSearchResultLite: Decodable {
     let displayName: String
     let summary: String?
     let version: String?
+    let trustState: String?
 
     /// Several publishers can share one slug, so install must send the Gateway-supplied reference.
     var reference: String {
         self.installRef ?? self.slug
+    }
+
+    /// This surface installs directly, so an unscanned external source must say so before the tap.
+    var trustLabel: String? {
+        self.trustState == "not-scanned-by-clawhub" ? "Not scanned by ClawHub" : nil
     }
 }
 

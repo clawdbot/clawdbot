@@ -50,6 +50,18 @@ class SkillManagementTest {
   }
 
   @Test
+  fun unscannedExternalSourcesCarryATrustLabel() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"email","installRef":"skills-sh:acme/tools/email","displayName":"Email","trustState":"not-scanned-by-clawhub"},{"slug":"email","installRef":"@alice/email","displayName":"Email"}]}""",
+        json,
+      )
+
+    // A registry result must not be labelled; only the unscanned external source is.
+    assertEquals(listOf("Not scanned by ClawHub", null), results.map { it.trustLabel })
+  }
+
+  @Test
   fun detailBindsExactVersionAndPublisherIdentity() {
     val review =
       parseClawHubInstallReview(
