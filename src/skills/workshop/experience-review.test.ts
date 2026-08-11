@@ -95,6 +95,87 @@ afterEach(() => {
 });
 
 describe("skill experience review scheduler", () => {
+  it("cancels queued review work for an explicitly stopped session", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun());
+    expect(scheduler.cancel("agent:main:main")).toBe(true);
+    await vi.runAllTimersAsync();
+
+    expect(runReview).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress a later aborted turn when no foreground abort succeeded", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    expect(scheduler.cancel("agent:main:main")).toBe(false);
+    scheduler.schedule(completedRun({ success: false }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts an in-flight review without retrying it", async () => {
+    vi.useFakeTimers();
+    let reviewSignal: AbortSignal | undefined;
+    const runReview = vi.fn((_candidate, abortSignal: AbortSignal) => {
+      reviewSignal = abortSignal;
+      return new Promise<void>((_resolve, reject) => {
+        abortSignal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              abortSignal.reason instanceof Error
+                ? abortSignal.reason
+                : new Error("review aborted"),
+            ),
+          { once: true },
+        );
+      });
+    });
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun());
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledTimes(1);
+
+    expect(scheduler.cancel("agent:main:main")).toBe(true);
+    expect(reviewSignal?.aborted).toBe(true);
+    await flushMicrotasks();
+    await vi.runAllTimersAsync();
+    expect(runReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves reviews from other sessions running", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ sessionKey: "agent:main:cancelled" }));
+    scheduler.schedule(completedRun({ sessionKey: "agent:main:unrelated" }));
+    expect(scheduler.cancel("agent:main:cancelled")).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(runReview.mock.calls[0]?.[0].ctx.sessionKey).toBe("agent:main:unrelated");
+  });
+
   it("waits for a completed substantial turn and an idle window", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
@@ -159,7 +240,10 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ iterations: 1, modelIterations: 10 }));
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 10 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -178,7 +262,10 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ modelIterations: 4, runId: "run-c" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 12 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -213,6 +300,7 @@ describe("skill experience review scheduler", () => {
           { name: "deploy-check", source: "workspace", activation: "command" },
         ],
       }),
+      expect.any(AbortSignal),
     );
     scheduler.clear();
   });
@@ -258,6 +346,7 @@ describe("skill experience review scheduler", () => {
         }),
         usedSkills: [{ name: "deploy-check", source: "workspace", activation: "command" }],
       }),
+      expect.any(AbortSignal),
     );
     const candidate = runReview.mock.calls[0]?.[0];
     expect(candidate.transcript).toContain("Current work handled by provider B.");
@@ -306,7 +395,10 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-c", senderId: "bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 12 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -340,7 +432,10 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ modelIterations: 5, runId: "run-next" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 10 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -389,7 +484,10 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-b", success: true }));
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ turnAborted: true }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ turnAborted: true }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 

@@ -1,3 +1,4 @@
+import { skillExperienceReviewCancellation } from "./experience-review-cancellation.js";
 import {
   createSkillExperienceReviewScheduler,
   type ExperienceReviewCandidate,
@@ -20,10 +21,20 @@ const defaultScheduler = createSkillExperienceReviewScheduler({
     const { getRuntimeConfig } = await import("../../config/config.js");
     return prepareSkillExperienceReviewCandidate(candidate, getRuntimeConfig());
   },
-  runReview: runSkillExperienceReview,
+  runReview: (candidate, abortSignal) => runSkillExperienceReview(candidate, { abortSignal }),
 });
+
+skillExperienceReviewCancellation.register((sessionKey) => defaultScheduler.cancel(sessionKey));
 
 /** Queues a conservative, post-run learning review after the agent system becomes idle. */
 export function scheduleSkillExperienceReview(params: SkillExperienceReviewParams): void {
+  if (
+    skillExperienceReviewCancellation.consumeStoppedTerminal(
+      params.ctx.sessionKey,
+      params.event.success,
+    )
+  ) {
+    return;
+  }
   defaultScheduler.schedule(params);
 }

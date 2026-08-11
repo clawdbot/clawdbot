@@ -15,6 +15,7 @@ import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
+const cancelExperienceReviewForAbortOutcomeMock = vi.hoisted(() => vi.fn(() => false));
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
@@ -49,6 +50,7 @@ vi.mock("./abort-cutoff.js", () => ({
 
 vi.mock("./abort.js", () => ({
   abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
+  cancelExperienceReviewForAbortOutcome: cancelExperienceReviewForAbortOutcomeMock,
   formatAbortReplyText: formatAbortReplyTextMock,
   isAbortTrigger: vi.fn(() => false),
   setAbortMemory: vi.fn(),
@@ -142,6 +144,7 @@ describe("handleStopCommand target fallback", () => {
   beforeEach(() => {
     previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
+    cancelExperienceReviewForAbortOutcomeMock.mockReturnValue(false);
     abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: false, aborted: false });
     persistAbortTargetEntryMock.mockResolvedValue(true);
   });
@@ -168,6 +171,9 @@ describe("handleStopCommand target fallback", () => {
       sessionId: undefined,
     });
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
+    expect(cancelExperienceReviewForAbortOutcomeMock.mock.calls).toEqual([
+      ["agent:target:telegram:direct:123", false],
+    ]);
     const [persistAbortTargetParams] = expectDefined(
       (
         persistAbortTargetEntryMock.mock.calls as unknown as Array<
@@ -225,6 +231,20 @@ describe("handleStopCommand target fallback", () => {
     });
     expect(formatAbortReplyTextMock).toHaveBeenCalledWith(0, "finalizing", 0);
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
+    expect(cancelExperienceReviewForAbortOutcomeMock.mock.calls).toEqual([
+      ["agent:target:telegram:direct:123", false],
+    ]);
+  });
+
+  it("suppresses the terminal review only after the target run aborts", async () => {
+    const params = buildStopParams();
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: true, aborted: true });
+
+    await handleStopCommand(params, true);
+
+    expect(cancelExperienceReviewForAbortOutcomeMock.mock.calls).toEqual([
+      ["agent:target:telegram:direct:123", true],
+    ]);
   });
 
   it("surfaces child stop failures in the stop reply", async () => {

@@ -34,6 +34,55 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it("leaves a captured proposal pending when the review is cancelled", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-cancel-auto-apply-");
+    const abortController = new AbortController();
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        origin: params.skillWorkshopOrigin,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        autonomousCapture: params.skillWorkshopAutonomousCapture,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-create", {
+        action: "create",
+        name: "deployment-preflight",
+        description: "Check deployment prerequisites before retrying.",
+        proposal_content: "# Deployment Preflight\n\nCheck prerequisites before deploy.\n",
+      });
+      abortController.abort(new Error("stopped by user"));
+      return {};
+    });
+    const candidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId: "foreground-run",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+      },
+      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+      transcript: "[user]\nRecover the deployment workflow.",
+      modelIterations: 10,
+    };
+
+    await runSkillExperienceReview(candidate, {
+      abortSignal: abortController.signal,
+      getCurrentConfig: () => candidate.config ?? {},
+    });
+
+    const manifest = await listSkillProposals({ workspaceDir });
+    expect(manifest.proposals).toHaveLength(1);
+    expect(manifest.proposals[0]).toMatchObject({ status: "pending" });
+    await expect(
+      fs.readFile(`${workspaceDir}/skills/deployment-preflight/SKILL.md`, "utf8"),
+    ).rejects.toThrow();
+  });
+
   it("applies the isolated reviewer proposal after the reviewer completes", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-workspace-");
     runEmbeddedAgent.mockImplementation(async (params) => {

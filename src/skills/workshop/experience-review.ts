@@ -89,13 +89,14 @@ export type ExperienceReviewCandidate = {
 
 type ExperienceReviewRunDeps = {
   getCurrentConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
+  abortSignal?: AbortSignal;
 };
 
 type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
 
 type ExperienceReviewSchedulerDeps = {
   isSystemActive: () => boolean | Promise<boolean>;
-  runReview: (candidate: ExperienceReviewCandidate) => Promise<void>;
+  runReview: (candidate: ExperienceReviewCandidate, abortSignal: AbortSignal) => Promise<void>;
   prepareReview?: (
     candidate: ExperienceReviewCandidate,
   ) => ExperienceReviewCandidate | undefined | Promise<ExperienceReviewCandidate | undefined>;
@@ -107,6 +108,7 @@ type PendingExperienceReview = {
   candidate: ExperienceReviewCandidate;
   generation: number;
   timer?: ExperienceReviewTimer;
+  abortController?: AbortController;
 };
 
 function mergeRunSkillUsage(
@@ -266,6 +268,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             return;
           }
           reviewInFlight = true;
+          const abortController = new AbortController();
+          pending.abortController = abortController;
           try {
             const candidate = deps.prepareReview
               ? await deps.prepareReview(pending.candidate)
@@ -277,25 +281,27 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
               return;
             }
-            await deps.runReview(candidate);
+            await deps.runReview(candidate, abortController.signal);
             if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
               pendingBySession.delete(sessionKey);
             }
           } finally {
+            if (pending.abortController === abortController) {
+              pending.abortController = undefined;
+            }
             reviewInFlight = false;
           }
         })
         .catch((error: unknown) => {
-          log.warn(`skill experience review failed: ${String(error)}`);
-          if (isAuthProfileMigrationRequiredError(error)) {
-            if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
-              pendingBySession.delete(sessionKey);
-            }
+          if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
             return;
           }
-          if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
-            arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+          log.warn(`skill experience review failed: ${String(error)}`);
+          if (isAuthProfileMigrationRequiredError(error)) {
+            pendingBySession.delete(sessionKey);
+            return;
           }
+          arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
         });
     }, delayMs);
     pending.timer = timer;
@@ -308,12 +314,12 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (!sessionKey) {
         return;
       }
-      const existing = pendingBySession.get(sessionKey);
       // Errored completions (provider/prompt failures) are transient environment
       // noise, not learnable evidence, and a same-model review would likely hit
-      // the same failure. User aborts carry no error and stay eligible: deep
-      // interrupted turns are exactly where corrective evidence lives.
+      // the same failure. Non-explicit interruptions remain eligible: deep
+      // interrupted turns can carry useful corrective evidence.
       const errored = typeof params.event.error === "string" && params.event.error.trim() !== "";
+      const existing = pendingBySession.get(sessionKey);
       if (
         existing &&
         errored &&
@@ -506,11 +512,31 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         );
       }
     },
+    cancel(sessionKey: string): boolean {
+      const normalizedSessionKey = sessionKey.trim();
+      if (!normalizedSessionKey) {
+        return false;
+      }
+      const pending = pendingBySession.get(normalizedSessionKey);
+      const hadShallowEvidence = shallowBySession.delete(normalizedSessionKey);
+      if (!pending) {
+        return hadShallowEvidence;
+      }
+      pending.generation += 1;
+      if (pending.timer) {
+        clearTimer(pending.timer);
+      }
+      pending.abortController?.abort(new Error("Skill experience review stopped by user"));
+      pendingBySession.delete(normalizedSessionKey);
+      log.debug(`experience review cancelled: session=${normalizedSessionKey}`);
+      return true;
+    },
     clear(): void {
       for (const pending of pendingBySession.values()) {
         if (pending.timer) {
           clearTimer(pending.timer);
         }
+        pending.abortController?.abort(new Error("Skill experience review scheduler cleared"));
       }
       pendingBySession.clear();
       shallowBySession.clear();
@@ -522,6 +548,9 @@ export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
   deps: ExperienceReviewRunDeps = {},
 ): Promise<void> {
+  if (deps.abortSignal?.aborted) {
+    return;
+  }
   // The idle timer that fires this review was armed inside the foreground
   // run's root-work ALS context. By fire time that root is released, so any
   // inherited-context lane enqueue is refused as GatewayDrainingError on a
@@ -541,6 +570,9 @@ async function runSkillExperienceReviewInner(
   const modelProviderId = candidate.ctx.modelProviderId?.trim();
   const modelId = candidate.ctx.modelId?.trim();
   if (!workspaceDir || !sessionKey || !modelProviderId || !modelId) {
+    return;
+  }
+  if (deps.abortSignal?.aborted) {
     return;
   }
 
@@ -617,6 +649,7 @@ async function runSkillExperienceReviewInner(
         sessionKey,
         ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
       },
+      abortSignal: deps.abortSignal,
       cleanupBundleMcpOnRunEnd: true,
       bootstrapContextMode: "lightweight",
       skillsSnapshot: { prompt: "", skills: [] },
@@ -628,9 +661,16 @@ async function runSkillExperienceReviewInner(
     preparedRunAdmission.close();
   }
 
+  if (deps.abortSignal?.aborted) {
+    return;
+  }
+
   const currentConfig = deps.getCurrentConfig
     ? await deps.getCurrentConfig()
     : (await import("../../config/config.js")).getRuntimeConfig();
+  if (deps.abortSignal?.aborted) {
+    return;
+  }
   if (resolveSkillWorkshopConfig(currentConfig).autonomous.mode !== "auto") {
     return;
   }
@@ -640,6 +680,9 @@ async function runSkillExperienceReviewInner(
   }
   const { inspectSkillProposal } = await import("./service.js");
   for (const proposalId of proposalIds) {
+    if (deps.abortSignal?.aborted) {
+      return;
+    }
     const proposal = await inspectSkillProposal(proposalId, {
       workspaceDir,
       ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
@@ -650,6 +693,9 @@ async function runSkillExperienceReviewInner(
       proposal.record.autonomousCapture !== true
     ) {
       continue;
+    }
+    if (deps.abortSignal?.aborted) {
+      return;
     }
     await autoApplySkillProposal({
       workspaceDir,

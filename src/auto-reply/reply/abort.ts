@@ -32,6 +32,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { skillExperienceReviewCancellation } from "../../skills/workshop/experience-review-cancellation.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
@@ -62,6 +63,13 @@ const defaultAbortDeps = {
 const abortDeps = {
   ...defaultAbortDeps,
 };
+
+export function cancelExperienceReviewForAbortOutcome(
+  sessionKey: string,
+  aborted: boolean,
+): boolean {
+  return skillExperienceReviewCancellation.cancel(sessionKey, aborted);
+}
 
 const abortTestApi = {
   setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
@@ -372,6 +380,13 @@ export async function tryFastAbortFromMessage(params: {
     if (boundAcpTargetKey && boundAcpTargetKey !== resolvedTargetKey) {
       abortTargetKeys.push(boundAcpTargetKey);
     }
+    const sourceAbortKey =
+      commandSessionKey &&
+      !abortTargetKeys.includes(commandSessionKey) &&
+      conversationBoundAcpTargetKey &&
+      abortTargetKeys.includes(conversationBoundAcpTargetKey)
+        ? commandSessionKey
+        : undefined;
     const acpManager = abortDeps.getAcpSessionManager();
     for (const acpTargetKey of abortTargetKeys.filter(isAcpSessionKey)) {
       const acpResolution = acpManager.resolveSession({
@@ -391,13 +406,6 @@ export async function tryFastAbortFromMessage(params: {
         logVerbose(`abort: ACP cancel failed for ${acpTargetKey}: ${formatErrorMessage(error)}`);
       }
     }
-    const sourceAbortKey =
-      commandSessionKey &&
-      !abortTargetKeys.includes(commandSessionKey) &&
-      conversationBoundAcpTargetKey &&
-      abortTargetKeys.includes(conversationBoundAcpTargetKey)
-        ? commandSessionKey
-        : undefined;
     const sessionIdsByKey = new Map<string, string | undefined>(
       abortTargetKeys.map((abortTargetKey) => [
         abortTargetKey,
@@ -409,6 +417,7 @@ export async function tryFastAbortFromMessage(params: {
     );
     let aborted = false;
     let activeAbortRejected = false;
+    const successfullyAbortedReviewSessions = new Set<string>();
     for (const abortTargetKey of abortTargetKeys) {
       const outcome = abortSessionRunTargetWithOutcome({
         key: abortTargetKey,
@@ -416,6 +425,9 @@ export async function tryFastAbortFromMessage(params: {
       });
       activeAbortRejected ||= outcome.active && !outcome.aborted;
       aborted = outcome.aborted || aborted;
+      if (outcome.aborted) {
+        successfullyAbortedReviewSessions.add(abortTargetKey);
+      }
     }
     const sourceSessionId = sourceAbortKey
       ? (replyRunRegistry.resolveSessionId(sourceAbortKey) ??
@@ -428,6 +440,17 @@ export async function tryFastAbortFromMessage(params: {
       });
       activeAbortRejected ||= outcome.active && !outcome.aborted;
       aborted = outcome.aborted || aborted;
+      if (outcome.aborted) {
+        successfullyAbortedReviewSessions.add(sourceAbortKey);
+      }
+    }
+    for (const reviewSessionKey of sourceAbortKey
+      ? [...abortTargetKeys, sourceAbortKey]
+      : abortTargetKeys) {
+      cancelExperienceReviewForAbortOutcome(
+        reviewSessionKey,
+        successfullyAbortedReviewSessions.has(reviewSessionKey),
+      );
     }
     const cleared = clearSessionQueues(
       abortTargetKeys
