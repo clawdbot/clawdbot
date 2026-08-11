@@ -241,6 +241,11 @@ function clearPendingAgentRunTimeout(runId: string) {
 }
 
 function beginAgentJob(runId: string, startedAt?: number) {
+  for (const [trackedRunId, trackedAt] of agentRunStarts) {
+    if (trackedAt < 0 && -trackedAt <= Date.now()) {
+      agentRunStarts.delete(trackedRunId);
+    }
+  }
   nextAgentRunVersion();
   clearPendingAgentRunError(runId);
   clearPendingAgentRunTimeout(runId);
@@ -518,7 +523,9 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
   if (incomingObservation.state === "terminal") {
-    if (key.source === "agent") agentRunStarts.delete(key.runId);
+    if (key.source === "agent") {
+      agentRunStarts.delete(key.runId);
+    }
     recordAgentRunSnapshot({
       ...incomingObservation.snapshot,
       runId: key.runId,
@@ -662,9 +669,6 @@ export async function waitForAgentJob(params: {
       finish(null);
     };
     const armTimeout = () => {
-      if (settled) {
-        return;
-      }
       const observedStart = params.executionScoped ? agentRunStarts.get(params.runId) : Date.now();
       if (params.executionScoped && observedStart === AGENT_RUN_QUEUED_AT) {
         clearWaitTimeout();
