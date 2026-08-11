@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "adapters": [
+    {
+      "id": "wizard-catalog-sources",
+      "owner": "wizard",
+      "roots": [
+        "src/wizard/i18n/catalogs"
+      ],
+      "extensions": [
+        ".json"
+      ]
+    },
+    {
+      "id": "tui-status-catalogs",
+      "owner": "tui",
+      "roots": [
+        "src/tui/i18n/locales"
+      ],
+      "extensions": [
+        ".ts"
+      ]
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "wizard-core",
+      "owner": "wizard",
+      "source": "src/wizard/i18n/catalogs/en.json",
+      "disposition": "adopted",
+      "catalogArea": "wizard-core",
+      "namespace": "wizard"
+    },
+    {
+      "id": "tui-status-en",
+      "owner": "tui",
+      "source": "src/tui/i18n/locales/en.ts",
+      "disposition": "deferred",
+      "blockerIssue": 113105,
+      "reviewOwner": "@giodl73-repo"
+    },
+    {
+      "id": "tui-status-zh-CN",
+      "owner": "tui",
+      "source": "src/tui/i18n/locales/zh-CN.ts",
+      "disposition": "deferred",
+      "blockerIssue": 113105,
+      "reviewOwner": "@giodl73-repo"
+    }
+  ]
+}

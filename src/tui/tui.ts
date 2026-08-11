@@ -40,6 +40,7 @@ import {
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
+import { createTuiLocalization } from "./i18n/runtime.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
 import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
@@ -639,6 +640,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
 async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
+  // Locale is a session-lifetime invariant: capture it once and never recreate it on reconnect or refresh.
+  const localization = createTuiLocalization();
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);
   const resolveUsableCwd = () => tryProcessCwd() ?? cliInvocation.cwd;
@@ -1461,6 +1464,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     tui,
     opts: { ...opts, local: isLocalMode },
     state,
+    localization,
     deliverDefault,
     openOverlay,
     closeOverlay,

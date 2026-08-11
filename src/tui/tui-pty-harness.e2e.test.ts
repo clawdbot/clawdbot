@@ -893,13 +893,69 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "renders gateway status from the backend",
+    "renders a structured gateway status from the backend",
     async () => {
       await fixture.run.write("/gateway-status\r", { delay: false });
-      await fixture.run.waitForOutput("fixture gateway ok");
+      await fixture.run.waitForOutput("Gateway status");
+      await fixture.run.waitForOutput("fixture-provider/model-id");
       await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders zh-CN and unsupported-locale English fallback from structured status at narrow width",
+    async () => {
+      const [chinese, fallback] = await Promise.all([
+        startTuiFixture({
+          env: {
+            OPENCLAW_LOCALE: "zh-CN",
+            OPENCLAW_TUI_PTY_COLS: "64",
+            OPENCLAW_TUI_PTY_ROWS: "18",
+          },
+        }),
+        startTuiFixture({
+          env: {
+            OPENCLAW_LOCALE: "fr-FR",
+            LC_ALL: undefined,
+            LC_MESSAGES: undefined,
+            LANG: undefined,
+            OPENCLAW_TUI_PTY_COLS: "64",
+            OPENCLAW_TUI_PTY_ROWS: "18",
+          },
+        }),
+      ]);
+      try {
+        await Promise.all([
+          chinese.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS),
+          fallback.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS),
+        ]);
+        await Promise.all([
+          chinese.run.write("/gateway-status\r", { delay: false }),
+          fallback.run.write("/gateway-status\r", { delay: false }),
+        ]);
+        await Promise.all([
+          chinese.run.waitForOutput("网关状态"),
+          fallback.run.waitForOutput("Gateway status"),
+          chinese.run.waitForOutput("fixture-provider/model-id"),
+          fallback.run.waitForOutput("fixture-provider/model-id"),
+        ]);
+
+        const chineseOutput = chinese.run.visibleOutput();
+        const fallbackOutput = fallback.run.visibleOutput();
+        expect(chineseOutput).toContain("1 小时前");
+        expect(chineseOutput).toContain("/literal/sessions.json");
+        expect(chineseOutput).toContain("flag-literal");
+        expect(chineseOutput).toContain("|");
+        expect(fallbackOutput).toContain("1h ago");
+        expect(fallbackOutput).toContain("/literal/sessions.json");
+        expect(fallbackOutput).toContain("flag-literal");
+        expect(fallbackOutput).toContain("|");
+      } finally {
+        await Promise.all([chinese.cleanup(), fallback.cleanup()]);
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

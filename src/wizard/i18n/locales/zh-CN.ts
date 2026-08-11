@@ -1,3 +1,5 @@
+import { catalogFamily } from "../catalog-family.js";
+import authoringCatalog from "../catalogs/generated/zh-CN.json" with { type: "json" };
 // Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
@@ -109,14 +111,7 @@ export const zh_CN = {
       serveHint: "面向你的 tailnet 设备提供私有 HTTPS",
       warningTitle: "Tailscale 警告",
     },
-    completion: {
-      cacheFailed: "生成 completion 缓存失败。稍后运行 `{command}`。",
-      enable: "为 {cli} 启用 {shell} shell completion？",
-      installed: "Shell completion 已安装。{reloadHint}",
-      reloadPowerShell: "重启 shell 或运行：{command}",
-      reloadShell: "重启 shell 或运行：source {profile}",
-      title: "Shell completion",
-    },
+    completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
     migration: {
       apply: "现在应用这次迁移？",
       appliedTitle: "迁移已应用",
@@ -185,7 +180,7 @@ export const zh_CN = {
       downloadFromClawHub: "从 ClawHub 下载（{spec}）",
       downloadFromNpm: "从 npm 下载（{spec}）",
       enableFailed: "无法启用 {plugin}：{reason}。",
-      fieldsCount: "{count} 个字段",
+      fieldsCount: "{count, plural, other {{count} 个字段}}",
       installFailed: "安装 {spec} 失败：{error}",
       installFailedShort: "安装失败：{plugin}",
       installPluginPrompt: "安装 {plugin} 插件？",
@@ -233,7 +228,7 @@ export const zh_CN = {
       keptExistingDefault: "已保留当前默认模型 {current}；{selected} 可用。",
       loadsProviderCatalogs: "加载 provider 模型目录",
       loadingModels: "正在加载可用模型",
-      modelCount: "{count} 个模型",
+      modelCount: "{count, plural, other {{count} 个模型}}",
       providerSetupUnavailable: "Provider 设置需要 agent 和运行时上下文。",
       providerSetupUnavailableTitle: "Provider 设置不可用",
       removeProviderModels: "从 /model 选择器中移除这些 provider 模型？",

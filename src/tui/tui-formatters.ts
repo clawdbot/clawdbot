@@ -10,6 +10,7 @@ import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.j
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
+import type { TuiLocalization } from "./i18n/runtime.js";
 import type { SessionInfo } from "./tui-types.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -732,20 +733,36 @@ function formatGoalFooter(goal?: SessionGoal): string | null {
   return null;
 }
 
-export function formatContextUsageLine(params: {
-  total?: number | null;
-  context?: number | null;
-  remaining?: number | null;
-  percent?: number | null;
-}) {
+export function formatContextUsageLine(
+  params: {
+    total?: number | null;
+    context?: number | null;
+    remaining?: number | null;
+    percent?: number | null;
+  },
+  localization: TuiLocalization,
+) {
   const totalLabel = typeof params.total === "number" ? formatTokenCount(params.total) : "?";
   const ctxLabel = typeof params.context === "number" ? formatTokenCount(params.context) : "?";
   const pct = typeof params.percent === "number" ? Math.min(999, Math.round(params.percent)) : null;
   const remainingLabel =
-    typeof params.remaining === "number" ? `${formatTokenCount(params.remaining)} left` : null;
+    typeof params.remaining === "number"
+      ? localization.t("tui.status.contextRemaining", {
+          remaining: formatTokenCount(params.remaining),
+        })
+      : null;
   const pctLabel = pct !== null ? `${pct}%` : null;
   const extra = [remainingLabel, pctLabel].filter(Boolean).join(", ");
-  return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
+  return extra
+    ? localization.t("tui.status.contextUsageWithExtra", {
+        total: totalLabel,
+        context: ctxLabel,
+        extra,
+      })
+    : localization.t("tui.status.contextUsage", {
+        total: totalLabel,
+        context: ctxLabel,
+      });
 }
 
 export function formatPrimitiveString(value: unknown, fallback = ""): string {

@@ -29,6 +29,7 @@ import {
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
+import type { TuiLocalization } from "./i18n/runtime.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
@@ -67,6 +68,7 @@ type CommandHandlerContext = {
   tui: TUI;
   opts: TuiOptions;
   state: TuiStateAccess;
+  localization: TuiLocalization;
   deliverDefault: boolean;
   openOverlay: (component: Component) => OverlayHandle;
   closeOverlay: (handle?: OverlayHandle) => void;
@@ -122,6 +124,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui,
     opts,
     state,
+    localization,
     deliverDefault,
     openOverlay,
     closeOverlay,
@@ -506,7 +509,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           return;
         }
         if (status && typeof status === "object") {
-          const lines = formatStatusSummary(status as GatewayStatusSummary);
+          const lines = formatStatusSummary(status as GatewayStatusSummary, localization);
           for (const line of lines) {
             chatLog.addSystem(line);
           }

@@ -1016,19 +1016,19 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
-type NativeTranslationEntry = {
+type CatalogTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;
 };
 
-export async function translateNativeEntries(
-  entries: readonly NativeTranslationEntry[],
+export async function translateCatalogEntries(
+  entries: readonly CatalogTranslationEntry[],
   targetLocale: string,
   glossary: readonly GlossaryEntry[] = [],
 ): Promise<Map<string, string>> {
   if (!hasTranslationProvider()) {
-    throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
+    throw new Error("catalog translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
   }
   const pending = entries.map((entry) => ({
     cacheKey: cacheKey(entry.id, hashControlUiTranslationText(entry.source), targetLocale),

@@ -24,32 +24,54 @@ type FormatTimeAgoOptions = {
  * With suffix (default):  "just now", "5m ago", "3h ago", "2d ago"
  * Without suffix:         "0s", "5m", "3h", "2d"
  */
+type TimeAgoBucket =
+  | { kind: "invalid" }
+  | { kind: "seconds"; count: number }
+  | { kind: "minutes"; count: number }
+  | { kind: "hours"; count: number }
+  | { kind: "days"; count: number };
+
+/** Classify one elapsed duration so product-owned renderers share exact thresholds and rounding. */
+export function classifyTimeAgo(durationMs: number | null | undefined): TimeAgoBucket {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
+    return { kind: "invalid" };
+  }
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 1) {
+    return { kind: "seconds", count: totalSeconds };
+  }
+  if (minutes < 60) {
+    return { kind: "minutes", count: minutes };
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return { kind: "hours", count: hours };
+  }
+  return { kind: "days", count: Math.round(hours / 24) };
+}
+
 export function formatTimeAgo(
   durationMs: number | null | undefined,
   options?: FormatTimeAgoOptions,
 ): string {
   const suffix = options?.suffix !== false;
   const fallback = options?.fallback ?? "unknown";
-
-  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
-    return fallback;
+  const bucket = classifyTimeAgo(durationMs);
+  switch (bucket.kind) {
+    case "invalid":
+      return fallback;
+    case "seconds":
+      return suffix ? "just now" : `${bucket.count}s`;
+    case "minutes":
+      return suffix ? `${bucket.count}m ago` : `${bucket.count}m`;
+    case "hours":
+      return suffix ? `${bucket.count}h ago` : `${bucket.count}h`;
+    case "days":
+      return suffix ? `${bucket.count}d ago` : `${bucket.count}d`;
+    default:
+      throw new Error("unreachable relative-time bucket");
   }
-
-  const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.round(totalSeconds / 60);
-
-  if (minutes < 1) {
-    return suffix ? "just now" : `${totalSeconds}s`;
-  }
-  if (minutes < 60) {
-    return suffix ? `${minutes}m ago` : `${minutes}m`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return suffix ? `${hours}h ago` : `${hours}h`;
-  }
-  const days = Math.round(hours / 24);
-  return suffix ? `${days}d ago` : `${days}d`;
 }
 
 type FormatRelativeTimestampOptions = {

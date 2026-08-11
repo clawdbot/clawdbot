@@ -9,6 +9,7 @@ import {
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTuiLocalization, type TuiLocalization } from "./i18n/runtime.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -128,6 +129,7 @@ function createHarness(params?: {
   refreshAgents?: RefreshAgentsMock;
   agentDefaultId?: string;
   agents?: Array<{ id: string; kind?: "agent" | "system"; name?: string }>;
+  localization?: TuiLocalization;
 }) {
   const sendChat =
     params?.sendChat ??
@@ -222,6 +224,7 @@ function createHarness(params?: {
     tui: { requestRender } as never,
     opts: params?.opts ?? {},
     state: state as never,
+    localization: params?.localization ?? createTuiLocalization({ locale: "en" }),
     deliverDefault: false,
     openOverlay,
     closeOverlay,
@@ -793,6 +796,21 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+  });
+
+  it("keeps one localization context when the process environment changes", async () => {
+    const localization = createTuiLocalization({ env: { OPENCLAW_LOCALE: "zh-CN" } });
+    const { handleCommand, addSystem } = createHarness({
+      localization,
+      getGatewayStatus: vi.fn().mockResolvedValue({ sessions: { count: 0 } }),
+    });
+    vi.stubEnv("OPENCLAW_LOCALE", "en");
+    try {
+      await handleCommand("/gateway-status");
+      expect(addSystem).toHaveBeenCalledWith("网关状态");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("returns to OpenClaw with an optional request", async () => {

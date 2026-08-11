@@ -1,6 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
+import nodePath from "node:path";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
@@ -10,6 +11,77 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 /** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
 const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
+const LOCALIZATION_INFRASTRUCTURE_RE =
+  /^(?:localization\/|packages\/localization-core\/|scripts\/localization-[^/]+\.(?:mjs|mts|ts)$|scripts\/ci-changed-scope\.mjs$|\.github\/workflows\/(?:ci|localization-catalog-refresh)\.yml$)/;
+
+/**
+ * Loads owner roots from the current localization registries. Catalog source
+ * directories are roots before the surface-disposition registry lands; later
+ * owner slices extend the same decision by adding adapter roots.
+ * @param {string} root
+ * @returns {string[]}
+ */
+function loadLocalizationRoots(root) {
+  const roots = new Set();
+  const readJson = (relativePath) => {
+    try {
+      return JSON.parse(readFileSync(nodePath.join(root, relativePath), "utf8"));
+    } catch {
+      return null;
+    }
+  };
+
+  const catalogs = readJson("localization/catalogs.json");
+  if (Array.isArray(catalogs?.areas)) {
+    for (const area of catalogs.areas) {
+      if (typeof area?.source === "string") {
+        roots.add(nodePath.posix.dirname(area.source));
+      }
+    }
+  }
+
+  const surfaces = readJson("localization/surfaces.json");
+  if (Array.isArray(surfaces?.adapters)) {
+    for (const adapter of surfaces.adapters) {
+      if (!Array.isArray(adapter?.roots)) {
+        continue;
+      }
+      for (const ownerRoot of adapter.roots) {
+        if (typeof ownerRoot === "string") {
+          roots.add(ownerRoot.replace(/\/$/u, ""));
+        }
+      }
+    }
+  }
+  return [...roots].filter((ownerRoot) => ownerRoot && ownerRoot !== ".");
+}
+
+/**
+ * Selects the single shared localization gate only for its infrastructure or
+ * currently enrolled owner roots. Missing diff data fails safe; an exact empty
+ * diff remains a no-op.
+ * @param {string[] | null} changedPaths
+ * @param {string} [root]
+ * @returns {boolean}
+ */
+export function shouldRunLocalization(changedPaths, root = process.cwd()) {
+  if (changedPaths === null || !Array.isArray(changedPaths)) {
+    return true;
+  }
+  if (changedPaths.length === 0) {
+    return false;
+  }
+  const ownerRoots = loadLocalizationRoots(root);
+  return changedPaths.some((rawPath) => {
+    const changedPath = rawPath.replaceAll("\\", "/").replace(/^\.\//u, "");
+    if (LOCALIZATION_INFRASTRUCTURE_RE.test(changedPath)) {
+      return true;
+    }
+    return ownerRoots.some(
+      (ownerRoot) => changedPath === ownerRoot || changedPath.startsWith(`${ownerRoot}/`),
+    );
+  });
+}
 
 /** @type {ChangedScope} */
 const FULL_SCOPE = {
@@ -611,6 +683,7 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(outputPath, `run_localization=${shouldRunLocalization(changedPaths)}\n`, "utf8");
   appendFileSync(
     outputPath,
     `strict_control_ui_i18n=${shouldStrictControlUiI18n(changedPaths)}\n`,
