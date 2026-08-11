@@ -40,7 +40,7 @@ export function loadExpectedRestartRecoveryClaim(params: {
     : undefined;
 }
 
-export function buildUnresumableSessionNoticeIdempotencyKey(entry: SessionEntry): string {
+export function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =
     normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ??
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ??
