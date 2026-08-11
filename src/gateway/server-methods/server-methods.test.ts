@@ -12,6 +12,7 @@ import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/clien
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
@@ -27,6 +28,10 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import {
+  appendAssistantMirrorMessageByIdentity,
+  appendSessionTranscriptMessageByIdentity,
+} from "../../plugin-sdk/session-transcript-runtime.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
@@ -40,6 +45,7 @@ import {
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -1984,6 +1990,100 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result).toHaveLength(2);
+  });
+
+  it("dedupes only newly tagged channel-final mirrors when read through the real Gateway history reader, leaving a pre-upgrade fieldless mirror untouched (issue #121643)", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-history-mixed-era-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const scope = {
+      agentId: "main",
+      sessionId: "mixed-era-session",
+      sessionKey: "agent:main:mixed-era",
+      storePath,
+    };
+    try {
+      await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+      // Pre-upgrade era: a reasoning reply followed by a fieldless mirror,
+      // written in the exact shape Telegram persisted before this fix, with
+      // no source-assistant correlation. This must keep showing two bubbles.
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "checking the old crontab" },
+            { type: "text", text: "All Amazon crons ran fine." },
+          ],
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "All Amazon crons ran fine." }],
+          idempotencyKey: "channel-final:telegram-final:old:1:0",
+          openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "telegram-final:old:1" },
+        },
+      });
+
+      // Post-fix era: a reasoning reply followed by a mirror appended through
+      // the changed appendAssistantMirrorMessageByIdentity. This must collapse
+      // to one bubble.
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", text: "greeting the user" },
+            { type: "text", text: "Hey! What's up?" },
+          ],
+        },
+      });
+      const mirror = await appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        deliveryMirror: { kind: "channel-final", sourceMessageId: "telegram-final:new:1" },
+        idempotencyKey: "telegram-final:new:1",
+        text: "Hey! What's up?",
+      });
+      expect(mirror).toMatchObject({ ok: true, messageId: expect.any(String) });
+
+      const { messages: rawMessages } = await readRecentSessionMessagesWithStatsAsync(
+        { agentId: scope.agentId, sessionId: scope.sessionId, sessionKey: scope.sessionKey, storePath },
+        { maxMessages: 20 },
+      );
+      const displayed = projectRecentChatDisplayMessages(rawMessages as Array<Record<string, unknown>>, {
+        maxMessages: 20,
+      });
+
+      expect(
+        displayed.map((message) => ({
+          role: message.role,
+          provider: message.provider,
+          model: message.model,
+        })),
+      ).toEqual([
+        { role: "assistant", provider: undefined, model: undefined },
+        { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
+        { role: "assistant", provider: undefined, model: undefined },
+      ]);
+      expect(displayed[0]).toMatchObject({
+        content: [
+          { type: "thinking", text: "checking the old crontab" },
+          { type: "text", text: "All Amazon crons ran fine." },
+        ],
+      });
+      expect(displayed[2]).toMatchObject({
+        content: [
+          { type: "thinking", text: "greeting the user" },
+          { type: "text", text: "Hey! What's up?" },
+        ],
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
