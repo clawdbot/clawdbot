@@ -571,6 +571,7 @@ export class GatewayProtocolClient<TPlan> {
     if (!this.isActive(socket, generation) || this.connectSent) {
       return;
     }
+    this.connectFailure = { error };
     this.opts.onConnectError?.(error);
   }
 

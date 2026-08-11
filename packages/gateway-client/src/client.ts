@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -229,6 +230,50 @@ type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity
 
 const DEFAULT_GATEWAY_CLIENT_URL = "ws://127.0.0.1:18789";
 const DEFAULT_CLIENT_VERSION = "0.0.0";
+const MAX_UPGRADE_ERROR_BODY_BYTES = 2 * 1024;
+const UPGRADE_ERROR_BODY_TIMEOUT_MS = 1_000;
+
+async function readUpgradeErrorBody(response: IncomingMessage): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      response.off("data", onData);
+      response.off("end", finish);
+      response.off("error", finish);
+      response.off("aborted", finish);
+      resolve(Buffer.concat(chunks, totalBytes).toString("utf8").replace(/\s+/gu, " ").trim());
+    };
+    const stop = () => {
+      finish();
+      response.destroy();
+    };
+    const onData = (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const remaining = MAX_UPGRADE_ERROR_BODY_BYTES - totalBytes;
+      if (remaining > 0) {
+        const prefix = buffer.subarray(0, remaining);
+        chunks.push(prefix);
+        totalBytes += prefix.byteLength;
+      }
+      if (buffer.byteLength >= remaining) {
+        stop();
+      }
+    };
+    const timer = setTimeout(stop, UPGRADE_ERROR_BODY_TIMEOUT_MS);
+    timer.unref?.();
+    response.on("data", onData);
+    response.once("end", finish);
+    response.once("error", finish);
+    response.once("aborted", finish);
+  });
+}
 
 export type GatewayReconnectPausedInfo = {
   code: number;
@@ -241,6 +286,7 @@ export type GatewayClientCloseInfo = {
   socketOpened: boolean;
   transportValidated: boolean;
   transientPreHelloCleanClose: boolean;
+  connectError?: Error;
 };
 
 export { GatewayClientRequestError } from "./request-error.js";
@@ -608,6 +654,7 @@ export class GatewayClient {
     }
     this.ws = ws;
     this.transportValidated = false;
+    let upgradeError: GatewayClientRequestError | undefined;
     ws.on("open", () => {
       handlers.open();
       if (usesTls && this.opts.tlsFingerprint) {
@@ -629,7 +676,28 @@ export class GatewayClient {
       this.resolvePendingStop(ws);
       handlers.close(code, reasonText);
     });
+    ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
+      void readUpgradeErrorBody(response).then((body) => {
+        const statusCode = response.statusCode;
+        const message = `gateway rejected websocket upgrade (HTTP ${statusCode ?? "unknown"})${body ? `: ${body}` : ""}`;
+        upgradeError = new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message,
+          retryable: true,
+          details: {
+            reason: "websocket-upgrade-rejected",
+            ...(statusCode === undefined ? {} : { httpStatus: statusCode }),
+          },
+        });
+        handlers.error(upgradeError);
+        request.destroy();
+        ws.close();
+      });
+    });
     ws.on("error", (err) => {
+      if (upgradeError) {
+        return;
+      }
       this.logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
       handlers.error(err instanceof Error ? err : new Error(String(err)));
     });
@@ -1153,6 +1221,7 @@ export class GatewayClient {
       transportValidated: this.transportValidated,
       transientPreHelloCleanClose:
         !context.helloReceived && context.code === 1000 && context.reason === "",
+      ...(context.connectFailure?.error ? { connectError: context.connectFailure.error } : {}),
     };
   }
 

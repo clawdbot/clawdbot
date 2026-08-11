@@ -457,6 +457,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
+      if (!isGatewayRestartDraining() && getGatewaySuspendAdmissionPhase() === "prepared") {
+        // Refuse-only suspension fences work, not control-plane visibility. A connect
+        // admitted while prepared can only reach suspend-control methods after handshake.
+        await handleMessage(data);
+        return;
+      }
       if (await rejectConnectForClosedAdmission(data)) {
         return;
       }

@@ -18,7 +18,11 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  isGatewayWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -782,7 +786,12 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
-  if (isGatewayWorkAdmissionClosed()) {
+  if (
+    isGatewayWorkAdmissionClosed() &&
+    (ingressName === "Worker" ||
+      isGatewayRestartDraining() ||
+      getGatewaySuspendAdmissionPhase() !== "prepared")
+  ) {
     writeGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     socket.destroy();
     return;
@@ -962,8 +971,7 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
-      // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an
-      // untracked pre-connect socket after suspension or restart admission closes.
+      // Core Gateway control connections remain reachable while suspension is prepared.
       try {
         handleBudgetedGatewayWebSocketUpgrade({
           req,
