@@ -447,6 +447,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
 
     expect(provider.defaultModel).toBe("gpt-realtime-2.1");
+    expect(provider.models).toEqual([
+      "gpt-realtime-2.1",
+      "gpt-realtime-2.1-mini",
+      "gpt-realtime-2",
+    ]);
     expect(provider.capabilities).toEqual({
       transports: ["webrtc", "gateway-relay"],
       inputAudioFormats: [

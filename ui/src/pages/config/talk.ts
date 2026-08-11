@@ -279,8 +279,8 @@ function renderVoiceRow(props: TalkViewProps) {
 
 /**
  * GPT-Live is the one model family whose auth differs from the rest of the
- * provider (ChatGPT OAuth works, no Platform key needed), so it gets its own
- * explainer row instead of a footnote in the provider description.
+ * provider: it requires enrolled Platform API-key access rather than the GA
+ * browser path's OAuth fallback, so it gets a dedicated explainer row.
  */
 function renderGptLiveRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);

@@ -124,13 +124,15 @@ Other GPT-Live consumers use the direct Frameless Bidi WebSocket. Both paths
 require Platform API-key auth, whose access is currently
 [waitlist-gated](https://openai.com/form/gpt-live-1-in-the-api/).
 
-The quickest setup is the Control UI: **Settings → Talk**, pick **OpenAI** and
-a `gpt-live-*` model. A ChatGPT/Codex OAuth profile does not configure
-GPT-Live. GPT-Live also requires the bundled `openai` plugin registered in full
-mode; a restrictive `plugins.allow` list fails
-session creation with "OpenAI GPT-Live browser session broker is unavailable".
-Runtime bounds: 8 concurrent sessions per Gateway and a 30-minute session TTL.
-Browser sessions also use 60-second single-use offer tokens.
+Private GPT-Live preview ids are not listed in the normal Talk model picker.
+Opt in by setting `talk.realtime.provider: "openai"` and the exact
+`talk.realtime.model` value in config; the configured model then appears in the
+Talk catalog. A ChatGPT/Codex OAuth profile does not configure GPT-Live.
+GPT-Live also requires the bundled `openai` plugin registered in full mode; a
+restrictive `plugins.allow` list fails session creation with "OpenAI GPT-Live
+browser session broker is unavailable". Runtime bounds: 8 concurrent sessions
+per Gateway and a 30-minute session TTL. Browser sessions also use 60-second
+single-use offer tokens.
 
 GPT-Live accepts `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`,
 `sage`, `shimmer`, and `verse`. A `403 Voice session access denied` response is

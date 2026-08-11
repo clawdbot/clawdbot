@@ -115,13 +115,12 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
-// Picker suggestions surfaced through talk.catalog; each value is live-verified
-// against the OpenAI realtime APIs. Free-form model values are still accepted.
+// Picker suggestions surfaced through talk.catalog. Private GPT-Live models
+// remain available through an explicit talk.realtime.model selection.
 const OPENAI_REALTIME_MODELS = [
   "gpt-realtime-2.1",
   "gpt-realtime-2.1-mini",
   "gpt-realtime-2",
-  ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
