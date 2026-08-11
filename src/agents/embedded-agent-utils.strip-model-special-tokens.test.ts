@@ -52,4 +52,24 @@ describe("stripModelSpecialTokens", () => {
   it("inserts a separator between adjacent non-Latin words", () => {
     expect(stripModelSpecialTokens("Привет<|assistant|>Мир")).toBe("Привет Мир");
   });
+
+  // Supplementary-plane letters are UTF-16 surrogate pairs; the boundary
+  // classifier must read the whole code point, not a lone surrogate half, or
+  // adjacent astral letters get merged instead of separated.
+  it("inserts a separator between adjacent supplementary-plane letters", () => {
+    // 𐐀 (U+10400, Deseret) is a surrogate pair on either side of the token.
+    expect(stripModelSpecialTokens("𐐀<|assistant|>𐐀")).toBe("𐐀 𐐀");
+  });
+
+  it("inserts a separator when a supplementary-plane letter meets an ASCII word", () => {
+    expect(stripModelSpecialTokens("𐐀<|assistant|>word")).toBe("𐐀 word");
+    expect(stripModelSpecialTokens("word<|assistant|>𐐀")).toBe("word 𐐀");
+  });
+
+  // A word ending in a decomposed combining mark (e + U+0301 = é) must still
+  // count as word content at the boundary so the mark is not split off.
+  it("inserts a separator after a word ending in a combining mark", () => {
+    // "café" is decomposed café; the combining acute is \p{M}, word content.
+    expect(stripModelSpecialTokens("café<|assistant|>world")).toBe("café world");
+  });
 });
