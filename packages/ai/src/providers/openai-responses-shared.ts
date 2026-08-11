@@ -13,6 +13,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -61,7 +62,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
 // Utilities

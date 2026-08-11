@@ -21,7 +21,7 @@ const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
 const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
-const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
+const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
@@ -58,7 +58,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager,
+  getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 }));
 
@@ -302,10 +302,10 @@ describe("noteMemorySearchHealth", () => {
     hasAuthProfileStoreSourceForProvider.mockReturnValue(true);
     isConfiguredAwsSdkAuthProfileForProvider.mockReset();
     isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
-    getActiveMemorySearchManager.mockReset();
+    getActiveMemorySearchManagerCore.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
     resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
-    getActiveMemorySearchManager.mockResolvedValue({
+    getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: {
         status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
         close: vi.fn(async () => {}),
@@ -1094,7 +1094,7 @@ describe("memory recall doctor integration", () => {
     );
     resetMemoryRecallMocks();
     resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
-    getActiveMemorySearchManager.mockResolvedValue({
+    getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: {
         status: () => ({ workspaceDir: "/tmp/agent-default/workspace", backend: "builtin" }),
         close: vi.fn(async () => {}),
@@ -1262,12 +1262,12 @@ describe("memory recall doctor integration", () => {
   });
 
   it("audits and repairs each agent with isolated managers and paths", async () => {
-    getActiveMemorySearchManager.mockClear();
+    getActiveMemorySearchManagerCore.mockClear();
     listAgentIds.mockReturnValue(["agent-default", "secondary"]);
     resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
     resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);
     const closes = new Map<string, ReturnType<typeof vi.fn>>();
-    getActiveMemorySearchManager.mockImplementation(async ({ agentId }) => {
+    getActiveMemorySearchManagerCore.mockImplementation(async ({ agentId }) => {
       const close = vi.fn(async () => {});
       closes.set(agentId, close);
       return {
@@ -1305,7 +1305,7 @@ describe("memory recall doctor integration", () => {
 
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
-    expect(getActiveMemorySearchManager).toHaveBeenCalledTimes(2);
+    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
     expect(closes.get("agent-default")).toHaveBeenCalledOnce();
     expect(closes.get("secondary")).toHaveBeenCalledOnce();
     expect(repairShortTermPromotionArtifacts).toHaveBeenCalledTimes(1);

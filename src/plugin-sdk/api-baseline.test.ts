@@ -1,6 +1,8 @@
 /**
  * Tests the plugin SDK public API baseline.
  */
+
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -307,7 +309,8 @@ describe("Plugin SDK API baseline", () => {
     expect(rendered.json).toContain('"source": {');
     expect(rendered.jsonl).not.toContain('"sourceLine":');
     expect(rendered.jsonl).not.toContain('"sourcePath":');
-    expect(rendered.jsonl).toContain('"closureHash":"');
+    expect(rendered.jsonl).toContain('"contentHash":"');
+    expect(rendered.jsonl).not.toContain('"closureHash":"');
     expect(rendered.jsonl).not.toContain("// declaration closure:");
   });
 
@@ -318,7 +321,7 @@ describe("Plugin SDK API baseline", () => {
     expect(reverse.jsonl).toBe(rendered.jsonl);
   });
 
-  it("keeps unrelated JSONL records byte-identical when one export changes", () => {
+  it("keeps unrelated module hashes byte-identical when one export changes", () => {
     const target = rendered.baseline.modules[0];
     expect(target?.exports.length).toBeGreaterThan(0);
     const changed = renderPluginSdkApiBaselineModules(
@@ -338,8 +341,68 @@ describe("Plugin SDK API baseline", () => {
     const before = rendered.jsonl.split("\n");
     const after = changed.jsonl.split("\n");
 
-    expect(after[1]).not.toBe(before[1]);
-    expect(after.slice(2)).toEqual(before.slice(2));
+    expect(after[0]).not.toBe(before[0]);
+    expect(after.slice(1)).toEqual(before.slice(1));
+  });
+
+  it("writes one line per module and merges disjoint module edits without conflicts", () => {
+    const modules = rendered.baseline.modules;
+    const left = modules[0];
+    const right = modules.at(-1);
+    expect(left?.exports.length).toBeGreaterThan(0);
+    expect(right?.exports.length).toBeGreaterThan(0);
+    expect(left?.entrypoint).not.toBe(right?.entrypoint);
+
+    const editModule = (target: typeof left, suffix: string) =>
+      renderPluginSdkApiBaselineModules(
+        modules.map((moduleSurface) =>
+          moduleSurface === target
+            ? {
+                ...moduleSurface,
+                exports: moduleSurface.exports.map((exportSurface, index) =>
+                  index === 0
+                    ? {
+                        ...exportSurface,
+                        declaration: `${exportSurface.declaration ?? ""} ${suffix}`,
+                      }
+                    : exportSurface,
+                ),
+              }
+            : moduleSurface,
+        ),
+      );
+    const ours = editModule(left, "left edit");
+    const theirs = editModule(right, "right edit");
+    const lines = rendered.jsonl
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    expect(lines).toHaveLength(modules.length);
+    expect(lines.map((line) => line.importSpecifier)).toEqual(
+      modules.map((moduleSurface) => moduleSurface.importSpecifier),
+    );
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
+      ]),
+    );
+
+    const mergeDir = tempDirs.make("openclaw-plugin-sdk-api-merge-");
+    const basePath = path.join(mergeDir, "base.jsonl");
+    const oursPath = path.join(mergeDir, "ours.jsonl");
+    const theirsPath = path.join(mergeDir, "theirs.jsonl");
+    fs.writeFileSync(basePath, rendered.jsonl);
+    fs.writeFileSync(oursPath, ours.jsonl);
+    fs.writeFileSync(theirsPath, theirs.jsonl);
+
+    const merge = spawnSync("git", ["merge-file", "--stdout", oursPath, basePath, theirsPath], {
+      encoding: "utf8",
+    });
+
+    expect(merge.status, merge.stderr).toBe(0);
+    expect(merge.stdout).toContain(ours.jsonl.trimEnd().split("\n")[0]);
+    expect(merge.stdout).toContain(theirs.jsonl.trimEnd().split("\n").at(-1));
   });
 
   it("renders byte-identical JSONL deterministically", async () => {

@@ -17,7 +17,6 @@ import {
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export { stripDowngradedToolCallText } from "../shared/text/assistant-visible-text.js";
 
@@ -408,14 +407,4 @@ export function extractThinkingFromTaggedStream(
     return closed;
   }
   return text.slice(state.lastTag.end).trim();
-}
-
-/** Infer compact display metadata for a tool call from its args. */
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: "explain" | "raw" },
-): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
-  return formatToolDetail(display);
 }

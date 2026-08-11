@@ -97,7 +97,7 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toError(error: unknown): Error {
+export function toWorkerConnectionError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }

@@ -11,7 +11,6 @@ import {
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
-import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -22,7 +21,7 @@ import {
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 import { ANNOUNCE_EXPIRY_MS, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
-import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import {
   getSubagentRunsForChildSession,
@@ -30,7 +29,10 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
-import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
+import {
+  countPendingDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
+} from "./subagent-registry-read.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import {
   createSubagentRunManager,
@@ -53,20 +55,11 @@ import {
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
-type SubagentRegistryRestorer = ReturnType<typeof createSubagentRegistryRestorer>;
-type SubagentRegistryBootstrapState = {
+const subagentRegistryBootstrapState: {
   pending?: boolean;
   ready?: boolean;
-  restorer?: SubagentRegistryRestorer;
-};
-
-function getSubagentRegistryBootstrapState(): SubagentRegistryBootstrapState {
-  const owner = getSubagentRegistryBootstrapState as typeof getSubagentRegistryBootstrapState & {
-    state?: SubagentRegistryBootstrapState;
-  };
-  owner.state ??= {};
-  return owner.state;
-}
+  restorer?: ReturnType<typeof createSubagentRegistryRestorer>;
+} = {};
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
@@ -130,7 +123,7 @@ const contextCleanup = createSubagentRegistryContextCleanup({
   warn: (message, meta) => log.warn(message, meta),
 });
 
-const subagentLifecycleController = createSubagentRegistryLifecycleController({
+const subagentLifecycleController = new SubagentLifecycleController({
   runs: subagentRuns,
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
@@ -138,7 +131,9 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   clearPendingLifecycleError,
-  countPendingDescendantRuns,
+  // Lifecycle wiring precedes publicApi construction; inject this read query
+  // as a late-bound callback instead of threading a partially built API object.
+  countPendingDescendantRuns: (rootSessionKey) => countPendingDescendantRuns(rootSessionKey),
   suppressAnnounceForSteerRestart: contextCleanup.suppressAnnounceForSteerRestart,
   resolveSubagentTask: findSubagentTaskForRun,
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
@@ -406,6 +401,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
+  discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun: contextCleanup.emitSubagentEndedHookForRun,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
@@ -567,6 +563,7 @@ function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;
+export const discardSubagentTerminalDelivery = SubagentLifecycleController.discardTerminalDelivery;
 
 export { prependAgentSteeringPrompt };
 
@@ -590,9 +587,8 @@ export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
-export const getSubagentRunByChildSessionKey = publicApi.getSubagentRunByChildSessionKey;
 export function initSubagentRegistry() {
-  const state = getSubagentRegistryBootstrapState();
+  const state = subagentRegistryBootstrapState;
   if (!state.ready || !state.restorer) {
     state.pending = true;
     return;
@@ -602,7 +598,7 @@ export function initSubagentRegistry() {
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
 
-const bootstrapState = getSubagentRegistryBootstrapState();
+const bootstrapState = subagentRegistryBootstrapState;
 bootstrapState.restorer = subagentRestorer;
 bootstrapState.ready = true;
 if (bootstrapState.pending) {

@@ -5,6 +5,7 @@ import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
@@ -137,6 +138,12 @@ vi.mock("../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+    const entry = statusSummaryMocks
+      .listSessionEntries()
+      .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
+    return entry ? { sessionKey, entry } : undefined;
+  },
   listSessionEntries: statusSummaryMocks.listSessionEntries,
   listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
 }));
@@ -150,14 +157,6 @@ vi.mock("../gateway/agent-list.js", () => ({
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: statusSummaryMocks.buildChannelSummary,
-}));
-
-vi.mock("../infra/heartbeat-summary.js", () => ({
-  resolveHeartbeatSummaryForAgent: vi.fn(() => ({
-    enabled: true,
-    every: "5m",
-    everyMs: 300_000,
-  })),
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -282,9 +281,64 @@ describe("getStatusSummary", () => {
 
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
+    expect(summary.heartbeat.agents).toEqual([
+      {
+        agentId: "main",
+        enabled: true,
+        every: "30m",
+        everyMs: 1_800_000,
+        waitingForRoute: true,
+      },
+    ]);
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  // waitingForRoute must follow the session the runner actually reads
+  // (heartbeat.session when set), not always the agent main session.
+  it.each([
+    {
+      name: "main routed, no configured session",
+      routedKeys: ["agent:main:main"],
+      emptyKeys: [],
+      heartbeatSession: undefined,
+      waitingForRoute: false,
+    },
+    {
+      name: "configured session routed while main is empty",
+      routedKeys: ["agent:main:telegram:alerts"],
+      emptyKeys: ["agent:main:main"],
+      heartbeatSession: "telegram:alerts",
+      waitingForRoute: false,
+    },
+    {
+      name: "configured session empty while main is routed",
+      routedKeys: ["agent:main:main"],
+      emptyKeys: ["agent:main:telegram:alerts"],
+      heartbeatSession: "telegram:alerts",
+      waitingForRoute: true,
+    },
+  ])("route wait: $name", async ({ routedKeys, emptyKeys, heartbeatSession, waitingForRoute }) => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue([
+      ...routedKeys.map((sessionKey) => ({
+        sessionKey,
+        entry: {
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "123" },
+          }),
+        },
+      })),
+      ...emptyKeys.map((sessionKey) => ({ sessionKey, entry: {} })),
+    ]);
+
+    const summary = await getStatusSummary(
+      heartbeatSession === undefined
+        ? undefined
+        : { config: { agents: { defaults: { heartbeat: { session: heartbeatSession } } } } },
+    );
+
+    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(waitingForRoute);
   });
 
   it("redacts collected session details when sensitive output is disabled", async () => {

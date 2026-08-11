@@ -176,6 +176,7 @@ const HealthSnapshotSchema = closedObject({
           prompt: Type.String(),
           target: Type.String(),
           model: Type.Optional(Type.String()),
+          session: Type.Optional(Type.String()),
           ackMaxChars: Type.Integer({ minimum: 0 }),
         }),
         sessions: HealthSessionSummarySchema,

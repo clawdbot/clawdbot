@@ -196,15 +196,18 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
-vi.mock("../registry/subagent-registry-runtime.js", () => ({
+vi.mock("../registry/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
-  countPendingDescendantRunsExcludingRun: () => 0,
+  hasDescendantRunAwaitingSettle: () => false,
+  getLatestSubagentRunByChildSessionKey: () => undefined,
   listSubagentRunsForRequester: () => [],
   isSubagentSessionRunActive: () => subagentSessionRunActive,
   shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-  replaceSubagentRunAfterSteer: () => true,
   resolveRequesterForChildSession: () => fallbackRequesterResolution,
+}));
+vi.mock("../registry/subagent-registry-runtime.js", () => ({
+  replaceSubagentRunAfterSteer: () => true,
 }));
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<

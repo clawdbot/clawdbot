@@ -135,7 +135,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      // Creation precedes canonical rows; carry placement/model until list hydration.
+      // Creation precedes canonical rows; claim placement before any event or
+      // list publication can assign this key an ordinary roster position.
+      host.notifyCreated(result.key);
       if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
         preparedWorkSessionKeys.add(result.key.trim());
       }
@@ -144,20 +146,15 @@ export function createSessionMutations(host: SessionMutationsHost) {
       } else if (preparedWorkSessionKeys.has(result.key)) {
         host.publish({ ...host.readState() });
       }
-      const reconcileCreatedSession = async () => {
-        await host.refreshReplacement(params.agentId);
-        if (host.connection.isCurrent(scope)) {
-          host.notifyCreated(result.key);
-        }
-      };
+      const reconciliation = host.refreshReplacement(params.agentId);
       if (options.reconciliation === "background") {
-        void reconcileCreatedSession().catch((error: unknown) => {
+        void reconciliation.catch((error: unknown) => {
           if (host.connection.isCurrent(scope)) {
             host.publish({ ...host.readState(), error: String(error) }, "operation");
           }
         });
       } else {
-        await reconcileCreatedSession();
+        await reconciliation;
         if (!host.connection.isCurrent(scope)) {
           return null;
         }
@@ -186,6 +183,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const hasModelPatch = Object.hasOwn(patchParams, "model");
     const managesModelOverride = hasModelPatch && options.deferModelOverride !== true;
     const normalizedKey = key.trim();
+    const archivedPresentationRow =
+      patchParams.archived === true ? host.publishedRow(normalizedKey) : undefined;
     let previousModelOverride: string | null | undefined;
     let modelPatchStarted = false;
     let modelPatchRevision = 0;
@@ -300,6 +299,28 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
         return null;
+      }
+      if (archivedPresentationRow) {
+        const state = host.readState();
+        if (state.result) {
+          const archivedRow = {
+            ...archivedPresentationRow,
+            archived: true,
+            pinned: false,
+            pinnedAt: undefined,
+          };
+          const existingIndex = state.result.sessions.findIndex((row) => row.key === normalizedKey);
+          const sessions = [...state.result.sessions];
+          if (existingIndex === -1) {
+            sessions.push(archivedRow);
+          } else {
+            sessions[existingIndex] = archivedRow;
+          }
+          host.publish({
+            ...state,
+            result: { ...state.result, count: sessions.length, sessions },
+          });
+        }
       }
       confirmPinPatch();
       if (!options.deferListRefresh) {

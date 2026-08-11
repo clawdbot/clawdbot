@@ -712,11 +712,7 @@ function withoutInternalHarnessAuthority(
       closeHostCapabilities: () => {},
     };
   }
-  const {
-    admittedRunContext: _admittedRunContext,
-    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
-    ...pluginParams
-  } = params;
+  const pluginParams = withoutPluginHarnessPrivateState(params);
   const host = createAgentHarnessHostCapabilities({
     attempt: params,
     pluginId:
@@ -745,13 +741,7 @@ function prepareHarnessFinalizationParams(
   if (builtIn) {
     return withoutCapabilities;
   }
-  const {
-    admittedRunContext: _admittedRunContext,
-    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
-    trajectoryRecorder: _trajectoryRecorder,
-    ...pluginParams
-  } = withoutCapabilities;
+  const pluginParams = withoutPluginHarnessPrivateState(withoutCapabilities);
   const boundary = "plugin harness finalization handoff";
   return {
     ...pluginParams,
@@ -760,6 +750,25 @@ function prepareHarnessFinalizationParams(
       ? unwrapSecretSentinelsForProviderEgress(pluginParams.resolvedApiKey, boundary)
       : pluginParams.resolvedApiKey,
   };
+}
+
+function withoutPluginHarnessPrivateState(
+  params: EmbeddedRunAttemptParams,
+): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
+  // Keep mutable host-owned state behind one projection for every plugin handoff;
+  // separate projections can drift and expose authority on less common operations.
+  const {
+    admittedRunContext: _admittedRunContext,
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    hostCapabilities: _hostCapabilities,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    trajectoryRecorder: _trajectoryRecorder,
+    __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
+    ...pluginParams
+  } = params as EmbeddedRunAttemptParams & {
+    __openclawSourceReplyDeliveryRuntime?: unknown;
+  };
+  return pluginParams;
 }
 
 function preparePluginHarnessParams(

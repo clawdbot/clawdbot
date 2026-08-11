@@ -2,9 +2,9 @@ import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import {
   createPromptError,
   createResult,
-  readString,
+  readNonEmptyString,
   resolvePoolAcquire,
-  toError,
+  toCopilotError,
 } from "./attempt-config.js";
 import { runCopilotExecution } from "./attempt-execution.js";
 import { prepareCopilotAttemptContext } from "./attempt-prepare.js";
@@ -55,22 +55,22 @@ export async function runCopilotAttempt(
   try {
     resolveCopilotProvider({
       model: modelRef,
-      resolvedApiKey: readString(params.resolvedApiKey),
-      authProfileId: readString(params.authProfileId),
+      resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
+      authProfileId: readNonEmptyString(params.authProfileId),
     });
   } catch (error) {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
         now,
-        promptError: createPromptError("model_not_supported", toError(error).message, error),
+        promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
         sessionIdUsed: input.sessionId,
       }),
     );
   }
   const settledFinalizationSessionId = settledToolFinalization
-    ? readString(input.initialReplayState?.sdkSessionId)
+    ? readNonEmptyString(input.initialReplayState?.sdkSessionId)
     : undefined;
   if (settledToolFinalization && !settledFinalizationSessionId) {
     return finishAttempt(

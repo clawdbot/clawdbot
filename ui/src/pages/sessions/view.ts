@@ -683,7 +683,7 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
   }
-  return formatDurationCompact(runtimeMs, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
 // Goal state is a dot + summary; the tooltip carries the objective detail.

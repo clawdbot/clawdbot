@@ -135,7 +135,7 @@ function requireNonNegativeNumber(value: unknown): number {
   return value;
 }
 
-function readOptionalString(value: unknown): string | undefined {
+function readOptionalInspectString(value: unknown): string | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
@@ -194,7 +194,7 @@ function readRestartPolicy(value: unknown): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  return readOptionalString(requireRecord(value).Name);
+  return readOptionalInspectString(requireRecord(value).Name);
 }
 
 function readPortBindings(
@@ -231,7 +231,7 @@ function readNetworkAttachments(value: unknown): Array<{ id: string; name?: stri
         throw new InvalidInspectOutputError();
       }
       const attachment = requireRecord(rawAttachment);
-      const name = readOptionalString(attachment.Name ?? attachment.name);
+      const name = readOptionalInspectString(attachment.Name ?? attachment.name);
       const normalized: { id: string; name?: string } = { id };
       if (name) {
         normalized.name = name;
@@ -284,8 +284,8 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   const config = requireRecord(inspected.Config);
   const hostConfig = requireRecord(inspected.HostConfig);
   const nanoCpus = requireNonNegativeNumber(hostConfig.NanoCpus);
-  const user = readOptionalString(config.User);
-  const usernsMode = readOptionalString(hostConfig.UsernsMode);
+  const user = readOptionalInspectString(config.User);
+  const usernsMode = readOptionalInspectString(hostConfig.UsernsMode);
 
   return {
     kind: "ok",

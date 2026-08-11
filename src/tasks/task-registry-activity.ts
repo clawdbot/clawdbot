@@ -1,5 +1,8 @@
 import path from "node:path";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractApplyPatchTargetPaths } from "../agents/apply-patch-paths.js";
@@ -85,15 +88,6 @@ function updateStreamText(
   return lastLineSnippet(cumulative);
 }
 
-function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    if (typeof record[key] === "string") {
-      return record[key];
-    }
-  }
-  return undefined;
-}
-
 function readTarget(record: Record<string, unknown>): string | undefined {
   const target = normalizeOptionalString(record.path ?? record.file_path ?? record.filePath);
   return target ? path.resolve(target) : undefined;
@@ -112,8 +106,8 @@ function readEditPairs(args: Record<string, unknown>): EditPair[] {
     if (!edit) {
       continue;
     }
-    const oldText = readString(edit, ["oldText", "old_string"]);
-    const newText = readString(edit, ["newText", "new_string"]);
+    const oldText = readStringField(edit, "oldText") ?? readStringField(edit, "old_string");
+    const newText = readStringField(edit, "newText") ?? readStringField(edit, "new_string");
     if (oldText !== undefined && newText !== undefined) {
       pairs.push({ oldText, newText });
     }
@@ -123,7 +117,27 @@ function readEditPairs(args: Record<string, unknown>): EditPair[] {
 
 function readPatchDelta(args: Record<string, unknown>): DiffDelta | undefined {
   if (typeof args.input !== "string") {
-    return undefined;
+    let added = 0;
+    let removed = 0;
+    const files: string[] = [];
+    for (const candidate of Array.isArray(args.changes) ? args.changes : []) {
+      const change = asOptionalObjectRecord(candidate);
+      const target = change ? readTarget(change) : undefined;
+      if (!change || !target) {
+        continue;
+      }
+      files.push(target);
+      const stat = asOptionalObjectRecord(change.stat);
+      added +=
+        typeof stat?.added === "number" && Number.isFinite(stat.added)
+          ? Math.max(0, stat.added)
+          : 0;
+      removed +=
+        typeof stat?.removed === "number" && Number.isFinite(stat.removed)
+          ? Math.max(0, stat.removed)
+          : 0;
+    }
+    return files.length > 0 ? { files, added, removed } : undefined;
   }
   const files = extractApplyPatchTargetPaths(args);
   if (files.length === 0) {

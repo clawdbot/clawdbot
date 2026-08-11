@@ -57,6 +57,8 @@ export function admitWorkerConnection(params: {
   admission: WorkerConnectParams["admission"];
   expectedBuild: ExpectedWorkerBuild;
   nowMs: number;
+  /** Service-only: exact durable turn validation must follow before admission succeeds. */
+  allowExpiredCredential?: boolean;
 }): WorkerConnectionAdmissionResult {
   const { admission, store } = params;
   const credentialHash = hashWorkerCredential(admission.credential);
@@ -71,7 +73,7 @@ export function admitWorkerConnection(params: {
   if (credential.environmentId !== admission.environmentId) {
     return { ok: false, reason: "environment-mismatch" };
   }
-  if (params.nowMs >= credential.expiresAtMs) {
+  if (params.nowMs >= credential.expiresAtMs && params.allowExpiredCredential !== true) {
     return { ok: false, reason: "credential-expired" };
   }
   const environment = store.get(admission.environmentId);

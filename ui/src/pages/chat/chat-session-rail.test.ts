@@ -335,6 +335,12 @@ describe("ChatSessionRailElement", () => {
     return element;
   }
 
+  it("spaces compound durations in the rendered rail timing", async () => {
+    const element = await mount({ startedAt: 508_000 });
+
+    expect(element.querySelector(".chat-session-rail__timing")?.textContent).toBe("1m 32s");
+  });
+
   it("submits the rail composer and renders sanitized markdown answers", async () => {
     const onSubmit = vi.fn();
     const element = await mount({

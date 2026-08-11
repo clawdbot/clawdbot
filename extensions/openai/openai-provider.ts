@@ -52,6 +52,7 @@ import {
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
+  resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import {
   buildOpenAIChatGPTAuthMethods,
@@ -436,16 +437,10 @@ function normalizeOpenAICodexCatalogModel(model: ModelDefinitionConfig): ModelDe
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
-    const supportsNativeUltra =
-      modelId === OPENAI_GPT_56_SOL_MODEL_ID || modelId === OPENAI_GPT_56_TERRA_MODEL_ID;
-    const supportedReasoningEfforts = model.compat?.supportedReasoningEfforts
-      ? [
-          ...new Set([
-            ...model.compat.supportedReasoningEfforts.filter((effort) => effort !== "none"),
-            ...(supportsNativeUltra ? (["ultra"] as const) : []),
-          ]),
-        ]
-      : undefined;
+    const supportedReasoningEfforts = resolveOpenAICodexReasoningEfforts(
+      modelId,
+      model.compat?.supportedReasoningEfforts?.filter((effort) => effort !== "none"),
+    );
     return {
       ...model,
       contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
@@ -526,7 +521,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     ...(reasoningLevels?.includes("max") ? { max: "max" as const } : {}),
   };
 
-  return {
+  return normalizeOpenAICodexCatalogModel({
     id: modelId,
     name: readCodexModelString(row, "display_name") ?? fallback?.name ?? modelId,
     api: "openai-chatgpt-responses",
@@ -542,7 +537,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     ...(fallback?.mediaInput ? { mediaInput: fallback.mediaInput } : {}),
     ...(compat ? { compat } : {}),
     ...(Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
-  };
+  });
 }
 
 function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {

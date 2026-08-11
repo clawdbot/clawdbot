@@ -105,6 +105,9 @@ const pinnedMessagesMap = new Map<string, PinnedMessages>();
 type ChatThreadState = {
   searchOpen: boolean;
   searchQuery: string;
+  searchFocusPending: boolean;
+  searchReturnFocusTarget: HTMLElement | null;
+  searchReturnFocusOwner: HTMLElement | null;
   pinnedExpanded: boolean;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: { onSetReply?: ChatThreadProps["onSetReply"] };
@@ -240,6 +243,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private threadInnerElement: HTMLDivElement | null = null;
   private connected = false;
   private observedWidth: number | null = null;
+  private observedHeight: number | null = null;
   private contentReady = false;
   private pendingScrollOffset: {
     offset: number;
@@ -336,10 +340,23 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
         observeElementRect(instance, (rect) => {
+          const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
+          const heightChanged = previousHeight !== null && previousHeight !== rect.height;
+          const scrollOffset = instance.scrollOffset;
+          const wasAtEndBeforeResize =
+            heightChanged &&
+            this.pendingScrollOffset === null &&
+            scrollOffset !== null &&
+            instance.getTotalSize() - previousHeight - scrollOffset <=
+              CHAT_TRANSCRIPT_END_THRESHOLD_PX;
           this.observedWidth = rect.width;
+          this.observedHeight = rect.height;
           this.syncScrollMargin(instance.scrollElement);
           callback(rect);
+          if (wasAtEndBeforeResize) {
+            instance.scrollToEnd({ behavior: "auto" });
+          }
           if (widthChanged) {
             // Cached offscreen sizes belong to the old wrapping width. Reset
             // them, seed current rows, then repeat after any same-commit
@@ -772,6 +789,9 @@ function createChatThreadState(): ChatThreadState {
   return {
     searchOpen: false,
     searchQuery: "",
+    searchFocusPending: false,
+    searchReturnFocusTarget: null,
+    searchReturnFocusOwner: null,
     pinnedExpanded: false,
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
@@ -820,6 +840,9 @@ export function resetChatThreadSessionPresentationState(paneId: string, owner?: 
     // preferences or dependency memos and invalidate themselves on new props.
     state.searchOpen = false;
     state.searchQuery = "";
+    state.searchFocusPending = false;
+    state.searchReturnFocusTarget = null;
+    state.searchReturnFocusOwner = null;
   }
 }
 
@@ -850,6 +873,18 @@ export function renderChatSearchBar(
         placeholder=${t("chat.thread.searchPlaceholder")}
         aria-label=${t("chat.thread.search")}
         .value=${state.searchQuery}
+        ${state.searchFocusPending
+          ? ref((element) => {
+              if (element instanceof HTMLInputElement) {
+                state.searchFocusPending = false;
+                queueMicrotask(() => {
+                  if (element.isConnected) {
+                    element.focus({ preventScroll: true });
+                  }
+                });
+              }
+            })
+          : nothing}
         @input=${(event: Event) => {
           state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();
@@ -859,11 +894,7 @@ export function renderChatSearchBar(
         <button
           class="btn btn--ghost"
           aria-label=${t("chat.thread.closeSearch")}
-          @click=${() => {
-            state.searchOpen = false;
-            state.searchQuery = "";
-            requestUpdate();
-          }}
+          @click=${() => closeChatThreadSearch(state, requestUpdate)}
         >
           ${icons.x}
         </button>
@@ -872,12 +903,49 @@ export function renderChatSearchBar(
   `;
 }
 
-export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
+function closeChatThreadSearch(state: ChatThreadState, requestUpdate: () => void): void {
+  const returnFocusTarget = state.searchReturnFocusTarget;
+  const returnFocusOwner = state.searchReturnFocusOwner;
+  state.searchOpen = false;
+  state.searchQuery = "";
+  state.searchFocusPending = false;
+  state.searchReturnFocusTarget = null;
+  state.searchReturnFocusOwner = null;
+  requestUpdate();
+  queueMicrotask(() => {
+    const target = returnFocusTarget?.isConnected
+      ? returnFocusTarget
+      : returnFocusOwner?.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+    target?.focus({ preventScroll: true });
+  });
+}
+
+/** Toggles transcript search and retains the shortcut origin for focus restoration. */
+export function toggleChatThreadSearch(
+  paneId: string,
+  requestUpdate: () => void,
+  triggerEvent?: Event,
+): void {
   const state = getChatThreadState(paneId);
-  state.searchOpen = !state.searchOpen;
-  if (!state.searchOpen) {
-    state.searchQuery = "";
+  if (state.searchOpen) {
+    closeChatThreadSearch(state, requestUpdate);
+    return;
   }
+
+  state.searchOpen = true;
+  state.searchFocusPending = true;
+  const returnFocusTarget = triggerEvent?.target;
+  const returnFocusOwner = triggerEvent?.currentTarget;
+  state.searchReturnFocusTarget =
+    returnFocusTarget instanceof HTMLElement && returnFocusTarget.isConnected
+      ? returnFocusTarget
+      : null;
+  state.searchReturnFocusOwner =
+    returnFocusOwner instanceof HTMLElement && returnFocusOwner.isConnected
+      ? returnFocusOwner
+      : null;
   requestUpdate();
 }
 

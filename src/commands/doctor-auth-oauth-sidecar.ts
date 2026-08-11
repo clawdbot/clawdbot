@@ -16,7 +16,6 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   isLegacyOAuthRef,
   isLegacyOAuthSidecarPayload,
-  legacyOAuthSidecarTestUtils,
   loadLegacyOAuthSidecarMaterial,
   resolveLegacyOAuthSidecarPath,
   type LegacyOAuthRef,
@@ -328,15 +327,4 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
     note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
   return result;
-}
-
-const testing = {
-  buildLegacyOAuthSecretAad: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretAad,
-  buildLegacyOAuthSecretKey: legacyOAuthSidecarTestUtils.buildLegacyOAuthSecretKey,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.doctorAuthOAuthSidecarTestApi")
-  ] = testing;
 }

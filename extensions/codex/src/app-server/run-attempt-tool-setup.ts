@@ -3,12 +3,13 @@ import {
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureFinalCodexCronCreatorToolAllowlist,
   materializeStaticMcpToolsForScheduledHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
+import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
   formatCodexDynamicToolBuildStageSummary,
@@ -26,6 +27,10 @@ import {
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import {
+  captureScheduledCodexAppAuthority,
+  resolveScheduledCodexAppCreatorCaptureDecision,
+} from "./scheduled-app-authority.js";
 
 function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
   return signal?.aborted === true && error === signal.reason;
@@ -129,17 +134,50 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
   } = {};
+  const scheduledAppAuthoritySourceRef: {
+    current?: Omit<
+      Parameters<typeof captureScheduledCodexAppAuthority>[0],
+      "profileId" | "accountId"
+    >;
+  } = {};
+  const preparedChatgptAuth =
+    connection.startupPreparedAuth?.kind === "profile" &&
+    connection.startupPreparedAuth.snapshot?.loginParams.type === "chatgptAuthTokens" &&
+    connection.startupPreparedAuth.snapshot.chatgptAccountId
+      ? {
+          profileId: connection.startupPreparedAuth.profileId,
+          accountId: connection.startupPreparedAuth.snapshot.chatgptAccountId,
+        }
+      : undefined;
+  const appPolicy = resolveCodexPluginsPolicy(pluginConfig);
+  const codexAppsMayBeVisible =
+    appPolicy.enabled &&
+    (appPolicy.allowAllPlugins || appPolicy.pluginPolicies.some((entry) => entry.enabled));
+  const appCreatorCapture = resolveScheduledCodexAppCreatorCaptureDecision({
+    appsMayBeVisible: codexAppsMayBeVisible,
+    authenticatedScheduledMode,
+    usesSupervisionConnection: connection.usesSupervisionConnection,
+    homeScope: connection.appServer.start.homeScope,
+    hasPreparedAccountIdentity: Boolean(preparedChatgptAuth),
+  });
+  const codexAppAuthorityUnavailableReason = appCreatorCapture.unavailableReason;
+  const canResolveScheduledCodexAppAuthority = appCreatorCapture.supported;
+  const requiresScheduledCodexAppAuthority = appCreatorCapture.required;
+  const canResolveAnyScheduledCreatorAuthority =
+    canResolveScheduledConfiguredMcpCreatorAuthority || requiresScheduledCodexAppAuthority;
   let toolBridge: ReturnType<typeof createCodexDynamicToolBridge> | undefined;
   let creatorAuthorityPromise:
     | Promise<{
         tools: readonly (string | { name: string; pluginId?: string })[];
         provenance: { version: 1; source: "final-executable-surface" };
+        runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>
     | undefined;
   let resolveCreatorAuthorityImpl:
     | ((options?: { signal?: AbortSignal }) => Promise<{
         tools: readonly (string | { name: string; pluginId?: string })[];
         provenance: { version: 1; source: "final-executable-surface" };
+        runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>)
     | undefined;
   const commonToolParams = {
@@ -168,7 +206,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       void emitCodexAppServerEvent(params, event);
     },
     computerContextEpoch,
-    ...(canResolveScheduledConfiguredMcpCreatorAuthority
+    ...(canResolveAnyScheduledCreatorAuthority
       ? {
           resolveCronCreatorToolAuthority: (options?: { signal?: AbortSignal }) => {
             if (!resolveCreatorAuthorityImpl) {
@@ -382,11 +420,54 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       // Keep the names for finite intersections, but never certify a partial default cap.
       delete cronCreatorToolAllowlistCaptureRef.value;
     }
-    if (canResolveScheduledConfiguredMcpCreatorAuthority) {
+    if (requiresScheduledCodexAppAuthority) {
+      // Native apps are not represented in the OpenClaw dynamic-tool list.
+      // Require the exact-thread resolver before certifying a default cap.
+      delete cronCreatorToolAllowlistCaptureRef.value;
+    }
+    if (canResolveAnyScheduledCreatorAuthority) {
       resolveCreatorAuthorityImpl = async (options) => {
         options?.signal?.throwIfAborted();
+        if (codexAppAuthorityUnavailableReason) {
+          throw new Error(codexAppAuthorityUnavailableReason);
+        }
         if (!toolBridge) {
-          throw new Error("configured MCP authority resolver lost the active tool bridge");
+          throw new Error("cron creator authority resolver lost the active tool bridge");
+        }
+        const authorityTools: Array<string | { name: string; pluginId?: string }> = [];
+        const captureRef: {
+          value?: { version: 1; source: "final-executable-surface" };
+        } = {};
+        await captureFinalCodexCronCreatorToolAllowlist(
+          authorityTools,
+          captureRef,
+          toolBridge.availableTools,
+        );
+        if (!captureRef.value) {
+          throw new Error("cron creator authority snapshot did not produce provenance");
+        }
+        const appSource = scheduledAppAuthoritySourceRef.current;
+        const runtimeAuthority =
+          canResolveScheduledCodexAppAuthority && preparedChatgptAuth
+            ? appSource
+              ? await captureScheduledCodexAppAuthority({
+                  ...appSource,
+                  ...preparedChatgptAuth,
+                  signal: options?.signal,
+                })
+              : (() => {
+                  throw new Error(
+                    "Codex app authority is unavailable before the exact creator thread is active. Retry this automation mutation from the current owner turn.",
+                  );
+                })()
+            : undefined;
+        if (!canResolveScheduledConfiguredMcpCreatorAuthority) {
+          options?.signal?.throwIfAborted();
+          return Object.freeze({
+            tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
+            provenance: Object.freeze(captureRef.value),
+            ...(runtimeAuthority ? { runtimeAuthority } : {}),
+          });
         }
         const authorityRuntimeId = `cron-authority:${params.runId}`;
         let materialized: Awaited<
@@ -423,10 +504,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
               `${materialized.diagnosticNotice} Sign in to the affected MCP server and retry, or provide an explicit finite toolsAllow list containing only currently visible tools. No automation changes were saved.`,
             );
           }
-          const authorityTools: Array<string | { name: string; pluginId?: string }> = [];
-          const captureRef: {
-            value?: { version: 1; source: "final-executable-surface" };
-          } = {};
           // Default authority contains model-callable tools only. App-only projections
           // gate view callbacks and must never become headless scheduled capability.
           const projectedConfiguredMcp = projectCodexExecutableDynamicTools({
@@ -444,6 +521,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           return Object.freeze({
             tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
             provenance: Object.freeze(captureRef.value),
+            ...(runtimeAuthority ? { runtimeAuthority } : {}),
           });
         } finally {
           await materialized.dispose();
@@ -458,6 +536,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       configuredMcpOwnershipVersion: ownsScheduledConfiguredMcpSurface ? (1 as const) : undefined,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
+      scheduledAppAuthoritySourceRef,
       dynamicToolParams,
       computerContextEpoch,
       toolBridge,

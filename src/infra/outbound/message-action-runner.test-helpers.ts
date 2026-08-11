@@ -7,7 +7,6 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
@@ -18,7 +17,9 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-export const messageActionRunnerMocks = {
+// Create shared bindings before mock factories run so non-isolated tests reset
+// and assert against the same functions that the production imports receive.
+const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
@@ -37,7 +38,9 @@ export const messageActionRunnerMocks = {
   isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
-};
+}));
+
+export const messageActionRunnerMocks = hoistedMessageActionRunnerMocks;
 
 vi.mock("./channel-resolution.js", () => ({
   normalizeDeliverableOutboundChannel: (value?: string | null) =>
@@ -348,120 +351,4 @@ export async function resetMessageActionMediaMocks() {
   });
   mocks.loadWebMedia.mockReset();
   mocks.loadWebMedia.mockImplementation(actualLoadWebMedia);
-}
-
-export const pollerConfig = {
-  channels: {
-    poller: {
-      botToken: "poller-test",
-    },
-  },
-} as OpenClawConfig;
-
-export const pollerTestPlugin: ChannelPlugin = {
-  id: "poller",
-  meta: {
-    id: "poller",
-    label: "Poller",
-    selectionLabel: "Poller",
-    docsPath: "/channels/poller",
-    blurb: "Poller test plugin.",
-  },
-  capabilities: { chatTypes: ["direct", "group"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({ botToken: "poller-test" }),
-    isConfigured: () => true,
-  },
-  outbound: {
-    deliveryMode: "gateway",
-    sendPoll: async () => ({
-      messageId: "poll-test",
-    }),
-  },
-  messaging: {
-    targetResolver: {
-      looksLikeId: () => true,
-      resolveTarget: async ({ normalized }) => ({
-        to: normalized,
-        kind: "user",
-        source: "normalized",
-      }),
-    },
-  },
-  threading: {
-    resolveAutoThreadId: ({ toolContext, to, replyToId }) => {
-      if (replyToId) {
-        return undefined;
-      }
-      if (toolContext?.currentChannelId !== to) {
-        return undefined;
-      }
-      return toolContext.currentThreadTs;
-    },
-  },
-};
-
-export async function runPollAction(params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-  toolContext?: Record<string, unknown>;
-  inboundEventKind?: "user_request" | "room_event";
-}) {
-  await runMessageAction({
-    cfg: params.cfg,
-    action: "poll",
-    params: params.actionParams as never,
-    toolContext: params.toolContext as never,
-    inboundEventKind: params.inboundEventKind,
-  });
-  const call = messageActionRunnerMocks.executePollAction.mock.calls[0]?.[0] as
-    | {
-        resolveCorePoll?: () => {
-          durationHours?: number;
-          maxSelections?: number;
-          threadId?: string;
-        };
-        ctx?: {
-          plugin?: ChannelPlugin;
-          inboundEventKind?: string;
-          idempotencyKey?: string;
-          params?: Record<string, unknown>;
-        };
-      }
-    | undefined;
-  if (!call) {
-    throw new Error("expected executePollAction call");
-  }
-  return {
-    ...call.resolveCorePoll?.(),
-    ctx: call.ctx,
-  };
-}
-
-export function resetMessageActionPollMocks() {
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "poller", source: "test", plugin: pollerTestPlugin }]),
-  );
-  const mocks = messageActionRunnerMocks;
-  mocks.resolveOutboundChannelPlugin.mockReset();
-  mocks.resolveOutboundChannelPlugin.mockImplementation(
-    ({ channel }: { channel: string }) =>
-      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-  );
-  mocks.executeSendAction.mockReset();
-  mocks.executeSendAction.mockImplementation(async () => {
-    throw new Error("executeSendAction should not run in poll tests");
-  });
-  mocks.executePollAction.mockReset();
-  mocks.executePollAction.mockImplementation(async (input) => ({
-    handledBy: "core",
-    payload: { ok: true, corePoll: input.resolveCorePoll() },
-    pollResult: { ok: true },
-  }));
-}
-
-export function clearMessageActionPollMocks() {
-  setActivePluginRegistry(createTestRegistry([]));
-  messageActionRunnerMocks.executePollAction.mockReset();
 }

@@ -1,7 +1,8 @@
 // Gateway import-boundary tests keep startup-critical modules lazy and prevent
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -10,9 +11,83 @@ function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+function resolveRelativeSource(importer: string, specifier: string): string | null {
+  const rawPath = path.resolve(path.dirname(importer), specifier);
+  const withoutJs = rawPath.replace(/\.(?:mjs|cjs|js)$/u, "");
+  for (const candidate of [
+    rawPath,
+    `${withoutJs}.ts`,
+    `${withoutJs}.mts`,
+    `${withoutJs}.cts`,
+    path.join(withoutJs, "index.ts"),
+  ]) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function staticValueSpecifiers(filePath: string, source: string): string[] {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const specifiers: string[] = [];
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const clause = statement.importClause;
+      if (clause?.isTypeOnly) {
+        continue;
+      }
+      if (
+        clause?.namedBindings &&
+        ts.isNamedImports(clause.namedBindings) &&
+        !clause.name &&
+        clause.namedBindings.elements.every((element) => element.isTypeOnly)
+      ) {
+        continue;
+      }
+      specifiers.push(statement.moduleSpecifier.text);
+      continue;
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      specifiers.push(statement.moduleSpecifier.text);
+    }
+  }
+  return specifiers;
+}
+
+function collectStaticValueImportGraph(entryRelativePath: string): Map<string, string[]> {
+  const entryPath = path.join(repoRoot, entryRelativePath);
+  const graph = new Map<string, string[]>();
+  const pending = [entryPath];
+  while (pending.length > 0) {
+    const filePath = pending.pop();
+    if (!filePath || graph.has(filePath)) {
+      continue;
+    }
+    const specifiers = staticValueSpecifiers(filePath, readFileSync(filePath, "utf8"));
+    graph.set(filePath, specifiers);
+    for (const specifier of specifiers) {
+      if (!specifier.startsWith(".")) {
+        continue;
+      }
+      const resolved = resolveRelativeSource(filePath, specifier);
+      if (resolved) {
+        pending.push(resolved);
+      }
+    }
+  }
+  return graph;
+}
+
 function readServerImplementation(): string {
   return [
     "src/gateway/server-start.ts",
+    "src/gateway/server-kernel.ts",
     "src/gateway/server-startup-bootstrap.ts",
     "src/gateway/server-runtime-state-prepare.ts",
     "src/gateway/server-lifecycle.ts",
@@ -24,6 +99,23 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps the kernel static import graph free of HTTP server and WebSocket construction", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-kernel.ts");
+    const violations: string[] = [];
+    for (const [filePath, specifiers] of graph) {
+      for (const specifier of specifiers) {
+        if (specifier === "node:http" || specifier === "node:https" || specifier === "ws") {
+          violations.push(`${path.relative(repoRoot, filePath)} -> ${specifier}`);
+        }
+      }
+    }
+
+    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
+      "src/gateway/server-runtime-state.ts",
+    );
+    expect(violations).toEqual([]);
+  });
+
   it("keeps heavy cron and doctor legacy paths out of the server-start import graph", () => {
     const serverImpl = readServerImplementation();
     const validation = readSource("src/config/validation.ts");

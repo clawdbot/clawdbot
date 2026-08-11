@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
 import {
   qaMockRequestCursorUrl,
@@ -110,14 +114,6 @@ type QaRuntimeToolFixtureDeps = {
   fetchJson: (url: string) => Promise<unknown>;
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
-
-function readString(raw: unknown, fallback = "") {
-  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : fallback;
-}
-
-function readBoolean(raw: unknown, fallback: boolean) {
-  return typeof raw === "boolean" ? raw : fallback;
-}
 
 function isKnownBroken(raw: unknown): raw is Record<string, unknown> {
   return isRecord(raw);
@@ -813,8 +809,8 @@ function formatKnownBrokenDetails(
   config: QaRuntimeToolFixtureConfig,
 ) {
   const knownBroken = isKnownBroken(config.knownBroken) ? config.knownBroken : {};
-  const issue = readString(knownBroken.issue);
-  const reason = readString(knownBroken.reason, "known broken runtime tool fixture");
+  const issue = normalizeOptionalString(knownBroken.issue) ?? "";
+  const reason = normalizeOptionalString(knownBroken.reason) ?? "known broken runtime tool fixture";
   return [
     `known-broken ${toolName}: ${reason}`,
     issue ? `tracking: ${issue}` : undefined,
@@ -886,8 +882,8 @@ function plannedRequestHasPrompt(request: QaRuntimeToolFixtureRequest) {
 
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
   const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
-  const issue = readString(knownHarnessGap.issue);
-  const reason = readString(knownHarnessGap.reason, "known QA harness gap");
+  const issue = normalizeOptionalString(knownHarnessGap.issue) ?? "";
+  const reason = normalizeOptionalString(knownHarnessGap.reason) ?? "known QA harness gap";
   return [`known-harness-gap ${toolName}: ${reason}`, issue ? `tracking: ${issue}` : undefined]
     .filter(Boolean)
     .join("\n");
@@ -898,7 +894,7 @@ export async function runRuntimeToolFixture(
   config: QaRuntimeToolFixtureConfig,
   deps: QaRuntimeToolFixtureDeps,
 ) {
-  const toolName = readString(config.toolName);
+  const toolName = normalizeOptionalString(config.toolName) ?? "";
   if (!toolName) {
     throw new Error("runtime tool fixture missing execution.config.toolName");
   }
@@ -947,7 +943,7 @@ export async function runRuntimeToolFixture(
   const dynamicExposureIntentionallyExcluded = forcedCodexNativeWorkspace && !tools.has(toolName);
   const requireCodexNativePatchCoverage =
     forcedCodexNativeWorkspace && metadata.required && toolName === "apply_patch";
-  const expectedAvailable = readBoolean(config.expectedAvailable, true);
+  const expectedAvailable = asBoolean(config.expectedAvailable) ?? true;
   if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
       skipFixture(formatExpectedUnavailableDetails(toolName, tools));
@@ -965,20 +961,16 @@ export async function runRuntimeToolFixture(
     );
   }
 
-  const happyPrompt = readString(
-    config.happyPrompt,
-    `tool search qa check target=${toolName}. Call exactly that tool once and then summarize.`,
-  );
-  const failurePrompt = readString(
-    config.failurePrompt,
-    `tool search qa failure target=${toolName}. Exercise the denied-input path once and then summarize.`,
-  );
-  const promptSnippet = readString(config.promptSnippet, `target=${toolName}`);
-  const failurePromptSnippet = readString(
-    config.failurePromptSnippet,
-    `failure target=${toolName}`,
-  );
-  const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
+  const happyPrompt =
+    normalizeOptionalString(config.happyPrompt) ??
+    `tool search qa check target=${toolName}. Call exactly that tool once and then summarize.`;
+  const failurePrompt =
+    normalizeOptionalString(config.failurePrompt) ??
+    `tool search qa failure target=${toolName}. Exercise the denied-input path once and then summarize.`;
+  const promptSnippet = normalizeOptionalString(config.promptSnippet) ?? `target=${toolName}`;
+  const failurePromptSnippet =
+    normalizeOptionalString(config.failurePromptSnippet) ?? `failure target=${toolName}`;
+  const happyPathOutputRequired = asBoolean(config.happyPathOutputRequired) ?? true;
   // Private QA can expose an actual dynamic patch tool. Real Codex instead
   // mirrors native file changes into linked apply_patch transcript evidence.
   const requireNativePatchTranscriptEvidence = !env.mock && requireCodexNativePatchCoverage;

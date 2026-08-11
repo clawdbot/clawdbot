@@ -7,7 +7,6 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -631,28 +630,6 @@ export function transitionMainSessionRecovery(
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;
       return { kind: "tombstoned" };
-    }
-    case "fail_recovery": {
-      const conflict = matchesObservation(entry, command.observation);
-      if (conflict) {
-        return { kind: "rejected", reason: conflict };
-      }
-      const noticeEntry = structuredClone(entry);
-      entry.status = "failed";
-      entry.lifecycleRunId = undefined;
-      entry.abortedLastRun = true;
-      entry.endedAt = command.now;
-      entry.updatedAt = command.now;
-      Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
-      Object.assign(
-        entry,
-        buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-        }),
-      );
-      entry.mainRestartRecovery = undefined;
-      return { kind: "failed", noticeEntry };
     }
     case "doctor_repair": {
       if (!entry.mainRestartRecovery?.tombstone || entry.abortedLastRun !== true) {

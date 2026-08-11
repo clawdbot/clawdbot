@@ -9,8 +9,9 @@ import type {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumber,
+  asOptionalObjectRecord,
   normalizeOptionalString,
-  parseBooleanValue as readBoolean,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
@@ -144,14 +145,10 @@ export function serializeXaiRealtimeToolResult(result: unknown): string {
   throw new Error(message);
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function readNestedXaiConfig(rawConfig: RealtimeVoiceProviderConfig) {
-  const raw = readRecord(rawConfig);
-  const providers = readRecord(raw?.providers);
-  return readRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
+  const raw = asOptionalObjectRecord(rawConfig);
+  const providers = asOptionalObjectRecord(raw?.providers);
+  return asOptionalObjectRecord(providers?.xai ?? raw?.xai ?? raw) ?? {};
 }
 
 export function normalizeXaiRealtimeBaseUrl(value?: string): string {
@@ -207,9 +204,9 @@ export function normalizeXaiRealtimeProviderConfig(
     vadThreshold: asXaiVadThreshold(raw.vadThreshold),
     silenceDurationMs: asXaiDurationMs(raw.silenceDurationMs),
     prefixPaddingMs: asXaiDurationMs(raw.prefixPaddingMs),
-    interruptResponseOnInputAudio: readBoolean(raw.interruptResponseOnInputAudio),
+    interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),
     reasoningEffort: asXaiReasoningEffort(raw.reasoningEffort),
-    sessionResumption: readBoolean(raw.sessionResumption),
+    sessionResumption: parseBooleanValue(raw.sessionResumption),
   };
 }
 
@@ -217,7 +214,7 @@ export function readXaiRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
   }
-  const record = readRecord(error);
+  const record = asOptionalObjectRecord(error);
   return (
     normalizeOptionalString(record?.message) ??
     normalizeOptionalString(record?.code) ??

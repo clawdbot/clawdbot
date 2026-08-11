@@ -1,4 +1,5 @@
 import { PinnedDispatcherPool } from "../infra/net/pinned-dispatcher-pool.js";
+import { setProviderTransportDispatcherPoolActive } from "./provider-runtime-lifecycle.js";
 
 const PROVIDER_DISPATCHER_POOL_MAX_ENTRIES = 16;
 const PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS = 60_000;
@@ -7,10 +8,13 @@ let activePool: PinnedDispatcherPool | undefined;
 
 /** Returns the current process-lifecycle provider dispatcher pool generation. */
 export function getProviderTransportDispatcherPool(): PinnedDispatcherPool {
-  activePool ??= new PinnedDispatcherPool({
-    maxEntries: PROVIDER_DISPATCHER_POOL_MAX_ENTRIES,
-    idleTtlMs: PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS,
-  });
+  if (!activePool) {
+    activePool = new PinnedDispatcherPool({
+      maxEntries: PROVIDER_DISPATCHER_POOL_MAX_ENTRIES,
+      idleTtlMs: PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS,
+    });
+    setProviderTransportDispatcherPoolActive(true);
+  }
   return activePool;
 }
 
@@ -21,6 +25,7 @@ export async function closeProviderTransportDispatcherPool(): Promise<void> {
     await pool.closeAll();
     if (activePool === pool) {
       activePool = undefined;
+      setProviderTransportDispatcherPoolActive(false);
     }
   }
 }

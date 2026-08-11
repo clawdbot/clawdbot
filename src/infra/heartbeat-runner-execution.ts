@@ -410,16 +410,34 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // to stale channels/threads because that base-session event context remains queued.
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
+  // Routeless ambient polls are pure model burn, but only they may skip:
+  // triggered wakes (hook/manual/cron/exec), polls with queued events, and
+  // scheduled-task wakes must still run to process their payloads even when
+  // the reply cannot deliver. An absent source is the plain scheduled poll.
+  if (
+    delivery.channel === "none" &&
+    delivery.reason === "no-route" &&
+    (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
+    preflight.pendingEventEntries.length === 0 &&
+    scheduledTasks.length === 0
+  ) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "no-route",
+      durationMs: Date.now() - startedAt,
+    });
+    return { kind: "skipped", reason: "no-route" } as const;
+  }
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId ?? null,
-      target: heartbeat?.target ?? "none",
+      target: heartbeat?.target ?? "last",
     });
   } else if (heartbeatAccountId) {
     log.info("heartbeat: using explicit accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId,
-      target: heartbeat?.target ?? "none",
+      target: heartbeat?.target ?? "last",
       channel: delivery.channel,
     });
   }

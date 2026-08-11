@@ -42,7 +42,6 @@ import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilitie
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSessionEntryForKey } from "./subagent-list.js";
-import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
 import {
   resolveFinalizedSubagentTaskState,
   resolveKilledSubagentTaskEndedAt,
@@ -50,6 +49,7 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import {
+  countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   listSubagentRunsForController,
 } from "./subagent-registry-read.js";

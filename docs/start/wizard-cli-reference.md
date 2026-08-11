@@ -368,7 +368,7 @@ The results screen lists the detected applications and shows: "App names were ma
 powerful and full system access is risky):
 
 ```bash
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice apiKey \
   --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```

@@ -4,12 +4,11 @@ import {
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "../../agent-steering-queue.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
-import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
   countActiveRunsForSessionFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
-  getSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
@@ -21,9 +20,7 @@ export function createSubagentRegistryPublicApi(config: {
   persistOrThrow: (...runIds: string[]) => void;
   restoreOnce: () => void;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
-  settleRequesterTurn: ReturnType<
-    typeof createSubagentRegistryLifecycleController
-  >["settleRequesterTurnAfterSessionSpawns"];
+  settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
 }) {
   const {
     runs,
@@ -186,13 +183,6 @@ export function createSubagentRegistryPublicApi(config: {
     return countActiveRunsForSessionFromRuns(readRuns(), requesterSessionKey, options);
   }
 
-  function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-    return getSubagentRunByChildSessionKeyFromRuns(
-      deps().getSubagentRunsSnapshotForChildSession(runs, childSessionKey),
-      childSessionKey,
-    );
-  }
-
   /** Records sessions_yield before the active requester run is aborted. */
   function markRequesterTurnYielded(params: {
     requesterSessionKey: string;
@@ -217,7 +207,6 @@ export function createSubagentRegistryPublicApi(config: {
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,
     countActiveRunsForSession,
-    getSubagentRunByChildSessionKey,
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
   };

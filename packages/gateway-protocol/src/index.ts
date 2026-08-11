@@ -37,6 +37,13 @@ export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
+export type {
+  SecretStoreEntry,
+  SecretsStoreDeleteParams,
+  SecretsStoreListResult,
+  SecretsStoreMutationResult,
+  SecretsStoreSetParams,
+} from "./schema/secrets.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -73,6 +80,11 @@ export {
   WorkerHeartbeatParamsSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerSessionsSpawnParamsSchema,
+  WorkerSessionsSpawnResponseFrameSchema,
+  WorkerSessionsSendParamsSchema,
+  WorkerSessionsSendResponseFrameSchema,
+  WorkerSessionToolResultSchema,
   WorkerLiveEventSchema,
   WorkerLiveEventErrorDetailsSchema,
   WorkerLiveEventErrorShapeSchema,
@@ -91,6 +103,8 @@ export {
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
+  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
   WORKER_PROTOCOL_MAX_FEATURES,
@@ -149,6 +163,14 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
+  SecretStoreSecretEntrySchema,
+  SecretStoreEnvEntrySchema,
+  SecretStoreEntrySchema,
+  SecretsStoreListParamsSchema,
+  SecretsStoreListResultSchema,
+  SecretsStoreSetParamsSchema,
+  SecretsStoreDeleteParamsSchema,
+  SecretsStoreMutationResultSchema,
   WebPushVapidPublicKeyParamsSchema,
   WebPushSubscribeParamsSchema,
   WebPushUnsubscribeParamsSchema,

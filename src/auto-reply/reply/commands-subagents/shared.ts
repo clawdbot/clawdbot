@@ -4,9 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ResolvedSubagentController } from "../../../agents/subagents/registry/subagent-control.js";
-import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagents/spawn/subagent-capabilities.js";
 import {
@@ -57,9 +55,7 @@ function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): SubagentTargetResolution {
-  const readIndex = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
-  });
+  const readIndex = buildSubagentRunReadIndex();
   return resolveSubagentTargetFromRuns({
     runs,
     token,

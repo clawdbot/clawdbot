@@ -45,7 +45,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -128,7 +128,7 @@ import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
-import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
+import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
@@ -259,7 +259,7 @@ async function resolveCliSkillsPrompt(params: {
     workspaceDir: params.workspaceDir,
   });
   if (!sandboxWorkspace) {
-    return resolveSkillsPromptForRun({
+    return resolveSkillsPrompt({
       skillsSnapshot: params.skillsSnapshot,
       workspaceDir: params.workspaceDir,
       config: params.config,
@@ -305,7 +305,7 @@ async function resolveCliSkillsPrompt(params: {
     skillsWorkspaceDir,
     skillsPromptWorkspaceDir,
   });
-  return resolveSkillsPromptForRun({
+  return resolveSkillsPrompt({
     skillsSnapshot: skillsSnapshotForRun,
     entries: promptSkillEntries,
     workspaceDir: skillsPromptWorkspaceDir,
@@ -796,7 +796,7 @@ export async function prepareCliRunContext(
   const promptBuildRestrictsTools =
     promptBuildToolsAllow !== undefined &&
     !promptBuildToolsAllow.some((toolName) => normalizeToolName(toolName) === "*");
-  const isClaudeCli = isClaudeCliProvider(params.provider);
+  const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
     ? resolveClaudeCliContextModelId(normalizedModel)
@@ -1390,7 +1390,7 @@ export async function prepareCliRunContext(
     const hasClaudeCliCandidate =
       !nodeClaudePlacement &&
       candidateClaudeCliSessionId !== undefined &&
-      isClaudeCliProvider(params.provider);
+      isClaudeCliBackendId(params.provider);
     const claudeCliTranscriptMissing =
       hasClaudeCliCandidate &&
       !(await prepareDeps.claudeCliSessionTranscriptHasContent({

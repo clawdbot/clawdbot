@@ -246,6 +246,14 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
   listSubagentRunsForController: () => [],
 }));
 
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+}));
+
 // #85714: keep the real private-final decision but spy the WARN emitter so we
 // can assert it fires only through the substantive text suppression branch.
 const warnPrivateFinalSpy = vi.hoisted(() => vi.fn());

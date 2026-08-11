@@ -1,7 +1,4 @@
-/**
- * Builds subscription params and cleans up embedded attempt resources.
- */
-import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
+/** Cleans up embedded attempt subscription resources. */
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
@@ -50,17 +47,6 @@ async function waitForEmbeddedAbortSettle(params: {
       `embedded abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
     );
   }
-}
-
-/**
- * Identity helper that preserves the concrete subscription params type at call
- * sites. Keeping this as a named helper lets tests assert the exact shape passed
- * into the subscription layer without widening the object inline.
- */
-export function buildEmbeddedSubscriptionParams(
-  params: SubscribeEmbeddedAgentSessionParams,
-): SubscribeEmbeddedAgentSessionParams {
-  return params;
 }
 
 /**

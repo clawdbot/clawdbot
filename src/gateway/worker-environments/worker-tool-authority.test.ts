@@ -27,7 +27,16 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}) {
 
 describe("resolveWorkerToolAuthority", () => {
   it("keeps the deterministic complete worker surface when no policy narrows it", () => {
-    expect(authority()).toEqual(["read", "write", "edit", "apply_patch", "exec", "process"]);
+    expect(authority()).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "sessions_spawn",
+      "sessions_send",
+    ]);
   });
 
   it("adds the optional browser surface only when the launcher makes it available", () => {
@@ -37,7 +46,17 @@ describe("resolveWorkerToolAuthority", () => {
         turn: turn(),
         availableOptionalToolNames: ["browser"],
       }).allowedToolNames,
-    ).toEqual(["read", "write", "edit", "apply_patch", "exec", "process", "browser"]);
+    ).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "browser",
+      "sessions_spawn",
+      "sessions_send",
+    ]);
     expect(
       resolveWorkerToolAuthority({
         modelRef: { provider: "openai", model: "gpt-test" },
@@ -52,6 +71,7 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
     expect(authority({ toolsAllow: [] })).toEqual([]);
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
+    expect(authority({ toolsAllow: ["sessions_send"] })).toEqual(["sessions_send"]);
   });
 
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {

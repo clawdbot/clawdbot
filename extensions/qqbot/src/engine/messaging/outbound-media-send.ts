@@ -14,6 +14,7 @@ import {
   sanitizeUntrustedFileName,
   writeExternalFileWithinRoot,
 } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { MediaFileType } from "../types.js";
@@ -33,7 +34,7 @@ import {
   isLocalPath as isLocalFilePath,
   normalizePath,
 } from "../utils/platform.js";
-import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
+import { sanitizeFileName } from "../utils/string-normalize.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
 import {
   isPathWithinRoot,

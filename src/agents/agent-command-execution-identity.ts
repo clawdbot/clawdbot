@@ -143,6 +143,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     mainRestartRecoveryAttempt: undefined,
     executionIdentityAdmission: undefined,
     operationalRunInstance: undefined,
+    cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
   };
 }

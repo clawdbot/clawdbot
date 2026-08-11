@@ -1791,6 +1791,76 @@ describe("sessions tools", () => {
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
+  it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exact-cron-send-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const requesterKey = "agent:main:main";
+    const runScopedTargetKey = "agent:leasing-ops:cron:monthly-utility:run:run-exact";
+    const targetSessionId = "exact-cron-run-incarnation";
+    const queueMessage = vi.fn(async () => {});
+    try {
+      await upsertSessionEntry(
+        { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
+        { sessionId: targetSessionId, updatedAt: 1 },
+      );
+      setActiveEmbeddedRun(
+        targetSessionId,
+        {
+          queueMessage,
+          isStreaming: () => false,
+          isCompacting: () => false,
+          supportsTranscriptCommitWait: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          abort: () => {},
+        },
+        runScopedTargetKey,
+      );
+      const calls: GatewayCall[] = [];
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as GatewayCall;
+        calls.push(request);
+        if (request.method === "sessions.list") {
+          return {
+            path: storePath,
+            sessions: [{ key: runScopedTargetKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "agent") {
+          throw new Error("exact target must not fall back to the durable Cron session");
+        }
+        return {};
+      });
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterKey,
+        expectedTargetSessionId: targetSessionId,
+        idempotencyKey: "worker-session-send:exact-cron-operation",
+        config: {
+          ...cloneTestConfig(),
+          session: {
+            ...cloneTestConfig().session,
+            store: storePath,
+          },
+        },
+        callGateway: callGatewayMock,
+      });
+
+      const result = await tool.execute("exact-cron-send", {
+        sessionKey: runScopedTargetKey,
+        message: "do not reroute this exact message",
+        timeoutSeconds: 0,
+      });
+
+      expect(sessionsSendDetails(result.details)).toMatchObject({
+        status: "error",
+        sessionKey: runScopedTargetKey,
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.method === "agent")).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const runScopedCallerKey = "agent:leasing-ops:slack:channel:c-room:run:run-fast";

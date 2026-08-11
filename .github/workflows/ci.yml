@@ -2348,6 +2348,14 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              if has_package_script "check:coercion-helpers"; then
+                pnpm check:coercion-helpers
+              elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+                echo "[skip] historical target predates the coercion-helper declaration guard"
+              else
+                echo "Current CI targets must provide the check:coercion-helpers package script." >&2
+                exit 1
+              fi
               if [ -n "$PR_BASE_SHA" ]; then
                 timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base

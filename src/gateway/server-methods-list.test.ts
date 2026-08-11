@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-39)).toEqual([
+    expect(listGatewayMethods().slice(-42)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -106,6 +106,9 @@ describe("listGatewayMethods", () => {
       "projects.register",
       "projects.remove",
       "worker.desktop.launch",
+      "secrets.store.list",
+      "secrets.store.set",
+      "secrets.store.delete",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -197,7 +200,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-46)).toEqual([
+    expect(coreMethods.slice(-49)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -244,6 +247,9 @@ describe("listGatewayMethods", () => {
       "projects.register",
       "projects.remove",
       "worker.desktop.launch",
+      "secrets.store.list",
+      "secrets.store.set",
+      "secrets.store.delete",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -260,6 +266,11 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("projects.register")).toBe(methods.indexOf("projects.list") + 1);
     expect(methods.indexOf("projects.remove")).toBe(methods.indexOf("projects.register") + 1);
     expect(methods.indexOf("worker.desktop.launch")).toBe(methods.indexOf("projects.remove") + 1);
+    expect(methods.indexOf("secrets.store.list")).toBe(
+      methods.indexOf("worker.desktop.launch") + 1,
+    );
+    expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
+    expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

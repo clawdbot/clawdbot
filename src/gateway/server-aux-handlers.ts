@@ -339,9 +339,14 @@ export function createGatewayAuxHandlers(params: {
   let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
   const runExclusiveReload = (
     fn: () => Promise<ReloadSecretsResult>,
+    options: { joinInFlight?: boolean } = {},
   ): Promise<ReloadSecretsResult> => {
     if (reloadInFlight) {
-      return reloadInFlight;
+      if (options.joinInFlight !== false) {
+        return reloadInFlight;
+      }
+      const precedingReload = reloadInFlight;
+      return precedingReload.catch(() => undefined).then(() => runExclusiveReload(fn, options));
     }
     const run = (async () => {
       try {
@@ -357,7 +362,7 @@ export function createGatewayAuxHandlers(params: {
     () =>
       import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
-          reloadSecrets: () =>
+          reloadSecrets: (reloadOptions) =>
             runExclusiveReload(async () => {
               let transaction:
                 | {
@@ -397,6 +402,7 @@ export function createGatewayAuxHandlers(params: {
                       reason: "reload",
                       activate: false,
                       publishFailureAsDegraded: true,
+                      forceColdRefKeys: reloadOptions?.forceColdRefKeys,
                       canPublishFailureAsDegraded: () =>
                         getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
                     },
@@ -624,7 +630,7 @@ export function createGatewayAuxHandlers(params: {
                 }
                 throw err;
               }
-            }),
+            }, reloadOptions),
           log: params.log,
           resolveSecrets: async ({
             allowedPaths,
@@ -701,6 +707,9 @@ export function createGatewayAuxHandlers(params: {
       "question.list": createLazyHandler("question.list", loadQuestionHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
+      "secrets.store.list": createLazyHandler("secrets.store.list", loadSecretsHandlers),
+      "secrets.store.set": createLazyHandler("secrets.store.set", loadSecretsHandlers),
+      "secrets.store.delete": createLazyHandler("secrets.store.delete", loadSecretsHandlers),
     },
   };
 }

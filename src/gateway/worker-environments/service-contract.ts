@@ -1,4 +1,4 @@
-import type { WorkerDesktopApp } from "../../plugins/capability-provider.types.js";
+import type { WorkerDesktopApp, WorkerProfile } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
@@ -60,6 +60,10 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  inheritedProfile?: {
+    providerId: string;
+    profileSnapshot: WorkerProfile;
+  };
 };
 
 export type WorkerPlacementReclaimRequest = {

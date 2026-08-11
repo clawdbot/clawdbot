@@ -107,9 +107,8 @@ export async function runPreparedEmbeddedLoop(
     { config: params.config },
   );
   params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
-  // Admission is resolved once before the retry loop. Carry that exact object
-  // through every attempt/recovery owner; the original prepared input must not
-  // let downstream dispatch lose the admitted context.
+  // Admission is resolved once before the retry loop. Carry that exact object through every
+  // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
@@ -471,8 +470,6 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason = recovery.lastRetryFailoverReason;
         continue;
       }
-      const { shouldSurfaceCodexCompletionTimeout } = recovery;
-
       const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
         runParams: params,
         attempt,
@@ -481,6 +478,7 @@ export async function runPreparedEmbeddedLoop(
         terminalState,
         activeErrorContext,
         provider,
+        providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
         modelId,
         model: model.id,
         thinkLevel,
@@ -539,6 +537,7 @@ export async function runPreparedEmbeddedLoop(
         terminalBase: {
           runParams: params,
           provider,
+          providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
           model: model.id,
           activeErrorContext,
           authProfileStore: attemptAuthProfileStore,
@@ -592,7 +591,7 @@ export async function runPreparedEmbeddedLoop(
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
         timedOutDuringPrompt,
         hasSuccessfulFinalAssistantAfterPromptTimeout,
-        shouldSurfaceCodexCompletionTimeout,
+        shouldSurfaceCodexCompletionTimeout: recovery.shouldSurfaceCodexCompletionTimeout,
         attempt: terminalAttempt,
         hasPartialAssistantTextAfterPromptTimeout,
         payloads,

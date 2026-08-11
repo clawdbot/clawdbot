@@ -1470,9 +1470,8 @@ create` validates the written archive by default; `--no-verify` is the
 - QMD's own `index.sqlite`, YAML collection config, and model downloads remain
   external-tool artifacts under `~/.openclaw/agents/<agentId>/qmd`; they are not
   mirrored into `plugin_blob_entries`. Current host-owned lease consumers use
-  shared `state_leases`; the per-agent `state_leases` table remains in the
-  canonical schema but has no runtime tenants. Runtime creates no QMD lock
-  sidecars.
+  the shared `state_leases` table; agent schema 17 retires the tenant-free
+  per-agent table. Runtime creates no QMD lock sidecars.
 - The optional `memory-lancedb` plugin no longer creates
   `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
   external LanceDB backend and stays disabled until the operator configures an

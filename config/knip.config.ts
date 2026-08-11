@@ -504,6 +504,7 @@ const config = {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         "src/index.ts!",
+        "src/provider-types.ts!",
         "src/providers.ts!",
         "src/types.ts!",
         "src/validation.ts!",

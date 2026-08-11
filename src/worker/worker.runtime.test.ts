@@ -3,10 +3,12 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { validateWorkerSessionsSpawnParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -17,6 +19,7 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
+  type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptCommitRequestFrameSchema,
@@ -38,7 +41,11 @@ import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
-import { createWorkerConnection, WorkerConnectionStoppedError } from "./worker-connection.js";
+import {
+  createWorkerConnection,
+  WorkerConnectionStoppedError,
+  type WorkerConnectionState,
+} from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
@@ -92,6 +99,7 @@ type InferencePlan =
   | "text"
   | "tool"
   | "background-tool"
+  | "session-tool"
   | "hold"
   | "fence"
   | "error"
@@ -112,6 +120,7 @@ type FakeGatewayOptions = {
   silenceFirstTranscript?: boolean;
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
+  silenceSessionSpawnResponses?: number;
   transcriptFailureAtRequest?: number;
   liveResyncAckedSeq?: number;
   liveResyncResponses?: number;
@@ -119,10 +128,6 @@ type FakeGatewayOptions = {
   heartbeatFailure?: "credential-expired";
   heartbeatIntervalMs?: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function assistantMessage(
   content: WorkerDoneMessage["content"],
@@ -167,6 +172,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
+  readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly applicationOrder: string[] = [];
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
@@ -240,6 +246,19 @@ class FakeWorkerGateway {
     }
     if (Value.Check(WorkerInferenceCancelRequestFrameSchema, parsed)) {
       this.handleInferenceCancel(socket, parsed as WorkerInferenceCancelRequestFrame);
+      return;
+    }
+    if (
+      isRecord(parsed) &&
+      parsed.type === "req" &&
+      typeof parsed.id === "string" &&
+      parsed.method === "worker.sessions.spawn" &&
+      validateWorkerSessionsSpawnParams(parsed.params)
+    ) {
+      this.handleSessionSpawn(socket, {
+        id: parsed.id,
+        params: parsed.params,
+      });
       return;
     }
     const unsupported: unknown = parsed;
@@ -331,6 +350,28 @@ class FakeWorkerGateway {
       id: frame.id,
       ok: true,
       payload: { status: "cancelled" },
+    });
+  }
+
+  private handleSessionSpawn(
+    socket: WebSocket,
+    frame: { id: string; params: WorkerSessionsSpawnParams },
+  ): void {
+    this.methods.push("worker.sessions.spawn");
+    this.sessionSpawnRequests.push(structuredClone(frame.params));
+    if (this.sessionSpawnRequests.length <= (this.options.silenceSessionSpawnResponses ?? 0)) {
+      return;
+    }
+    this.send(socket, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: {
+        resultJson: JSON.stringify({
+          content: [{ type: "text", text: "child accepted" }],
+          details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
+        }),
+      },
     });
   }
 
@@ -455,6 +496,10 @@ class FakeWorkerGateway {
     }
     if (plan === "tool" || plan === "background-tool") {
       this.sendToolTurn(socket, frame.params, plan === "background-tool");
+      return;
+    }
+    if (plan === "session-tool") {
+      this.sendSessionToolTurn(socket, frame.params);
       return;
     }
     if (plan === "burst-text") {
@@ -644,6 +689,27 @@ class FakeWorkerGateway {
           background: true,
         }
       : { command: "printf worker-local > local-proof.txt" };
+    this.sendToolCallTurn(socket, identity, {
+      args,
+      toolCallId,
+      toolName: "exec",
+    });
+  }
+
+  private sendSessionToolTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
+    this.sendToolCallTurn(socket, identity, {
+      args: { task: "start a nested cloud child" },
+      toolCallId: "nested-session-spawn-call",
+      toolName: "sessions_spawn",
+    });
+  }
+
+  private sendToolCallTurn(
+    socket: WebSocket,
+    identity: WorkerInferenceStartParams,
+    tool: { args: Record<string, unknown>; toolCallId: string; toolName: string },
+  ): void {
+    const { args, toolCallId, toolName } = tool;
     const encodedArgs = JSON.stringify(args);
     const events: WorkerInferenceEventFrame[] = [
       {
@@ -665,7 +731,7 @@ class FakeWorkerGateway {
         payload: {
           ...this.identity(identity),
           seq: 2,
-          event: { type: "toolcall_start", contentIndex: 0, id: toolCallId, toolName: "exec" },
+          event: { type: "toolcall_start", contentIndex: 0, id: toolCallId, toolName },
         },
       },
       {
@@ -695,7 +761,7 @@ class FakeWorkerGateway {
       identity,
       5,
       assistantMessage(
-        [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
+        [{ type: "toolCall", id: toolCallId, name: toolName, arguments: args }],
         "toolUse",
       ),
     );
@@ -859,13 +925,20 @@ describe("worker runtime", () => {
 
   it("exposes exactly the Gateway-authorized worker tools", async () => {
     const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = ["read", "exec"];
+    launch.assignment.toolAuthority.allowedToolNames = [
+      "read",
+      "exec",
+      "sessions_spawn",
+      "sessions_send",
+    ];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
     expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
       "read",
       "exec",
+      "sessions_spawn",
+      "sessions_send",
     ]);
   });
 
@@ -922,6 +995,63 @@ describe("worker runtime", () => {
       "Worker Browser authority and launch descriptor must be provided together",
     );
     expect(gateway.inferenceRequests).toHaveLength(0);
+  });
+
+  it("runs an authorized nested-session tool through the closed worker RPC", async () => {
+    const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
+    launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.sessionSpawnRequests).toEqual([
+      {
+        toolCallId: "nested-session-spawn-call",
+        task: "start a nested cloud child",
+      },
+    ]);
+    expect(gateway.inferenceRequests).toHaveLength(2);
+    expect(
+      gateway.transcriptRequests.flatMap((request) =>
+        request.messages.flatMap((message) =>
+          message.role === "toolResult" ? [message.toolName] : [],
+        ),
+      ),
+    ).toContain("sessions_spawn");
+  });
+
+  it("replays the same durable session operation across repeated response loss", async () => {
+    const { gateway, launch } = await setup({
+      heartbeatIntervalMs: 1,
+      ignoreHeartbeat: true,
+      silenceSessionSpawnResponses: 2,
+    });
+    const connection = createWorkerConnection({
+      socketPath: gateway.socketPath,
+      connectParams: buildWorkerConnectParams(launch),
+      requestTimeoutMs: 25,
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    });
+    const states: WorkerConnectionState["kind"][] = [];
+    connection.onStateChange((state) => states.push(state.kind));
+    await connection.start();
+
+    const response = await connection.requestSessionsSpawn({
+      toolCallId: "call-durable-spawn",
+      task: "start a nested cloud child",
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      payload: { resultJson: expect.stringContaining("child accepted") },
+    });
+    expect(gateway.connectionCount).toBe(3);
+    expect(states).toContain("reconnecting");
+    expect(gateway.sessionSpawnRequests).toEqual([
+      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+      { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
+    ]);
+    await connection.stop();
   });
 
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {

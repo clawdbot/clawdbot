@@ -551,12 +551,12 @@ describe("resolveSessionDeliveryTarget", () => {
         sessionId: "sess-origin-no-config",
         updatedAt: 1,
         lastChannel: "alpha",
-        lastTo: "chat:one",
+        lastTo: "chat:stale",
       },
-      turnSource: { channel: "alpha", to: "chat:one", threadId: "77" },
+      turnSource: { channel: "beta", to: "chat:event", threadId: "77" },
     });
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("chat:one");
+    expect(resolved.channel).toBe("beta");
+    expect(resolved.to).toBe("chat:event");
     expect(resolved.threadId).toBe("77");
   });
 
@@ -576,7 +576,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("target-none");
   });
 
-  it("stays suppressed with unset heartbeat config and no origin turn source", () => {
+  it("delivers to the last session route with unset heartbeat config", () => {
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
       entry: {
@@ -586,8 +586,20 @@ describe("resolveSessionDeliveryTarget", () => {
         lastTo: "chat:one",
       },
     });
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("chat:one");
+  });
+
+  it("reports no route when unset heartbeat config has no session route", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-no-config-no-route",
+        updatedAt: 1,
+      },
+    });
     expect(resolved.channel).toBe("none");
-    expect(resolved.reason).toBe("target-none");
+    expect(resolved.reason).toBe("no-route");
   });
 
   const resolveHeartbeatTarget = (entry: LegacyDeliveryFixture, directPolicy?: "allow" | "block") =>
@@ -917,7 +929,7 @@ describe("resolveSessionDeliveryTarget", () => {
     ).toHaveLength(1);
   });
 
-  it("does not bootstrap plugin-channel heartbeat routes without a concrete target", () => {
+  it("reports no route without a concrete last target", () => {
     setActivePluginRegistry(createTargetsTestRegistry([]));
 
     const resolved = resolveHeartbeatDeliveryTarget({
@@ -934,7 +946,7 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved.channel).toBe("none");
-    expect(resolved.reason).toBe("no-target");
+    expect(resolved.reason).toBe("no-route");
     expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
   });
 

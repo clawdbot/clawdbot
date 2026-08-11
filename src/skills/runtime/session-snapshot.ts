@@ -3,7 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
@@ -68,7 +68,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    return buildWorkspaceSkillSnapshot(params.workspaceDir, {
+    return buildSkillSnapshot(params.workspaceDir, {
       config: params.config,
       agentId: params.agentId,
       skillFilter: params.skillFilter,
