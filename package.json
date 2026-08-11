@@ -122,6 +122,7 @@
     "!dist/plugin-sdk/memory-host-events.d.ts",
     "!dist/plugin-sdk/memory-host-markdown.d.ts",
     "!dist/plugin-sdk/memory-host-search.d.ts",
+    "!dist/plugin-sdk/memory-migration-runtime.d.ts",
     "!dist/plugin-sdk/message-tool-delivery-hints.d.ts",
     "!dist/plugin-sdk/migration.d.ts",
     "!dist/plugin-sdk/migration-runtime.d.ts",
@@ -845,6 +846,9 @@
     },
     "./plugin-sdk/migration": {
       "default": "./dist/plugin-sdk/migration.js"
+    },
+    "./plugin-sdk/memory-migration-runtime": {
+      "default": "./dist/plugin-sdk/memory-migration-runtime.js"
     },
     "./plugin-sdk/migration-runtime": {
       "default": "./dist/plugin-sdk/migration-runtime.js"

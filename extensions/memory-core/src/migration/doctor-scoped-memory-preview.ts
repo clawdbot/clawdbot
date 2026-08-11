@@ -3,7 +3,6 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isValidAgentId } from "openclaw/plugin-sdk/routing";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 type PreviewKind = "curated" | "memory" | "transcript" | "quarantine";
@@ -96,33 +95,10 @@ async function buildPreview(params: {
   config: OpenClawConfig;
   stateDir: string;
 }): Promise<string[] | null> {
-  const { listAgentIds, readAgentRosterProperty, resolveAgentWorkspaceDir } =
-    await import("openclaw/plugin-sdk/memory-host-core");
-  const roster = readAgentRosterProperty(params.config);
-  const rawAgentIds =
-    roster?.kind === "entries" && roster.value && typeof roster.value === "object"
-      ? Object.keys(roster.value)
-      : roster?.kind === "list" && Array.isArray(roster.value)
-        ? roster.value.flatMap((entry) => {
-            const id =
-              entry && typeof entry === "object" ? (entry as { id?: unknown }).id : undefined;
-            return typeof id === "string" ? [id] : [];
-          })
-        : [];
-  if (rawAgentIds.some((agentId) => !isValidAgentId(agentId))) {
-    return previewLines({
-      items: [],
-      dmScope: 0,
-      backend: 1,
-      filesystem: 0,
-      sandbox: 0,
-      invalidAgent: 1,
-    });
-  }
-  let agentIds: readonly string[];
-  try {
-    agentIds = listAgentIds(params.config);
-  } catch {
+  const { resolveMemoryMigrationAgentWorkspaces } =
+    await import("openclaw/plugin-sdk/memory-migration-runtime");
+  const agentWorkspaces = resolveMemoryMigrationAgentWorkspaces(params.config);
+  if (agentWorkspaces.kind === "invalid-agent") {
     return previewLines({
       items: [],
       dmScope: 0,
@@ -135,33 +111,31 @@ async function buildPreview(params: {
   const items: PreviewItem[] = [];
   let filesystem = 0;
   let sandbox = 0;
-  for (const agentId of agentIds.toSorted()) {
-    const workspace = resolveAgentWorkspaceDir(params.config, agentId);
+  for (const agent of agentWorkspaces.agents.toSorted((left, right) =>
+    left.agentId.localeCompare(right.agentId),
+  )) {
     const curated = await scanRegularFiles({
-      directory: workspace,
-      agentId,
+      directory: agent.workspaceDir,
+      agentId: agent.agentId,
       kind: "curated",
       extension: ".md",
     });
     const memory = await scanRegularFiles({
-      directory: path.join(workspace, "memory"),
-      agentId,
+      directory: path.join(agent.workspaceDir, "memory"),
+      agentId: agent.agentId,
       kind: "memory",
     });
     // Transcripts are direct JSONL files. sessions.json is metadata, never memory content.
     const transcripts = await scanRegularFiles({
-      directory: path.join(params.stateDir, "agents", agentId, "sessions"),
-      agentId,
+      directory: path.join(params.stateDir, "agents", agent.agentId, "sessions"),
+      agentId: agent.agentId,
       kind: "transcript",
       extension: ".jsonl",
     });
     items.push(...curated.items, ...memory.items, ...transcripts.items);
     filesystem +=
       curated.filesystemBlockers + memory.filesystemBlockers + transcripts.filesystemBlockers;
-    const entry =
-      params.config.agents?.entries?.[agentId] ??
-      params.config.agents?.list?.find((candidate) => candidate?.id === agentId);
-    if (entry?.sandbox?.mode === "all") {
+    if (agent.sandboxed) {
       sandbox += 1;
     }
   }
