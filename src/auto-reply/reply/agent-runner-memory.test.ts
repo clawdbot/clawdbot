@@ -1747,6 +1747,7 @@ describe("runMemoryFlushIfNeeded", () => {
       forcePreflight: true,
       preflightRequired: true,
       preflightCompactionTrigger: "tokens",
+      preflightTokenPressure: true,
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
       agentHarnessId: "openclaw",
@@ -3268,6 +3269,9 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(12);
     expect(compactCall.sessionFile).toBe("main");
+    // Byte-only pressure must not mark token pressure (openclaw#121617 dual-trigger).
+    expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
+    expect(compactCall.preflightTokenPressure).toBe(false);
   });
 
   it("byte-guards a Codex runtime session through SQLite semantic compaction", async () => {

@@ -4499,6 +4499,38 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       forcePreflight: true,
       preflightRequired: true,
       preflightCompactionTrigger: "tokens",
+      preflightTokenPressure: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe(
+      "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)",
+    );
+  });
+
+  it("rewrites the verdict when token pressure rides the dual-trigger byte label", async () => {
+    // When both guards fire, the trigger label prefers transcript_bytes; token
+    // pressure must still reach the producer or the generic overflow path
+    // survives for dual-threshold sessions (review #122023).
+    sessionCompactImpl.mockImplementationOnce(async () => {
+      throw new Error("Already compacted");
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+      trigger: "budget",
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "transcript_bytes",
+      preflightTokenPressure: true,
     });
 
     expect(result.ok).toBe(false);

@@ -942,6 +942,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       forcePreflight: true,
       preflightRequired: true,
       preflightCompactionTrigger: compactionTrigger,
+      preflightTokenPressure: shouldCompactByTokens,
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,

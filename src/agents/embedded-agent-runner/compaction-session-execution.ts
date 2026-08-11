@@ -564,11 +564,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     });
     // A token-budget preflight that reports "already compacted" leaves the
     // over-budget session unresolved; surface a distinct failure so the gate
-    // rejects instead of skipping (openclaw#121617). The transcript-byte guard
-    // keeps the benign skip: its model context may still fit.
+    // rejects instead of skipping (openclaw#121617). Byte-only preflights keep
+    // the benign skip: their model context may still fit.
     if (
       params.preflightRequired === true &&
-      params.preflightCompactionTrigger === "tokens" &&
+      params.preflightTokenPressure === true &&
       classifyCompactionReason(reason) === "already_compacted"
     ) {
       return fail(

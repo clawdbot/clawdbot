@@ -119,6 +119,12 @@ export type CompactEmbeddedAgentSessionParams = {
   preflightRequired?: boolean;
   /** Diagnostic trigger that made preflight compaction mandatory. */
   preflightCompactionTrigger?: "tokens" | "transcript_bytes";
+  /**
+   * Whether the mandatory preflight measured token pressure. The trigger label
+   * prefers transcript_bytes when both guards fire, so token pressure needs its
+   * own fact (openclaw#121617).
+   */
+  preflightTokenPressure?: boolean;
   trigger?: "budget" | "overflow" | "manual";
   /**
    * Preflight callers can allow native/current-session harness compaction but
