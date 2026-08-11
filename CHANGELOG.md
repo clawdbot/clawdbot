@@ -68,7 +68,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Updater post-core handoff isolation:** clear inherited source-config, compatibility-host, and requested-channel context before spawning finalizer children, then apply only the current update's values. Fixes #94559. Thanks @rohitjavvadi.
 - **Telegram live locations:** expose initial, moving, and stopped live-location updates through the channel-neutral `message_received` hook without starting agent turns for edits.
 - **Updater plugin convergence:** keep pre-plugin doctor passes from installing configured plugins before the updater's plugin sweep, while preserving the final post-plugin migration pass and preventing ambient update-phase state from leaking into fresh doctor processes.
 - **Control UI browser tab identity:** keep selected tab styling, accessibility, focus, address, and page snapshot aligned across in-place navigation and tab reordering. Fixes #120745. Thanks @shakkernerd.
