@@ -1,5 +1,5 @@
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 export { summarizeSpawnError } from "./spawn-error.js";
 
 type SpawnPipelinePhase = "initialize" | "dispatch" | "register";

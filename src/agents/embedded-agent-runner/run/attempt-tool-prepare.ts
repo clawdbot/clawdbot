@@ -268,6 +268,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             origin: attempt.skillWorkshopOrigin,
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
             proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
+            collectionReconcile: attempt.skillWorkshopCollectionReconcile,
           },
           modelCompat: extractModelCompat(attempt.model),
           modelApi: attempt.model.api,

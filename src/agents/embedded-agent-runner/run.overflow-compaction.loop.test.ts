@@ -36,7 +36,7 @@ vi.mock("../harness/selection.js", () => ({
   runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
 
-vi.mock("../subagent-registry.js", () => ({
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 

@@ -18,11 +18,14 @@ import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
-import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
-import { resolveSubagentTargetPolicy } from "../subagent-target-policy.js";
+import {
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "../subagents/registry/subagent-registry.js";
+import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeToolModelOverride, readStringParam, ToolInputError } from "./common.js";
 import {
   callInProcessGatewayTool,

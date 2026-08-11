@@ -32,7 +32,7 @@ describe("session accessor boundary guard", () => {
     ).toBe(true);
     expect(
       findReadOnlySessionAccessorViolations(`
-        import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+        import { listSessionEntries, loadSessionEntry } from "../../src/config/sessions/session-accessor.js";
         listSessionEntries({ storePath });
         sessionUtils.loadSessionEntry(sessionKey);
       `),
@@ -44,7 +44,7 @@ describe("session accessor boundary guard", () => {
     ]);
     expect(
       findReadOnlySessionAccessorViolations(`
-        import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+        import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "../../src/config/sessions/session-accessor.js";
         listSessionEntriesReadOnly({ storePath });
         sessionUtils.loadSessionEntryReadOnly(sessionKey);
       `),
@@ -66,8 +66,8 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",
         "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/subagent-control.ts",
-        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/subagents/registry/subagent-control.ts",
+        "src/agents/subagents/registry/subagent-registry-helpers.ts",
         "src/auto-reply/reply/abort.ts",
         "src/auto-reply/reply/agent-runner-helpers.ts",
         "src/auto-reply/reply/agent-runner.ts",
@@ -167,13 +167,13 @@ describe("session accessor boundary guard", () => {
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
         "src/agents/live-model-switch.ts",
-        "src/agents/main-session-restart-recovery-checkpoint.ts",
-        "src/agents/main-session-restart-recovery-marking.ts",
-        "src/agents/main-session-restart-recovery-store.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-marking.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
         "src/agents/session-suspension.ts",
         "src/auto-reply/reply/abort.ts",
-        "src/agents/subagent-control.ts",
-        "src/agents/subagent-registry-helpers.ts",
+        "src/agents/subagents/registry/subagent-control.ts",
+        "src/agents/subagents/registry/subagent-registry-helpers.ts",
         "src/agents/tools/session-status-tool.ts",
         "src/auto-reply/reply/abort-cutoff.runtime.ts",
         "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
@@ -281,7 +281,7 @@ describe("session accessor boundary guard", () => {
         export function loadSessionStore() {}
         export function updateSessionStore() {}
         export function resolveSessionFilePath() {}
-        export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+        export { resolveSessionStoreEntry } from "../../src/config/sessions/store-entry.js";
       `),
     ).toEqual([]);
     expect(
@@ -400,7 +400,7 @@ describe("session accessor boundary guard", () => {
   it("allows migrated accessor reads", () => {
     expect(
       findSessionAccessorBoundaryViolations(`
-        import { listSessionEntries } from "../config/sessions/session-accessor.js";
+        import { listSessionEntries } from "../../src/config/sessions/session-accessor.js";
         listSessionEntries({ storePath });
       `),
     ).toEqual([]);
@@ -486,7 +486,7 @@ describe("session accessor boundary guard", () => {
   it("allows migrated accessor writes", () => {
     expect(
       findSessionAccessorWriteBoundaryViolations(`
-        import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+        import { updateSessionEntry } from "../../src/config/sessions/session-accessor.js";
         updateSessionEntry({ storePath, sessionKey }, () => undefined);
       `),
     ).toEqual([]);
@@ -495,8 +495,8 @@ describe("session accessor boundary guard", () => {
   it("flags legacy transcript writer imports", () => {
     expect(
       findTranscriptWriterBoundaryViolations(`
-        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
-        import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
+        import { appendSessionTranscriptMessage } from "../../src/config/sessions/transcript-append.test-support.js";
+        import { emitSessionTranscriptUpdate as emitUpdate } from "../../src/sessions/transcript-events.js";
       `),
     ).toEqual([
       { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
@@ -521,7 +521,7 @@ describe("session accessor boundary guard", () => {
   it("allows migrated transcript writer helpers", () => {
     expect(
       findTranscriptWriterBoundaryViolations(`
-        import { appendTranscriptMessage, publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
+        import { appendTranscriptMessage, publishTranscriptUpdate } from "../../src/config/sessions/session-accessor.js";
         appendTranscriptMessage(scope, { message });
         publishTranscriptUpdate(scope, { messageId });
       `),
@@ -565,8 +565,8 @@ describe("session accessor boundary guard", () => {
   it("flags gateway manual compact trim file mutations", () => {
     expect(
       findSessionCompactManualTrimBoundaryViolations(`
-        import { archiveFileOnDisk } from "../session-utils.js";
-        import { readRecentSessionTranscriptLines } from "../session-transcript-readers.js";
+        import { archiveFileOnDisk } from "../../src/gateway/session-utils.js";
+        import { readRecentSessionTranscriptLines } from "../../src/gateway/session-transcript-readers.js";
         const tail = readRecentSessionTranscriptLines(scope);
         const archived = archiveFileOnDisk(filePath, "bak");
       `),
@@ -589,7 +589,7 @@ describe("session accessor boundary guard", () => {
     expect(
       findSessionLifecycleCleanupBoundaryViolations(`
         import { archiveRemovedSessionTranscripts } from "../config/sessions/store.js";
-        import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
+        import { cleanupArchivedSessionTranscripts } from "../../src/gateway/session-utils.fs.js";
         archiveRemovedSessionTranscripts({ removedSessionFiles, referencedSessionIds, storePath, reason: "deleted" });
         cleanupArchivedSessionTranscripts({ directories, rules });
       `),

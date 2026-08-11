@@ -193,8 +193,9 @@ describe("runExecProcess cursor tracking", () => {
 describe("sandbox exec preparation failures", () => {
   it("settles the registered session once when buildExecSpec rejects", async () => {
     const registry = await import("./bash-process-registry.js");
+    const sessionSlugs = await import("./session-slug.js");
     const sessionId = "sandbox-preparation-failure";
-    const sessionSlug = vi.spyOn(registry, "createSessionSlug").mockReturnValue(sessionId);
+    const sessionSlug = vi.spyOn(sessionSlugs, "createSessionSlug").mockReturnValue(sessionId);
     const preparation =
       createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});

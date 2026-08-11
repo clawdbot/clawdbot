@@ -10,7 +10,10 @@ import {
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
-import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
+import {
+  runExclusiveSystemAgentSetupActivation,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
@@ -51,7 +54,7 @@ async function cancelWizardSessions(
 ) {
   for (const session of sessions.values()) {
     session.cancel();
-    await session.whenSettled();
+    await whenAdmittedWizardSessionSettled(session);
   }
 }
 
@@ -201,7 +204,7 @@ describe("wizard setup ownership", () => {
       "admitted classic setup session",
     );
     session.cancel();
-    await session.whenSettled();
+    await whenAdmittedWizardSessionSettled(session);
   });
 
   it("makes structured setup retry while a classic runner owns admission, then releases", async () => {
@@ -241,7 +244,7 @@ describe("wizard setup ownership", () => {
       [...tracker.wizardSessions.values()][0],
       "active classic setup session",
     );
-    await session.whenSettled();
+    await whenAdmittedWizardSessionSettled(session);
     const structuredTask = vi.fn(async () => "ok");
     await expect(runExclusiveSystemAgentSetupActivation(structuredTask)).resolves.toBe("ok");
     expect(structuredTask).toHaveBeenCalledOnce();

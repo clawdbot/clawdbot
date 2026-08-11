@@ -2,28 +2,28 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./subagent-registry.mocks.shared.js";
+import "./subagents/registry/subagent-registry.mocks.shared.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagents/registry/subagent-lifecycle-events.js";
+import { persistSubagentSessionTiming } from "./subagents/registry/subagent-registry-helpers.js";
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+} from "./subagents/registry/subagent-registry.persistence.test-support.js";
+import { saveSubagentRegistryToSqlite } from "./subagents/registry/subagent-registry.store.sqlite.js";
 import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+} from "./subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),

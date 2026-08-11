@@ -561,7 +561,8 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
       onBeforeYield:
         requesterSessionKey && requesterTurnRunId
           ? async () => {
-              const { markRequesterTurnYielded } = await import("./subagent-registry.js");
+              const { markRequesterTurnYielded } =
+                await import("./subagents/registry/subagent-registry.js");
               markRequesterTurnYielded({ requesterSessionKey, requesterTurnRunId });
             }
           : undefined,

@@ -99,15 +99,15 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 // upstream's, which pushed that file past the 1000-line lint budget. Splitting
 // keeps every assertion rather than suppressing the rule.
 describe("subagent registry archive behavior (continuation work)", () => {
-  let mod: typeof import("./subagent-registry.test-helpers.js");
-  let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
+  let mod: typeof import("./subagents/registry/subagent-registry.test-helpers.js");
+  let createCanonicalSubagentRunFixture: typeof import("./subagents/registry/subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
   let createSubagentRunRecord: typeof import("./subagent-test-fixtures.test-helpers.js").createSubagentRunRecord;
 
   beforeAll(async () => {
     ({ createCanonicalSubagentRunFixture } =
-      await import("./subagent-registry.persistence.test-support.js"));
+      await import("./subagents/registry/subagent-registry.persistence.test-support.js"));
     ({ createSubagentRunRecord } = await import("./subagent-test-fixtures.test-helpers.js"));
-    mod = await import("./subagent-registry.test-helpers.js");
+    mod = await import("./subagents/registry/subagent-registry.test-helpers.js");
   });
 
   const setRegistryTestDeps = (

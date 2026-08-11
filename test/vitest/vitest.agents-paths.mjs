@@ -14,8 +14,8 @@ const coreIsolatedFiles = [
   "src/agents/model-selection.plugin-runtime.test.ts",
   "src/agents/models-config.runtime-source-snapshot.test.ts",
   "src/agents/openai-transport-stream.streaming.test.ts",
-  "src/agents/subagent-registry.announce-loop-guard.test.ts",
-  "src/agents/subagent-registry-restart-recovery.test.ts",
+  "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
+  "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.test.ts`];
 const overflowCompactionFiles = [`${embeddedRoot}/run.overflow-compaction.test.ts`];
@@ -91,7 +91,7 @@ export const agentVitestProjectOwners = {
     root: agentsRoot,
     dir: agentsRoot,
     include: [`${agentsRoot}/*/**/*.test.ts`],
-    exclude: [`${embeddedRoot}/**`, `${agentsRoot}/tools/**`],
+    exclude: [...coreIsolatedFiles, `${embeddedRoot}/**`, `${agentsRoot}/tools/**`],
   },
   tools: {
     kind: "agentTools",

@@ -18,7 +18,7 @@ import {
 } from "./delegate-artifacts.js";
 import { deriveContinuationDelegateChildRunId } from "./subagent-continuation-ids.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "./subagent-continuation-ids.js";
-import { listAncestorSessionKeys } from "./subagent-registry-announce-read.js";
+import { listAncestorSessionKeys } from "./subagents/registry/subagent-registry-announce-read.js";
 
 export function formatDelegateArtifactTaskInstruction(
   delegate: Pick<PendingContinuationDelegate, "returnOptions">,

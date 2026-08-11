@@ -36,25 +36,35 @@ const recoveryOwnerReleaseMocks = vi.hoisted(() => ({
   schedulePendingTarget: vi.fn(),
 }));
 
-vi.mock("../../agents/main-session-recovery-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../agents/main-session-recovery-store.js")>();
-  return {
-    ...actual,
-    releaseMainSessionRecoveryOwner: async (
-      lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
-      options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
-    ) => {
-      await recoveryOwnerReleaseMocks.beforeRelease();
-      return await actual.releaseMainSessionRecoveryOwner(lease, options);
-    },
-  };
-});
+vi.mock(
+  "../../agents/main-session-recovery/main-session-recovery-store.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../agents/main-session-recovery/main-session-recovery-store.js")
+      >();
+    return {
+      ...actual,
+      releaseMainSessionRecoveryOwner: async (
+        lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
+        options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
+      ) => {
+        await recoveryOwnerReleaseMocks.beforeRelease();
+        return await actual.releaseMainSessionRecoveryOwner(lease, options);
+      },
+    };
+  },
+);
 
-vi.mock("../../agents/main-session-recovery-owner-release.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/main-session-recovery-owner-release.js")>()),
-  scheduleMainSessionRecoveryPendingTarget: recoveryOwnerReleaseMocks.schedulePendingTarget,
-}));
+vi.mock(
+  "../../agents/main-session-recovery/main-session-recovery-owner-release.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../agents/main-session-recovery/main-session-recovery-owner-release.js")
+    >()),
+    scheduleMainSessionRecoveryPendingTarget: recoveryOwnerReleaseMocks.schedulePendingTarget,
+  }),
+);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

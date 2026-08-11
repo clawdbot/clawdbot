@@ -1,6 +1,6 @@
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
-import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { createSubagentRunManager } from "./subagents/registry/subagent-registry-run-manager.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 export type RestartRecoveryResult =
   | { status: "ignored" }

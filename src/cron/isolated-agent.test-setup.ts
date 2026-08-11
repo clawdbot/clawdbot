@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
+import { runSubagentAnnounceFlow } from "../agents/subagents/announce/subagent-announce.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,

@@ -33,7 +33,7 @@ import {
 import { prepareDelegateArtifactPolicy } from "../delegate-artifact-policy.js";
 import { removeUnacceptedDelegateArtifactPolicy } from "../delegate-artifacts.js";
 import { optionalStringEnum } from "../schema/typebox.js";
-import { validateSubagentAttachments } from "../subagent-attachments.js";
+import { validateSubagentAttachments } from "../subagents/spawn/subagent-attachments.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,

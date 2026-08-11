@@ -200,15 +200,15 @@
   {
     "name": "countActiveDescendantRuns",
     "files": [
-      "src/agents/subagent-registry-read.ts",
-      "src/agents/subagent-registry.ts"
+      "src/agents/subagents/registry/subagent-registry-read.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
     "name": "countPendingDescendantRuns",
     "files": [
-      "src/agents/subagent-registry-announce-read.ts",
-      "src/agents/subagent-registry.ts"
+      "src/agents/subagents/registry/subagent-registry-announce-read.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -259,13 +259,6 @@
     "files": [
       "src/agents/sessions/session-manager-id.ts",
       "src/agents/tools/transcripts-tool-runtime.ts"
-    ]
-  },
-  {
-    "name": "createSessionSlug",
-    "files": [
-      "src/agents/bash-process-registry.ts",
-      "src/agents/session-slug.ts"
     ]
   },
   {
@@ -531,8 +524,8 @@
   {
     "name": "getLatestSubagentRunByChildSessionKey",
     "files": [
-      "src/agents/subagent-registry-read.ts",
-      "src/agents/subagent-registry.ts"
+      "src/agents/subagents/registry/subagent-registry-read.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -679,8 +672,8 @@
   {
     "name": "listDescendantRunsForRequester",
     "files": [
-      "src/agents/subagent-registry-read.ts",
-      "src/agents/subagent-registry.ts"
+      "src/agents/subagents/registry/subagent-registry-read.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -709,8 +702,8 @@
   {
     "name": "listSubagentRunsForController",
     "files": [
-      "src/agents/subagent-registry-read.ts",
-      "src/agents/subagent-registry.ts"
+      "src/agents/subagents/registry/subagent-registry-read.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -813,7 +806,7 @@
     "files": [
       "src/agents/auth-profiles/constants.ts",
       "src/agents/embedded-agent-runner/logger.ts",
-      "src/agents/main-session-restart-recovery-shared.ts",
+      "src/agents/main-session-recovery/main-session-restart-recovery-shared.ts",
       "src/system-agent/setup-inference-core.ts",
       "src/tasks/task-registry-state.ts"
     ]
@@ -1088,7 +1081,7 @@
   {
     "name": "readSessionEntry",
     "files": [
-      "src/agents/subagent-announce.runtime.ts",
+      "src/agents/subagents/announce/subagent-announce.runtime.ts",
       "src/cron/isolated-agent.turn-test-helpers.ts"
     ]
   },
@@ -1191,8 +1184,8 @@
   {
     "name": "replaceSubagentRunAfterSteer",
     "files": [
-      "src/agents/subagent-registry-runtime.ts",
-      "src/agents/subagent-registry.ts"
+      "src/agents/subagents/registry/subagent-registry-runtime.ts",
+      "src/agents/subagents/registry/subagent-registry.ts"
     ]
   },
   {
@@ -1530,14 +1523,6 @@
     "files": [
       "src/infra/crypto-digest.ts",
       "src/logging/redact-identifier.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "sleep",
-    "files": [
-      "src/tui/tui-pty-test-support.ts",
-      "src/utils/sleep.ts"
     ],
     "sdk": true
   },

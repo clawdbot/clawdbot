@@ -8,12 +8,12 @@ describe("session transcript reader boundary guard", () => {
   it("ratchets only the files migrated by the transcript reader slice", () => {
     expect(migratedSessionTranscriptReaderFiles).toEqual(
       new Set([
-        "src/agents/main-session-restart-recovery-store.ts",
-        "src/agents/subagent-announce-output.test.ts",
-        "src/agents/subagent-announce-output.ts",
-        "src/agents/subagent-announce.runtime.ts",
-        "src/agents/subagent-registry-restart-recovery.test.ts",
-        "src/agents/subagent-registry-restart-recovery.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
+        "src/agents/subagents/announce/subagent-announce-output.test.ts",
+        "src/agents/subagents/announce/subagent-announce-output.ts",
+        "src/agents/subagents/announce/subagent-announce.runtime.ts",
+        "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
+        "src/agents/subagents/registry/subagent-registry-restart-recovery.ts",
         "src/agents/tools/embedded-gateway-stub.runtime.ts",
         "src/agents/tools/embedded-gateway-stub.test.ts",
         "src/agents/tools/embedded-gateway-stub.ts",
@@ -60,19 +60,19 @@ describe("session transcript reader boundary guard", () => {
   it("flags legacy transcript reader imports", () => {
     expect(
       findSessionTranscriptReaderBoundaryViolations(`
-        import { readSessionMessagesAsync, loadSessionEntry } from "./session-utils.js";
-        import { readRecentSessionMessages as readRecent } from "./session-utils.fs.js";
+        import { readSessionMessagesAsync, loadSessionEntry } from "../../src/gateway/session-utils.js";
+        import { readRecentSessionMessages as readRecent } from "../../src/gateway/session-utils.fs.js";
       `),
     ).toEqual([
       {
         line: 2,
         reason:
-          'imports transcript reader "readSessionMessagesAsync" from legacy module "./session-utils.js"',
+          'imports transcript reader "readSessionMessagesAsync" from legacy module "../../src/gateway/session-utils.js"',
       },
       {
         line: 3,
         reason:
-          'imports transcript reader "readRecentSessionMessages" from legacy module "./session-utils.fs.js"',
+          'imports transcript reader "readRecentSessionMessages" from legacy module "../../src/gateway/session-utils.fs.js"',
       },
     ]);
   });
@@ -80,7 +80,7 @@ describe("session transcript reader boundary guard", () => {
   it("flags namespace legacy transcript reader references", () => {
     expect(
       findSessionTranscriptReaderBoundaryViolations(`
-        import * as sessionUtils from "./session-utils.js";
+        import * as sessionUtils from "../../src/gateway/session-utils.js";
         sessionUtils.readSessionMessagesAsync();
         sessionUtils["readRecentSessionMessages"]();
         const { readSessionMessages } = sessionUtils;
@@ -95,29 +95,31 @@ describe("session transcript reader boundary guard", () => {
   it("flags legacy transcript reader re-exports", () => {
     expect(
       findSessionTranscriptReaderBoundaryViolations(`
-        export { readSessionMessagesAsync } from "./session-utils.js";
-        export { readRecentSessionMessages as readRecent } from "./session-utils.fs.js";
-        export * as sessionUtils from "./session-utils.js";
-        export * from "./session-utils.fs.js";
+        export { readSessionMessagesAsync } from "../../src/gateway/session-utils.js";
+        export { readRecentSessionMessages as readRecent } from "../../src/gateway/session-utils.fs.js";
+        export * as sessionUtils from "../../src/gateway/session-utils.js";
+        export * from "../../src/gateway/session-utils.fs.js";
       `),
     ).toEqual([
       {
         line: 2,
         reason:
-          're-exports transcript reader "readSessionMessagesAsync" from legacy module "./session-utils.js"',
+          're-exports transcript reader "readSessionMessagesAsync" from legacy module "../../src/gateway/session-utils.js"',
       },
       {
         line: 3,
         reason:
-          're-exports transcript reader "readRecentSessionMessages" from legacy module "./session-utils.fs.js"',
+          're-exports transcript reader "readRecentSessionMessages" from legacy module "../../src/gateway/session-utils.fs.js"',
       },
       {
         line: 4,
-        reason: 're-exports transcript reader namespace from legacy module "./session-utils.js"',
+        reason:
+          're-exports transcript reader namespace from legacy module "../../src/gateway/session-utils.js"',
       },
       {
         line: 5,
-        reason: 're-exports transcript readers from legacy module "./session-utils.fs.js"',
+        reason:
+          're-exports transcript readers from legacy module "../../src/gateway/session-utils.fs.js"',
       },
     ]);
   });
@@ -125,8 +127,8 @@ describe("session transcript reader boundary guard", () => {
   it("allows migrated reader facade imports and non-reader session utilities", () => {
     expect(
       findSessionTranscriptReaderBoundaryViolations(`
-        import { readSessionMessagesAsync } from "./session-transcript-readers.js";
-        import { loadSessionEntry } from "./session-utils.js";
+        import { readSessionMessagesAsync } from "../../src/gateway/session-transcript-readers.js";
+        import { loadSessionEntry } from "../../src/gateway/session-utils.js";
         export { readSessionMessagesAsync };
         await readSessionMessagesAsync(scope, opts);
         loadSessionEntry("agent:main");
@@ -146,7 +148,7 @@ describe("session transcript reader boundary guard", () => {
   it("flags storage-specific reader aliases in migrated files", () => {
     expect(
       findSessionTranscriptReaderBoundaryViolations(`
-        import { readSessionMessagesAsync as readSessionMessagesFromFileAsync } from "./session-transcript-readers.js";
+        import { readSessionMessagesAsync as readSessionMessagesFromFileAsync } from "../../src/gateway/session-transcript-readers.js";
         await readSessionMessagesFromFileAsync(scope, opts);
       `),
     ).toEqual([

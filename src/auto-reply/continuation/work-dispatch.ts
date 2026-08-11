@@ -1,6 +1,6 @@
 /** Durable same-session continuation_work dispatch. */
 
-import type { SubagentRunLiveness } from "../../agents/subagent-run-liveness.js";
+import type { SubagentRunLiveness } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { emitContinuationWorkSpan } from "../../infra/continuation-tracer.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";

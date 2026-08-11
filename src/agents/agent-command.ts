@@ -59,7 +59,7 @@ import {
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
+import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { measureAgentStartup } from "./startup-timing.js";

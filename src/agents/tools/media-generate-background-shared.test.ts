@@ -47,7 +47,7 @@ const ACTIVE_TRACE_CONTEXT: DiagnosticTraceContext = {
 };
 const ACTIVE_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
-vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async () => ({
   ...(await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",

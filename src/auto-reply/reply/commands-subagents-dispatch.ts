@@ -1,5 +1,5 @@
 // Dispatches subagent command actions after parsing the subcommand target.
-import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 export {

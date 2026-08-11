@@ -16,7 +16,7 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
-import { createCronServiceState } from "./state.js";
+import { createCronServiceState, type CronServiceDeps } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
@@ -723,7 +723,9 @@ describe("cron service timer regressions", () => {
       const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const sendCronFailureAlert = vi.fn(async () => {});
+      const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+        async () => {},
+      );
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -775,23 +777,29 @@ describe("cron service timer regressions", () => {
       await timerPromise;
 
       const job = requireJob(state, "isolated-before-agent-reply-unhandled-82811");
+      const diagnostic =
+        "cron: isolated agent run stalled before execution start (last phase: runtime-plugins)";
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
-      expect(job.state.lastError).toContain("runtime-plugins");
+      expect(job.state.lastError).toBe(diagnostic);
+      expect(job.state.lastDiagnosticSummary).toBe(diagnostic);
+      expect(job.state.lastDiagnostics).toEqual({
+        summary: diagnostic,
+        entries: [
+          { source: "cron-setup", severity: "error", message: diagnostic, ts: scheduledAt },
+        ],
+      });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-      expect(sendCronFailureAlert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "telegram",
-          to: "12345",
-          payload: expect.objectContaining({
-            text:
-              'Automation "before agent reply unhandled regression" failed 1 times\n' +
-              "Check automation history for details.",
-          }),
-        }),
-      );
+      const alert = sendCronFailureAlert.mock.calls[0]?.[0];
+      expect(alert?.channel).toBe("telegram");
+      expect(alert?.to).toBe("12345");
+      expect(alert?.payload).toEqual({
+        text:
+          'Automation "before agent reply unhandled regression" failed 1 times\n' +
+          "Check automation history for details.",
+      });
+      expect(alert?.job.state.lastDiagnosticSummary).toBe(diagnostic);
     } finally {
       vi.useRealTimers();
     }

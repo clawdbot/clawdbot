@@ -26,6 +26,7 @@ import {
   OpenClawStateOwnershipMetadataError,
   STATE_SUPERVISION_KEY,
   type OpenClawExternalStateOwnership,
+  runWithOpenClawStateOwnershipCoordinator,
 } from "./openclaw-state-ownership.js";
 
 type OpenClawStateOwnershipOptions = Omit<OpenClawStateDatabaseOptions, "database" | "readOnly">;
@@ -96,38 +97,44 @@ function repairMalformedOwnershipClaim(
   databasePath: string,
   managerId: string,
 ): OpenClawExternalStateOwnership {
-  const database = openNodeSqliteDatabase(databasePath);
-  let walMaintenance: SqliteWalMaintenance | undefined;
-  try {
-    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSqliteIntegrity(database, databasePath);
-    assertOpenClawStateDatabaseForMaintenance(database, { pathname: databasePath });
-    walMaintenance = configureSqliteWalMaintenance(database, {
-      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      checkpointIntervalMs: 0,
-      checkpointMode: "TRUNCATE",
-      databaseLabel: "OpenClaw shared state ownership",
-      databasePath,
-    });
-    const ownership = runSqliteImmediateTransactionSync(
-      database,
-      () => {
+  return runWithOpenClawStateOwnershipCoordinator(
+    databasePath,
+    "malformed state ownership repair/checkpoint",
+    () => {
+      const database = openNodeSqliteDatabase(databasePath);
+      let walMaintenance: SqliteWalMaintenance | undefined;
+      try {
+        database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+        assertSqliteIntegrity(database, databasePath);
         assertOpenClawStateDatabaseForMaintenance(database, { pathname: databasePath });
-        return claimOwnershipRow(database, databasePath, managerId, true);
-      },
-      {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: databasePath,
-        operationLabel: "state.ownership.repair",
-      },
-    );
-    requireOwnershipCheckpoint(walMaintenance, databasePath);
-    return ownership;
-  } finally {
-    walMaintenance?.close({ checkpointMode: "PASSIVE" });
-    clearNodeSqliteKyselyCacheForDatabase(database);
-    database.close();
-  }
+        walMaintenance = configureSqliteWalMaintenance(database, {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          checkpointIntervalMs: 0,
+          checkpointMode: "TRUNCATE",
+          databaseLabel: "OpenClaw shared state ownership",
+          databasePath,
+        });
+        const ownership = runSqliteImmediateTransactionSync(
+          database,
+          () => {
+            assertOpenClawStateDatabaseForMaintenance(database, { pathname: databasePath });
+            return claimOwnershipRow(database, databasePath, managerId, true);
+          },
+          {
+            busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+            databaseLabel: databasePath,
+            operationLabel: "state.ownership.repair",
+          },
+        );
+        requireOwnershipCheckpoint(walMaintenance, databasePath);
+        return ownership;
+      } finally {
+        walMaintenance?.close({ checkpointMode: "PASSIVE" });
+        clearNodeSqliteKyselyCacheForDatabase(database);
+        database.close();
+      }
+    },
+  );
 }
 
 /** Claim durable shared-state write ownership for the active external supervisor. */
@@ -144,14 +151,20 @@ export function claimOpenClawStateOwnership(
   const normalizedManagerId = normalizeOpenClawStateManagerId(managerId);
   try {
     const database = openOpenClawStateDatabase(options);
-    const ownership = runOpenClawStateWriteTransaction(
-      ({ db, path: databasePath }) =>
-        claimOwnershipRow(db, databasePath, normalizedManagerId, false),
-      { ...options, database },
-      { operationLabel: "state.ownership.claim" },
+    return runWithOpenClawStateOwnershipCoordinator(
+      database.path,
+      "state ownership claim/checkpoint",
+      () => {
+        const ownership = runOpenClawStateWriteTransaction(
+          ({ db, path: databasePath }) =>
+            claimOwnershipRow(db, databasePath, normalizedManagerId, false),
+          { ...options, database },
+          { operationLabel: "state.ownership.claim" },
+        );
+        requireOwnershipCheckpoint(database.walMaintenance, database.path);
+        return ownership;
+      },
     );
-    requireOwnershipCheckpoint(database.walMaintenance, database.path);
-    return ownership;
   } catch (error) {
     if (!(error instanceof OpenClawStateOwnershipMetadataError)) {
       throw error;

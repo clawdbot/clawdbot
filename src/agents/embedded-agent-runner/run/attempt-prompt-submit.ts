@@ -11,7 +11,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
+import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {

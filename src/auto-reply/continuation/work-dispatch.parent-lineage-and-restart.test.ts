@@ -437,13 +437,13 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   }),
 }));
 
-import { subagentRuns } from "../../agents/subagent-registry-memory.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
-import { STALE_UNENDED_SUBAGENT_RUN_MS } from "../../agents/subagent-run-liveness.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { STALE_UNENDED_SUBAGENT_RUN_MS } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import {
   deleteSubagentSessionForCleanup,
   resetSubagentSessionCleanupForTests,
-} from "../../agents/subagent-session-cleanup.js";
+} from "../../agents/subagents/registry/subagent-session-cleanup.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest as runWithGatewayRootWorkAdmission } from "../../process/gateway-work-admission.test-helpers.js";
 import { getReplyFromConfig } from "../reply/get-reply.js";

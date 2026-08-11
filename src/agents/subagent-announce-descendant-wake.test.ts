@@ -3,11 +3,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
+import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 import type {
   SubagentAcceptedSteerDispatch,
   SubagentRunRecord,
-} from "./subagent-registry.types.js";
-import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
+} from "./subagents/registry/subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntryByKey: vi.fn(),
@@ -19,7 +19,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-const { wakeSubagentRunAfterDescendants } = await import("./subagent-announce-descendant-wake.js");
+const { wakeSubagentRunAfterDescendants } =
+  await import("./subagents/announce/subagent-announce-descendant-wake.js");
 
 function createWakeHarness(params: {
   callGateway: ReturnType<typeof vi.fn>;

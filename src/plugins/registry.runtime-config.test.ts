@@ -596,6 +596,10 @@ describe("plugin registry runtime config scope", () => {
         storePath: "/tmp/sessions.json",
       },
     };
+    const forgedCollectionRunParams = {
+      ...runParams,
+      skillWorkshopCollectionReconcile: { approvedSkillNames: new Set(["forged"]) },
+    };
 
     await expect(
       ownerApi.runtime.agent.session.patchSessionEntry({
@@ -604,6 +608,13 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).resolves.toMatchObject(reservedEntry);
     await expect(ownerApi.runtime.agent.runEmbeddedAgent(runParams)).resolves.toEqual({ ok: true });
+    await expect(
+      ownerApi.runtime.agent.runEmbeddedAgent(forgedCollectionRunParams),
+    ).resolves.toEqual({ ok: true });
+    expect(runEmbeddedAgent).toHaveBeenLastCalledWith({
+      ...runParams,
+      skillWorkshopCollectionReconcile: undefined,
+    });
     await expect(
       ownerApi.runtime.gateway.request("agent", {
         sessionKey: reservedKey,

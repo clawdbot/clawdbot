@@ -88,7 +88,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 
 type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
 

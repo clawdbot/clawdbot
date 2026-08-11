@@ -1,7 +1,7 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagents/announce/subagent-announce.test-support.js";
 import type { SpawnSubagentResult } from "./subagents/spawn/subagent-spawn.js";
 
 // Verify subagent-announce drains the child session's continue_delegate
@@ -299,7 +299,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ) => updateSessionEntryMock(scope, update, options),
 }));
 
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 
 const splitLintUse = [expectDefined, validTraceparent];
 void splitLintUse;

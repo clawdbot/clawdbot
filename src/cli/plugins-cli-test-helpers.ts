@@ -296,10 +296,14 @@ vi.mock("../config/config.js", () => ({
     >(replaceConfigFile, params)) as (typeof import("../config/config.js"))["replaceConfigFile"],
 }));
 
-vi.mock("../config/paths.js", () => ({
-  resolveIsNixMode: () => false,
-  resolveStateDir: () => resolveStateDir(),
-}));
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveIsNixMode: () => false,
+    resolveStateDir: () => resolveStateDir(),
+  };
+});
 
 vi.mock("../plugins/marketplace.js", () => ({
   installPluginFromMarketplace: ((...args: Parameters<InstallPluginFromMarketplaceFn>) =>

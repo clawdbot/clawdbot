@@ -8,7 +8,7 @@ import { deriveContinuationDelegateChildSessionKey } from "../../agents/subagent
 import {
   getSubagentRunByChildSessionKey,
   hasLiveContinuationDelegateChildRun,
-} from "../../agents/subagent-registry-read.js";
+} from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   spawnSubagentDirect,
   type SpawnSubagentContext,

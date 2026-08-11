@@ -25,12 +25,12 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { subagentRuns } from "../../subagent-registry-memory.js";
-import { markSubagentRunTerminated } from "../../subagent-registry.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
-} from "../../subagent-registry.test-helpers.js";
+} from "../registry/subagent-registry.test-helpers.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";

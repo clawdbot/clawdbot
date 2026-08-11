@@ -529,7 +529,7 @@ describe("sessions_yield completion ownership", () => {
     ["the controller when the run owner is blank", "   ", controllerSessionKey],
     ["the controller when the run owner is absent", undefined, controllerSessionKey],
   ] as const)("records yield intent against %s", async (_, runSessionKey, expectedSessionKey) => {
-    const registry = await import("./subagent-registry.js");
+    const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
       .mockReturnValue(1);

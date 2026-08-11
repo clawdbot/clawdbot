@@ -10,8 +10,8 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
-} from "../agents/subagent-registry-read.js";
-import { shouldKeepSubagentRunChildLink } from "../agents/subagent-run-liveness.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";

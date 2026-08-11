@@ -60,11 +60,6 @@
     "wrapper": "src/plugin-sdk/extension-shared.ts"
   },
   {
-    "name": "createSessionSlug",
-    "wrapped": "src/agents/session-slug.ts",
-    "wrapper": "src/agents/bash-process-registry.ts"
-  },
-  {
     "name": "DEFAULT_PROGRESS_DRAFT_LABELS",
     "wrapped": "src/shared/progress-labels.ts",
     "wrapper": "src/channels/streaming.ts"

@@ -77,7 +77,7 @@ import {
   createReadTool,
   createWriteTool,
 } from "./sessions/index.js";
-import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";

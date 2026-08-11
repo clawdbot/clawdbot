@@ -1,8 +1,7 @@
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { DelegateArtifactRecipientProjectionV1 } from "./delegate-artifacts.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
-import type { SubagentRunOutcome } from "./subagent-registry.types.js";
-
+import type { SubagentRunOutcome } from "./subagents/announce/subagent-announce-output.js";
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
 function buildAnnounceReplyInstruction(params: {

@@ -27,7 +27,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
-import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
+import { buildActiveSubagentSystemPromptAddition } from "../../subagents/registry/subagent-active-context.js";
 import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";

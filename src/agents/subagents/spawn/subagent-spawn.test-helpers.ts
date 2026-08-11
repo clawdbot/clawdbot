@@ -386,15 +386,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
     ...createDefaultSessionHelperMocks(),
   }));
 
-  vi.doMock("../../subagent-depth.js", () => ({
+  vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
   const countActiveRunsForSessionImpl = params.countActiveRunsForSession ?? (() => 0);
   const registerSubagentRunImpl =
     params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined);
-
-  vi.doMock("../../subagent-registry.js", () => ({
+  vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: countActiveRunsForSessionImpl,
     getSubagentRunByRunId:

@@ -89,7 +89,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { drainSystemEventEntries } from "../infra/system-events.js";
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
 
 type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];

@@ -19,7 +19,7 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
-import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
+import { formatChannelAccountLabel, requireValidChannelConfig } from "./shared.js";
 
 export type ChannelsListOptions = {
   json?: boolean;
@@ -148,7 +148,7 @@ export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
+  const cfg = await requireValidChannelConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
   }

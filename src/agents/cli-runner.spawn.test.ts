@@ -4641,6 +4641,45 @@ describe("runCliAgent spawn path", () => {
       expectedPermissionMode: "default",
     },
     {
+      name: "denies tools when session exec security overrides broader config",
+      requestId: "req-session-security-deny",
+      toolUseId: "tool-session-security-deny-1",
+      input: { command: "ls" },
+      expected: { behavior: "deny", messageIncludes: "security=deny" },
+      context: {
+        sessionKey: "agent:main:main",
+        sessionEntry: { execSecurity: "deny" } as PreparedCliRunContext["params"]["sessionEntry"],
+        config: {
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            entries: {
+              main: { default: true, tools: { exec: { security: "full", ask: "off" } } },
+            },
+          },
+        },
+      },
+      expectedPermissionMode: "default",
+    },
+    {
+      name: "denies tools when a partial agent exec block inherits restrictive global security",
+      requestId: "req-partial-agent-global-deny",
+      toolUseId: "tool-partial-agent-global-deny-1",
+      input: { command: "ls" },
+      expected: { behavior: "deny", messageIncludes: "security=deny" },
+      context: {
+        sessionKey: "agent:main:main",
+        config: {
+          tools: { exec: { security: "deny", ask: "off" } },
+          agents: {
+            entries: {
+              main: { default: true, tools: { exec: { ask: "off" } } },
+            },
+          },
+        },
+      },
+      expectedPermissionMode: "default",
+    },
+    {
       name: "denies tools when session exec ask is restrictive",
       requestId: "req-session-ask-deny",
       toolUseId: "tool-session-ask-deny-1",

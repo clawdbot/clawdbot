@@ -111,7 +111,7 @@ vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => requesterDepthMock(),
 }));
 
-const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+const { runSubagentAnnounceFlow } = await import("./subagents/announce/subagent-announce.js");
 
 async function readQueuedSystemEventDeliveries(stateDir: string): Promise<QueuedSessionDelivery[]> {
   return loadPendingSessionDeliveries(stateDir);

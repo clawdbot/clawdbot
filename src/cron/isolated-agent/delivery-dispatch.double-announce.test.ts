@@ -82,7 +82,7 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
 
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 
@@ -153,7 +153,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
 
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 // Import after mocks
-import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
+import { countActiveDescendantRuns } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import { callGateway } from "../../gateway/call.runtime.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";

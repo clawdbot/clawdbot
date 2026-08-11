@@ -1,9 +1,9 @@
 import type { callGateway } from "../gateway/call.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import { deleteSubagentSessionForCleanup } from "./subagents/registry/subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
-} from "./subagent-session-reconciliation.js";
+} from "./subagents/registry/subagent-session-reconciliation.js";
 
 type FrozenSessionIdentity = {
   sessionId: string;

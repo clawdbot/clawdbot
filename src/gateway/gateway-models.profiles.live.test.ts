@@ -3176,7 +3176,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   thinkingLevel: string;
 }): Promise<void> {
   const { listSubagentRunsForRequester } =
-    await import("../agents/subagent-registry.test-helpers.js");
+    await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );

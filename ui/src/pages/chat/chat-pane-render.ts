@@ -139,9 +139,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
     const approvalSnapshot = overlays?.snapshot;
-    const inlineApproval = this.active
-      ? findInlineApproval(approvalSnapshot?.approvalQueue ?? [], state.sessionKey)
-      : null;
+    const inlineApproval = findInlineApproval(
+      approvalSnapshot?.approvalQueue ?? [],
+      state.sessionKey,
+    );
     // Tool rows consult the global title store while rendering; point its
     // fetcher at this pane's connection. Requests capture session + agent at
     // schedule time, so later renders of other panes cannot re-route them.
@@ -212,7 +213,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       ? this.paneWidth
       : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
     const sessionWorkspace = createSessionWorkspaceProps(state, {
-      draftScope: this.paneId,
+      draftScope: this.presentationId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
     const railSideDocked =
@@ -262,9 +263,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const props: ChatProps = {
       transcript: this.transcript,
       backgroundTaskTranscript: this.backgroundTaskTranscript,
-      paneId: this.paneId,
+      paneId: this.presentationId,
       sessionKey: state.sessionKey,
-      announceTranscript: this.active,
+      announceTranscript: this.active && this.presented,
       onSessionKeyChange: (next) => {
         this.onPaneSessionChange?.(this.paneId, next);
       },

@@ -1,6 +1,6 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagents/announce/subagent-announce.test-support.js";
 
 // Pins the silent / silent-wake / wakeOnReturn announce routing
 // at src/agents/subagent-announce.ts:604-634. RFC §2.3 calls this the
@@ -174,7 +174,7 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (options: unknown) => requestHeartbeatNowMock(options),
 }));
 
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { runSubagentAnnounceFlow } from "./subagents/announce/subagent-announce.js";
 
 const childSessionKey = "agent:main:subagent:silent-test";
 const requesterSessionKey = "agent:main:main";

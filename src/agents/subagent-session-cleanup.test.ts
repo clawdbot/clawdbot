@@ -3,7 +3,7 @@ import type { callGateway as defaultCallGateway, CallGatewayOptions } from "../g
 import {
   deleteSubagentSessionForCleanup,
   resetSubagentSessionCleanupForTests,
-} from "./subagent-session-cleanup.js";
+} from "./subagents/registry/subagent-session-cleanup.js";
 
 const hasLiveOrRecentlyDispatchedContinuationWorkMock = vi.hoisted(() => vi.fn(() => false));
 const hasRecoverablePendingDelegateMock = vi.hoisted(() => vi.fn(() => false));

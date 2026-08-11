@@ -1319,7 +1319,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("keeps the original failed-tool warning if finalization fails (#118274)", async () => {
+  it("keeps the original failed-tool warning if finalization completes empty (#118274)", async () => {
     const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
@@ -1344,8 +1344,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           assistantTexts: [],
-          promptError: new Error("finalizer provider failure"),
-          promptErrorSource: "prompt",
+          lastAssistant: makeLastAssistant(),
+          currentAttemptAssistant: makeLastAssistant(),
+          currentAttemptCompletedAssistant: makeLastAssistant(),
         }),
       );
     mockedBuildEmbeddedRunPayloads.mockReturnValue([warning]);
@@ -1354,7 +1355,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]).toEqual(warning);
-    expectWarnMessageWith("settled-turn finalization failed closed");
+    expectWarnMessageWith("settled-turn finalization completed without a visible answer");
   });
 
   it("preserves the incomplete-turn failure when the selected harness cannot finalize safely", async () => {
@@ -1411,6 +1412,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Writing note.txt…"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "chat:123",
+            text: "Writing note.txt…",
+            sourceReplyFinal: false,
+          },
+        ],
         lastAssistant: emptyStopAssistant,
         currentAttemptAssistant: emptyStopAssistant,
       });
@@ -1483,7 +1495,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("surfaces failure without cascading when the settled-tool continuation is also empty", async () => {
+  it("records silent success when the settled-tool finalization completes empty", async () => {
     const emptyStopAssistant = makeLastAssistant();
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
@@ -1512,12 +1524,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ isError: true });
-    expect(result.payloads?.[0]?.text).toContain(
-      "some tool actions may have already been executed",
-    );
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.terminalReplyKind).toBeUndefined();
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.finalAssistantRawText).toBeUndefined();
+    expect(result.meta.stopReason).toBe("stop");
     expectNoWarnMessageWith("empty response detected");
-    expectWarnMessageWith("settled-turn finalization failed closed");
+    expectWarnMessageWith("settled-turn finalization completed without a visible answer");
   });
 
   it.each([
@@ -2583,6 +2597,44 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
       expect(instruction).toContain(
         "If any tool failed, state that failure plainly and do not claim it succeeded.",
+      );
+    },
+  );
+
+  it.each([
+    { label: "progress", sourceReplyFinal: false, expectedFinalization: true },
+    { label: "final reply", sourceReplyFinal: true, expectedFinalization: false },
+    { label: "legacy unmarked send", sourceReplyFinal: undefined, expectedFinalization: false },
+  ])(
+    "handles $label delivery evidence before settled finalization",
+    ({ sourceReplyFinal, expectedFinalization }) => {
+      const emptyStopAssistant = makeLastAssistant();
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(
+          {
+            assistantTexts: [],
+            toolMetas: [{ toolName: "write" }],
+            itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+            didSendViaMessagingTool: true,
+            messagingToolSentTexts: ["Writing note.txt…"],
+            messagingToolSentTargets: [
+              {
+                tool: "message",
+                provider: "telegram",
+                to: "chat:123",
+                text: "Writing note.txt…",
+                sourceReplyFinal,
+              },
+            ],
+            lastAssistant: emptyStopAssistant,
+            currentAttemptAssistant: emptyStopAssistant,
+          },
+          { allowEmptyStopContinuation: true },
+        ),
+      );
+
+      expect(instruction).toBe(
+        expectedFinalization ? SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : null,
       );
     },
   );

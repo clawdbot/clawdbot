@@ -1,6 +1,10 @@
 // Control UI E2E tests cover the redesigned chat composer.
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -605,41 +609,48 @@ suite.define(() => {
     });
   });
 
-  it("refreshes agent-scoped models when the pane switches sessions", async () => {
+  it("loads agent-scoped startup models when the route switches sessions", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const workModel = {
+        id: "work-model",
+        name: "Work Model",
+        provider: "openai",
+        available: true,
+      };
+      const otherModel = {
+        id: "other-model",
+        name: "Other Model",
+        provider: "anthropic",
+        available: true,
+      };
+      const startupResponse = (sessionId: string, model: typeof workModel) => ({
+        agentsList: {
+          agents: [
+            { id: "work", name: "Work" },
+            { id: "other", name: "Other" },
+          ],
+          defaultId: "work",
+          mainKey: "main",
+          scope: "agent",
+        },
+        messages: [],
+        metadata: { commands: [], models: [model] },
+        sessionId,
+        thinkingLevel: null,
+      });
       const gateway = await installMockGateway(page, {
         defaultAgentId: "work",
         sessionKey: "agent:work:main",
         methodResponses: {
-          "chat.metadata": {
+          "chat.startup": {
             cases: [
               {
-                match: { agentId: "work" },
-                response: {
-                  commands: [],
-                  models: [
-                    {
-                      id: "work-model",
-                      name: "Work Model",
-                      provider: "openai",
-                      available: true,
-                    },
-                  ],
-                },
+                match: { sessionKey: "agent:work:main" },
+                response: startupResponse("work-session", workModel),
               },
               {
-                match: { agentId: "other" },
-                response: {
-                  commands: [],
-                  models: [
-                    {
-                      id: "other-model",
-                      name: "Other Model",
-                      provider: "anthropic",
-                      available: true,
-                    },
-                  ],
-                },
+                match: { sessionKey: "agent:other:main" },
+                response: startupResponse("other-session", otherModel),
               },
             ],
           },
@@ -672,177 +683,41 @@ suite.define(() => {
             ts: Date.now(),
           },
         },
-        models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+        models: [workModel],
       });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
       await gateway.waitForRequest("chat.startup");
-      // The initial work-agent catalog is complete in chat.startup, so only the
-      // later switch to the other agent should require chat.metadata.
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
 
-      const composer = page.locator(".agent-chat__input");
+      const activeComposer = () =>
+        page.locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input');
       await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
-        .toBe(1);
-
-      await page.locator("openclaw-chat-pane").evaluate((pane) => {
-        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:other:main";
-      });
-
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.filter(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "other",
-          ).length;
-        })
-        .toBe(1);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="anthropic/other-model"]').count())
-        .toBe(1);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
-        .toBe(0);
-      const metadataRequests = await gateway.getRequests("chat.metadata");
-      expect(metadataRequests).toHaveLength(1);
-      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
-        "other",
-      );
-    });
-  });
-
-  it("keeps startup models when an explicit metadata refresh fails", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.metadata"],
-        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__input");
-      await expect
-        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
-        .toContain("GPT-5.5");
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-
-      // Startup metadata now owns the same-agent cache. A config change invalidates
-      // that cache, so the next pane refresh still exercises the failure fallback.
-      await gateway.emitGatewayEvent("config.changed", {});
-      await page.locator("openclaw-chat-pane").evaluate((pane) => {
-        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:main:refreshed";
-      });
-      await gateway.waitForRequest("chat.metadata");
-      await gateway.rejectDeferred("chat.metadata", {
-        code: "UNAVAILABLE",
-        message: "metadata unavailable",
-      });
-      await expect
-        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
-        .toContain("GPT-5.5");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
-    });
-  });
-
-  it("does not substitute default-agent models when scoped metadata fails", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.startup"],
-        methodResponses: {
-          "chat.metadata": {
-            cases: [
-              {
-                match: { agentId: "work" },
-                response: {
-                  __mockError: { code: "UNAVAILABLE", message: "metadata unavailable" },
-                },
-              },
-            ],
-          },
-        },
-        models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-      });
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      await gateway.waitForRequest("chat.startup");
-      await page.locator("openclaw-chat-pane").evaluate((pane) => {
-        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:work:main";
-      });
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
-          );
-        })
-        .toBe(true);
-      await page.waitForFunction(() => {
-        const pane = document.querySelector("openclaw-chat-pane") as
-          | (HTMLElement & {
-              state?: {
-                sessionKey?: string;
-                chatMetadataRequestVersion?: number;
-                chatModelCatalog?: unknown[];
-                chatModelsLoading?: boolean;
-              };
-            })
-          | null;
-        return (
-          pane?.state?.sessionKey === "agent:work:main" &&
-          (pane.state.chatMetadataRequestVersion ?? 0) >= 2 &&
-          pane.state.chatModelsLoading === false &&
-          pane.state.chatModelCatalog?.length === 0
-        );
-      });
-      await gateway.resolveDeferred("chat.startup", {
-        agentsList: {
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "work", name: "Work" },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        messages: [],
-        metadata: {
-          commands: [],
-          models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-        },
-        sessionId: "control-ui-e2e-session",
-        thinkingLevel: null,
-      });
-      await page.waitForFunction(() => {
-        const pane = document.querySelector("openclaw-chat-pane") as
-          | (HTMLElement & {
-              state?: { agentsList?: { defaultId?: string; agents?: Array<{ id?: string }> } };
-            })
-          | null;
-        return (
-          pane?.state?.agentsList?.defaultId === "main" &&
-          pane.state.agentsList.agents?.some((agent) => agent.id === "main") === true
-        );
-      });
-      const composer = page.locator(".agent-chat__input");
-      await expect
-        .poll(async () =>
-          (await composer.locator("[data-chat-model-option]").allTextContents()).join(" "),
+        .poll(() =>
+          activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
-        .not.toContain("GPT Default");
-      const metadataRequests = await gateway.getRequests("chat.metadata");
+        .toBe(1);
+
+      await navigateToControlUiSession(page, "agent:other:main");
+      const startupRequests = await gateway.getRequests("chat.startup");
       expect(
-        metadataRequests.filter(
-          (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+        startupRequests.filter(
+          (request) =>
+            (request.params as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:other:main",
         ),
       ).toHaveLength(1);
-      expect(
-        metadataRequests.every(
-          (request) =>
-            typeof (request.params as { agentId?: string } | undefined)?.agentId === "string",
-        ),
-      ).toBe(true);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await expect
+        .poll(() =>
+          activeComposer().locator('[data-chat-model-option="anthropic/other-model"]').count(),
+        )
+        .toBe(1);
+      await expect
+        .poll(() =>
+          activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
+        )
+        .toBe(0);
     });
   });
 

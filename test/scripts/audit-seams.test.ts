@@ -9,11 +9,11 @@ import {
 describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {
     const source = `
-      import { runCliAgent } from "../../agents/cli-runner.js";
-      import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
-      import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
-      import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-      import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+      import { runCliAgent } from "../../src/agents/cli-runner.js";
+      import { runWithModelFallback } from "../../src/agents/model-fallback-runner.js";
+      import { registerAgentRunContext } from "../../src/infra/agent-run-registry.js";
+      import { deliverOutboundPayloads } from "../../src/infra/outbound/deliver.js";
+      import { buildOutboundSessionContext } from "../../src/infra/outbound/session-context.js";
 
       export async function runCronIsolatedAgentTurn() {
         registerAgentRunContext({});
@@ -31,9 +31,9 @@ describe("audit-seams cron seam classification", () => {
 
   it("detects scheduler-state seams in cron service orchestration", () => {
     const source = `
-      import { recomputeNextRuns, computeJobNextRunAtMs } from "./jobs-scheduling.js";
+      import { recomputeNextRuns, computeJobNextRunAtMs } from "../../src/cron/service/jobs-scheduling.js";
       import { ensureLoaded, persist } from "./store.js";
-      import { armTimer, runMissedJobs } from "./timer.js";
+      import { armTimer, runMissedJobs } from "../../src/cron/service/timer.js";
 
       export async function start(state) {
         await ensureLoaded(state);
@@ -54,9 +54,9 @@ describe("audit-seams cron seam classification", () => {
 describe("audit-seams subagent seam classification", () => {
   it("detects relocated native spawn executor seams", () => {
     const source = `
-      import { callGateway } from "../../../gateway/call.js";
-      import { registerSubagentRun } from "../../subagent-registry.js";
-      import { emitSessionLifecycleEvent } from "./subagent-spawn.runtime.js";
+      import { callGateway } from "../../src/gateway/call.js";
+      import { registerSubagentRun } from "../../src/agents/subagents/registry/subagent-registry.js";
+      import { emitSessionLifecycleEvent } from "../../src/agents/subagents/spawn/subagent-spawn.runtime.js";
 
       export async function spawnSubagentDirect() {
         const response = await callGateway({ method: "agent.run", params: { task: "do it" } });
@@ -77,9 +77,9 @@ describe("audit-seams subagent seam classification", () => {
   it("detects subagent lifecycle registry and announce delivery seams", () => {
     const source = `
       import { resolveContextEngine } from "../context-engine/registry.js";
-      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "./subagent-announce.js";
-      import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
-      import { persistSubagentRunsToDisk } from "./subagent-registry-state.js";
+      import { captureSubagentCompletionReply, runSubagentAnnounceFlow } from "../../src/agents/subagents/announce/subagent-announce.js";
+      import { emitSubagentEndedHookOnce } from "../../src/agents/subagents/registry/subagent-registry-completion.js";
+      import { persistSubagentRunsToDisk } from "../../src/agents/subagents/registry/subagent-registry-state.js";
 
       export async function completeRun(entry) {
         await resolveContextEngine({});
@@ -90,31 +90,30 @@ describe("audit-seams subagent seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
-      "subagent-announce-delivery",
-      "subagent-lifecycle-registry",
-    ]);
+    expect(describeSeamKinds("src/agents/subagents/registry/subagent-registry.ts", source)).toEqual(
+      ["subagent-announce-delivery", "subagent-lifecycle-registry"],
+    );
   });
 
   it("detects the shared delivery-context announce seam", () => {
     const source = `
-      import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+      import { normalizeDeliveryContext } from "../../src/utils/delivery-context.shared.js";
 
       export function createBoundDeliveryRouter(context) {
         return normalizeDeliveryContext(context);
       }
     `;
 
-    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
-      "subagent-announce-delivery",
-    ]);
+    expect(
+      describeSeamKinds("src/agents/subagents/announce/subagent-announce-origin.ts", source),
+    ).toEqual(["subagent-announce-delivery"]);
   });
 
   it("detects parent-stream seams for ACP spawn relays", () => {
     const source = `
-      import { onAgentEvent } from "../../../infra/agent-events.js";
-      import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
-      import { enqueueSystemEvent } from "../../../infra/system-events.js";
+      import { onAgentEvent } from "../../src/infra/agent-events.js";
+      import { requestHeartbeat } from "../../src/infra/heartbeat-wake.js";
+      import { enqueueSystemEvent } from "../../src/infra/system-events.js";
 
       export function startAcpSpawnParentStreamRelay() {
         onAgentEvent("agent-output", () => {});

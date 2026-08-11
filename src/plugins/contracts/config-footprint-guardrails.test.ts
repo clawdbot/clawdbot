@@ -238,10 +238,10 @@ describe("config footprint guardrails", () => {
     // The primitives facade re-exports the canonical channel-config-schema
     // module; only bundled provider schemas bypass it.
     const primitivesSource = readSource("src/plugin-sdk/channel-config-primitives.ts");
-    expect(primitivesSource).toContain('from "./channel-config-schema.js";');
+    expect(primitivesSource).toContain('from "../../plugin-sdk/channel-config-schema.js";');
     expect(primitivesSource).not.toContain("../channels/");
     expect(primitivesSource).not.toContain("../config/");
-    expect(bundledSource).toContain('from "./channel-config-schema.js";');
+    expect(bundledSource).toContain('from "../../plugin-sdk/channel-config-schema.js";');
     expect(bundledSource).not.toContain("../channels/");
   });
 

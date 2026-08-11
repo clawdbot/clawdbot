@@ -30,7 +30,7 @@
     "@openclaw/net-policy": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
     "@openclaw/session-url-contract": "workspace:*",
-    "@openclaw/uirouter": "0.1.0",
+    "@openclaw/uirouter": "0.1.1",
     "@openclaw/workboard-contract": "workspace:*",
     "@tanstack/lit-virtual": "3.13.35",
     "@tanstack/virtual-core": "3.17.6",

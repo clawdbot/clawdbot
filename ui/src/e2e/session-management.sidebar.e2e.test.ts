@@ -49,7 +49,9 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       const firstRow = page.locator(`[data-session-key="${firstKey}"]`);
       const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
+      );
       await firstRow.waitFor({ state: "visible", timeout: 10_000 });
       await secondRow.waitFor({ state: "visible" });
       await composer.waitFor({ state: "visible" });

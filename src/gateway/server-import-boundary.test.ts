@@ -63,9 +63,9 @@ describe("gateway startup import boundaries", () => {
       /import\s+\{[^}]*attachGatewayWsMessageHandler[^}]*\}\s+from "\.\/ws-connection\/message-handler\.js"/s,
     );
     expect(wsConnection).toContain('import("./ws-connection/message-handler.js")');
-    expect(wsConnection).not.toContain('from "../talk-realtime-relay.js"');
-    expect(wsConnection).not.toContain('from "../talk-transcription-relay.js"');
-    expect(wsConnection).toContain('from "../talk-session-registry.js"');
+    expect(wsConnection).not.toContain('from "./talk-realtime-relay.js"');
+    expect(wsConnection).not.toContain('from "./talk-transcription-relay.js"');
+    expect(wsConnection).toContain('from "./talk-session-registry.js"');
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );
@@ -88,6 +88,13 @@ describe("gateway startup import boundaries", () => {
     expect(workerStartup).toContain(
       'import("../../packages/gateway-protocol/src/schema/worker-admission.js")',
     );
+  });
+
+  it("keeps channel startup maintenance on the loaded-only registry", () => {
+    const lifecycleStartup = readSource("src/channels/plugins/lifecycle-startup.ts");
+
+    expect(lifecycleStartup).toContain('from "../channels/plugins/registry-loaded.js"');
+    expect(lifecycleStartup).not.toContain('from "./registry.js"');
   });
 
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {

@@ -1,6 +1,7 @@
 // Gateway restart sentinel recovery.
 // Resumes pending restart continuations and outbound delivery after process restart.
-import { settleCorrelatedSubagentDelivery } from "../agents/subagent-completion-delivery.js";
+
+import { settleCorrelatedSubagentDelivery } from "../agents/subagents/completion/subagent-completion-delivery.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -47,7 +48,6 @@ import {
 } from "./server-restart-sentinel-notice.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
-
 export { deliverQueuedSessionDelivery };
 
 const log = createSubsystemLogger("gateway/restart-sentinel");

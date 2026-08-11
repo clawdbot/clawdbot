@@ -4,7 +4,7 @@ import {
   getSubagentRunByChildSessionKey,
   hasLiveContinuationDelegateChildRun,
   isSubagentRunLive,
-} from "../../agents/subagent-registry-read.js";
+} from "../../agents/subagents/registry/subagent-registry-read.js";
 
 export function partitionKnownAcceptedDelegateChildren<
   T extends {

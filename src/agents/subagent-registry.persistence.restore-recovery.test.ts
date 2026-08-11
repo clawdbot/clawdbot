@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./subagent-registry.mocks.shared.js";
+import "./subagents/registry/subagent-registry.mocks.shared.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -17,12 +17,12 @@ import {
   createSubagentRegistryTestDeps,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
-import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
+} from "./subagents/registry/subagent-registry.persistence.test-support.js";
+import type { SubagentRunFixture } from "./subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+} from "./subagents/registry/subagent-registry.store.sqlite.js";
 import {
   testing,
   addSubagentRunForTests,
@@ -32,8 +32,8 @@ import {
   initSubagentRegistry,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
-} from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+} from "./subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),

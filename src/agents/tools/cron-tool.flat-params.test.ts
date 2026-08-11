@@ -431,7 +431,7 @@ describe("cron tool flat-params", () => {
     await tool.execute("call-patch-trailing-space", {
       action: "update",
       jobId: "job-123",
-      patch: {
+      job: {
         "schedule ": { kind: "cron", expr: "0 9 * * 1-5", tz: "America/New_York" },
         "enabled ": false,
       },

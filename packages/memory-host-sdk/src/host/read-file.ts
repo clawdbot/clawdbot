@@ -41,8 +41,8 @@ async function isAllowedAdditionalDirectoryPath(
   }
   try {
     await assertNoSymlinkParents({ rootDir: additionalPath, targetPath: absPath });
-  } catch (err) {
-    return isFileMissingError(err);
+  } catch {
+    return false;
   }
   if (!isPathInsideWithRealpath(additionalPath, absPath)) {
     try {

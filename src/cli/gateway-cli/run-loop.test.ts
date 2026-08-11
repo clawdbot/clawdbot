@@ -233,7 +233,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   waitForActiveEmbeddedRuns: (timeoutMs?: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
-vi.mock("../../agents/main-session-restart-recovery-marking.js", () => ({
+vi.mock("../../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
 }));
 

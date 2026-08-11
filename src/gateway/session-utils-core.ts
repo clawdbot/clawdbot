@@ -3,11 +3,11 @@ import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../agents/subagent-registry-read.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
-} from "../agents/subagent-run-liveness.js";
+} from "../agents/subagents/registry/subagent-run-liveness.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -22,26 +22,26 @@ import {
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
 import {
-  buildContinuationSessionPatch,
-  persistInitialChildRuntimeState,
-  type ContinuationSpawnParams,
-} from "../../subagent-announce.runtime.js";
-import {
-  materializeSubagentAttachments,
-  type SubagentAttachmentReceiptFile,
-} from "../../subagent-attachments.js";
-import {
   deriveContinuationDelegateChildRunId,
   deriveContinuationDelegateChildSessionKey,
 } from "../../subagent-continuation-ids.js";
+import { registerSubagentTraceparentHandoff } from "../../subagent-traceparent-handoff.js";
+import {
+  buildContinuationSessionPatch,
+  persistInitialChildRuntimeState,
+  type ContinuationSpawnParams,
+} from "../announce/subagent-announce.runtime.js";
 import {
   completeCollectorLaunchCleanup,
   getSubagentRunByRunId,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
-} from "../../subagent-registry.js";
-import { registerSubagentTraceparentHandoff } from "../../subagent-traceparent-handoff.js";
+} from "../registry/subagent-registry.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  materializeSubagentAttachments,
+  type SubagentAttachmentReceiptFile,
+} from "./subagent-attachments.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {

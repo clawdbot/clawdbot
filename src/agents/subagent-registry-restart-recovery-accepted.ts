@@ -1,14 +1,14 @@
 import { resolveInternalSessionEffectsTarget } from "./internal-session-effects.js";
-import { isRestartRecoveryLifecycleCurrent } from "./subagent-registry-restart-recovery-helpers.js";
-import { settleAcceptedRecoverySession } from "./subagent-registry-restart-recovery-session.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
 } from "./subagent-registry-restart-recovery-types.js";
+import { isRestartRecoveryLifecycleCurrent } from "./subagents/registry/subagent-registry-restart-recovery-helpers.js";
+import { settleAcceptedRecoverySession } from "./subagents/registry/subagent-registry-restart-recovery-session.js";
 import type {
   SubagentRestartRecoveryReceipt,
   SubagentRunRecord,
-} from "./subagent-registry.types.js";
+} from "./subagents/registry/subagent-registry.types.js";
 
 export async function reconcileAcceptedRecovery(params: {
   agentId: string;

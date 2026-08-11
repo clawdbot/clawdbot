@@ -13,7 +13,10 @@ import {
 } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
-import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import {
+  assertOpenClawStateWriteAllowed,
+  runWithOpenClawStateWriteAccess,
+} from "./openclaw-state-ownership.js";
 
 function ensureStartupMigrationCheckpointSchema(
   db: DatabaseSync,
@@ -68,20 +71,25 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
 ): T {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
-  assertOpenClawStateWriteAllowed({ databasePath: pathname, env });
-  ensureOpenClawStatePermissions(pathname, env);
-  const db = openNodeSqliteDatabase(pathname);
-  try {
-    configureSqlitePreSchemaPragmas(db, {
-      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-    });
-    assertSqliteIntegrity(db, pathname);
-    ensureStartupMigrationCheckpointSchema(db, pathname, env);
-    return callback(db);
-  } finally {
-    db.close();
-    ensureOpenClawStatePermissions(pathname, env);
-  }
+  return runWithOpenClawStateWriteAccess(
+    { databasePath: pathname, env },
+    "startup migration checkpoint database operation",
+    () => {
+      ensureOpenClawStatePermissions(pathname, env);
+      const db = openNodeSqliteDatabase(pathname);
+      try {
+        configureSqlitePreSchemaPragmas(db, {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        });
+        assertSqliteIntegrity(db, pathname);
+        ensureStartupMigrationCheckpointSchema(db, pathname, env);
+        return callback(db);
+      } finally {
+        db.close();
+        ensureOpenClawStatePermissions(pathname, env);
+      }
+    },
+  );
 }
 
 // One-time seed for the ledger footprint aggregates (#100622): estimate rows

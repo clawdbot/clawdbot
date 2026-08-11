@@ -21,8 +21,8 @@ describe("native hook relay CLI import boundary", () => {
 
   it("dispatches the hidden relay before loading the general CLI", () => {
     const entry = readSource("src/entry.ts");
-    const relayDispatch = entry.indexOf('import("./cli/native-hook-relay-cli.js")');
-    const generalCli = entry.indexOf('import("./cli/run-main.js")');
+    const relayDispatch = entry.indexOf('import("./native-hook-relay-cli.js")');
+    const generalCli = entry.indexOf('import("./run-main.js")');
 
     expect(relayDispatch).toBeGreaterThan(-1);
     expect(generalCli).toBeGreaterThan(relayDispatch);

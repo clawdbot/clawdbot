@@ -24,7 +24,6 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { removeUnacceptedDelegateArtifactPolicy } from "./delegate-artifacts.js";
-import { loadSessionEntryByKey } from "./subagent-announce-delivery.js";
 import {
   type ContinuationChainSource,
   type ContinuationChainState,
@@ -32,9 +31,10 @@ import {
   parseContinuationChainHop,
   prepareSubagentContinuationAccounting,
 } from "./subagent-announce.continuation.accounting.js";
-import { resolveContinuationRuntimeConfig } from "./subagent-announce.runtime.js";
 import { deriveContinuationDelegateChildSessionKeyFromParent } from "./subagent-continuation-ids.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { loadSessionEntryByKey } from "./subagents/announce/subagent-announce-delivery.js";
+import { resolveContinuationRuntimeConfig } from "./subagents/announce/subagent-announce.runtime.js";
+import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 
 export { routeSubagentContinuationReturn } from "./subagent-announce.continuation-return.js";

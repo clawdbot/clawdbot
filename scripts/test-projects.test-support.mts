@@ -2479,6 +2479,16 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, "plugin-clawhub-new-workflow"],
   ],
   [
+    new RegExp(
+      [
+        "^(?:scripts\\/materialize-vercel-cli\\.sh|",
+        "\\.github\\/release\\/vercel-cli\\/package(?:-lock)?\\.json)$",
+      ].join(""),
+      "u",
+    ),
+    ["test/scripts/vercel-container-registry-publish.test.ts"],
+  ],
+  [
     /^scripts\/lib\/generated-text-asset\.mts$/u,
     [
       "extensions/browser/scripts/build-copilot-runtime.test.ts",

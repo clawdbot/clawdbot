@@ -9,7 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 const sessionIds = vi.hoisted(() => new Map<string, string>());
 const registryRuns = vi.hoisted(() => new Map<string, SubagentRunRecord>());
@@ -26,7 +26,8 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
 });
 
 vi.mock("./subagent-registry-announce-read.js", async () => {
-  const { listAncestorSessionKeysFromRuns } = await import("./subagent-registry-queries.js");
+  const { listAncestorSessionKeysFromRuns } =
+    await import("./subagents/registry/subagent-registry-queries.js");
   return {
     listAncestorSessionKeys: (sessionKey: string) =>
       listAncestorSessionKeysFromRuns(registryRuns, sessionKey),

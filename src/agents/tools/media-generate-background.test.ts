@@ -21,7 +21,7 @@ import {
 
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
-vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
+vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 
 const {
   createImageGenerationTaskRun,

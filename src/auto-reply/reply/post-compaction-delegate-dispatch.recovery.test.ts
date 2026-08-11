@@ -633,12 +633,8 @@ describe("post-compaction delegate dispatch extraction", () => {
 
     expect(dispatchSource).toContain('from "./post-compaction-delegate-delivery.js"');
     expect(deliverySource).not.toContain("post-compaction-delegate-dispatch");
-    expect(restartDeliverySource).toContain(
-      'from "../auto-reply/reply/post-compaction-delegate-delivery.js"',
-    );
-    expect(restartDeliverySource).not.toContain(
-      'from "../auto-reply/reply/post-compaction-delegate-dispatch.js"',
-    );
+    expect(restartDeliverySource).toContain('from "./post-compaction-delegate-delivery.js"');
+    expect(restartDeliverySource).not.toContain('from "./post-compaction-delegate-dispatch.js"');
     expect(
       combinedSource.match(/export async function deliverQueuedPostCompactionDelegate/g),
     ).toHaveLength(1);

@@ -3161,6 +3161,10 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.input-dialog__field {
+  margin-top: 14px;
+}
+
 .exec-approval-warning {
   margin-top: 10px;
   font-size: 13px;
