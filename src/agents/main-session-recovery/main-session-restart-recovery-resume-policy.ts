@@ -398,11 +398,6 @@ export function resolveMainSessionResumePolicy(
   if (beforeAgentReplyState === "handled-reply") {
     return { action: "resume", forceRestartSafeTools: true };
   }
-  if (beforeAgentReplyState === "handled-unrecoverable") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  // `admitted` means no optional hook started. The dispatch boundary reloads
-  // the current hook set before it permits this transcript to resume.
   // Progress can commit after the recovery mark while the old run is winding
   // down. It is not a terminal turn boundary; preserve it in the transcript
   // while classifying the actual user/tool/assistant boundary beneath it.

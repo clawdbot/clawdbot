@@ -324,7 +324,6 @@ function deliveredReceiptEntry(
   sourceRunId = "discord-message-1",
 ): Partial<SessionEntry> {
   return {
-    restartRecoveryBeforeAgentReplyState: "continue",
     restartRecoveryDeliveryReceiptState: "delivered-terminal",
     restartRecoveryDeliveryToolCallId: toolCallId,
     restartRecoveryDeliveryRunId: "recovery-1",
@@ -345,9 +344,8 @@ function makeDeliveredReceiptFixture(
   });
 }
 
-function makeAdmittedControlUiFixture(overrides: SessionEntryFixture = {}) {
+function makeControlUiRecoveryFixture(overrides: SessionEntryFixture = {}) {
   return makeMainSessionFixture({
-    restartRecoveryBeforeAgentReplyState: "admitted",
     restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
     restartRecoveryDeliveryRunId: "control-ui-run",
     restartRecoveryDeliverySourceRunId: "control-ui-run",
@@ -3794,7 +3792,7 @@ describe("main-session-restart-recovery", () => {
       handler: vi.fn(),
     });
     initializeGlobalHookRunner(registry);
-    const { sessionsDir, sessionKey } = await makeAdmittedControlUiFixture();
+    const { sessionsDir, sessionKey } = await makeControlUiRecoveryFixture();
     await writeTranscript(sessionsDir, "main-session", [
       makeUserMessage("do the thing", { idempotencyKey: "control-ui-run:user" }),
     ]);
@@ -3812,7 +3810,6 @@ describe("main-session-restart-recovery", () => {
   it("resumes with restart-safe tools while a terminal provider outcome remains unknown", async () => {
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
       sessionKey: "agent:main:discord:direct:123",
-      restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoveryDeliveryReceiptState: "terminal-pending",
       restartRecoveryDeliveryToolCallId: "message-call-1",
       restartRecoveryDeliveryRunId: "recovery-1",
@@ -4047,7 +4044,7 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it.each(["pending", "handled-reply", "handled-unrecoverable"] as const)(
+  it.each(["pending", "handled-reply"] as const)(
     "resumes safely for a %s before_agent_reply checkpoint without a recoverable result",
     async (restartRecoveryBeforeAgentReplyState) => {
       const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({

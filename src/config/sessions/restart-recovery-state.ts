@@ -323,12 +323,9 @@ export function normalizeRestartRecoveryEntryFields(
   );
   assign(
     "restartRecoveryBeforeAgentReplyState",
-    entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
-      entry.restartRecoveryBeforeAgentReplyState === "pending" ||
-      entry.restartRecoveryBeforeAgentReplyState === "continue" ||
+    entry.restartRecoveryBeforeAgentReplyState === "pending" ||
       entry.restartRecoveryBeforeAgentReplyState === "handled-silent" ||
-      entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
-      entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable"
+      entry.restartRecoveryBeforeAgentReplyState === "handled-reply"
       ? entry.restartRecoveryBeforeAgentReplyState
       : undefined,
   );
