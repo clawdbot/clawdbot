@@ -2,14 +2,12 @@
 // session lists with repeated provider/model tuples.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import {
   readAcpSessionMetaBatch,
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
-import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import * as subagentRegistryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -24,14 +22,6 @@ import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
-
-// Persisted subagent state is outside these cache, metadata, and transcript
-// batching contracts. Keep its state-database startup off this focused file.
-const subagentIndexSpy = vi
-  .spyOn(subagentRegistryRead, "buildSubagentSessionListReadIndex")
-  .mockImplementation((now) => buildSubagentRunReadIndexFromRuns({ runs: new Map(), now }));
-
-afterAll(() => subagentIndexSpy.mockRestore());
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -48,7 +38,10 @@ describe("listSessionsFromStore resolver cache", () => {
   test("collapses request-local resolver work to O(unique provider/model tuples)", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { model: { primary: "google-vertex/gemini-3-flash-preview" } },
+        defaults: {
+          model: { primary: "google-vertex/gemini-3-flash-preview" },
+          thinkingDefault: "off",
+        },
       },
     } as OpenClawConfig;
     const tuples: Array<{ modelProvider: string; model: string }> = [
@@ -128,7 +121,7 @@ describe("listSessionsFromStore resolver cache", () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg = {
-        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
@@ -256,7 +249,7 @@ describe("listSessionsFromStore resolver cache", () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg = {
-        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
