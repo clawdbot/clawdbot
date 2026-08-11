@@ -892,6 +892,37 @@ describe("memory authorization conformance suite", () => {
     );
   });
 
+  it("rejects non-enumerable or accessor-backed required handle bindings", async () => {
+    const requiredKeys = [
+      "version",
+      "handleId",
+      "planId",
+      "contextFingerprint",
+      "resourceRevision",
+      "policyRevision",
+      "expiresAt",
+    ] as const;
+    for (const key of requiredKeys) {
+      for (const descriptorKind of ["hidden", "accessor"] as const) {
+        const report = await runMemoryAuthorizationConformanceSuite(
+          createAllowedHandleAdapter((handle) => {
+            const malformed = { ...handle } as Record<string, unknown>;
+            const value = malformed[key];
+            Object.defineProperty(malformed, key, {
+              ...(descriptorKind === "hidden"
+                ? { enumerable: false, value }
+                : { enumerable: true, get: () => value }),
+            });
+            return malformed;
+          }),
+        );
+        expect(report.failures).toContainEqual(
+          expect.objectContaining({ invariant: "authorized-handle" }),
+        );
+      }
+    }
+  });
+
   it("rejects allowed handles with own, inherited, non-enumerable, or symbolic metadata", async () => {
     const privateMetadata = Symbol("private-metadata");
     const decorateHandle: Array<(handle: AuthorizedResourceHandle) => unknown> = [

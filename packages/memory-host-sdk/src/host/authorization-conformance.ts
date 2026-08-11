@@ -473,34 +473,55 @@ function hasAuthorizedResourceHandle(params: {
   if (!decision.allowed || !isRecord(decision.handle)) {
     return false;
   }
-  const handle = decision.handle;
-  const prototype = Object.getPrototypeOf(handle);
-  const ownKeys = Reflect.ownKeys(handle);
-  // The opaque ID has no prescribed encoding; its surrounding facts prevent it becoming a bearer grant.
-  return (
-    (prototype === Object.prototype || prototype === null) &&
-    ownKeys.length === 7 &&
-    ownKeys.includes("version") &&
-    ownKeys.includes("handleId") &&
-    ownKeys.includes("planId") &&
-    ownKeys.includes("contextFingerprint") &&
-    ownKeys.includes("resourceRevision") &&
-    ownKeys.includes("policyRevision") &&
-    ownKeys.includes("expiresAt") &&
-    handle.version === MEMORY_AUTHORIZATION_CONTRACT_VERSION &&
-    isNonEmptyText(handle.handleId) &&
-    isNonEmptyText(handle.planId) &&
-    isNonEmptyText(handle.contextFingerprint) &&
-    isNonEmptyText(handle.resourceRevision) &&
-    isNonEmptyText(handle.policyRevision) &&
-    isNonEmptyText(handle.expiresAt) &&
-    handle.planId === scenario.plan.planId &&
-    handle.contextFingerprint === scenario.plan.contextFingerprint &&
-    handle.resourceRevision === resource.revision &&
-    handle.policyRevision === scenario.plan.policyRevision &&
-    hasCurrentConformanceEvidenceExpiry(handle.expiresAt, scenario.now) &&
-    expiresNoLaterThan(handle.expiresAt, scenario.plan.expiresAt)
-  );
+  try {
+    const handle = decision.handle;
+    const prototype = Object.getPrototypeOf(handle);
+    const expectedKeys = [
+      "version",
+      "handleId",
+      "planId",
+      "contextFingerprint",
+      "resourceRevision",
+      "policyRevision",
+      "expiresAt",
+    ] as const;
+    const ownKeys = Reflect.ownKeys(handle);
+    const descriptors = Object.getOwnPropertyDescriptors(handle);
+    // These bindings cross the backend contract boundary. Read only enumerable
+    // data descriptors so hidden fields and accessors cannot pass conformance.
+    if (
+      (prototype !== Object.prototype && prototype !== null) ||
+      ownKeys.length !== expectedKeys.length ||
+      !expectedKeys.every((key) => {
+        const descriptor = descriptors[key];
+        return descriptor?.enumerable === true && "value" in descriptor;
+      })
+    ) {
+      return false;
+    }
+    const values = Object.fromEntries(
+      expectedKeys.map((key) => [key, descriptors[key]?.value]),
+    ) as Record<(typeof expectedKeys)[number], unknown>;
+    // The opaque ID has no prescribed encoding; its surrounding facts prevent it becoming a bearer grant.
+    return (
+      values.version === MEMORY_AUTHORIZATION_CONTRACT_VERSION &&
+      isNonEmptyText(values.handleId) &&
+      isNonEmptyText(values.planId) &&
+      isNonEmptyText(values.contextFingerprint) &&
+      isNonEmptyText(values.resourceRevision) &&
+      isNonEmptyText(values.policyRevision) &&
+      isNonEmptyText(values.expiresAt) &&
+      values.planId === scenario.plan.planId &&
+      values.contextFingerprint === scenario.plan.contextFingerprint &&
+      values.resourceRevision === resource.revision &&
+      values.policyRevision === scenario.plan.policyRevision &&
+      hasCurrentConformanceEvidenceExpiry(values.expiresAt, scenario.now) &&
+      expiresNoLaterThan(values.expiresAt, scenario.plan.expiresAt)
+    );
+  } catch {
+    // Backend-issued handles are untrusted conformance input; proxy traps are nonconforming.
+    return false;
+  }
 }
 
 function isSafeDeniedDecision(decision: MemoryAuthorizationConformanceDecision): boolean {
