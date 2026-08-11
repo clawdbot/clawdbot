@@ -1534,6 +1534,30 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
+  it("renders internal system user messages as labeled notices without changing search visibility", () => {
+    const messages = [
+      userMessage("before", 999),
+      userMessage("[System] Continue the interrupted turn.", 1000, {
+        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+      }),
+      userMessage("after", 1001),
+    ];
+    const items = buildCachedChatItems(createProps({ messages }));
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items[1]).toMatchObject({
+      kind: "notice",
+      label: "System",
+      text: "Continue the interrupted turn.",
+      timestamp: 1000,
+    });
+
+    const filtered = buildCachedChatItems(
+      createProps({ messages, searchOpen: true, searchQuery: "after" }),
+    );
+    expect(filtered.some((item) => item.kind === "notice")).toBe(false);
+  });
+
   it("attributes assistant groups to the latest user in multi-sender threads", () => {
     const groups = messageGroups({
       messages: [
@@ -4095,6 +4119,18 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(5),
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("keeps internal system notices as semantic user-turn boundaries", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      userMessage("[System] Continue the interrupted turn.", 2, {
+        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+      }),
+      failedTool(3),
+      assistantReply("Recovered on the next turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

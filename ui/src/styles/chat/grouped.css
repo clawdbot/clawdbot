@@ -422,6 +422,14 @@
   line-height: inherit;
 }
 
+.chat-notice__label {
+  margin-bottom: 2px;
+  color: var(--muted-strong);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .chat-notice :where(ul, ol, pre, blockquote) {
   display: inline-block;
   text-align: left;

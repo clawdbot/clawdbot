@@ -267,6 +267,22 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
+    const provenance = asRecord(raw.provenance);
+    if (role === "user" && provenance?.kind === "internal_system") {
+      const text = extractTextCached(msg)?.replace(/^\[System\] /u, "");
+      if (text?.trim()) {
+        items.push({
+          kind: "notice",
+          key: itemKey,
+          label: "System",
+          startsTurn: true,
+          text,
+          timestamp: normalized.timestamp,
+        });
+      }
+      continue;
+    }
+
     items.push({
       kind: "message",
       key: itemKey,

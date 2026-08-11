@@ -458,6 +458,10 @@ export function annotateToolTurnOutcome(
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
+    if (item?.kind === "notice" && item.startsTurn) {
+      sawAssistantReply = false;
+      continue;
+    }
     if (!item || item.kind !== "group") {
       continue;
     }
