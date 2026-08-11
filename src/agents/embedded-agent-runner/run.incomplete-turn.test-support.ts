@@ -43,7 +43,7 @@ vi.mock("./run/payloads.js", () => ({
   buildEmbeddedRunPayloads: hoisted.buildPayloads,
 }));
 
-vi.mock("./logger.js", () => ({ log: hoisted.log }));
+vi.mock("./logger.js", () => ({ embeddedAgentLog: hoisted.log }));
 
 let registeredHarnesses = new Map<string, AgentHarness>();
 

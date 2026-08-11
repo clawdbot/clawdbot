@@ -19,7 +19,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./logger.js", () => ({
-  log: mocks.log,
+  embeddedAgentLog: mocks.log,
 }));
 
 const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =

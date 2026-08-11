@@ -12,7 +12,7 @@ import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 vi.mock("./logger.js", () => ({
   // Sampling tests assert call options only; silence warning/debug output from
   // invalid or provider-specific extra params.
-  log: {
+  embeddedAgentLog: {
     debug: vi.fn(),
     warn: vi.fn(),
   },

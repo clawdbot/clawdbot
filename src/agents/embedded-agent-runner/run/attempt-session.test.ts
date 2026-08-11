@@ -49,7 +49,7 @@ vi.mock("../../tool-search.js", () => ({
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
-vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
+vi.mock("../logger.js", () => ({ embeddedAgentLog: { info: vi.fn() } }));
 vi.mock("../resource-loader.js", () => ({
   createEmbeddedAgentResourceLoader: hoisted.createEmbeddedAgentResourceLoader,
 }));

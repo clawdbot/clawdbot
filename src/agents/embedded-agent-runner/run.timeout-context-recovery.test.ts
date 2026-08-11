@@ -19,7 +19,7 @@ vi.mock("./compaction-hooks.js", () => ({
 }));
 
 vi.mock("./logger.js", () => ({
-  log: {
+  embeddedAgentLog: {
     info: mocks.info,
     warn: mocks.warn,
   },

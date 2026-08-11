@@ -11,7 +11,7 @@ vi.mock("../../tool-search.js", () => ({
   clearToolSearchCatalog: hoisted.clearToolSearchCatalog,
 }));
 vi.mock("../logger.js", () => ({
-  log: { warn: hoisted.warn },
+  embeddedAgentLog: { warn: hoisted.warn },
 }));
 vi.mock("./attempt-finalize.js", () => ({
   flushEmbeddedAttemptTrajectoryRecorder: hoisted.flushEmbeddedAttemptTrajectoryRecorder,

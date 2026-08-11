@@ -41,7 +41,7 @@ vi.mock("../../../plugins/hook-agent-context.js", () => ({
 vi.mock("../../../trajectory/runtime.js", () => ({
   toTrajectoryToolDefinitions: hoisted.toTrajectoryToolDefinitions,
 }));
-vi.mock("../logger.js", () => ({ log: hoisted.log }));
+vi.mock("../logger.js", () => ({ embeddedAgentLog: hoisted.log }));
 
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 
