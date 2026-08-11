@@ -243,7 +243,9 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
     });
     expect(events.slice(0, 3)).toEqual(["accepted", "abort-failed", "delete-failed"]);
     expect(events.indexOf("rollback")).toBeGreaterThan(events.indexOf("aborted"));
-    expect(events.indexOf("rollback-recorded")).toBeGreaterThan(events.indexOf("rollback"));
+    expect(events.indexOf("rollback-recorded")).toBeGreaterThan(
+      events.indexOf("rollback"),
+    );
     expect(events.indexOf("sweep-scheduled")).toBeGreaterThan(
       events.indexOf("rollback-recorded"),
     );
