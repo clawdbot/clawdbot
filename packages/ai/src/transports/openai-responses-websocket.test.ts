@@ -111,17 +111,13 @@ async function consumeResponse(response: ReturnType<typeof createOpenAIResponses
   return events;
 }
 
-function createStream(
-  request: Record<string, unknown>,
-  overrides: { continuationItems?: Array<Record<string, unknown>>; sessionId?: string } = {},
-) {
+function createStream(request: Record<string, unknown>, overrides: { sessionId?: string } = {}) {
   return createOpenAIResponsesWebSocketStream({
     client,
     request,
     mode: "websocket-cached",
     sessionId: overrides.sessionId ?? "session-1",
     headers: { "x-stable-session": "session-1" },
-    resolveContinuationItems: () => (overrides.continuationItems ?? [assistantOutput]) as never,
   });
 }
 
@@ -210,79 +206,13 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
   });
 
-  it("reuses a session socket and sends only a strict append-compatible input delta", async () => {
-    websocketState.responseBatches.push(
-      [completion("resp_1", [assistantOutput])],
-      [completion("resp_2")],
-    );
-    const stableRequest = {
-      model: "gpt-5.6-luna",
-      stream: true,
-      background: true,
-      store: false,
-      instructions: "stable prompt",
-      tools: [{ type: "function", name: "read", parameters: { type: "object" } }],
-      metadata: {
-        openclaw_session_id: "session-1",
-        openclaw_turn_id: "turn-1",
-        openclaw_turn_attempt: "1",
-      },
-      input: [firstUser],
-    };
-
-    const first = createStream(stableRequest);
-    expect(first.continuationStatus).toBe("no_previous_response");
-    expect(first.request).not.toHaveProperty("stream");
-    expect(first.request).not.toHaveProperty("background");
-    await consumeResponse(first);
-
-    const second = createStream({
-      ...stableRequest,
-      metadata: {
-        openclaw_session_id: "session-1",
-        openclaw_turn_id: "turn-2",
-        openclaw_turn_attempt: "1",
-      },
-      input: [
-        firstUser,
-        {
-          type: "message",
-          role: "assistant",
-          content: assistantOutput.content,
-        },
-        { role: "user", content: "second" },
-      ],
-    });
-    expect(second.continuationStatus).toBe("continued");
-    expect(second.request).toMatchObject({
-      previous_response_id: "resp_1",
-      input: [{ role: "user", content: "second" }],
-    });
-    await consumeResponse(second);
-
-    expect(websocketState.instances).toHaveLength(1);
-    expect(websocketState.requests).toHaveLength(2);
-    expect(websocketState.requests[1]).toMatchObject({
-      type: "response.create",
-      previous_response_id: "resp_1",
-      input: [{ role: "user", content: "second" }],
-    });
-    expect(websocketState.requests[0]).not.toHaveProperty("stream");
-    expect(websocketState.requests[0]).not.toHaveProperty("background");
-  });
-
   it("uses the response id when persisted encrypted reasoning has a different replay shape", async () => {
     const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "ciphertext" };
     websocketState.responseBatches.push(
       [completion("resp_1", [reasoning, assistantOutput])],
       [completion("resp_2")],
     );
-    await consumeResponse(
-      createStream(
-        { model: "gpt-5.6-luna", input: [firstUser] },
-        { continuationItems: [reasoning, assistantOutput] },
-      ),
-    );
+    await consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] }));
 
     const second = createStream({
       model: "gpt-5.6-luna",

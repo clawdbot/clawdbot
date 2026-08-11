@@ -73,7 +73,7 @@ describe("createAgentSession runtime ownership", () => {
           settingsManager: SettingsManager.inMemory(),
           modelRegistry: createTestModelRegistry(),
         },
-        { cleanupProviderSessionResourcesOnDispose: false },
+        {},
       );
 
       session.dispose();

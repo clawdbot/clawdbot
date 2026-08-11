@@ -233,7 +233,7 @@ function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-export function convertOpenAIResponsesMessagesForRequest(
+function convertOpenAIResponsesMessagesForRequest(
   model: Model,
   context: Context,
   options: OpenAIResponsesOptions | undefined,

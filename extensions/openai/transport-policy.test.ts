@@ -86,21 +86,6 @@ describe("openai transport policy", () => {
     expect(state?.headers?.["x-openclaw-turn-attempt"]).toBe("2");
   });
 
-  it("returns websocket session headers and cooldown for native routes", () => {
-    const policy = resolveOpenAITransportTurnState({
-      provider: "openai",
-      modelId: nativeModel.id,
-      model: nativeModel,
-      sessionId: "session-123",
-      turnId: "turn-123",
-      attempt: 1,
-      transport: "websocket",
-    })?.websocket;
-    expect(policy?.headers?.["x-client-request-id"]).toBe("session-123");
-    expect(policy?.headers?.["x-openclaw-session-id"]).toBe("session-123");
-    expect(policy?.degradeCooldownMs).toBe(60_000);
-  });
-
   it.each([
     [
       "Azure",
