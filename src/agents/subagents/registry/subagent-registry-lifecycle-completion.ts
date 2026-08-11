@@ -44,9 +44,7 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
-export function shouldPreservePublishedExplicitRunTimeout(params: {
-  entry: SubagentRunRecord;
-}): boolean {
+function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
   if (
     typeof params.entry.runTimeoutSeconds !== "number" ||
     !Number.isFinite(params.entry.runTimeoutSeconds) ||
@@ -69,7 +67,7 @@ export function shouldPreservePublishedExplicitRunTimeout(params: {
   );
 }
 
-export function resolveExpiredExplicitRunDeadlineMs(params: {
+function resolveExpiredExplicitRunDeadlineMs(params: {
   entry: SubagentRunRecord;
   nextEndedAt: number;
   observedStartedAt?: number;
@@ -82,7 +80,7 @@ export function resolveExpiredExplicitRunDeadlineMs(params: {
   return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
 }
 
-export function isOlderEquivalentTerminalCallback(params: {
+function isOlderEquivalentTerminalCallback(params: {
   entry: SubagentRunRecord;
   endedAt: number;
   outcome: SubagentRunOutcome;

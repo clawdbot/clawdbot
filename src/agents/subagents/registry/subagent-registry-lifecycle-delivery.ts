@@ -448,7 +448,7 @@ export const emitCompletionEndedHookIfNeeded = async (
   }
 };
 
-export const clearPendingFinalDelivery = (entry: SubagentRunRecord) => {
+export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   const delivery = ensureDeliveryState(entry);
   delivery.payload = undefined;
   delivery.createdAt = undefined;

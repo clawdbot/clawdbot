@@ -261,7 +261,7 @@ export function retireSupersededCleanupInBackground(
   });
 }
 
-export async function retireRunModeBundleMcpRuntime(
+async function retireRunModeBundleMcpRuntime(
   context: SubagentLifecycleCommonContext,
   cleanupParams: { runId: string; entry: SubagentRunRecord; reason: string },
 ): Promise<void> {
@@ -459,7 +459,7 @@ export async function completeTerminalEffects(
   });
 }
 
-export async function completeTerminalCleanup(
+async function completeTerminalCleanup(
   context: SubagentLifecycleCompletionContext,
   args: {
     completeParams: SubagentCompletionRequest;

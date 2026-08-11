@@ -193,7 +193,7 @@ export const markRequesterSettleWakePending = (
   } satisfies RequesterSettleWakeState;
 };
 
-export const persistRequesterSettleWakePending = (
+const persistRequesterSettleWakePending = (
   context: SubagentLifecycleWakeContext,
   entry: SubagentRunRecord,
   options?: {

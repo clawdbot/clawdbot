@@ -30,7 +30,7 @@ import {
 } from "./subagent-registry-lifecycle-cleanup.js";
 import {
   buildSafeLifecycleErrorMeta,
-  clearPendingFinalDelivery,
+  clearSubagentPendingDelivery,
   emitCompletionEndedHookIfNeeded,
   formatAnnounceDeliveryError,
   hasPriorRequesterDeliveryMirror,
@@ -80,7 +80,7 @@ export const finalizeResumedAnnounceGiveUp = async (
     return;
   }
   const deliveryError = getDeliveryLastError(entry) ?? reason;
-  clearPendingFinalDelivery(entry);
+  clearSubagentPendingDelivery(entry);
   const failedDelivery = ensureDeliveryState(entry);
   failedDelivery.status = "failed";
   failedDelivery.lastError = deliveryError;
@@ -202,7 +202,7 @@ const finalizeSubagentCleanup = async (
     return;
   }
   if (entry.expectsCompletionMessage === false || options?.skipRequesterDelivery) {
-    clearPendingFinalDelivery(entry);
+    clearSubagentPendingDelivery(entry);
     if (options?.skipRequesterDelivery) {
       ensureDeliveryState(entry).status = "not_required";
       entry.suppressCompletionDelivery = undefined;
@@ -252,7 +252,7 @@ const finalizeSubagentCleanup = async (
       }
     }
     if (announceOutcome === "delivered") {
-      clearPendingFinalDelivery(entry);
+      clearSubagentPendingDelivery(entry);
     } else {
       // The requester-settle batch owns the real delivery now. Retire the
       // per-child retry obligation without converting the handoff into success.
