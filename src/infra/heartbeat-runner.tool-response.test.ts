@@ -177,7 +177,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     return call;
   }
 
-  function setAgentTurnStatus(options: object | undefined, status: "ok" | "failed") {
+  function setAgentTurnStatus(options: object | undefined, status: "ok" | "failed" | "cancelled") {
     const runState = resolveReplyOperationRunState(options);
     if (!runState) {
       throw new Error("Expected heartbeat reply operation run state");
@@ -961,6 +961,48 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(result).toEqual({ status: "failed", reason: "agent-runner-failure" });
       expect(sendTelegram).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
+    });
+  });
+
+  it("keeps a cancelled agent turn out of failure and acknowledgement paths", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const previousHeartbeatText = "Previous successful heartbeat.";
+      const previousHeartbeatSentAt = 123;
+      const sessionKey = await seedTelegramSession(storePath, cfg, {
+        lastHeartbeatText: previousHeartbeatText,
+        lastHeartbeatSentAt: previousHeartbeatSentAt,
+      });
+      enqueueSystemEvent("exec finished: retry after cancellation", { sessionKey });
+      const inspectedEvents = peekSystemEventEntries(sessionKey);
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setAgentTurnStatus(options, "cancelled");
+        return { text: SILENT_REPLY_TOKEN };
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeat(cfg, replySpy, sendTelegram);
+      const sessionStore = readSessionStoreForTest<{
+        lastHeartbeatText?: string;
+        lastHeartbeatSentAt?: number;
+      }>(storePath);
+
+      try {
+        expect(result).toEqual({ status: "skipped", reason: "agent-runner-cancelled" });
+        expect(sendTelegram).not.toHaveBeenCalled();
+        expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
+        expect(sessionStore[sessionKey]).toMatchObject({
+          lastHeartbeatText: previousHeartbeatText,
+          lastHeartbeatSentAt: previousHeartbeatSentAt,
+        });
+        expect(getLastHeartbeatEvent()).toMatchObject({
+          status: "skipped",
+          reason: "agent-runner-cancelled",
+        });
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+      }
     });
   });
 

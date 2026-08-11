@@ -62,8 +62,12 @@ export function classifyHeartbeatAgentOutcome(params: {
   responsePrefix: string | undefined;
   ackMaxChars: number;
 }) {
-  const { agentRunFailed, heartbeatToolResponse, heartbeatTerminalToolFailure, replyPayload } =
+  const { agentTurnStatus, heartbeatToolResponse, heartbeatTerminalToolFailure, replyPayload } =
     params.agentRun;
+  if (agentTurnStatus === "cancelled") {
+    return { kind: "cancelled" } as const;
+  }
+  const agentRunFailed = agentTurnStatus === "failed";
   const replyMetadata = replyPayload ? getReplyPayloadMetadata(replyPayload) : undefined;
   const hasExplicitFailure = Boolean(heartbeatTerminalToolFailure || agentRunFailed);
   const shouldSuppressSourceReply =
@@ -199,6 +203,17 @@ export async function finalizeHeartbeatOutcome(params: {
   const { delivery, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
   const outcome = params.outcome;
+  if (outcome.kind === "cancelled") {
+    await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "agent-runner-cancelled",
+      durationMs: Date.now() - startedAt,
+      channel: delivery.channel !== "none" ? delivery.channel : undefined,
+      accountId: delivery.accountId,
+    });
+    return { status: "skipped", reason: "agent-runner-cancelled" };
+  }
   if (outcome.kind === "failure") {
     const failureReplyPayload = outcome.replyPayload;
     const failureChannel = delivery.channel;

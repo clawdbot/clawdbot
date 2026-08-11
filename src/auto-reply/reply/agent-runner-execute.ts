@@ -27,7 +27,7 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
-import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
+import { recordReplyOperationAgentTurnOutcome } from "./reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
@@ -393,10 +393,7 @@ export async function executePreparedReplyAgentRun(
         }),
       ),
   );
-  recordReplyOperationAgentTurn(
-    resolveReplyOperationRunState(opts),
-    runOutcome.outcome.kind === "settled" ? runOutcome.outcome.status : "failed",
-  );
+  recordReplyOperationAgentTurnOutcome(resolveReplyOperationRunState(opts), runOutcome.outcome);
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 

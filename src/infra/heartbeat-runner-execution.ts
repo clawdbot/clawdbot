@@ -682,7 +682,7 @@ export async function invokeHeartbeatAgentRun(
     resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
-  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
+  const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&
@@ -718,7 +718,7 @@ export async function invokeHeartbeatAgentRun(
     kind: "completed",
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
-    agentRunFailed,
+    agentTurnStatus,
     replyPayload,
   } as const;
 }
