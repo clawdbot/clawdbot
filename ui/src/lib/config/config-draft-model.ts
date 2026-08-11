@@ -166,13 +166,6 @@ export function applyConfigSnapshot(
   }
 }
 
-function asJsonSchema(value: unknown): JsonSchema | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as JsonSchema;
-}
-
 function coerceBooleanString(value: string): boolean | string {
   const trimmed = value.trim();
   if (trimmed === "true") {
@@ -317,7 +310,7 @@ export function serializeFormForSubmit(state: RuntimeConfigState): string {
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
-  const schema = asJsonSchema(state.configSchema);
+  const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;

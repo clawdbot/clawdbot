@@ -555,14 +555,11 @@ export function adoptConfigPatchAck(
   }
   const currentSnapshot = state.configSnapshot ?? snapshotAtDispatch;
   const raw =
-    ack.noop === true
-      ? (currentSnapshot.raw ?? state.configRaw)
-      : ackConfig
-        ? serializeConfigForm(ackConfig)
-        : (currentSnapshot.raw ?? state.configRaw);
+    ack.noop === true ? (currentSnapshot.raw ?? state.configRaw) : serializeConfigForm(ackConfig);
   applyConfigSnapshot(state, {
     ...currentSnapshot,
-    ...(ackConfig ? { config: ackConfig, sourceConfig: ackConfig } : {}),
+    config: ackConfig,
+    sourceConfig: ackConfig,
     hash: ackHash ?? currentSnapshot.hash ?? null,
     raw,
     valid: true,
