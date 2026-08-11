@@ -60,6 +60,7 @@
           "type": "string"
         },
         "channel": {
+          "description": "Name of one configured messaging provider, or \"all\" for broadcast; not a channel or conversation ID.",
           "type": "string"
         },
         "contentType": {
