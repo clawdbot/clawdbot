@@ -1,5 +1,8 @@
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { runBrowserNativeHost } from "./src/browser/extension-native-host.js";
+import {
+  parseBrowserNativeHostOrigins,
+  runBrowserNativeHost,
+} from "./src/browser/extension-native-host.js";
 import { buildBrowserExtensionPairing } from "./src/browser/extension-pairing.js";
 
 function requiredArgument(name: string): string {
@@ -12,15 +15,13 @@ function requiredArgument(name: string): string {
 }
 
 async function main(): Promise<void> {
-  const callerOrigin = process.argv.find((argument) => argument.startsWith("chrome-extension://"));
-  if (!callerOrigin) {
-    throw new Error("Missing Chrome extension origin");
-  }
+  const { callerOrigin, expectedOrigins } = parseBrowserNativeHostOrigins(process.argv.slice(2));
   let responseFrame: Buffer | undefined;
   await runBrowserNativeHost({
     manifestPath: requiredArgument("--manifest"),
     launcherPath: requiredArgument("--launcher"),
     callerOrigin,
+    expectedOrigins,
     input: process.stdin,
     write: (frame) => {
       responseFrame = frame;

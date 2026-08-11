@@ -27,6 +27,9 @@ export function createPopupMessageHandler({
   enableNativeBootstrap,
   onManualPairing,
   onUnpairStart,
+  isRetiredCopilotCustodyBlocked,
+  requireAutomationAllowed,
+  discardRetiredCopilotCustody,
   resetRelayState,
   suspendRelayConnections,
   resumeRelayConnections,
@@ -55,6 +58,7 @@ export function createPopupMessageHandler({
   };
 
   async function applyPairing({ pairing, pairingString, accessMode, source = "manual" }) {
+    await requireAutomationAllowed();
     const parsed = pairing ?? parsePairingString(pairingString);
     if (!parsed) {
       return { ok: false, error: "Invalid pairing string." };
@@ -136,6 +140,7 @@ export function createPopupMessageHandler({
       await pairingConfigStore.clear();
       await policy.clearDenied();
       await detaching;
+      await discardRetiredCopilotCustody();
       resetRelayState();
       clearRelayOpeningDeadline();
       closeRelaySocket();
@@ -157,6 +162,7 @@ export function createPopupMessageHandler({
         switch (msg?.type) {
           case "getStatus": {
             await accessReady;
+            const retiredCopilotCustodyBlocked = isRetiredCopilotCustodyBlocked();
             const nativeBootstrap = await getNativeBootstrapStatus();
             const { relayUrl, accessMode } = await getConfig();
             await reconcilePairingInvalidation();
@@ -169,6 +175,7 @@ export function createPopupMessageHandler({
               accessibleTabCount: accessible.length,
               relayUrl: relayUrl ?? "",
               nativeBootstrap,
+              retiredCopilotCustodyBlocked,
               ...(hint ? { hint } : {}),
             });
             return;
@@ -197,6 +204,7 @@ export function createPopupMessageHandler({
               sendResponse({ ok: false, error: "Invalid access mode." });
               return;
             }
+            await requireAutomationAllowed();
             const restricting = msg.accessMode === ACCESS_MODE_SELECTED;
             if (restricting) {
               policy.beginTransition();
@@ -229,6 +237,7 @@ export function createPopupMessageHandler({
               return;
             }
             await accessReady;
+            await requireAutomationAllowed();
             if (policy.mode !== msg.accessMode) {
               sendResponse({ ok: false, error: "Browser access mode changed. Refresh and retry." });
               return;

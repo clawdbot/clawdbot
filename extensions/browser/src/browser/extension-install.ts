@@ -64,32 +64,6 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function launcherContent(params: {
-  nodePath: string;
-  nativeHostPath: string;
-  manifestPath: string;
-  launcherPath: string;
-  stateDir: string;
-  configPath?: string;
-}): string {
-  const command = [
-    params.nodePath,
-    params.nativeHostPath,
-    "--manifest",
-    params.manifestPath,
-    "--launcher",
-    params.launcherPath,
-  ];
-  return [
-    "#!/bin/sh",
-    OWNED_LAUNCHER_MARKER,
-    `export OPENCLAW_STATE_DIR=${shellQuote(params.stateDir)}`,
-    ...(params.configPath ? [`export OPENCLAW_CONFIG_PATH=${shellQuote(params.configPath)}`] : []),
-    `exec ${command.map(shellQuote).join(" ")} "$@"`,
-    "",
-  ].join("\n");
-}
-
 async function resolveNativeHostPath(pluginRoot: string, explicit?: string): Promise<string> {
   if (explicit) {
     return await fs.realpath(explicit);
@@ -118,9 +92,53 @@ function launcherPathForManifest(manifestPath: string, deps: ExtensionInstallDep
   return path.join(nativeMessagingRoot(deps), `${BROWSER_NATIVE_HOST_NAME}.${suffix}.sh`);
 }
 
+function expectedOriginsForExtensionIds(extensionIds: string[]): string[] {
+  return [...new Set(extensionIds)]
+    .toSorted()
+    .map((extensionId) => `chrome-extension://${extensionId}/`);
+}
+
+async function resolveLauncherInstall(params: {
+  manifestPath: string;
+  pluginRoot: string;
+  extensionIds: string[];
+  deps: ExtensionInstallDeps;
+}): Promise<{ path: string; content: string }> {
+  const launcherPath = launcherPathForManifest(params.manifestPath, params.deps);
+  const nodePath = await fs.realpath(params.deps.nodePath ?? process.execPath);
+  const nativeHostPath = await resolveNativeHostPath(params.pluginRoot, params.deps.nativeHostPath);
+  await assertOwnedPath(nodePath, "file", { allowRootOwner: true });
+  await assertOwnedPath(nativeHostPath, "file", { allowRootOwner: true });
+  const command = [
+    nodePath,
+    nativeHostPath,
+    "--manifest",
+    params.manifestPath,
+    "--launcher",
+    launcherPath,
+    ...expectedOriginsForExtensionIds(params.extensionIds).flatMap((origin) => [
+      "--expected-origin",
+      origin,
+    ]),
+  ];
+  const configPath = resolveInstallConfigPath(params.deps);
+  return {
+    path: launcherPath,
+    content: [
+      "#!/bin/sh",
+      OWNED_LAUNCHER_MARKER,
+      `export OPENCLAW_STATE_DIR=${shellQuote(resolveInstallStateDir(params.deps))}`,
+      ...(configPath ? [`export OPENCLAW_CONFIG_PATH=${shellQuote(configPath)}`] : []),
+      `exec ${command.map(shellQuote).join(" ")} "$@"`,
+      "",
+    ].join("\n"),
+  };
+}
+
 async function inspectRegistration(
   root: ChromeProductRoot,
   deps: ExtensionInstallDeps,
+  expectedExtensionIds?: string[],
 ): Promise<NativeHostRegistrationStatus> {
   const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
   if (!(await pathInfo(manifestPath))) {
@@ -163,12 +181,16 @@ async function inspectRegistration(
           typeof origin === "string" && /^chrome-extension:\/\/[a-p]{32}\/$/u.test(origin),
       ) &&
       new Set(origins).size === origins.length;
+    const expectedOrigins = expectedExtensionIds
+      ? expectedOriginsForExtensionIds(expectedExtensionIds)
+      : null;
     if (
       Object.keys(manifest).length !== exactKeys.length ||
       !exactKeys.every((key) => Object.hasOwn(manifest, key)) ||
       (manifest as { description?: unknown }).description !== NATIVE_HOST_DESCRIPTION ||
       (manifest as { type?: unknown }).type !== "stdio" ||
-      !validOrigins
+      !validOrigins ||
+      (expectedOrigins !== null && JSON.stringify(origins) !== JSON.stringify(expectedOrigins))
     ) {
       throw new Error("native host manifest does not contain exact allowed origins");
     }
@@ -203,38 +225,32 @@ async function installRegistration(params: {
 }): Promise<NativeHostRegistrationStatus> {
   const { root, extensionIds, deps } = params;
   const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
-  const existing = await inspectRegistration(root, deps);
+  const existing = await inspectRegistration(root, deps, extensionIds);
   if (existing.state === "foreign" || existing.state === "invalid") {
     throw new Error(`Refusing to overwrite ${existing.state} native host: ${manifestPath}`);
   }
   await ensurePrivateDirectory(nativeMessagingRoot(deps));
   await ensurePrivateDirectory(root.nativeManifestDir);
-  const launcherPath = launcherPathForManifest(manifestPath, deps);
-  const nodePath = await fs.realpath(deps.nodePath ?? process.execPath);
-  const nativeHostPath = await resolveNativeHostPath(params.pluginRoot, deps.nativeHostPath);
-  await assertOwnedPath(nodePath, "file", { allowRootOwner: true });
-  await assertOwnedPath(nativeHostPath, "file", { allowRootOwner: true });
-  const desiredLauncher = launcherContent({
-    nodePath,
-    nativeHostPath,
+  const launcher = await resolveLauncherInstall({
     manifestPath,
-    launcherPath,
-    stateDir: resolveInstallStateDir(deps),
-    configPath: resolveInstallConfigPath(deps),
+    pluginRoot: params.pluginRoot,
+    extensionIds,
+    deps,
   });
+  const launcherPath = launcher.path;
   if (await pathInfo(launcherPath)) {
     await assertOwnedPath(launcherPath, "file");
     const existingLauncher = await fs.readFile(launcherPath, "utf8");
     if (!existingLauncher.includes(OWNED_LAUNCHER_MARKER)) {
       throw new Error(`Refusing to overwrite foreign native host launcher: ${launcherPath}`);
     }
-    if (existingLauncher !== desiredLauncher) {
+    if (existingLauncher !== launcher.content) {
       const replacement = `${launcherPath}.tmp-${process.pid}`;
-      await fs.writeFile(replacement, desiredLauncher, { mode: 0o700, flag: "wx" });
+      await fs.writeFile(replacement, launcher.content, { mode: 0o700, flag: "wx" });
       await fs.rename(replacement, launcherPath);
     }
   } else {
-    await fs.writeFile(launcherPath, desiredLauncher, { mode: 0o700, flag: "wx" });
+    await fs.writeFile(launcherPath, launcher.content, { mode: 0o700, flag: "wx" });
   }
   if (process.platform !== "win32") {
     await fs.chmod(launcherPath, 0o700);
@@ -244,7 +260,7 @@ async function installRegistration(params: {
     description: NATIVE_HOST_DESCRIPTION,
     path: launcherPath,
     type: "stdio",
-    allowed_origins: extensionIds.map((id) => `chrome-extension://${id}/`),
+    allowed_origins: expectedOriginsForExtensionIds(extensionIds),
   };
   const temporary = `${manifestPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
   await fs.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, {
@@ -255,7 +271,7 @@ async function installRegistration(params: {
   if (process.platform !== "win32") {
     await fs.chmod(manifestPath, 0o600);
   }
-  return await inspectRegistration(root, deps);
+  return await inspectRegistration(root, deps, extensionIds);
 }
 
 async function approvedInstallRealpaths(installed: string, bundled: string): Promise<string[]> {
@@ -381,13 +397,17 @@ export async function browserExtensionStatus(params: {
     ? await approvedInstallRealpaths(installedPath, bundledPath)
     : [bundledPath];
   const discovery = await discoverChromeExtensionIds({ approvedDirs: approvedPaths, deps });
-  const predictedIds = approvedPaths.map((candidate) =>
-    generateChromeExtensionIdForPath(candidate, platform),
-  );
+  const predictedIds = [
+    ...new Set(
+      approvedPaths.map((candidate) => generateChromeExtensionIdForPath(candidate, platform)),
+    ),
+  ].toSorted();
   const registrations =
     platform === "win32"
       ? []
-      : await Promise.all(chromeProductRoots(deps).map((root) => inspectRegistration(root, deps)));
+      : await Promise.all(
+          chromeProductRoots(deps).map((root) => inspectRegistration(root, deps, predictedIds)),
+        );
   const missingRegistration = chromeProductRoots(deps).some((root) => {
     const productWasDiscovered = discovery.discovered.some(
       (entry) => entry.product === root.product,
@@ -399,7 +419,7 @@ export async function browserExtensionStatus(params: {
     const registration = registrations.find((entry) => entry.manifestPath === manifestPath);
     return (
       registration?.state !== "owned" ||
-      predictedIds.some((extensionId) => !registration.extensionIds.includes(extensionId))
+      JSON.stringify(registration.extensionIds) !== JSON.stringify(predictedIds)
     );
   });
   return {
@@ -509,14 +529,32 @@ export async function repairOwnedChromeExtensionNativeHosts(params: {
     const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
     const registration = before.registrations.find((entry) => entry.manifestPath === manifestPath);
     const productWasDiscovered = before.discovered.some((entry) => entry.product === root.product);
-    if (
-      !productWasDiscovered ||
-      registration?.state !== "owned" ||
-      JSON.stringify(registration.extensionIds) === JSON.stringify(predictedIds)
-    ) {
+    if (!productWasDiscovered) {
+      continue;
+    }
+    if (registration?.state === "foreign" || registration?.state === "invalid") {
+      warnings.push(
+        `${root.label} native host repair refused: ${registration.issue ?? registration.state}`,
+      );
+      continue;
+    }
+    if (registration?.state !== "owned") {
       continue;
     }
     try {
+      const launcher = await resolveLauncherInstall({
+        manifestPath,
+        pluginRoot: params.pluginRoot,
+        extensionIds: predictedIds,
+        deps,
+      });
+      await assertOwnedPath(launcher.path, "file");
+      const idsAreCurrent =
+        JSON.stringify(registration.extensionIds) === JSON.stringify(predictedIds);
+      const launcherIsCurrent = (await fs.readFile(launcher.path, "utf8")) === launcher.content;
+      if (idsAreCurrent && launcherIsCurrent) {
+        continue;
+      }
       await installRegistration({
         root,
         extensionIds: predictedIds,

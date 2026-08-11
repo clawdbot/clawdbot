@@ -130,6 +130,15 @@ local setup** switch.
 - **Use local OpenClaw** clears the opt-out and retries the native host.
 - Saving an explicit manual pairing also clears the opt-out.
 
+### Upgrades from the retired tab copilot
+
+If Settings says automation is paused to protect a pre-upgrade copilot
+session, confirm that old runs are finished. Then click **Disconnect and
+disable automatic setup** to discard the retired recovery state, followed by
+**Use local OpenClaw** to reconnect. Until that explicit disconnect succeeds,
+the extension preserves the retired state and blocks relay connections, native
+setup, manual pairing, tab access changes, and debugger attachment.
+
 Chromium caches the first missing-native-host result for the running browser
 process. If an existing extension already attempted automatic setup before the
 native host was installed, restart Chrome once (a full browser-process reload).

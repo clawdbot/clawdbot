@@ -238,6 +238,7 @@ const COPILOT_LOCAL_KEYS = [
   "copilotDeviceTokensV1",
 ];
 const COPILOT_SESSION_KEYS = ["copilotBrowserInstanceV1", "copilotPanelBindingsV1"];
+const RETIRED_COPILOT_CUSTODY_BLOCKED_KEY = "retiredCopilotCustodyBlockedV1";
 
 function canClearRetiredCopilotRegistry(value) {
   return (
@@ -251,25 +252,41 @@ function canClearRetiredCopilotRegistry(value) {
   );
 }
 
-/** Remove retired copilot state only after proving no recovery custody remains. */
-export async function clearRetiredExtensionState(chromeApi = chrome) {
+/** Explicitly discard every retired copilot key. */
+export async function discardRetiredCopilotState(chromeApi = chrome) {
+  await chromeApi.storage.local.set({ [RETIRED_COPILOT_CUSTODY_BLOCKED_KEY]: true });
+  await chromeApi.storage.session.remove(COPILOT_SESSION_KEYS);
+  await chromeApi.storage.local.remove(COPILOT_LOCAL_KEYS);
+  await chromeApi.storage.local.remove([RETIRED_COPILOT_CUSTODY_BLOCKED_KEY]);
+}
+
+/** Clear harmless retired state, or preserve custody and fail closed. */
+export async function prepareRetiredCopilotState(chromeApi = chrome) {
   let stored;
   try {
-    stored = await chromeApi.storage.local.get([COPILOT_LOCAL_KEYS[0]]);
+    stored = await chromeApi.storage.local.get([
+      RETIRED_COPILOT_CUSTODY_BLOCKED_KEY,
+      COPILOT_LOCAL_KEYS[0],
+    ]);
   } catch {
-    return;
+    return { blocked: true };
   }
   if (stored === null || typeof stored !== "object" || Array.isArray(stored)) {
-    return;
+    return { blocked: true };
+  }
+  if (Object.hasOwn(stored, RETIRED_COPILOT_CUSTODY_BLOCKED_KEY)) {
+    return { blocked: true };
   }
   if (
     Object.hasOwn(stored, COPILOT_LOCAL_KEYS[0]) &&
     !canClearRetiredCopilotRegistry(stored[COPILOT_LOCAL_KEYS[0]])
   ) {
-    return;
+    return { blocked: true };
   }
-  await Promise.all([
-    chromeApi.storage.local.remove(COPILOT_LOCAL_KEYS),
-    chromeApi.storage.session.remove(COPILOT_SESSION_KEYS),
-  ]);
+  try {
+    await discardRetiredCopilotState(chromeApi);
+  } catch {
+    return { blocked: true };
+  }
+  return { blocked: false };
 }

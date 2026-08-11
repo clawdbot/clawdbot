@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
-import { runBrowserNativeHost } from "./extension-native-host.js";
+import { parseBrowserNativeHostOrigins, runBrowserNativeHost } from "./extension-native-host.js";
 import {
   decodeBrowserNativeFrame,
   encodeBrowserNativeResponse,
@@ -12,6 +12,7 @@ import {
 
 const EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop";
 const ORIGIN = `chrome-extension://${EXTENSION_ID}/`;
+const OTHER_ORIGIN = `chrome-extension://${"p".repeat(32)}/`;
 const NONCE = Buffer.alloc(16, 7).toString("base64url");
 const PAIRING = `ws://127.0.0.1:18799/extension#${relayTestKey(1)}`;
 const REQUEST_MAX_BYTES = 4 * 1024;
@@ -194,6 +195,7 @@ async function invokeHost(overrides: Partial<Parameters<typeof runBrowserNativeH
   const response = await runBrowserNativeHost({
     ...fixture,
     callerOrigin: ORIGIN,
+    expectedOrigins: [ORIGIN],
     input: chunks(frame(requestJson())),
     write: (value) => writes.push(value),
     buildPairing: async () => ({ pairingString: PAIRING, topology: "local" }),
@@ -203,6 +205,31 @@ async function invokeHost(overrides: Partial<Parameters<typeof runBrowserNativeH
 }
 
 describe("native host origin and topology boundary", () => {
+  it("parses a nonempty sorted unique expected-origin list before the caller origin", () => {
+    expect(
+      parseBrowserNativeHostOrigins([
+        "--manifest",
+        "manifest.json",
+        "--expected-origin",
+        ORIGIN,
+        "--expected-origin",
+        OTHER_ORIGIN,
+        OTHER_ORIGIN,
+      ]),
+    ).toEqual({ expectedOrigins: [ORIGIN, OTHER_ORIGIN], callerOrigin: OTHER_ORIGIN });
+  });
+
+  it.each([
+    ["missing list", [ORIGIN]],
+    ["missing value", ["--expected-origin"]],
+    ["duplicate", ["--expected-origin", ORIGIN, "--expected-origin", ORIGIN, ORIGIN]],
+    ["unsorted", ["--expected-origin", OTHER_ORIGIN, "--expected-origin", ORIGIN, ORIGIN]],
+    ["malformed", ["--expected-origin", "chrome-extension://*/", ORIGIN]],
+    ["multiple callers", ["--expected-origin", ORIGIN, ORIGIN, OTHER_ORIGIN]],
+  ])("rejects %s expected-origin arguments", (_label, argv) => {
+    expect(() => parseBrowserNativeHostOrigins(argv)).toThrow();
+  });
+
   it("echoes the nonce and returns only the canonical pairing", async () => {
     const result = await invokeHost();
     expect(result.response).toEqual({ v: 1, ok: true, nonce: NONCE, pairingString: PAIRING });
@@ -210,8 +237,36 @@ describe("native host origin and topology boundary", () => {
   });
 
   it("rejects a wrong extension origin", async () => {
-    const result = await invokeHost({ callerOrigin: `chrome-extension://${"p".repeat(32)}/` });
+    const result = await invokeHost({ callerOrigin: OTHER_ORIGIN });
     expect(result.response).toEqual({ v: 1, ok: false, code: "origin_forbidden" });
+  });
+
+  it("rejects a manifest with an extra valid origin before building pairing", async () => {
+    const fixture = await nativeFixture();
+    await fs.writeFile(
+      fixture.manifestPath,
+      `${JSON.stringify({
+        name: "ai.openclaw.browser_bootstrap",
+        description: "OpenClaw browser extension bootstrap",
+        path: fixture.launcherPath,
+        type: "stdio",
+        allowed_origins: [ORIGIN, OTHER_ORIGIN],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const buildPairing = vi.fn(async () => ({ pairingString: PAIRING, topology: "local" }));
+
+    const response = await runBrowserNativeHost({
+      ...fixture,
+      callerOrigin: ORIGIN,
+      expectedOrigins: [ORIGIN],
+      input: chunks(frame(requestJson())),
+      write: vi.fn(),
+      buildPairing,
+    });
+
+    expect(response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
+    expect(buildPairing).not.toHaveBeenCalled();
   });
 
   it("rejects a wildcard manifest", async () => {
@@ -231,6 +286,7 @@ describe("native host origin and topology boundary", () => {
     const response = await runBrowserNativeHost({
       ...fixture,
       callerOrigin: ORIGIN,
+      expectedOrigins: [ORIGIN],
       input: chunks(frame(requestJson())),
       write: (value) => writes.push(value),
       buildPairing: async () => ({ pairingString: PAIRING, topology: "local" }),

@@ -30,4 +30,16 @@ describe("simplified Chrome extension package", () => {
 
     expect(files.join("\n")).not.toMatch(/copilot|page-share|sidepanel/iu);
   });
+
+  it("ships redacted retired-custody recovery guidance", () => {
+    const options = fs.readFileSync(path.join(extensionDir, "options.html"), "utf8");
+    const popup = fs.readFileSync(path.join(extensionDir, "popup.js"), "utf8");
+
+    expect(options).toContain("Automation is paused to protect a pre-upgrade copilot session.");
+    expect(options).toContain("Confirm old runs are finished");
+    expect(options).toContain("Disconnect and disable automatic setup");
+    expect(options).toContain("Use local OpenClaw");
+    expect(popup).toContain("Automation paused; open Settings");
+    expect(options).not.toMatch(/copilotSessionRegistryV1|sessionId|sessionKey|deviceToken/u);
+  });
 });

@@ -71,7 +71,7 @@ async function loadUnpackedExtension(
 
 async function exactOwnedManifestsExist(
   manifestPaths: string[],
-  expectedOrigin: string,
+  expectedOrigins: string[],
 ): Promise<boolean> {
   for (const manifestPath of manifestPaths) {
     try {
@@ -86,11 +86,7 @@ async function exactOwnedManifestsExist(
         typeof manifest.path !== "string" ||
         Object.hasOwn(manifest, "key") ||
         !Array.isArray(manifest.allowed_origins) ||
-        !manifest.allowed_origins.includes(expectedOrigin) ||
-        !manifest.allowed_origins.every(
-          (origin) =>
-            typeof origin === "string" && /^chrome-extension:\/\/[a-p]{32}\/$/u.test(origin),
-        ) ||
+        JSON.stringify(manifest.allowed_origins) !== JSON.stringify(expectedOrigins) ||
         !(await fs.readFile(manifest.path, "utf8")).includes(
           "# OpenClaw native messaging bootstrap v1",
         )
@@ -221,7 +217,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         cleanups.push(async () => await context.close());
         const installed = stableChromeExtensionDir(deps);
         const predictedId = generateChromeExtensionIdForPath(installed, process.platform);
-        const expectedOrigin = `chrome-extension://${predictedId}/`;
+        const expectedOrigins = [
+          predictedId,
+          generateChromeExtensionIdForPath(extensionSource, process.platform),
+        ]
+          .toSorted()
+          .map((id) => `chrome-extension://${id}/`);
         const relevantManifestPaths = chromeProductRoots(deps)
           .filter((productRoot) => productRoot.userDataDir === userDataDir)
           .map((productRoot) =>
@@ -234,9 +235,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           deps,
         });
         await expect
-          .poll(async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigin), {
-            timeout: 15_000,
-          })
+          .poll(
+            async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
+            {
+              timeout: 15_000,
+            },
+          )
           .toBe(true);
         process.stderr.write("[browser-extension-e2e] deterministic native host pre-registered\n");
         await loadUnpackedExtension(context, installed);

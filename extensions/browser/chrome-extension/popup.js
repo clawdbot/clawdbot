@@ -27,6 +27,11 @@ async function refresh() {
     return;
   }
   pairedDetails.classList.toggle("hidden", !status.paired);
+  if (status.retiredCopilotCustodyBlocked === true) {
+    statusLine.textContent = "Automation paused; open Settings";
+    tabAction.classList.add("hidden");
+    return;
+  }
   if (!status.paired) {
     statusLine.textContent = unpairedLabel(status.nativeBootstrap);
     tabAction.classList.add("hidden");

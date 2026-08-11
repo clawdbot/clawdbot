@@ -7,25 +7,36 @@ const pair = document.getElementById("pair");
 const useLocal = document.getElementById("useLocal");
 const disconnect = document.getElementById("disconnect");
 const message = document.getElementById("message");
+const retiredCustody = document.getElementById("retiredCustody");
 
 async function refresh() {
   const status = await chrome.runtime.sendMessage({ type: "getStatus" });
+  const custodyBlocked = status.retiredCopilotCustodyBlocked === true;
+  retiredCustody.classList.toggle("hidden", !custodyBlocked);
   connectionStatus.textContent = status.paired
-    ? status.state === "on"
-      ? "Connected"
-      : "Paired; relay unavailable"
+    ? custodyBlocked
+      ? "Paired; automation paused"
+      : status.state === "on"
+        ? "Connected"
+        : "Paired; relay unavailable"
     : "Not paired";
-  automaticSetup.checked = !status.nativeBootstrap?.disabled;
-  bootstrapStatus.textContent = status.nativeBootstrap?.disabled
-    ? "Automatic setup disabled"
-    : status.nativeBootstrap?.state === "manual_required"
-      ? `Manual setup required (${status.nativeBootstrap.failureCode ?? "unsupported topology"})`
-      : status.nativeBootstrap?.state === "retrying"
-        ? "Waiting for the local native host"
-        : "Automatic bootstrap ready";
+  automaticSetup.checked = !status.nativeBootstrap?.disabled && !custodyBlocked;
+  bootstrapStatus.textContent = custodyBlocked
+    ? "Retired recovery state requires confirmation"
+    : status.nativeBootstrap?.disabled
+      ? "Automatic setup disabled"
+      : status.nativeBootstrap?.state === "manual_required"
+        ? `Manual setup required (${status.nativeBootstrap.failureCode ?? "unsupported topology"})`
+        : status.nativeBootstrap?.state === "retrying"
+          ? "Waiting for the local native host"
+          : "Automatic bootstrap ready";
   accessMode.value = status.accessMode === "selected" ? "selected" : "all";
-  accessMode.disabled = !status.paired;
-  disconnect.disabled = !status.paired;
+  automaticSetup.disabled = custodyBlocked;
+  useLocal.disabled = custodyBlocked;
+  accessMode.disabled = !status.paired || custodyBlocked;
+  pairingString.disabled = custodyBlocked;
+  pair.disabled = custodyBlocked;
+  disconnect.disabled = !status.paired && !custodyBlocked;
 }
 
 async function showResult(task, success) {

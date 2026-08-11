@@ -13,21 +13,34 @@ import { relayTestKey } from "./relay-key.test-support.js";
 export const TEST_RELAY_KEY = relayTestKey(1);
 export const REPLACEMENT_TEST_RELAY_KEY = relayTestKey(2);
 const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
+const RETIRED_CUSTODY_BLOCKED_KEY = "retiredCopilotCustodyBlockedV1";
+
+export type RetiredStorageFailureStage =
+  | "marker_set"
+  | "session_remove"
+  | "retired_local_remove"
+  | "marker_remove";
 
 export async function loadBackground({
   deferTabAccessInitialization = false,
+  deferRetiredStatePreparation = false,
   deferSocketClose = false,
+  inheritedDebuggerTabIds = [],
   nativeMessage,
   rejectStorageRemove = false,
+  retiredStorageFailureStage,
   relayNegotiatedProtocol,
   sessionConfig,
   storedConfig,
   initialTabs = [],
 }: {
   deferTabAccessInitialization?: boolean;
+  deferRetiredStatePreparation?: boolean;
   deferSocketClose?: boolean;
+  inheritedDebuggerTabIds?: number[];
   nativeMessage?: (request: unknown) => Promise<unknown>;
   rejectStorageRemove?: boolean;
+  retiredStorageFailureStage?: RetiredStorageFailureStage;
   relayNegotiatedProtocol?: string;
   sessionConfig?: Record<string, unknown>;
   storedConfig?: Record<string, unknown>;
@@ -35,7 +48,9 @@ export async function loadBackground({
 } = {}) {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
+  let installedListener: (() => void) | undefined;
   let messageListener: RuntimeMessageListener | undefined;
+  let startupListener: (() => void) | undefined;
   let debuggerDetachListener:
     | ((source: { tabId?: number }, reason: "target_closed" | "canceled_by_user") => void)
     | undefined;
@@ -51,10 +66,17 @@ export async function loadBackground({
   let nextStorageRemove: Promise<void> | null = null;
   let nextStorageSet: Promise<void> | null = null;
   let nextSessionStorageSet: Promise<void> | null = null;
+  let currentRetiredStorageFailureStage = retiredStorageFailureStage;
   let releaseTabAccessInitialization = () => {};
+  let releaseRetiredStatePreparation = () => {};
   const tabAccessInitialization = deferTabAccessInitialization
     ? new Promise<void>((resolve) => {
         releaseTabAccessInitialization = resolve;
+      })
+    : Promise.resolve();
+  const retiredStatePreparation = deferRetiredStatePreparation
+    ? new Promise<void>((resolve) => {
+        releaseRetiredStatePreparation = resolve;
       })
     : Promise.resolve();
   const sharedTabIds = new Set<number>([1]);
@@ -83,6 +105,9 @@ export async function loadBackground({
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
   const storageGet = vi.fn(async (requestedKeys: string[] | string) => {
     const keys = Array.isArray(requestedKeys) ? requestedKeys : [requestedKeys];
+    if (keys.includes("copilotSessionRegistryV1")) {
+      await retiredStatePreparation;
+    }
     const pending = nextStorageGet;
     nextStorageGet = null;
     await pending;
@@ -96,14 +121,31 @@ export async function loadBackground({
     const pending = nextStorageSet;
     nextStorageSet = null;
     await pending;
+    if (
+      currentRetiredStorageFailureStage === "marker_set" &&
+      values[RETIRED_CUSTODY_BLOCKED_KEY] === true
+    ) {
+      throw new Error("Could not persist retired recovery block.");
+    }
     Object.assign(storageValues, values);
   });
   const storageRemove = vi.fn(async (keys: string[]) => {
     const pending = nextStorageRemove;
     nextStorageRemove = null;
     await pending;
-    if (rejectStorageRemove) {
+    if (
+      rejectStorageRemove &&
+      !keys.some((key) => key.startsWith("copilot") || key === RETIRED_CUSTODY_BLOCKED_KEY)
+    ) {
       throw new Error("Could not clear invalid browser pairing.");
+    }
+    const retiredStage = keys.includes(RETIRED_CUSTODY_BLOCKED_KEY)
+      ? "marker_remove"
+      : keys.some((key) => key.startsWith("copilot"))
+        ? "retired_local_remove"
+        : null;
+    if (retiredStage && currentRetiredStorageFailureStage === retiredStage) {
+      throw new Error("Could not discard retired recovery state.");
     }
     for (const key of keys) {
       delete storageValues[key];
@@ -162,7 +204,8 @@ export async function loadBackground({
       attach: vi.fn(async () => undefined),
       detach: vi.fn(async (_source: { tabId: number }) => undefined),
       getTargets: vi.fn(
-        async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> => [],
+        async (): Promise<Array<{ id?: string; tabId?: number; attached?: boolean }>> =>
+          inheritedDebuggerTabIds.map((tabId) => ({ id: `tab-${tabId}`, tabId, attached: true })),
       ),
       sendCommand: vi.fn(async () => ({})),
     },
@@ -221,8 +264,16 @@ export async function loadBackground({
           messageListener = listener;
         }),
       },
-      onStartup: { addListener },
-      onInstalled: { addListener },
+      onStartup: {
+        addListener: vi.fn((listener: () => void) => {
+          startupListener = listener;
+        }),
+      },
+      onInstalled: {
+        addListener: vi.fn((listener: () => void) => {
+          installedListener = listener;
+        }),
+      },
     },
     storage: {
       local: { get: storageGet, set: storageSet, remove: storageRemove },
@@ -237,6 +288,12 @@ export async function loadBackground({
         }),
         set: sessionStorageSet,
         remove: vi.fn(async (keys: string[]) => {
+          if (
+            currentRetiredStorageFailureStage === "session_remove" &&
+            keys.some((key) => key.startsWith("copilot"))
+          ) {
+            throw new Error("Could not discard retired recovery state.");
+          }
           for (const key of keys) {
             delete sessionStorageValues[key];
           }
@@ -325,13 +382,15 @@ export async function loadBackground({
 
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
-  await vi.waitFor(() => {
-    const pairingReads = storageGet.mock.calls.filter(([keys]) =>
-      PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
-    );
-    expect(pairingReads.length).toBeGreaterThanOrEqual(2);
-  });
-  if (!deferTabAccessInitialization) {
+  if (!deferRetiredStatePreparation) {
+    await vi.waitFor(() => {
+      const pairingReads = storageGet.mock.calls.filter(([keys]) =>
+        PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
+      );
+      expect(pairingReads.length).toBeGreaterThanOrEqual(1);
+    });
+  }
+  if (!deferTabAccessInitialization && !deferRetiredStatePreparation) {
     await vi.waitFor(() => {
       const pairingWasCleared = storageRemove.mock.calls.some(([keys]) =>
         keys.includes("relayUrl"),
@@ -340,12 +399,21 @@ export async function loadBackground({
         sockets.length > 0 ||
           pairingWasCleared ||
           sendNativeMessage.mock.calls.length > 0 ||
+          Object.hasOwn(storageValues, "copilotSessionRegistryV1") ||
+          Object.hasOwn(storageValues, RETIRED_CUSTODY_BLOCKED_KEY) ||
           storageValues.nativeBootstrapDisabled === true,
       ).toBe(true);
     });
   }
 
-  if (!alarmListener || !messageListener || !tabsUpdatedListener || !tabsReplacedListener) {
+  if (
+    !alarmListener ||
+    !installedListener ||
+    !messageListener ||
+    !startupListener ||
+    !tabsUpdatedListener ||
+    !tabsReplacedListener
+  ) {
     throw new Error("expected background worker lifecycle listeners");
   }
   return {
@@ -389,9 +457,11 @@ export async function loadBackground({
     get gatewaySockets() {
       return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
     },
+    installedListener,
     messageListener,
     sendNativeMessage,
     releaseTabAccessInitialization,
+    releaseRetiredStatePreparation,
     get relaySockets() {
       return sockets.filter((socket) => socket.protocols.includes("openclaw-extension-relay.v2"));
     },
@@ -460,6 +530,10 @@ export async function loadBackground({
     storageRemove,
     storageSet,
     storageValues,
+    setRetiredStorageFailureStage: (stage?: RetiredStorageFailureStage) => {
+      currentRetiredStorageFailureStage = stage;
+    },
+    startupListener,
     sessionStorageValues,
     sessionStorageSet,
     shareTab: (tabId: number) => sharedTabIds.add(tabId),

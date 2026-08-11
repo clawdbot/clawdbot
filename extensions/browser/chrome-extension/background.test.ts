@@ -5,6 +5,7 @@ import {
   REPLACEMENT_TEST_RELAY_KEY,
   sendRuntimeMessage,
 } from "./background.test-harness.js";
+import type { RetiredStorageFailureStage } from "./background.test-harness.js";
 
 function nativeSuccess(request: unknown, secret = TEST_RELAY_KEY) {
   const nonce = (request as { nonce?: unknown }).nonce;
@@ -159,6 +160,185 @@ describe("native extension bootstrap", () => {
       });
     });
     expect(harness.storageValues).not.toHaveProperty("relayUrl");
+  });
+
+  it("blocks every startup path while retired copilot custody is unresolved", async () => {
+    const harness = await loadBackground({
+      deferRetiredStatePreparation: true,
+      inheritedDebuggerTabIds: [17],
+      storedConfig: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: TEST_RELAY_KEY,
+        authVersion: 2,
+        accessMode: "all",
+        copilotSessionRegistryV1: {
+          sessions: { 17: { creationPending: true } },
+          pendingArchives: [],
+        },
+      },
+    });
+
+    harness.alarmListener({ name: "openclaw-relay-watchdog" });
+    harness.startupListener();
+    harness.installedListener();
+    await Promise.resolve();
+    expect(harness.sendNativeMessage).not.toHaveBeenCalled();
+    expect(harness.relaySockets).toHaveLength(0);
+    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+
+    harness.releaseRetiredStatePreparation();
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 17 }));
+    expect(harness.sendNativeMessage).not.toHaveBeenCalled();
+    expect(harness.relaySockets).toHaveLength(0);
+
+    const status = await sendRuntimeMessage(harness, { type: "getStatus" });
+    expect(status).toMatchObject({
+      paired: true,
+      retiredCopilotCustodyBlocked: true,
+      accessibleTabCount: 0,
+    });
+    expect(JSON.stringify(status)).not.toMatch(/creationPending|pendingArchives|sessionKey/u);
+    await expect(
+      sendRuntimeMessage(harness, {
+        type: "pair",
+        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
+      }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      sendRuntimeMessage(harness, { type: "setNativeBootstrapEnabled", enabled: true }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      sendRuntimeMessage(harness, { type: "setAccessMode", accessMode: "selected" }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      sendRuntimeMessage(harness, {
+        type: "toggleTabAccess",
+        tabId: 17,
+        accessMode: "all",
+        grant: true,
+      }),
+    ).resolves.toMatchObject({ ok: false });
+    expect(harness.storageValues).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      accessMode: "all",
+      copilotSessionRegistryV1: expect.any(Object),
+    });
+  });
+
+  it("uses explicit Disconnect to discard custody before local setup can reconnect", async () => {
+    const harness = await loadBackground({
+      nativeMessage: async (request) => nativeSuccess(request),
+      storedConfig: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: TEST_RELAY_KEY,
+        authVersion: 2,
+        accessMode: "all",
+        copilotSessionRegistryV1: {
+          sessions: { 17: { creationPending: true } },
+          pendingArchives: [],
+        },
+        copilotDeviceIdentitiesV1: { redacted: true },
+        copilotDeviceTokensV1: { redacted: true },
+      },
+      sessionConfig: {
+        copilotBrowserInstanceV1: "redacted",
+        copilotPanelBindingsV1: { 17: "redacted" },
+      },
+    });
+
+    await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toEqual({ ok: true });
+    expect(harness.storageValues).not.toHaveProperty("relayUrl");
+    expect(harness.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
+    expect(harness.sessionStorageValues).not.toHaveProperty("copilotBrowserInstanceV1");
+    expect(harness.storageValues.nativeBootstrapDisabled).toBe(true);
+
+    await expect(
+      sendRuntimeMessage(harness, { type: "setNativeBootstrapEnabled", enabled: true }),
+    ).resolves.toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(harness.relaySockets).toHaveLength(1));
+    expect(harness.sendNativeMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each<RetiredStorageFailureStage>([
+    "marker_set",
+    "session_remove",
+    "retired_local_remove",
+    "marker_remove",
+  ])(
+    "keeps custody blocked when Disconnect fails at %s and permits an explicit retry",
+    async (stage) => {
+      const harness = await loadBackground({
+        inheritedDebuggerTabIds: [17],
+        retiredStorageFailureStage: stage,
+        storedConfig: {
+          relayUrl: "ws://127.0.0.1:18797/extension",
+          token: TEST_RELAY_KEY,
+          authVersion: 2,
+          accessMode: "all",
+          copilotSessionRegistryV1: {
+            sessions: { 17: { creationPending: true } },
+            pendingArchives: [],
+          },
+        },
+        sessionConfig: {
+          copilotBrowserInstanceV1: "redacted",
+          copilotPanelBindingsV1: { 17: "redacted" },
+        },
+      });
+
+      await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toMatchObject({
+        ok: false,
+      });
+      await expect(sendRuntimeMessage(harness, { type: "getStatus" })).resolves.toMatchObject({
+        retiredCopilotCustodyBlocked: true,
+      });
+      expect(harness.relaySockets).toHaveLength(0);
+      expect(harness.sendNativeMessage).not.toHaveBeenCalled();
+      expect(harness.debuggerAttach).not.toHaveBeenCalled();
+      if (stage === "marker_set") {
+        expect(harness.storageValues).toHaveProperty("copilotSessionRegistryV1");
+        expect(harness.storageValues).not.toHaveProperty("retiredCopilotCustodyBlockedV1");
+      } else {
+        expect(harness.storageValues.retiredCopilotCustodyBlockedV1).toBe(true);
+      }
+      if (stage === "session_remove" || stage === "retired_local_remove") {
+        expect(harness.storageValues).toHaveProperty("copilotSessionRegistryV1");
+      }
+      if (stage === "marker_remove") {
+        expect(harness.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
+      }
+
+      harness.setRetiredStorageFailureStage(undefined);
+      await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toEqual({ ok: true });
+      expect(harness.storageValues).not.toHaveProperty("retiredCopilotCustodyBlockedV1");
+      expect(harness.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
+      expect(harness.sessionStorageValues).not.toHaveProperty("copilotBrowserInstanceV1");
+      expect(harness.storageValues.nativeBootstrapDisabled).toBe(true);
+      expect(harness.relaySockets).toHaveLength(0);
+    },
+  );
+
+  it("keeps a persisted custody marker inert across worker startup without a registry", async () => {
+    const harness = await loadBackground({
+      inheritedDebuggerTabIds: [18],
+      nativeMessage: async (request) => nativeSuccess(request),
+      storedConfig: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: TEST_RELAY_KEY,
+        authVersion: 2,
+        accessMode: "all",
+        retiredCopilotCustodyBlockedV1: true,
+      },
+    });
+
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 18 }));
+    expect(harness.relaySockets).toHaveLength(0);
+    expect(harness.sendNativeMessage).not.toHaveBeenCalled();
+    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+    await expect(sendRuntimeMessage(harness, { type: "getStatus" })).resolves.toMatchObject({
+      retiredCopilotCustodyBlocked: true,
+      accessibleTabCount: 0,
+    });
   });
 });
 

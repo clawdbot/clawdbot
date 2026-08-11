@@ -45,9 +45,15 @@ export function createNativeBootstrapController(params: {
   status(): Promise<{ disabled: boolean; state: string; failureCode?: string }>;
 };
 
-export function clearRetiredExtensionState(chromeApi?: {
+type RetiredCopilotStorage = {
   storage: {
-    local: Pick<NativeBootstrapStorageArea, "get" | "remove">;
+    local: Pick<NativeBootstrapStorageArea, "get" | "set" | "remove">;
     session: Pick<NativeBootstrapStorageArea, "remove">;
   };
-}): Promise<void>;
+};
+
+export function prepareRetiredCopilotState(
+  chromeApi?: RetiredCopilotStorage,
+): Promise<{ blocked: boolean }>;
+
+export function discardRetiredCopilotState(chromeApi?: RetiredCopilotStorage): Promise<void>;

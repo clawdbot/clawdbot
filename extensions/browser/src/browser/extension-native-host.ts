@@ -10,7 +10,7 @@ import {
 } from "./extension-native-protocol.js";
 
 export const BROWSER_NATIVE_HOST_NAME = "ai.openclaw.browser_bootstrap";
-const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
+const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}\/$/;
 
 type NativeHostManifest = {
   name: string;
@@ -19,6 +19,48 @@ type NativeHostManifest = {
   type: string;
   allowed_origins: string[];
 };
+
+function validateExpectedOrigins(origins: string[]): string[] {
+  const canonical = [...new Set(origins)].toSorted();
+  if (
+    origins.length === 0 ||
+    origins.length !== canonical.length ||
+    origins.some((origin, index) => origin !== canonical[index]) ||
+    origins.some((origin) => !EXTENSION_ORIGIN_PATTERN.test(origin))
+  ) {
+    throw new Error("invalid expected origins");
+  }
+  return canonical;
+}
+
+export function parseBrowserNativeHostOrigins(argv: string[]): {
+  expectedOrigins: string[];
+  callerOrigin: string;
+} {
+  const expectedOrigins: string[] = [];
+  let callerOrigin = "";
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--expected-origin") {
+      const value = argv[index + 1];
+      if (!value || callerOrigin) {
+        throw new Error("invalid expected-origin arguments");
+      }
+      expectedOrigins.push(value);
+      index += 1;
+    } else if (argument?.startsWith("chrome-extension://")) {
+      if (callerOrigin) {
+        throw new Error("multiple Chrome extension origins");
+      }
+      callerOrigin = argument;
+    }
+  }
+  validateExpectedOrigins(expectedOrigins);
+  if (!EXTENSION_ORIGIN_PATTERN.test(callerOrigin)) {
+    throw new Error("missing Chrome extension origin");
+  }
+  return { expectedOrigins, callerOrigin };
+}
 
 async function validateOwnedFile(filePath: string, executable: boolean): Promise<string> {
   const resolved = path.resolve(filePath);
@@ -47,6 +89,7 @@ async function validateNativeManifest(params: {
   manifestPath: string;
   launcherPath: string;
   callerOrigin: string;
+  expectedOrigins: string[];
   stateDir?: string;
 }): Promise<void> {
   const manifestPath = await validateOwnedFile(params.manifestPath, false);
@@ -64,6 +107,7 @@ async function validateNativeManifest(params: {
     throw new Error("invalid manifest");
   }
   const manifest = parsed as NativeHostManifest;
+  const expectedOrigins = validateExpectedOrigins(params.expectedOrigins);
   const keys = ["name", "description", "path", "type", "allowed_origins"];
   if (
     Object.keys(manifest).length !== keys.length ||
@@ -72,17 +116,11 @@ async function validateNativeManifest(params: {
     manifest.type !== "stdio" ||
     manifest.path !== launcherPath ||
     !Array.isArray(manifest.allowed_origins) ||
-    manifest.allowed_origins.length === 0 ||
-    !manifest.allowed_origins.every(
-      (origin) =>
-        typeof origin === "string" &&
-        origin === `chrome-extension://${origin.slice(19, -1)}/` &&
-        EXTENSION_ID_PATTERN.test(origin.slice(19, -1)),
-    )
+    JSON.stringify(manifest.allowed_origins) !== JSON.stringify(expectedOrigins)
   ) {
     throw new Error("invalid manifest");
   }
-  if (!manifest.allowed_origins.includes(params.callerOrigin)) {
+  if (!expectedOrigins.includes(params.callerOrigin)) {
     throw new Error("origin forbidden");
   }
 }
@@ -92,6 +130,7 @@ export async function runBrowserNativeHost(params: {
   manifestPath: string;
   launcherPath: string;
   callerOrigin: string;
+  expectedOrigins: string[];
   input: AsyncIterable<Buffer>;
   write: (frame: Buffer) => void;
   buildPairing: () => Promise<{ pairingString: string; topology: string }>;

@@ -1,6 +1,7 @@
 import {
-  clearRetiredExtensionState,
   createNativeBootstrapController,
+  discardRetiredCopilotState,
+  prepareRetiredCopilotState,
 } from "./modules/native-bootstrap.js";
 import { createPopupMessageHandler } from "./modules/popup-background.js";
 import { createRelayCommandHandler } from "./modules/relay-command-handler.js";
@@ -46,6 +47,8 @@ let reconciledPairingInvalidationRevision = 0;
 let relayConnectionGeneration = 0;
 let relayConnectionsSuspended = false;
 let nativeBootstrap = null;
+// Start blocked: no runtime path may outrun the retired-state storage read.
+let retiredCopilotCustodyBlocked = true;
 /** Tab ids with an active chrome.debugger attachment. */
 const attachedTabs = new Set();
 /** Access epoch proven for each attachment; debugger events use this synchronously. */
@@ -58,9 +61,30 @@ let accessMutationChain = Promise.resolve();
 const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
 const tabAccessPolicy = createTabAccessPolicy({ isSelectedTab: isTabSelected });
 const tabAccessReady = (async () => {
+  const retiredState = await prepareRetiredCopilotState();
+  retiredCopilotCustodyBlocked = retiredState.blocked;
   const config = await pairingConfigStore.read();
-  await tabAccessPolicy.initialize(config.accessMode, Boolean(config.relayUrl));
+  await tabAccessPolicy.initialize(
+    config.accessMode,
+    Boolean(config.relayUrl) && !retiredCopilotCustodyBlocked,
+  );
+  if (retiredCopilotCustodyBlocked) {
+    tabAccessPolicy.setEnabled(false);
+    await detachAllDebuggerSessions();
+  }
 })();
+
+const custodyError = () =>
+  new Error(
+    "Automation is paused to protect a pre-upgrade copilot session. Open Settings to disconnect before reconnecting.",
+  );
+
+async function requireAutomationAllowed() {
+  await tabAccessReady;
+  if (retiredCopilotCustodyBlocked) {
+    throw custodyError();
+  }
+}
 
 function closeRelaySocket() {
   const socket = relayWs;
@@ -104,9 +128,9 @@ function setBadge(kind) {
 }
 
 async function getConfig() {
-  const config = await pairingConfigStore.read();
   await tabAccessReady;
-  if (!config.relayUrl) {
+  const config = await pairingConfigStore.read();
+  if (retiredCopilotCustodyBlocked || !config.relayUrl) {
     tabAccessPolicy.setEnabled(false);
   }
   if (config.pairingStatusHint) {
@@ -166,6 +190,9 @@ function scheduleTabsSync() {
 }
 
 async function syncTabsToRelay() {
+  if (retiredCopilotCustodyBlocked) {
+    return;
+  }
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN || relayAuthenticatedSocket !== relayWs) {
     return;
   }
@@ -184,7 +211,7 @@ async function syncTabsToRelay() {
 // ---------------------------------------------------------------------------
 
 async function attachDebugger(tabId) {
-  await tabAccessReady;
+  await requireAutomationAllowed();
   const accessEpoch = tabAccessPolicy.capture(tabId);
   const assertAccess = async () => {
     await tabAccessPolicy.requireTab(tabId, accessEpoch);
@@ -345,7 +372,12 @@ async function pauseTab(tabId) {
 // ---------------------------------------------------------------------------
 
 function send(message) {
-  if (relayWs && relayWs.readyState === WebSocket.OPEN && relayAuthenticatedSocket === relayWs) {
+  if (
+    !retiredCopilotCustodyBlocked &&
+    relayWs &&
+    relayWs.readyState === WebSocket.OPEN &&
+    relayAuthenticatedSocket === relayWs
+  ) {
     relayWs.send(JSON.stringify(message));
   }
 }
@@ -405,6 +437,14 @@ async function sendHello() {
 }
 
 async function connectRelay(isConnectionAllowed = () => true) {
+  await tabAccessReady;
+  if (retiredCopilotCustodyBlocked) {
+    tabAccessPolicy.setEnabled(false);
+    clearRelayOpeningDeadline();
+    closeRelaySocket();
+    setBadge("off");
+    return;
+  }
   const connectionGeneration = relayConnectionGeneration;
   const connectionIsCurrent = () =>
     !relayConnectionsSuspended &&
@@ -524,8 +564,17 @@ function scheduleReconnect() {
   reconnectAttempt += 1;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    void connectRelay();
+    void startAutomation();
   }, delay);
+}
+
+async function startAutomation() {
+  await tabAccessReady;
+  if (retiredCopilotCustodyBlocked) {
+    return;
+  }
+  await nativeBootstrap.attempt();
+  await connectRelay();
 }
 
 // ---------------------------------------------------------------------------
@@ -540,13 +589,27 @@ const handlePopupMessage = createPopupMessageHandler({
   getRelayState: () => relayState,
   getRelayStatusHint: () => relayStatusHint,
   getNativeBootstrapStatus: async () => {
-    await nativeBootstrap.attempt();
+    await tabAccessReady;
+    if (!retiredCopilotCustodyBlocked) {
+      await nativeBootstrap.attempt();
+    }
     return await nativeBootstrap.status();
   },
-  enableNativeBootstrap: async (enabled) =>
-    enabled ? await nativeBootstrap.enable() : await nativeBootstrap.disableSynchronously(),
+  enableNativeBootstrap: async (enabled) => {
+    await requireAutomationAllowed();
+    return enabled ? await nativeBootstrap.enable() : await nativeBootstrap.disableSynchronously();
+  },
   onManualPairing: () => nativeBootstrap.enable({ attemptNow: false }),
   onUnpairStart: () => nativeBootstrap.disableSynchronously(),
+  isRetiredCopilotCustodyBlocked: () => retiredCopilotCustodyBlocked,
+  requireAutomationAllowed,
+  discardRetiredCopilotCustody: async () => {
+    retiredCopilotCustodyBlocked = true;
+    tabAccessPolicy.setEnabled(false);
+    tabAccessPolicy.invalidateAll();
+    await discardRetiredCopilotState();
+    retiredCopilotCustodyBlocked = false;
+  },
   resetRelayState: () => {
     relayStatusHint = "";
     reconnectAttempt = 0;
@@ -593,17 +656,15 @@ registerTabAccessEvents({
 chrome.alarms.create(RELAY_WATCHDOG_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RELAY_WATCHDOG_ALARM) {
-    void nativeBootstrap.attempt().then(() => connectRelay());
+    void startAutomation();
   } else if (alarm.name === RELAY_OPENING_DEADLINE_ALARM) {
     handleRelayOpeningDeadline();
   }
 });
 chrome.runtime.onStartup.addListener(() => {
-  void nativeBootstrap.attempt().then(() => connectRelay());
+  void startAutomation();
 });
 chrome.runtime.onInstalled.addListener(() => {
-  void clearRetiredExtensionState()
-    .then(() => nativeBootstrap.attempt())
-    .then(() => connectRelay());
+  void startAutomation();
 });
-void nativeBootstrap.attempt().then(() => connectRelay());
+void startAutomation();
