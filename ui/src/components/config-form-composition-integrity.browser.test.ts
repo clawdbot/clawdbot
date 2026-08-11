@@ -53,6 +53,12 @@ describe("config form composition integrity", () => {
         ambiguousBooleanLabel: {
           anyOf: [{ type: "boolean" }, { const: "true" }],
         },
+        overlappingOneOf: {
+          oneOf: [{ type: "boolean" }, { const: true }],
+        },
+        overlappingAnyOf: {
+          anyOf: [{ type: "boolean" }, { const: true }],
+        },
         mode: {
           title: "Native Commands",
           default: "auto",
@@ -62,6 +68,9 @@ describe("config form composition integrity", () => {
           title: "Plain Mode",
           enum: ["auto", "manual"],
         },
+        disjointOneOf: {
+          oneOf: [{ type: "boolean" }, { const: "auto" }],
+        },
       },
     });
 
@@ -70,6 +79,7 @@ describe("config form composition integrity", () => {
       "guarded",
       "nullableBoolean",
       "ambiguousBooleanLabel",
+      "overlappingOneOf",
     ]);
     expect(analysis.schema?.properties?.retention).toMatchObject({
       anyOf: [{ type: "string" }, { const: false }],
@@ -77,6 +87,15 @@ describe("config form composition integrity", () => {
     expect(analysis.schema?.properties?.mode).toMatchObject({
       enum: [true, false, "auto"],
       default: "auto",
+    });
+    expect(analysis.schema?.properties?.overlappingOneOf).toMatchObject({
+      oneOf: [{ type: "boolean" }, { const: true }],
+    });
+    expect(analysis.schema?.properties?.overlappingAnyOf).toMatchObject({
+      enum: [true, false],
+    });
+    expect(analysis.schema?.properties?.disjointOneOf).toMatchObject({
+      enum: [true, false, "auto"],
     });
 
     const onPatch = vi.fn();
@@ -94,9 +113,11 @@ describe("config form composition integrity", () => {
       container,
     );
 
-    const modeControl = container.querySelector<HTMLElement & { value: string }>(
-      "wa-radio-group.settings-segmented",
-    );
+    const modeControl = [
+      ...container.querySelectorAll<HTMLElement & { value: string }>(
+        "wa-radio-group.settings-segmented",
+      ),
+    ].find((group) => group.querySelector("[slot='label']")?.textContent === "Native Commands");
     expect(modeControl).not.toBeNull();
     const modeOptions = [...(modeControl?.querySelectorAll("wa-radio") ?? [])];
     // Web Awesome radios take their accessible names from their visible default-slot text.
