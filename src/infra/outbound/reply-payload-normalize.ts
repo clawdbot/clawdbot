@@ -29,7 +29,7 @@ function readObjectValue(value: unknown): object | undefined {
 }
 
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
-export function normalizeOutboundReplyPayload(
+export function normalizeOutboundReplyPayloadCore(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
   const text = readStringValue(payload.text);

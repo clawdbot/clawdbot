@@ -18,6 +18,7 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -38,7 +39,6 @@ import {
   collectActionMediaSourceHints,
   collectAttachmentSources,
   normalizeSandboxMediaList,
-  readBooleanParam,
 } from "./message-action-params.js";
 import {
   prepareOutboundMirrorRoute,

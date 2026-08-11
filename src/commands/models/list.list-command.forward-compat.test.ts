@@ -217,7 +217,7 @@ function installModelsListCommandForwardCompatMocks() {
     id === "gpt-5.3-codex-spark";
 
   vi.doMock("../../agents/model-suppression.js", () => ({
-    shouldSuppressBuiltInModel: suppressOpenAiSpark,
+    shouldSuppressBuiltInModelCore: suppressOpenAiSpark,
     shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
     createManifestBuiltInModelSuppressor: vi.fn(
       () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),

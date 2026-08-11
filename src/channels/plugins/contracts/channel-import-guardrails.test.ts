@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -20,7 +20,7 @@ const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
-const bundledPluginRecords = loadPluginManifestRegistry({
+const bundledPluginRecords = loadPluginManifestRegistryCore({
   config: {},
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const bundledPluginRoots = new Map(

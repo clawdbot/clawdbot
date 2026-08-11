@@ -243,7 +243,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({

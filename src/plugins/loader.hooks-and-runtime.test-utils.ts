@@ -21,7 +21,7 @@ import {
   globalAfterAll1,
   updatePluginManifest,
 } from "./loader.test-harness.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -923,7 +923,7 @@ ${channelPluginSource({
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
       () => {
-        const manifestRegistry = loadPluginManifestRegistry({ config });
+        const manifestRegistry = loadPluginManifestRegistryCore({ config });
         return loadOpenClawPlugins({
           cache: false,
           preferBuiltPluginArtifacts: true,
