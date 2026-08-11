@@ -9,8 +9,12 @@ type AvatarRouteEntry = {
 const AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const sharedAvatarRoutes = new Map<string, AvatarRouteEntry>();
 
-function avatarRouteKey(url: string, authTokens: readonly string[]): string {
-  return `${authTokens.join("")}\0${url}`;
+function avatarRouteKey(
+  url: string,
+  authTokens: readonly string[],
+  cacheNotFound: boolean,
+): string {
+  return `${cacheNotFound ? "stable-miss" : "retry-miss"}\0${authTokens.join("")}\0${url}`;
 }
 
 function releaseEntry(key: string, owner: symbol) {
@@ -41,10 +45,12 @@ async function fetchAvatarRoute(
   key: string,
   url: string,
   authTokens: readonly string[],
+  cacheNotFound: boolean,
   entry: AvatarRouteEntry,
 ) {
   const timeout = setTimeout(() => entry.controller.abort(), AUTHENTICATED_AVATAR_FETCH_TIMEOUT_MS);
   let blobUrl: string | null = null;
+  let notFound = false;
   try {
     // Ordered credential recovery: a saved token can be stale while the session's
     // password is valid, so a rejected credential falls through to the next one
@@ -58,6 +64,7 @@ async function fetchAvatarRoute(
         blobUrl = URL.createObjectURL(await response.blob());
         break;
       }
+      notFound = response.status === 404;
       if (response.status !== 401 && response.status !== 403) {
         break;
       }
@@ -75,7 +82,10 @@ async function fetchAvatarRoute(
     return;
   }
   if (!blobUrl) {
-    // Do not cache misses: a later identity publication may make this stable route valid.
+    if (notFound && cacheNotFound) {
+      return;
+    }
+    // Avatar misses stay retryable because a later identity publication may make the route valid.
     sharedAvatarRoutes.delete(key);
     return;
   }
@@ -93,7 +103,10 @@ export class AuthenticatedAvatarRouteLoader {
   private readonly owner = Symbol("authenticated-avatar-route-owner");
   private keys = new Set<string>();
 
-  constructor(private readonly onUpdate: () => void) {}
+  constructor(
+    private readonly onUpdate: () => void,
+    private readonly options: { cacheNotFound?: boolean } = {},
+  ) {}
 
   reset() {
     for (const key of this.keys) {
@@ -121,7 +134,8 @@ export class AuthenticatedAvatarRouteLoader {
     if (!url.startsWith("/")) {
       return url;
     }
-    const key = avatarRouteKey(url, authTokens);
+    const cacheNotFound = this.options.cacheNotFound === true;
+    const key = avatarRouteKey(url, authTokens, cacheNotFound);
     let entry = sharedAvatarRoutes.get(key);
     if (!entry) {
       entry = {
@@ -131,7 +145,7 @@ export class AuthenticatedAvatarRouteLoader {
         releaseTimer: undefined,
       };
       sharedAvatarRoutes.set(key, entry);
-      void fetchAvatarRoute(key, url, authTokens, entry);
+      void fetchAvatarRoute(key, url, authTokens, cacheNotFound, entry);
     }
     if (entry.releaseTimer !== undefined) {
       clearTimeout(entry.releaseTimer);

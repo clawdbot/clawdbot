@@ -557,6 +557,41 @@ describe("chat pane workspace chip icon", () => {
     fetchSpy.mockRestore();
   });
 
+  it("does not refetch a missing project icon when the header rerenders", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({ ok: false, status: 404 } as Response);
+    const workspaceIcon = {
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
+      authTokens: ["token"],
+      authReady: true,
+    };
+    const mounted = mount({ workspaceIcon });
+    const element = mounted.container.querySelector("openclaw-workspace-icon") as
+      | (HTMLElement & { updateComplete?: Promise<unknown> })
+      | null;
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await element?.updateComplete;
+    render(
+      html`${renderChatPaneHeader({ ...mounted.props, title: "Updated title", workspaceIcon })}`,
+      mounted.container,
+    );
+    await element?.updateComplete;
+    await Promise.resolve();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    render(
+      html`${renderChatPaneHeader({
+        ...mounted.props,
+        workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] },
+      })}`,
+      mounted.container,
+    );
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    fetchSpy.mockRestore();
+  });
+
   it("retries the next credential when a stale token is rejected", async () => {
     const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
     const fetchSpy = vi
