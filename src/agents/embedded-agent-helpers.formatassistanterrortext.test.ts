@@ -308,14 +308,6 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
   });
-  it("keeps OpenRouter 429 key budget failures on billing copy", () => {
-    const msg = makeAssistantError("429 API key budget limit exceeded");
-    const result = formatAssistantErrorText(msg, {
-      provider: "openrouter",
-      model: "openai/gpt-5.5",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
-  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");

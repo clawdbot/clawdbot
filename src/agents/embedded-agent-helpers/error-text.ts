@@ -13,8 +13,6 @@ import {
   isBilling429MessageForProvider,
   isBillingErrorMessage,
   isContextOverflowError,
-  isOpenRouterKeyBudgetLimitExceededError,
-  isOpenRouterKeyLimitExceededError,
   isProviderCompletedErrorFinishReasonMessage,
   isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
@@ -205,17 +203,14 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
-  if (
-    isOpenRouterKeyLimitExceededError(raw, opts?.provider) ||
-    isOpenRouterKeyBudgetLimitExceededError(raw, opts?.provider)
-  ) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
   if (isBilling429MessageForProvider(raw, opts?.provider)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
   const failoverReason = classifyFailoverReason(raw, { provider: opts?.provider });
+  if (failoverReason === "billing") {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+  }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
       ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
