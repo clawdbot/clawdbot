@@ -372,7 +372,7 @@ export const ja_JP: TranslationMap = {
     genericSubtitle: "このパネルの読み込み中に問題が発生しました。",
     staleTitle: "新しいバージョンが利用可能です",
     staleSubtitle:
-      "OpenClaw がバックグラウンドで更新されました。最新のパネルを表示するには再読み込みしてください。",
+      "OpenCrustacean がバックグラウンドで更新されました。最新のパネルを表示するには再読み込みしてください。",
     reloading: "再読み込み中…",
     retry: "再試行",
     stylesFailed: "スタイルの読み込みに失敗したため、ページが正しく表示されない場合があります。",
@@ -397,7 +397,7 @@ export const ja_JP: TranslationMap = {
       notGitInstall:
         "gitチェックアウトではありません。グローバル再インストールを行うには、CLIから `openclaw update` を実行してください。",
       notOpenclawRoot:
-        "OpenClawのチェックアウトから更新を実行するか、CLIのグローバル再インストールを使用してください。",
+        "OpenCrustaceanのチェックアウトから更新を実行するか、CLIのグローバル再インストールを使用してください。",
       depsInstallFailed:
         "依存関係のインストールに失敗しました。インストールエラーを修正して再試行してください。",
       buildFailed: "ビルドに失敗しました。ビルドエラーを修正して再試行してください。",
@@ -430,7 +430,7 @@ export const ja_JP: TranslationMap = {
     pairing: {
       button: "モバイルデバイスをペアリング",
       adminRequired: "セットアップコードを作成するには管理者アクセスが必要です。",
-      title: "OpenClaw mobile",
+      title: "OpenCrustacean mobile",
       subtitle:
         "新しいスマートフォンを接続するには、モバイルアプリでこのQRコードをスキャンしてください。",
       noApp: "まだアプリをお持ちでないですか？",
@@ -446,14 +446,14 @@ export const ja_JP: TranslationMap = {
       transportLimitedHint:
         "このGateway URLは平文のws://を使用しています。wss://またはTailscale Serveを使用してから、フルアクセス用の新しいコードを作成してください。",
       failed: "セットアップコードを作成できませんでした。",
-      qrAlt: "OpenClaw mobile ペアリングQRコード",
+      qrAlt: "OpenCrustacean mobile ペアリングQRコード",
       qrUnavailable: "QRを利用できません。代わりにセットアップコードをコピーしてください。",
       copySetupCode: "セットアップコードをコピー",
       newCode: "新しいコード",
       showSetupCode: "セットアップコードを表示",
       pending: "レビュー待ちのデバイスリクエスト: {count}",
       review: "レビュー",
-      waiting: "公式の OpenClaw mobile アプリはスキャン後に自動的に接続します。",
+      waiting: "公式の OpenCrustacean mobile アプリはスキャン後に自動的に接続します。",
       help: "ペアリングのヘルプ",
       manageDevices: "デバイスを管理",
     },
@@ -601,11 +601,11 @@ export const ja_JP: TranslationMap = {
     ownerSession: "セッション",
     ownerWorkboard: "Workboard",
     title: "管理対象ワークツリー",
-    subtitle: "OpenClaw が所有する分離されたリポジトリのチェックアウト。",
+    subtitle: "OpenCrustacean が所有する分離されたリポジトリのチェックアウト。",
     cleanNow: "今すぐクリーンアップ",
     cleanupTitle: "クリーンアップ",
     cleanupSubtitle:
-      "OpenClaw は、ディスク容量を確保するために古い worktree を定期的に削除します。クリーンアップの実行基準を調整できます。",
+      "OpenCrustacean は、ディスク容量を確保するために古い worktree を定期的に削除します。クリーンアップの実行基準を調整できます。",
     cleanupMaxCount: "worktree の最大数",
     cleanupMaxCountHelp:
       "すべてのリポジトリで保持する管理対象 worktree の最大数です。古い worktree から順にスナップショットが作成され、削除されます。件数制限を無効にするには 0 に設定します。",
@@ -657,8 +657,8 @@ export const ja_JP: TranslationMap = {
     cloudWorker: "クラウド · {profile}",
     cloudWorkerProvider: "クラウドワーカーのプロバイダー: {provider}",
     cloudRequiresWorktree: "クラウドワーカーには管理対象のワークツリーが必要です",
-    cloudRequiresOpenClawRuntime:
-      "クラウドワーカーにはOpenClawランタイムが必要です。{runtime}が選択されています。",
+    cloudRequiresOpenCrustaceanRuntime:
+      "クラウドワーカーにはOpenCrustaceanランタイムが必要です。{runtime}が選択されています。",
     cloudSecureContextRequired:
       "復旧時にタスクを保護できるようにするには、クラウドワーカーにセキュアなブラウザーコンテキストが必要です。",
     cloudStartFailed:
@@ -1467,7 +1467,7 @@ export const ja_JP: TranslationMap = {
       title: "プッシュ通知",
       nativeTitle: "通知",
       hint: "ゲートウェイからブラウザのプッシュ通知を受け取ります。",
-      nativeHint: "通知はこの Mac の OpenClaw アプリによってネイティブに表示されます。",
+      nativeHint: "通知はこの Mac の OpenCrustacean アプリによってネイティブに表示されます。",
       unavailableHint: "このブラウザでは利用できません。",
       unavailable: "利用不可",
       checking: "確認中...",
@@ -1492,7 +1492,7 @@ export const ja_JP: TranslationMap = {
       blockedHint:
         "通知がブロックされています。通知を許可するには、ブラウザのサイト権限を更新してください。",
       nativeBlockedHint:
-        "macOSでOpenClawの通知が無効になっています。システム設定 > 通知で許可してください。",
+        "macOSでOpenCrustaceanの通知が無効になっています。システム設定 > 通知で許可してください。",
     },
     appearance: {
       intro: "この Control UI クライアントのテーマ、チャット、サイドバーの設定。",
@@ -1631,7 +1631,7 @@ export const ja_JP: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1640,7 +1640,7 @@ export const ja_JP: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1818,7 +1818,7 @@ export const ja_JP: TranslationMap = {
     forward: "進む",
     chat: "チャット",
     settings: "設定",
-    askOpenClaw: "OpenClaw に質問",
+    askOpenCrustacean: "OpenCrustacean に質問",
     settingsGroupConnections: "接続",
     settingsGroupAgents: "エージェントとツール",
     settingsGroupSecurity: "プライバシーとセキュリティ",
@@ -1960,7 +1960,7 @@ export const ja_JP: TranslationMap = {
     nodes: "ノード",
     chat: "チャット",
     dashboards: "ダッシュボード",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "設定",
     profile: "プロフィール",
     communications: "通信",
@@ -2027,14 +2027,14 @@ export const ja_JP: TranslationMap = {
   modelSetup: {
     heading: "AIに接続",
     intro:
-      "OpenClawは、CLIログイン、APIキー、プロバイダーへのサインインなど、既にお持ちのAIアクセスを再利用します。",
+      "OpenCrustaceanは、CLIログイン、APIキー、プロバイダーへのサインインなど、既にお持ちのAIアクセスを再利用します。",
     required: {
       title: "AI プロバイダーが構成されていません",
-      body: "OpenClaw はこのエージェントに構成されたプロバイダーとモデルを見つけられませんでした。会話を開始する前に追加してください。",
+      body: "OpenCrustacean はこのエージェントに構成されたプロバイダーとモデルを見つけられませんでした。会話を開始する前に追加してください。",
       action: "プロバイダーを構成",
     },
     connectionFailure: {
-      title: "OpenClaw は構成済みの AI を使用できませんでした",
+      title: "OpenCrustacean は構成済みの AI を使用できませんでした",
       body: "このエージェントにはプロバイダーとモデルが選択されていますが、接続に失敗しました。プロバイダーのログインまたは API キー、モデルへのアクセス、サービスの状態を確認して、もう一度お試しください。",
       action: "プロバイダー設定を確認",
     },
@@ -2050,7 +2050,7 @@ export const ja_JP: TranslationMap = {
     },
     access: {
       adminRequired: "モデルの設定にはoperator.adminアクセスが必要です。",
-      gatewayTooOld: "Gatewayで実行中のOpenClawのバージョンが古いです",
+      gatewayTooOld: "Gatewayで実行中のOpenCrustaceanのバージョンが古いです",
     },
     candidates: {
       title: "このGatewayで検出",
@@ -2098,12 +2098,12 @@ export const ja_JP: TranslationMap = {
       accessValuePlaceholder: "APIキーまたはトークンを貼り付け",
       connect: "接続",
       connectAndVerify: "接続して検証",
-      verifyHint: "OpenClaw は接続を準備完了とする前に、実際のモデル応答を検証します。",
+      verifyHint: "OpenCrustacean は接続を準備完了とする前に、実際のモデル応答を検証します。",
       required: "プロバイダーを選択し、APIキーまたはトークンを入力してください。",
     },
     success: {
       title: "AIの準備ができました",
-      body: "OpenClaw は {modelRef} から実際の応答を受信しました。今すぐチャットを開始できます。",
+      body: "OpenCrustacean は {modelRef} から実際の応答を受信しました。今すぐチャットを開始できます。",
       activeModel: "アクティブなモデル",
       latency: "{latencyMs} ミリ秒で検証しました",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2178,12 +2178,12 @@ export const ja_JP: TranslationMap = {
     confirmReplace:
       "既存のコピー先ファイルは、置き換える前に移行レポート内にバックアップされます。",
     confirmBackup:
-      "OpenClaw は、メモリをコピーする前に検証済みのインポート前バックアップを作成します。",
+      "OpenCrustacean は、メモリをコピーする前に検証済みのインポート前バックアップを作成します。",
     confirmImport: "メモリをインポート",
     disconnected: "メモリをインポートするには Gateway に接続してください。",
     title: "アシスタントのメモリをインポート",
     subtitle:
-      "Codex の統合メモリと Claude Code の自動メモリを確認してから、OpenClaw にコピーします。",
+      "Codex の統合メモリと Claude Code の自動メモリを確認してから、OpenCrustacean にコピーします。",
     agent: "コピー先エージェント",
     replaceExisting: "既存のインポートを置き換える",
     replaceHint: "競合を再度プレビューし、置き換える前に各項目のバックアップを保持します。",
@@ -2224,7 +2224,7 @@ export const ja_JP: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "アシスタントのメモリを引き継ぐ",
-      body: "OpenClaw が他のコーディングアシスタントのメモリを検出しました。エージェントのワークスペースにインポートしますか？",
+      body: "OpenCrustacean が他のコーディングアシスタントのメモリを検出しました。エージェントのワークスペースにインポートしますか？",
       plannedCount: "{count} 件をインポートできます",
       alreadyImported: "インポート済み: {count} 件",
       sourceUnavailable: "ソースパスを利用できません",
@@ -2240,35 +2240,35 @@ export const ja_JP: TranslationMap = {
       unknownError: "リクエストに失敗しました",
       doneTitle: "メモリのインポートが完了しました",
       doneBody:
-        "{migrated} 件を移行し、{skipped} 件をスキップしました。OpenClaw のセットアップを続行できます。",
+        "{migrated} 件を移行し、{skipped} 件をスキップしました。OpenCrustacean のセットアップを続行できます。",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "システムセットアップガイド",
     subtitleCaretaker: "システムのセットアップとケア。",
     exitSetup: "セットアップを終了",
     newAgent: "新しいエージェント",
     hatchDraft: "起きて、友よ！",
-    placeholder: "OpenClaw にメッセージ…",
+    placeholder: "OpenCrustacean にメッセージ…",
     sensitivePlaceholder: "機密の値を入力…",
     sensitiveReply: "機密の返信を送信しました",
     send: "送信",
-    thinking: "OpenClaw が考えています",
+    thinking: "OpenCrustacean が考えています",
     earlier: "以前",
-    requestFailed: "OpenClaw は返信できませんでした。もう一度お試しください。",
+    requestFailed: "OpenCrustacean は返信できませんでした。もう一度お試しください。",
     connectionChanged:
       "Gateway 接続が変更されました。このセットアップを続けるには再試行してください。",
     sessionRestarted:
-      "{error} OpenClaw は新しいセッションを開始しました。以前のメッセージはコンテキストとして残ります。",
-    unsupportedGateway: "OpenClaw でセットアップを続けるには Gateway を更新してください。",
+      "{error} OpenCrustacean は新しいセッションを開始しました。以前のメッセージはコンテキストとして残ります。",
+    unsupportedGateway: "OpenCrustacean でセットアップを続けるには Gateway を更新してください。",
     panel: {
-      title: "OpenClaw",
-      toggle: "OpenClaw に質問",
-      close: "Ask OpenClaw を閉じる",
-      resize: "Ask OpenClaw のサイズを変更",
-      dockBottom: "Ask OpenClaw を下部にドッキング",
-      dockRight: "Ask OpenClaw を右側にドッキング",
+      title: "OpenCrustacean",
+      toggle: "OpenCrustacean に質問",
+      close: "Ask OpenCrustacean を閉じる",
+      resize: "Ask OpenCrustacean のサイズを変更",
+      dockBottom: "Ask OpenCrustacean を下部にドッキング",
+      dockRight: "Ask OpenCrustacean を右側にドッキング",
     },
     history: {
       button: "履歴",
@@ -2276,7 +2276,7 @@ export const ja_JP: TranslationMap = {
       description: "このシステムで変更された内容（新しい順）。",
       loading: "最近の変更を読み込み中…",
       empty: "まだ記録された変更はありません。",
-      requestFailed: "OpenClaw は変更履歴を読み込めませんでした。",
+      requestFailed: "OpenCrustacean は変更履歴を読み込めませんでした。",
       loadMore: "さらに読み込む",
       loadingMore: "さらに読み込み中…",
       changedPaths: "変更されたパス ({count})",
@@ -2299,9 +2299,9 @@ export const ja_JP: TranslationMap = {
       channelDegraded: "{channel} が低下しています — 何が起きたか聞いてください",
       channelFallback: "チャネル",
       dismiss: "この更新を閉じる",
-      channelSetupTitle: "このアプリの外で OpenClaw にアクセス",
+      channelSetupTitle: "このアプリの外で OpenCrustacean にアクセス",
       channelSetupBody:
-        "Web アプリはすでに動作しています。別のサービスから OpenClaw にメッセージを送りたい場合のみ、チャンネルを追加してください。",
+        "Web アプリはすでに動作しています。別のサービスから OpenCrustacean にメッセージを送りたい場合のみ、チャンネルを追加してください。",
       channelSetupAction: "チャンネルを設定",
       channelSetupDismiss: "Web アプリを使い続ける",
     },
@@ -2338,7 +2338,7 @@ export const ja_JP: TranslationMap = {
     working: "作業中…",
   },
   mcpPage: {
-    intro: "OpenClaw にツールを提供する MCP サーバーを接続・管理します。",
+    intro: "OpenCrustacean にツールを提供する MCP サーバーを接続・管理します。",
     connectorsLink: "Plugins ページでワンクリックコネクターを見つけましょう。",
     servers: "サーバー",
     oauth: "OAuth",
@@ -2394,7 +2394,7 @@ export const ja_JP: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "OpenClaw がエージェントのメモリを保存、検索、維持する方法を選択します。",
+    intro: "OpenCrustacean がエージェントのメモリを保存、検索、維持する方法を選択します。",
     tablistLabel: "メモリセクション",
     tabs: {
       overview: "概要",
@@ -2488,7 +2488,7 @@ export const ja_JP: TranslationMap = {
       description:
         "メモリスロットを所有できるメモリプラグインは常に1つだけです。エンジンを選択すると、それが有効になり、他は無効になります。",
       rowTitle: "メモリエンジン",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "オフ",
       unavailable: "利用不可",
       autoHint:
@@ -2509,7 +2509,7 @@ export const ja_JP: TranslationMap = {
       rowTitle: "取得バックエンド",
       builtin: "組み込み",
       qmd: "QMD",
-      builtinHint: "メモリファイルは OpenClaw 自身によってインデックス化され検索されます。",
+      builtinHint: "メモリファイルは OpenCrustacean 自身によってインデックス化され検索されます。",
       qmdHint: "取得は QMD に委任されます。その設定は以下に表示されます。",
     },
     addons: {
@@ -2705,7 +2705,8 @@ export const ja_JP: TranslationMap = {
       notes: "Markdown、Obsidian、Notion、Bear にメモを取り込みます。",
     },
     noInstalledTitle: "オプションのプラグインはインストールされていません",
-    noInstalledBody: "注目のプラグインを見つけるか、ClawHub を検索して OpenClaw を拡張しましょう。",
+    noInstalledBody:
+      "注目のプラグインを見つけるか、ClawHub を検索して OpenCrustacean を拡張しましょう。",
     noInstalledMatchTitle: "一致するインストール済みプラグインはありません",
     noMatchBody: "別の検索を試してください。",
     filterAll: "すべて",
@@ -2740,7 +2741,7 @@ export const ja_JP: TranslationMap = {
     detailPluginId: "プラグイン ID",
     offlineTitle: "Gatewayがオフラインです",
     offlineBody: "接続して、インストール済みおよびおすすめのプラグインを閲覧してください。",
-    optionalCapability: "任意のOpenClaw機能です。",
+    optionalCapability: "任意のOpenCrustacean機能です。",
     enabled: "有効",
     disabled: "無効",
     available: "利用可能",
@@ -2815,7 +2816,7 @@ export const ja_JP: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "あなた自身のデバイスで動作する、パーソナルAIアシスタント。",
     waveHello: "Clawdに手を振って挨拶",
     linksLabel: "コミュニティとリソース",
@@ -2825,7 +2826,7 @@ export const ja_JP: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "変更履歴",
-    license: "© 2026 OpenClaw Foundation — MIT License.",
+    license: "© 2026 OpenCrustacean Foundation — MIT License.",
     artifactTitle: "Control UI",
     artifactSubtitle: "このブラウザーアーティファクトのビルド時に埋め込まれた ID。",
     artifactDetails: "Control UI のビルド詳細",
@@ -2843,7 +2844,7 @@ export const ja_JP: TranslationMap = {
       "アクティブな Gateway 接続によって報告されます。この Control UI ビルドとは別です。",
   },
   appsPage: {
-    heroTitle: "OpenClawをどこへでも",
+    heroTitle: "OpenCrustaceanをどこへでも",
     heroTagline:
       "スマートフォン、時計、デスクトップ、ブラウザ向けのコンパニオンアプリ。さらにエージェントの機能を拡張するプラグインも。",
     sectionMobile: "スマートフォンで",
@@ -2867,11 +2868,11 @@ export const ja_JP: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "iOSからチャット、通話、アクションの承認、OpenClawへの共有ができます。",
+        desc: "iOSからチャット、通話、アクションの承認、OpenCrustaceanへの共有ができます。",
       },
       android: {
         title: "Android",
-        desc: "AndroidスマートフォンをOpenClawの完全なノードとして利用 — チャット、カメラ、Canvas。",
+        desc: "AndroidスマートフォンをOpenCrustaceanの完全なノードとして利用 — チャット、カメラ、Canvas。",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2879,7 +2880,7 @@ export const ja_JP: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "AndroidコンパニオンがOpenClawを腕時計に拡張します。",
+        desc: "AndroidコンパニオンがOpenCrustaceanを腕時計に拡張します。",
       },
       macos: {
         title: "macOS",
@@ -2887,7 +2888,7 @@ export const ja_JP: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "WindowsコンパニオンがPCをOpenClawノードとして接続します。",
+        desc: "WindowsコンパニオンがPCをOpenCrustaceanノードとして接続します。",
       },
       linux: {
         title: "Linux",
@@ -2895,11 +2896,11 @@ export const ja_JP: TranslationMap = {
       },
       chrome: {
         title: "Chrome拡張機能",
-        desc: "OpenClaw に既存の Chrome を操作させます — タブ、ページ、フォーム。",
+        desc: "OpenCrustacean に既存の Chrome を操作させます — タブ、ページ、フォーム。",
       },
       plugins: {
         title: "プラグインと ClawHub",
-        desc: "コミュニティのチャンネル、ツール、Skills で OpenClaw を拡張します。",
+        desc: "コミュニティのチャンネル、ツール、Skills で OpenCrustacean を拡張します。",
       },
     },
   },
@@ -3105,7 +3106,7 @@ export const ja_JP: TranslationMap = {
     selfLearning: {
       pitchTitle: "自己学習を有効にする",
       pitchBody:
-        "OpenClaw は修正内容や完了した重要な実行をレビューし、このボード向けのスキル提案の下書きを作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案として追加されます。",
+        "OpenCrustacean は修正内容や完了した重要な実行をレビューし、このボード向けのスキル提案の下書きを作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案として追加されます。",
       enable: "自己学習を有効にする",
       enabling: "有効化中…",
       updateError: "自己学習の設定を更新できませんでした。",
@@ -4021,7 +4022,7 @@ export const ja_JP: TranslationMap = {
       heading: "AI を接続",
       signedInNoModels:
         "サインインしていますが、このアカウントでは利用可能なモデルがありません。続行するには別のプロバイダーまたはアカウントを選択してください。",
-      notConfigured: "プロバイダーを選択し、OpenClaw が使用するモデルを確認してください。",
+      notConfigured: "プロバイダーを選択し、OpenCrustacean が使用するモデルを確認してください。",
       noModels: "利用可能なモデルがありません",
       modelRequired: "モデルが必要です",
       chooseProvider: "別のプロバイダーを選択",
@@ -4452,7 +4453,7 @@ export const ja_JP: TranslationMap = {
           "openclaw dashboard で提供元の dashboard を開き直し、UI と Gateway が同じインストールから来るようにします。",
         stepDevUi:
           "pnpm ui:dev を使用している場合は、現在の checkout に対して開発 UI を再ビルドまたは再起動します。",
-        stepRestart: "OpenClaw 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
+        stepRestart: "OpenCrustacean 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
       },
       network: {
         title: "接続できません",
@@ -4676,7 +4677,7 @@ export const ja_JP: TranslationMap = {
       remoteViewOnly: "このセッションはペアリング済みノード上にあり、表示専用です。",
       unsupportedViewOnly: "この外部セッションソースは表示専用です。",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4731,7 +4732,7 @@ export const ja_JP: TranslationMap = {
     followUpModeOverriding: "サーバーのデフォルトを上書き中 ({mode})",
     followUpModeReset: "サーバーの既定値にリセット",
     catalogOpenTarget: "外部セッションを開く場所",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "セットアップ中は無効",
     commandPaletteTitle: "検索または移動… (⌘K)",
@@ -4756,7 +4757,7 @@ export const ja_JP: TranslationMap = {
       titleOne: "1件のクラウドワークスペースの競合",
       titleMany: "{count}件のクラウドワークスペースの競合",
       description:
-        "OpenClaw はローカルバージョンを保持し、その他のクラウド変更を適用しました。ステージされた結果を確認するか、競合するパスについてクラウドのバージョンを採用してください。",
+        "OpenCrustacean はローカルバージョンを保持し、その他のクラウド変更を適用しました。ステージされた結果を確認するか、競合するパスについてクラウドのバージョンを採用してください。",
       morePaths: "他 +{count} 件のパス",
       stagedResult: "ステージされたクラウド結果",
       copyStagedResult: "ステージされた結果の参照をコピー",
@@ -4767,7 +4768,7 @@ export const ja_JP: TranslationMap = {
       commandHelp:
         "これらは Bash または zsh（Windows では Git Bash）で実行してください。inspect でパスが存在しないと表示された場合、クラウドがそれを削除しています。確認のうえ、ローカルパスを手動で削除してください。checkout がファイル/ディレクトリの競合を報告した場合は、ブロックしているローカルパスを移動または削除してから再試行してください。ステージされた参照が見つからない場合、この通知は古くなっています。ローカルパスは変更しないでください。",
       commandsUnavailable:
-        "このファイル名にはターミナル制御文字が含まれているため、OpenClaw はコピー可能なシェルコマンドを生成しません。ステージされた参照を直接確認し、パスは慎重に手動で入力してください。",
+        "このファイル名にはターミナル制御文字が含まれているため、OpenCrustacean はコピー可能なシェルコマンドを生成しません。ステージされた参照を直接確認し、パスは慎重に手動で入力してください。",
       dismiss: "ワークスペース競合の通知を閉じる",
       eventSender: "クラウドワークスペース",
       eventTitleOne: "1件の競合とともにクラウド結果を適用しました",
@@ -5271,7 +5272,7 @@ export const ja_JP: TranslationMap = {
       checking: "確認中...",
     },
     voice: {
-      asking: "OpenClaw に問い合わせ中...",
+      asking: "OpenCrustacean に問い合わせ中...",
       connecting: "音声入力に接続中...",
       listening: "聞き取り中...",
     },
@@ -5491,7 +5492,8 @@ export const ja_JP: TranslationMap = {
       filters: "フィルター",
       shownOf: "{total} 件中 {shown} 件",
       emptyTitle: "スケジュールされたタスクはまだありません",
-      emptyHint: "OpenClaw に何をいつ実行させるかを記述すると、スケジュールに従って実行されます。",
+      emptyHint:
+        "OpenCrustacean に何をいつ実行させるかを記述すると、スケジュールに従って実行されます。",
       noMatching: "現在のフィルターに一致するタスクはありません。",
       loadMore: "さらに読み込む",
       loading: "読み込み中...",
@@ -5558,7 +5560,7 @@ export const ja_JP: TranslationMap = {
     detail: {
       tabsLabel: "自動化の詳細",
       newTitle: "新規スケジュールタスク",
-      newSubtitle: "OpenClaw に何をさせるかを記述し、実行するタイミングを選択します。",
+      newSubtitle: "OpenCrustacean に何をさせるかを記述し、実行するタイミングを選択します。",
       back: "すべての自動化",
       settingsTab: "設定",
       historyTitle: "実行履歴",
@@ -5631,7 +5633,7 @@ export const ja_JP: TranslationMap = {
       descriptionPlaceholder: "このジョブの任意のコンテキスト",
       agentPlaceholder: "main または ops",
       agentHelp: "入力を始めると既知のエージェントを選択でき、カスタム値を入力することもできます。",
-      promptPlaceholder: "OpenClaw に実行させたいことを記述...",
+      promptPlaceholder: "OpenCrustacean に実行させたいことを記述...",
       repeat: "繰り返し",
       repeatInterval: "間隔",
       repeatOnce: "1回",

@@ -6,7 +6,6 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
-import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -84,10 +83,6 @@ function isChatResetCommand(text: string) {
     return false;
   }
   return true;
-}
-
-function isBtwCommand(text: string) {
-  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 function attachmentSubmitSignature(attachment: ChatAttachment): string {
@@ -246,24 +241,6 @@ export async function handleSendChat(
     }
 
     const parsed = parseSlashCommand(message);
-    if (isBtwCommand(message)) {
-      const question = extractCompanionCommandQuestion(message);
-      if (!question) {
-        return;
-      }
-      const submitKey = chatSubmitKey(host, "local", message, []);
-      await withChatSubmitGuard(host, submitKey, async () => {
-        if (messageOverride == null) {
-          recordNonTranscriptInputHistory(host, message);
-          if (host.chatMessage === previousDraft) {
-            host.chatMessage = "";
-            resetChatInputHistoryNavigation(host);
-          }
-        }
-        await host.openSessionCompanion?.(question);
-      });
-      return;
-    }
     // The backend resolves /approve before active-run admission. Send it now so
     // the approval command cannot queue behind the run that is waiting for it.
     const shouldSendDetachedCommand = parsed?.command.key === "approve" && isChatBusy(host);

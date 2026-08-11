@@ -8,7 +8,6 @@ import type {
   SessionSuggestionResolution,
   TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -35,7 +34,6 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
-import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import { renderChatViewNotices } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import {
@@ -48,7 +46,6 @@ import { isChatRunWorking, renderChatComposer } from "./components/chat-composer
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import type { SessionRailMode } from "./components/chat-session-rail.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
   renderSessionWorkspaceRail,
@@ -100,20 +97,6 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
-  observerDigest?: SessionObserverDigest | null;
-  sessionRailReady?: boolean;
-  observerRunId?: string | null;
-  observerStartedAt?: number;
-  observerLastReadAt?: number;
-  onObserverVisibilityChange?: (visible: boolean) => void;
-  sessionRailCompanion?: ChatSessionCompanionThread;
-  sessionRailOpenRequest?: number;
-  sessionRailMode?: SessionRailMode;
-  sessionRailDocked?: boolean;
-  onSessionRailSubmit?: (question: string) => void;
-  onSessionRailDraftChange?: (draft: string) => void;
-  onSessionRailClear?: () => void;
-  onSessionRailModeChange?: (mode: SessionRailMode) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
@@ -230,8 +213,6 @@ export type ChatProps = {
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
   onHistoryIntent?: (event: Event) => void;
-  onCompanionQuestion?: (question: string) => void;
-  onCompanionPrefill?: (question: string) => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -377,12 +358,6 @@ export function renderChat(props: ChatProps) {
       onSetReply: props.onSetReply,
       onRewindMessage: props.onRewindMessage,
       onForkMessage: props.onForkMessage,
-      // Archived/non-composable sessions must not offer selection actions:
-      // withholding the callback keeps the popup from rendering at all.
-      onCompanionQuestion:
-        props.canSend && !props.suggestionComposer ? props.onCompanionQuestion : undefined,
-      onCompanionPrefill:
-        props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,
       modelSetupRequired: props.modelSetupRequired,
       onModelSetup: props.onModelSetup,
@@ -576,11 +551,7 @@ export function renderChat(props: ChatProps) {
           : nothing}
         <div class="chat-workbench__main">
           <div class="chat-split-container">
-            <div
-              class="chat-main ${props.sessionRailDocked && props.sessionRailMode === "expanded"
-                ? "chat-main--rail-docked"
-                : ""}"
-            >
+            <div class="chat-main">
               <div class="chat-main__conversation">
                 ${thread}
                 ${props.inlineApproval && props.onApprovalDecision
@@ -627,28 +598,6 @@ export function renderChat(props: ChatProps) {
                 })}
                 ${showModelSetupSplash ? nothing : chatColumnFooter}
               </div>
-              ${props.sessionRailReady
-                ? html`
-                    <openclaw-chat-session-rail
-                      .sessionKey=${props.sessionKey}
-                      .digest=${props.observerDigest ?? null}
-                      .running=${Boolean(props.observerRunId)}
-                      .activeRunId=${props.observerRunId ?? null}
-                      .startedAt=${props.observerStartedAt}
-                      .lastReadAt=${props.observerLastReadAt}
-                      .planStatus=${props.planStatus ?? null}
-                      .pullRequests=${props.pullRequests ?? []}
-                      .companion=${props.sessionRailCompanion}
-                      .connected=${props.connected}
-                      .openRequest=${props.sessionRailOpenRequest ?? 0}
-                      .onSubmit=${props.onSessionRailSubmit}
-                      .onDraftChange=${props.onSessionRailDraftChange}
-                      .onClear=${props.onSessionRailClear}
-                      .onModeChange=${props.onSessionRailModeChange}
-                      .onVisibilityChange=${props.onObserverVisibilityChange}
-                    ></openclaw-chat-session-rail>
-                  `
-                : nothing}
             </div>
           </div>
         </div>

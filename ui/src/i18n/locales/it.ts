@@ -370,7 +370,7 @@ export const it: TranslationMap = {
     genericSubtitle: "Si è verificato un problema durante il caricamento di questo pannello.",
     staleTitle: "È disponibile una nuova versione",
     staleSubtitle:
-      "OpenClaw è stato aggiornato in background. Ricarica per visualizzare il pannello più recente.",
+      "OpenCrustacean è stato aggiornato in background. Ricarica per visualizzare il pannello più recente.",
     reloading: "Ricaricamento…",
     retry: "Riprova",
     stylesFailed:
@@ -396,7 +396,7 @@ export const it: TranslationMap = {
       notGitInstall:
         "Non è un checkout git. Esegui `openclaw update` dalla CLI per una reinstallazione globale.",
       notOpenclawRoot:
-        "Esegui l'aggiornamento da un checkout OpenClaw o usa il percorso di reinstallazione globale della CLI.",
+        "Esegui l'aggiornamento da un checkout OpenCrustacean o usa il percorso di reinstallazione globale della CLI.",
       depsInstallFailed:
         "Installazione delle dipendenze non riuscita. Correggi l'errore di installazione e riprova.",
       buildFailed: "Build non riuscita. Correggi l'errore di build e riprova.",
@@ -430,7 +430,7 @@ export const it: TranslationMap = {
       button: "Associa dispositivo mobile",
       adminRequired:
         "È necessario l'accesso da amministratore per creare codici di configurazione.",
-      title: "OpenClaw mobile",
+      title: "OpenCrustacean mobile",
       subtitle: "Scansiona questo codice QR nell'app mobile per connettere un nuovo telefono.",
       noApp: "Non hai ancora l'app?",
       getApps: "Scarica le app",
@@ -446,7 +446,7 @@ export const it: TranslationMap = {
       transportLimitedHint:
         "Questo URL del Gateway usa ws:// in chiaro. Usa wss:// o Tailscale Serve, quindi crea un nuovo codice per ottenere l'accesso completo.",
       failed: "Impossibile creare un codice di configurazione.",
-      qrAlt: "Codice QR di associazione di OpenClaw mobile",
+      qrAlt: "Codice QR di associazione di OpenCrustacean mobile",
       qrUnavailable: "QR non disponibile. Copia invece il codice di configurazione.",
       copySetupCode: "Copia codice di configurazione",
       newCode: "Nuovo codice",
@@ -454,7 +454,7 @@ export const it: TranslationMap = {
       pending: "Richieste di dispositivi in attesa di revisione: {count}",
       review: "Revisione",
       waiting:
-        "Le app mobile ufficiali di OpenClaw si connettono automaticamente dopo la scansione.",
+        "Le app mobile ufficiali di OpenCrustacean si connettono automaticamente dopo la scansione.",
       help: "Aiuto per l'associazione",
       manageDevices: "Gestisci dispositivi",
     },
@@ -601,11 +601,11 @@ export const it: TranslationMap = {
     ownerSession: "Sessione",
     ownerWorkboard: "Workboard",
     title: "Worktree gestiti",
-    subtitle: "Checkout di repository isolati di proprietà di OpenClaw.",
+    subtitle: "Checkout di repository isolati di proprietà di OpenCrustacean.",
     cleanNow: "Pulisci ora",
     cleanupTitle: "Pulizia",
     cleanupSubtitle:
-      "OpenClaw rimuove periodicamente i worktree obsoleti per liberare spazio su disco. Configura il livello di aggressività della pulizia.",
+      "OpenCrustacean rimuove periodicamente i worktree obsoleti per liberare spazio su disco. Configura il livello di aggressività della pulizia.",
     cleanupMaxCount: "Numero massimo di worktree",
     cleanupMaxCountHelp:
       "Numero massimo di worktree gestiti da conservare in tutti i repository. I worktree meno recenti vengono prima salvati come snapshot e poi rimossi. Imposta 0 per disattivare il limite numerico.",
@@ -656,8 +656,8 @@ export const it: TranslationMap = {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Provider del worker cloud: {provider}",
     cloudRequiresWorktree: "I worker cloud richiedono un worktree gestito",
-    cloudRequiresOpenClawRuntime:
-      "I worker cloud richiedono il runtime OpenClaw; è selezionato {runtime}.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "I worker cloud richiedono il runtime OpenCrustacean; è selezionato {runtime}.",
     cloudSecureContextRequired:
       "I worker cloud necessitano di un contesto del browser sicuro affinché il ripristino possa proteggere la tua attività.",
     cloudStartFailed:
@@ -1475,7 +1475,8 @@ export const it: TranslationMap = {
       title: "Notifiche push",
       nativeTitle: "Notifiche",
       hint: "Ricevi notifiche push del browser dal tuo gateway.",
-      nativeHint: "Le notifiche vengono mostrate in modo nativo dall'app OpenClaw su questo Mac.",
+      nativeHint:
+        "Le notifiche vengono mostrate in modo nativo dall'app OpenCrustacean su questo Mac.",
       unavailableHint: "Non disponibile in questo browser.",
       unavailable: "Non disponibile",
       checking: "Verifica in corso...",
@@ -1500,7 +1501,7 @@ export const it: TranslationMap = {
       blockedHint:
         "Le notifiche sono bloccate. Aggiorna le autorizzazioni del sito nel browser per consentire le notifiche.",
       nativeBlockedHint:
-        "Le notifiche sono disabilitate per OpenClaw in macOS. Consentile in Impostazioni di Sistema > Notifiche.",
+        "Le notifiche sono disabilitate per OpenCrustacean in macOS. Consentile in Impostazioni di Sistema > Notifiche.",
     },
     appearance: {
       intro: "Preferenze di tema, chat e barra laterale per questo client Control UI.",
@@ -1642,7 +1643,7 @@ export const it: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1651,7 +1652,7 @@ export const it: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1828,7 +1829,7 @@ export const it: TranslationMap = {
     forward: "Avanti",
     chat: "Chat",
     settings: "Impostazioni",
-    askOpenClaw: "Chiedi a OpenClaw",
+    askOpenCrustacean: "Chiedi a OpenCrustacean",
     settingsGroupConnections: "Connessioni",
     settingsGroupAgents: "Agenti e strumenti",
     settingsGroupSecurity: "Privacy e sicurezza",
@@ -1974,7 +1975,7 @@ export const it: TranslationMap = {
     nodes: "Nodi",
     chat: "Chat",
     dashboards: "Dashboard",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "Config",
     profile: "Profilo",
     communications: "Comunicazioni",
@@ -2041,14 +2042,14 @@ export const it: TranslationMap = {
   modelSetup: {
     heading: "Connetti la tua IA",
     intro:
-      "OpenClaw riutilizza l'accesso all'IA che hai già: un accesso CLI, una chiave API o l'accesso a un provider.",
+      "OpenCrustacean riutilizza l'accesso all'IA che hai già: un accesso CLI, una chiave API o l'accesso a un provider.",
     required: {
       title: "Nessun provider AI configurato",
-      body: "OpenClaw non ha trovato un provider e un modello configurati per questo agent. Aggiungine uno prima di iniziare una conversazione.",
+      body: "OpenCrustacean non ha trovato un provider e un modello configurati per questo agent. Aggiungine uno prima di iniziare una conversazione.",
       action: "Configura un provider",
     },
     connectionFailure: {
-      title: "OpenClaw non ha potuto utilizzare l'AI configurata",
+      title: "OpenCrustacean non ha potuto utilizzare l'AI configurata",
       body: "Questo agent ha un provider e un modello selezionati, ma la connessione è fallita. Controlla il login del provider o la chiave API, l'accesso al modello e lo stato del servizio, quindi riprova.",
       action: "Controlla le impostazioni del provider",
     },
@@ -2064,7 +2065,7 @@ export const it: TranslationMap = {
     },
     access: {
       adminRequired: "La configurazione del modello richiede l'accesso operator.admin.",
-      gatewayTooOld: "Il Gateway esegue una versione precedente di OpenClaw",
+      gatewayTooOld: "Il Gateway esegue una versione precedente di OpenCrustacean",
     },
     candidates: {
       title: "Trovati su questo Gateway",
@@ -2113,12 +2114,12 @@ export const it: TranslationMap = {
       connect: "Connetti",
       connectAndVerify: "Connetti e verifica",
       verifyHint:
-        "OpenClaw verifica una vera risposta del modello prima di contrassegnare la connessione come pronta.",
+        "OpenCrustacean verifica una vera risposta del modello prima di contrassegnare la connessione come pronta.",
       required: "Scegli un provider e inserisci una chiave API o un token.",
     },
     success: {
       title: "La tua IA è pronta",
-      body: "OpenClaw ha ricevuto una risposta reale da {modelRef}. Puoi iniziare a chattare ora.",
+      body: "OpenCrustacean ha ricevuto una risposta reale da {modelRef}. Puoi iniziare a chattare ora.",
       activeModel: "Modello attivo",
       latency: "Verificato in {latencyMs} ms",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2193,12 +2194,12 @@ export const it: TranslationMap = {
     confirmReplace:
       "Prima della sostituzione, verrà eseguito il backup dei file di destinazione esistenti nel rapporto di migrazione.",
     confirmBackup:
-      "OpenClaw crea un backup verificato prima dell'importazione e prima di copiare la memoria.",
+      "OpenCrustacean crea un backup verificato prima dell'importazione e prima di copiare la memoria.",
     confirmImport: "Importa memoria",
     disconnected: "Connettiti al Gateway per importare la memoria.",
     title: "Importa la memoria dell'assistente",
     subtitle:
-      "Esamina la memoria consolidata di Codex e la memoria automatica di Claude Code prima di copiarle in OpenClaw.",
+      "Esamina la memoria consolidata di Codex e la memoria automatica di Claude Code prima di copiarle in OpenCrustacean.",
     agent: "Agente di destinazione",
     replaceExisting: "Sostituisci importazioni esistenti",
     replaceHint:
@@ -2240,7 +2241,7 @@ export const it: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "Porta con te la memoria del tuo assistente",
-      body: "OpenClaw ha trovato la memoria di altri assistenti di programmazione. Importarla nell'area di lavoro del tuo agente?",
+      body: "OpenCrustacean ha trovato la memoria di altri assistenti di programmazione. Importarla nell'area di lavoro del tuo agente?",
       plannedCount: "{count} pronti per l'importazione",
       alreadyImported: "Già importati: {count}",
       sourceUnavailable: "Percorso di origine non disponibile",
@@ -2256,35 +2257,36 @@ export const it: TranslationMap = {
         "Operazione ignorata: la connessione al Gateway è cambiata durante l'importazione",
       unknownError: "Richiesta non riuscita",
       doneTitle: "Importazione della memoria completata",
-      doneBody: "Migrati: {migrated}, ignorati: {skipped}. Puoi continuare a configurare OpenClaw.",
+      doneBody:
+        "Migrati: {migrated}, ignorati: {skipped}. Puoi continuare a configurare OpenCrustacean.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "La tua guida alla configurazione del sistema",
     subtitleCaretaker: "Configurazione e cura del sistema.",
     exitSetup: "Esci dalla configurazione",
     newAgent: "Nuovo agente",
     hatchDraft: "Svegliati, amico mio!",
-    placeholder: "Scrivi a OpenClaw…",
+    placeholder: "Scrivi a OpenCrustacean…",
     sensitivePlaceholder: "Inserisci un valore sensibile…",
     sensitiveReply: "Risposta sensibile inviata",
     send: "Invia",
-    thinking: "OpenClaw sta pensando",
+    thinking: "OpenCrustacean sta pensando",
     earlier: "Precedenti",
-    requestFailed: "OpenClaw non è riuscito a rispondere. Riprova.",
+    requestFailed: "OpenCrustacean non è riuscito a rispondere. Riprova.",
     connectionChanged:
       "La connessione al Gateway è cambiata. Riprova per continuare questa configurazione.",
     sessionRestarted:
-      "{error} OpenClaw ha avviato una nuova sessione; i messaggi precedenti restano disponibili come contesto.",
-    unsupportedGateway: "Aggiorna il Gateway per continuare la configurazione con OpenClaw.",
+      "{error} OpenCrustacean ha avviato una nuova sessione; i messaggi precedenti restano disponibili come contesto.",
+    unsupportedGateway: "Aggiorna il Gateway per continuare la configurazione con OpenCrustacean.",
     panel: {
-      title: "OpenClaw",
-      toggle: "Chiedi a OpenClaw",
-      close: "Chiudi Ask OpenClaw",
-      resize: "Ridimensiona Ask OpenClaw",
-      dockBottom: "Ancora Ask OpenClaw in basso",
-      dockRight: "Ancora Ask OpenClaw a destra",
+      title: "OpenCrustacean",
+      toggle: "Chiedi a OpenCrustacean",
+      close: "Chiudi Ask OpenCrustacean",
+      resize: "Ridimensiona Ask OpenCrustacean",
+      dockBottom: "Ancora Ask OpenCrustacean in basso",
+      dockRight: "Ancora Ask OpenCrustacean a destra",
     },
     history: {
       button: "Cronologia",
@@ -2292,7 +2294,7 @@ export const it: TranslationMap = {
       description: "Cosa è cambiato su questo sistema, dal più recente.",
       loading: "Caricamento delle modifiche recenti…",
       empty: "Nessuna modifica registrata al momento.",
-      requestFailed: "OpenClaw non è riuscito a caricare la cronologia delle modifiche.",
+      requestFailed: "OpenCrustacean non è riuscito a caricare la cronologia delle modifiche.",
       loadMore: "Carica altro",
       loadingMore: "Caricamento di altri elementi…",
       changedPaths: "Percorsi modificati ({count})",
@@ -2316,9 +2318,9 @@ export const it: TranslationMap = {
       channelDegraded: "{channel} è degradato — chiedimi cosa è successo",
       channelFallback: "Un canale",
       dismiss: "Ignora questo aggiornamento",
-      channelSetupTitle: "Raggiungi OpenClaw fuori da questa app",
+      channelSetupTitle: "Raggiungi OpenCrustacean fuori da questa app",
       channelSetupBody:
-        "L'app web funziona già. Aggiungi un canale solo se vuoi inviare messaggi a OpenClaw da un altro servizio.",
+        "L'app web funziona già. Aggiungi un canale solo se vuoi inviare messaggi a OpenCrustacean da un altro servizio.",
       channelSetupAction: "Configura un canale",
       channelSetupDismiss: "Continua a usare l'app web",
     },
@@ -2354,7 +2356,7 @@ export const it: TranslationMap = {
     working: "In elaborazione…",
   },
   mcpPage: {
-    intro: "Connetti e gestisci i server MCP che forniscono strumenti a OpenClaw.",
+    intro: "Connetti e gestisci i server MCP che forniscono strumenti a OpenCrustacean.",
     connectorsLink: "Scopri i connettori con un clic nella pagina Plugin.",
     servers: "Server",
     oauth: "OAuth",
@@ -2413,7 +2415,7 @@ export const it: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "Scegli come OpenClaw archivia, cerca e gestisce la memoria dell'agente.",
+    intro: "Scegli come OpenCrustacean archivia, cerca e gestisce la memoria dell'agente.",
     tablistLabel: "Sezioni memoria",
     tabs: {
       overview: "Panoramica",
@@ -2508,7 +2510,7 @@ export const it: TranslationMap = {
       description:
         "Esattamente un plugin di memoria occupa lo slot memoria. Selezionando un motore lo si abilita e si disabilitano gli altri.",
       rowTitle: "Motore di memoria",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "Disattivato",
       unavailable: "Non disponibile",
       autoHint:
@@ -2529,7 +2531,7 @@ export const it: TranslationMap = {
       rowTitle: "Backend di recupero",
       builtin: "Integrato",
       qmd: "QMD",
-      builtinHint: "I file di memoria vengono indicizzati e ricercati da OpenClaw stesso.",
+      builtinHint: "I file di memoria vengono indicizzati e ricercati da OpenCrustacean stesso.",
       qmdHint: "Il recupero è delegato a QMD. Le sue impostazioni appaiono qui sotto.",
     },
     addons: {
@@ -2736,7 +2738,8 @@ export const it: TranslationMap = {
       notes: "Salva note in Markdown, Obsidian, Notion o Bear.",
     },
     noInstalledTitle: "Nessun plugin opzionale installato",
-    noInstalledBody: "Scopri un plugin in evidenza o cerca in ClawHub per estendere OpenClaw.",
+    noInstalledBody:
+      "Scopri un plugin in evidenza o cerca in ClawHub per estendere OpenCrustacean.",
     noInstalledMatchTitle: "Nessun plugin installato corrispondente",
     noMatchBody: "Prova una ricerca diversa.",
     filterAll: "Tutti",
@@ -2771,7 +2774,7 @@ export const it: TranslationMap = {
     detailPluginId: "ID plugin",
     offlineTitle: "Gateway offline",
     offlineBody: "Connettiti per esplorare i plugin installati e consigliati.",
-    optionalCapability: "Funzionalità OpenClaw facoltativa.",
+    optionalCapability: "Funzionalità OpenCrustacean facoltativa.",
     enabled: "Abilitato",
     disabled: "Disabilitato",
     available: "Disponibile",
@@ -2849,7 +2852,7 @@ export const it: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "Il tuo assistente AI personale, in esecuzione sui tuoi dispositivi.",
     waveHello: "Saluta Clawd",
     linksLabel: "Community e risorse",
@@ -2859,7 +2862,7 @@ export const it: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "Registro delle modifiche",
-    license: "© 2026 OpenClaw Foundation — Licenza MIT.",
+    license: "© 2026 OpenCrustacean Foundation — Licenza MIT.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Identità incorporata quando questo artefatto del browser è stato creato.",
     artifactDetails: "Dettagli della build di Control UI",
@@ -2877,7 +2880,7 @@ export const it: TranslationMap = {
       "Segnalata dalla connessione Gateway attiva; separata da questa build di Control UI.",
   },
   appsPage: {
-    heroTitle: "Porta OpenClaw ovunque",
+    heroTitle: "Porta OpenCrustacean ovunque",
     heroTagline:
       "App companion per telefono, orologio, desktop e browser, oltre a plugin per estendere le capacità del tuo agente.",
     sectionMobile: "Sul tuo telefono",
@@ -2901,11 +2904,11 @@ export const it: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "Chatta, parla, approva azioni e condividi in OpenClaw da iOS.",
+        desc: "Chatta, parla, approva azioni e condividi in OpenCrustacean da iOS.",
       },
       android: {
         title: "Android",
-        desc: "Il tuo telefono Android come nodo OpenClaw completo — chat, fotocamera e Canvas.",
+        desc: "Il tuo telefono Android come nodo OpenCrustacean completo — chat, fotocamera e Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2913,7 +2916,7 @@ export const it: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "Il companion Android estende OpenClaw al tuo orologio.",
+        desc: "Il companion Android estende OpenCrustacean al tuo orologio.",
       },
       macos: {
         title: "macOS",
@@ -2921,7 +2924,7 @@ export const it: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "Il companion per Windows collega il tuo PC come nodo OpenClaw.",
+        desc: "Il companion per Windows collega il tuo PC come nodo OpenCrustacean.",
       },
       linux: {
         title: "Linux",
@@ -2929,11 +2932,11 @@ export const it: TranslationMap = {
       },
       chrome: {
         title: "Estensione Chrome",
-        desc: "Consenti a OpenClaw di controllare il tuo Chrome esistente — schede, pagine e moduli.",
+        desc: "Consenti a OpenCrustacean di controllare il tuo Chrome esistente — schede, pagine e moduli.",
       },
       plugins: {
         title: "Plugin e ClawHub",
-        desc: "Estendi OpenClaw con canali, strumenti e skill dalla community.",
+        desc: "Estendi OpenCrustacean con canali, strumenti e skill dalla community.",
       },
     },
   },
@@ -3140,7 +3143,7 @@ export const it: TranslationMap = {
     selfLearning: {
       pitchTitle: "Attiva l'autoapprendimento",
       pitchBody:
-        "OpenClaw esamina le correzioni e le esecuzioni sostanziali completate, quindi crea bozze di proposte di skill per questa bacheca. Utilizza token aggiuntivi in background e le bozze arrivano come proposte in sospeso.",
+        "OpenCrustacean esamina le correzioni e le esecuzioni sostanziali completate, quindi crea bozze di proposte di skill per questa bacheca. Utilizza token aggiuntivi in background e le bozze arrivano come proposte in sospeso.",
       enable: "Abilita l'autoapprendimento",
       enabling: "Abilitazione…",
       updateError: "Impossibile aggiornare l'impostazione di autoapprendimento.",
@@ -4056,7 +4059,7 @@ export const it: TranslationMap = {
       heading: "Connetti la tua AI",
       signedInNoModels:
         "Hai effettuato l'accesso, ma questo account non espone modelli utilizzabili. Scegli un altro provider o account per continuare.",
-      notConfigured: "Scegli un provider e verifica il modello che OpenClaw utilizzerà.",
+      notConfigured: "Scegli un provider e verifica il modello che OpenCrustacean utilizzerà.",
       noModels: "Nessun modello disponibile",
       modelRequired: "Modello richiesto",
       chooseProvider: "Scegli un altro provider",
@@ -4491,7 +4494,7 @@ export const it: TranslationMap = {
         stepDevUi:
           "Se usi pnpm ui:dev, ricompila o riavvia la UI di sviluppo contro il checkout corrente.",
         stepRestart:
-          "Riavvia il Gateway dopo aver aggiornato OpenClaw affinché serva il protocollo corrente.",
+          "Riavvia il Gateway dopo aver aggiornato OpenCrustacean affinché serva il protocollo corrente.",
       },
       network: {
         title: "Impossibile connettersi",
@@ -4717,7 +4720,7 @@ export const it: TranslationMap = {
       remoteViewOnly: "Questa sessione si trova su un nodo associato ed è di sola visualizzazione.",
       unsupportedViewOnly: "Questa origine di sessione esterna è di sola visualizzazione.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4773,7 +4776,7 @@ export const it: TranslationMap = {
     followUpModeOverriding: "Sovrascrittura del predefinito del server ({mode})",
     followUpModeReset: "Ripristina i valori predefiniti del server",
     catalogOpenTarget: "Apri sessioni esterne in",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Disabilitato durante la configurazione",
     commandPaletteTitle: "Cerca o passa a… (⌘K)",
@@ -4798,7 +4801,7 @@ export const it: TranslationMap = {
       titleOne: "1 conflitto di workspace cloud",
       titleMany: "{count} conflitti di workspace cloud",
       description:
-        "OpenClaw ha mantenuto le versioni locali e applicato le altre modifiche cloud. Esamina il risultato in staging o prendi la sua versione per un percorso in conflitto.",
+        "OpenCrustacean ha mantenuto le versioni locali e applicato le altre modifiche cloud. Esamina il risultato in staging o prendi la sua versione per un percorso in conflitto.",
       morePaths: "+{count} altri percorsi",
       stagedResult: "Risultato cloud in staging",
       copyStagedResult: "Copia ref risultato in staging",
@@ -4809,7 +4812,7 @@ export const it: TranslationMap = {
       commandHelp:
         "Esegui questi comandi in Bash o zsh (Git Bash su Windows). Se l'ispezione indica che il percorso non esiste, il cloud lo ha eliminato; verifica e rimuovi manualmente il percorso locale. Se il checkout segnala un conflitto file/directory, sposta o rimuovi il percorso locale che blocca, poi riprova. Se la ref in staging manca, l'avviso è obsoleto; non modificare il percorso locale.",
       commandsUnavailable:
-        "Questo nome file contiene caratteri di controllo del terminale, quindi OpenClaw non genererà un comando shell copiabile per esso. Esamina direttamente la ref in staging e inserisci il percorso manualmente con attenzione.",
+        "Questo nome file contiene caratteri di controllo del terminale, quindi OpenCrustacean non genererà un comando shell copiabile per esso. Esamina direttamente la ref in staging e inserisci il percorso manualmente con attenzione.",
       dismiss: "Ignora avviso di conflitto dell'area di lavoro",
       eventSender: "Area di lavoro cloud",
       eventTitleOne: "Risultato cloud applicato con 1 conflitto",
@@ -5320,7 +5323,7 @@ export const it: TranslationMap = {
       checking: "Verifica in corso...",
     },
     voice: {
-      asking: "Richiesta a OpenClaw in corso...",
+      asking: "Richiesta a OpenCrustacean in corso...",
       connecting: "Connessione dell'ingresso vocale...",
       listening: "In ascolto...",
     },
@@ -5543,7 +5546,7 @@ export const it: TranslationMap = {
       shownOf: "{shown} di {total}",
       emptyTitle: "Nessuna attività pianificata",
       emptyHint:
-        "Descrivi cosa deve fare OpenClaw e quando: verrà eseguito secondo la pianificazione.",
+        "Descrivi cosa deve fare OpenCrustacean e quando: verrà eseguito secondo la pianificazione.",
       noMatching: "Nessuna attività corrisponde ai filtri attuali.",
       loadMore: "Carica altro",
       loading: "Caricamento...",
@@ -5610,7 +5613,7 @@ export const it: TranslationMap = {
     detail: {
       tabsLabel: "Dettagli dell'automazione",
       newTitle: "Nuova attività pianificata",
-      newSubtitle: "Descrivi cosa deve fare OpenClaw, poi scegli quando eseguirla.",
+      newSubtitle: "Descrivi cosa deve fare OpenCrustacean, poi scegli quando eseguirla.",
       back: "Tutte le automazioni",
       settingsTab: "Impostazioni",
       historyTitle: "Cronologia esecuzioni",
@@ -5684,7 +5687,7 @@ export const it: TranslationMap = {
       agentPlaceholder: "main o ops",
       agentHelp:
         "Inizia a digitare per scegliere un agente noto oppure inseriscine uno personalizzato.",
-      promptPlaceholder: "Descrivi cosa deve fare OpenClaw...",
+      promptPlaceholder: "Descrivi cosa deve fare OpenCrustacean...",
       repeat: "Ripeti",
       repeatInterval: "Intervallo",
       repeatOnce: "Una volta",

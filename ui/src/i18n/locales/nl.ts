@@ -370,7 +370,7 @@ export const nl: TranslationMap = {
     genericSubtitle: "Er is iets misgegaan bij het laden van dit paneel.",
     staleTitle: "Er is een nieuwe versie beschikbaar",
     staleSubtitle:
-      "OpenClaw is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
+      "OpenCrustacean is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
     reloading: "Opnieuw laden…",
     retry: "Opnieuw proberen",
     stylesFailed: "Stijlen konden niet worden geladen, dus de pagina ziet er mogelijk defect uit.",
@@ -395,7 +395,7 @@ export const nl: TranslationMap = {
       notGitInstall:
         "Geen git-checkout. Voer `openclaw update` uit vanaf de CLI voor een globale herinstallatie.",
       notOpenclawRoot:
-        "Voer de update uit vanuit een OpenClaw-checkout of gebruik het pad voor globale herinstallatie via de CLI.",
+        "Voer de update uit vanuit een OpenCrustacean-checkout of gebruik het pad voor globale herinstallatie via de CLI.",
       depsInstallFailed:
         "Installatie van afhankelijkheden mislukt. Los de installatiefout op en probeer het opnieuw.",
       buildFailed: "Build mislukt. Los de buildfout op en probeer het opnieuw.",
@@ -428,7 +428,7 @@ export const nl: TranslationMap = {
     pairing: {
       button: "Mobiel apparaat koppelen",
       adminRequired: "Beheerderstoegang is vereist om installatiecodes te maken.",
-      title: "OpenClaw mobiel",
+      title: "OpenCrustacean mobiel",
       subtitle: "Scan deze QR-code in de mobiele app om een nieuwe telefoon te verbinden.",
       noApp: "Heb je de app nog niet?",
       getApps: "Download de apps",
@@ -443,14 +443,14 @@ export const nl: TranslationMap = {
       transportLimitedHint:
         "Deze Gateway-URL gebruikt ws:// zonder versleuteling. Gebruik wss:// of Tailscale Serve en maak vervolgens een nieuwe code voor volledige toegang.",
       failed: "Kan geen installatiecode maken.",
-      qrAlt: "QR-code voor koppeling met OpenClaw mobiel",
+      qrAlt: "QR-code voor koppeling met OpenCrustacean mobiel",
       qrUnavailable: "QR niet beschikbaar. Kopieer in plaats daarvan de installatiecode.",
       copySetupCode: "Installatiecode kopiëren",
       newCode: "Nieuwe code",
       showSetupCode: "Installatiecode weergeven",
       pending: "Apparaatverzoeken die wachten op beoordeling: {count}",
       review: "Beoordeling",
-      waiting: "Officiële mobiele OpenClaw-apps verbinden automatisch na het scannen.",
+      waiting: "Officiële mobiele OpenCrustacean-apps verbinden automatisch na het scannen.",
       help: "Hulp bij koppelen",
       manageDevices: "Apparaten beheren",
     },
@@ -598,11 +598,11 @@ export const nl: TranslationMap = {
     ownerSession: "Sessie",
     ownerWorkboard: "Workboard",
     title: "Beheerde worktrees",
-    subtitle: "Geïsoleerde repository-checkouts beheerd door OpenClaw.",
+    subtitle: "Geïsoleerde repository-checkouts beheerd door OpenCrustacean.",
     cleanNow: "Nu opschonen",
     cleanupTitle: "Opschonen",
     cleanupSubtitle:
-      "OpenClaw verwijdert periodiek oude worktrees om schijfruimte vrij te maken. Stel in hoe agressief de opschoning wordt uitgevoerd.",
+      "OpenCrustacean verwijdert periodiek oude worktrees om schijfruimte vrij te maken. Stel in hoe agressief de opschoning wordt uitgevoerd.",
     cleanupMaxCount: "Maximaal aantal worktrees",
     cleanupMaxCountHelp:
       "Maximaal aantal beheerde worktrees dat in alle repository's samen wordt bewaard. Van oudere worktrees wordt eerst een snapshot gemaakt, waarna ze worden verwijderd. Stel in op 0 om de limiet voor het aantal uit te schakelen.",
@@ -653,8 +653,8 @@ export const nl: TranslationMap = {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloudworkerprovider: {provider}",
     cloudRequiresWorktree: "Cloudworkers vereisen een beheerde worktree",
-    cloudRequiresOpenClawRuntime:
-      "Cloudworkers vereisen de OpenClaw-runtime; {runtime} is geselecteerd.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "Cloudworkers vereisen de OpenCrustacean-runtime; {runtime} is geselecteerd.",
     cloudSecureContextRequired:
       "Cloudworkers hebben een beveiligde browsercontext nodig, zodat herstel je taak kan beschermen.",
     cloudStartFailed:
@@ -1467,7 +1467,7 @@ export const nl: TranslationMap = {
       title: "Pushmeldingen",
       nativeTitle: "Meldingen",
       hint: "Ontvang browser-pushmeldingen van je gateway.",
-      nativeHint: "Meldingen worden native weergegeven door de OpenClaw-app op deze Mac.",
+      nativeHint: "Meldingen worden native weergegeven door de OpenCrustacean-app op deze Mac.",
       unavailableHint: "Niet beschikbaar in deze browser.",
       unavailable: "Niet beschikbaar",
       checking: "Controleren...",
@@ -1492,7 +1492,7 @@ export const nl: TranslationMap = {
       blockedHint:
         "Meldingen zijn geblokkeerd. Werk de siterechten van je browser bij om meldingen toe te staan.",
       nativeBlockedHint:
-        "Meldingen zijn uitgeschakeld voor OpenClaw in macOS. Sta ze toe in Systeeminstellingen > Meldingen.",
+        "Meldingen zijn uitgeschakeld voor OpenCrustacean in macOS. Sta ze toe in Systeeminstellingen > Meldingen.",
     },
     appearance: {
       intro: "Thema-, chat- en zijbalkvoorkeuren voor deze Control UI-client.",
@@ -1632,7 +1632,7 @@ export const nl: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1641,7 +1641,7 @@ export const nl: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1818,7 +1818,7 @@ export const nl: TranslationMap = {
     forward: "Vooruit",
     chat: "Chat",
     settings: "Instellingen",
-    askOpenClaw: "Vraag OpenClaw",
+    askOpenCrustacean: "Vraag OpenCrustacean",
     settingsGroupConnections: "Verbindingen",
     settingsGroupAgents: "Agents en tools",
     settingsGroupSecurity: "Privacy & beveiliging",
@@ -1959,7 +1959,7 @@ export const nl: TranslationMap = {
     nodes: "Nodes",
     chat: "Chat",
     dashboards: "Dashboards",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "Config",
     profile: "Profiel",
     communications: "Communicatie",
@@ -2026,14 +2026,14 @@ export const nl: TranslationMap = {
   modelSetup: {
     heading: "Verbind je AI",
     intro:
-      "OpenClaw hergebruikt AI-toegang die je al hebt — een CLI-login, een API-sleutel of een aanmelding bij een provider.",
+      "OpenCrustacean hergebruikt AI-toegang die je al hebt — een CLI-login, een API-sleutel of een aanmelding bij een provider.",
     required: {
       title: "Geen AI-provider geconfigureerd",
-      body: "OpenClaw kon geen provider en model vinden die voor deze agent zijn geconfigureerd. Voeg er een toe voordat je een gesprek start.",
+      body: "OpenCrustacean kon geen provider en model vinden die voor deze agent zijn geconfigureerd. Voeg er een toe voordat je een gesprek start.",
       action: "Een provider configureren",
     },
     connectionFailure: {
-      title: "OpenClaw kon je geconfigureerde AI niet gebruiken",
+      title: "OpenCrustacean kon je geconfigureerde AI niet gebruiken",
       body: "Voor deze agent zijn een provider en model geselecteerd, maar de verbinding is mislukt. Controleer de providerlogin of API-sleutel, modeltoegang en servicestatus en probeer het opnieuw.",
       action: "Providerinstellingen controleren",
     },
@@ -2049,7 +2049,7 @@ export const nl: TranslationMap = {
     },
     access: {
       adminRequired: "Voor modelinstellingen is operator.admin-toegang vereist.",
-      gatewayTooOld: "De Gateway gebruikt een oudere versie van OpenClaw",
+      gatewayTooOld: "De Gateway gebruikt een oudere versie van OpenCrustacean",
     },
     candidates: {
       title: "Gevonden op deze Gateway",
@@ -2098,12 +2098,12 @@ export const nl: TranslationMap = {
       connect: "Verbinden",
       connectAndVerify: "Verbinden en verifiëren",
       verifyHint:
-        "OpenClaw verifieert een echt modelantwoord voordat de verbinding als gereed wordt gemarkeerd.",
+        "OpenCrustacean verifieert een echt modelantwoord voordat de verbinding als gereed wordt gemarkeerd.",
       required: "Kies een provider en voer een API-sleutel of token in.",
     },
     success: {
       title: "Je AI is klaar",
-      body: "OpenClaw heeft een echt antwoord ontvangen van {modelRef}. Je kunt nu beginnen met chatten.",
+      body: "OpenCrustacean heeft een echt antwoord ontvangen van {modelRef}. Je kunt nu beginnen met chatten.",
       activeModel: "Actief model",
       latency: "Geverifieerd in {latencyMs} ms",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2178,12 +2178,12 @@ export const nl: TranslationMap = {
     confirmReplace:
       "Van bestaande doelbestanden wordt vóór vervanging een back-up gemaakt in het migratierapport.",
     confirmBackup:
-      "OpenClaw maakt een geverifieerde back-up vóór de import voordat het geheugen wordt gekopieerd.",
+      "OpenCrustacean maakt een geverifieerde back-up vóór de import voordat het geheugen wordt gekopieerd.",
     confirmImport: "Geheugen importeren",
     disconnected: "Maak verbinding met de Gateway om geheugen te importeren.",
     title: "Assistentgeheugen importeren",
     subtitle:
-      "Controleer het geconsolideerde geheugen van Codex en het automatische geheugen van Claude Code voordat u het naar OpenClaw kopieert.",
+      "Controleer het geconsolideerde geheugen van Codex en het automatische geheugen van Claude Code voordat u het naar OpenCrustacean kopieert.",
     agent: "Doelagent",
     replaceExisting: "Bestaande imports vervangen",
     replaceHint: "Bekijk conflicten opnieuw en bewaar back-ups van items vóór vervanging.",
@@ -2226,7 +2226,7 @@ export const nl: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "Neem het geheugen van je assistent mee",
-      body: "OpenClaw heeft geheugen van andere programmeerassistenten gevonden. Wil je dit importeren in de werkruimte van je agent?",
+      body: "OpenCrustacean heeft geheugen van andere programmeerassistenten gevonden. Wil je dit importeren in de werkruimte van je agent?",
       plannedCount: "{count} klaar om te importeren",
       alreadyImported: "Al geïmporteerd: {count}",
       sourceUnavailable: "Bronpad niet beschikbaar",
@@ -2242,35 +2242,35 @@ export const nl: TranslationMap = {
       unknownError: "Verzoek mislukt",
       doneTitle: "Geheugenimport voltooid",
       doneBody:
-        "{migrated} gemigreerd, {skipped} overgeslagen. Je kunt doorgaan met het instellen van OpenClaw.",
+        "{migrated} gemigreerd, {skipped} overgeslagen. Je kunt doorgaan met het instellen van OpenCrustacean.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "Je gids voor systeeminstellingen",
     subtitleCaretaker: "Systeeminstellingen en onderhoud.",
     exitSetup: "Setup afsluiten",
     newAgent: "Nieuwe agent",
     hatchDraft: "Word wakker, mijn vriend!",
-    placeholder: "Bericht aan OpenClaw…",
+    placeholder: "Bericht aan OpenCrustacean…",
     sensitivePlaceholder: "Voer gevoelige waarde in…",
     sensitiveReply: "Gevoelig antwoord verzonden",
     send: "Verzenden",
-    thinking: "OpenClaw denkt na",
+    thinking: "OpenCrustacean denkt na",
     earlier: "Eerder",
-    requestFailed: "OpenClaw kon niet antwoorden. Probeer het opnieuw.",
+    requestFailed: "OpenCrustacean kon niet antwoorden. Probeer het opnieuw.",
     connectionChanged:
       "De Gateway-verbinding is gewijzigd. Probeer opnieuw om deze setup voort te zetten.",
     sessionRestarted:
-      "{error} OpenClaw is een nieuwe sessie gestart; eerdere berichten blijven bewaard als context.",
-    unsupportedGateway: "Werk de Gateway bij om de setup met OpenClaw voort te zetten.",
+      "{error} OpenCrustacean is een nieuwe sessie gestart; eerdere berichten blijven bewaard als context.",
+    unsupportedGateway: "Werk de Gateway bij om de setup met OpenCrustacean voort te zetten.",
     panel: {
-      title: "OpenClaw",
-      toggle: "Vraag OpenClaw",
-      close: "Ask OpenClaw sluiten",
-      resize: "Grootte van Ask OpenClaw aanpassen",
-      dockBottom: "Ask OpenClaw onderaan verankeren",
-      dockRight: "Ask OpenClaw rechts verankeren",
+      title: "OpenCrustacean",
+      toggle: "Vraag OpenCrustacean",
+      close: "Ask OpenCrustacean sluiten",
+      resize: "Grootte van Ask OpenCrustacean aanpassen",
+      dockBottom: "Ask OpenCrustacean onderaan verankeren",
+      dockRight: "Ask OpenCrustacean rechts verankeren",
     },
     history: {
       button: "Geschiedenis",
@@ -2278,7 +2278,7 @@ export const nl: TranslationMap = {
       description: "Wat er op dit systeem is gewijzigd, nieuwste eerst.",
       loading: "Recente wijzigingen laden…",
       empty: "Nog geen geregistreerde wijzigingen.",
-      requestFailed: "OpenClaw kon de wijzigingsgeschiedenis niet laden.",
+      requestFailed: "OpenCrustacean kon de wijzigingsgeschiedenis niet laden.",
       loadMore: "Meer laden",
       loadingMore: "Meer laden…",
       changedPaths: "Gewijzigde paden ({count})",
@@ -2302,9 +2302,9 @@ export const nl: TranslationMap = {
       channelDegraded: "{channel} is verslechterd — vraag me wat er is gebeurd",
       channelFallback: "Een kanaal",
       dismiss: "Deze update sluiten",
-      channelSetupTitle: "Bereik OpenClaw buiten deze app",
+      channelSetupTitle: "Bereik OpenCrustacean buiten deze app",
       channelSetupBody:
-        "De webapp werkt al. Voeg alleen een kanaal toe als je OpenClaw vanuit een andere service wilt berichten.",
+        "De webapp werkt al. Voeg alleen een kanaal toe als je OpenCrustacean vanuit een andere service wilt berichten.",
       channelSetupAction: "Een kanaal instellen",
       channelSetupDismiss: "De webapp blijven gebruiken",
     },
@@ -2340,7 +2340,7 @@ export const nl: TranslationMap = {
     working: "Bezig…",
   },
   mcpPage: {
-    intro: "Verbind en beheer MCP-servers die tools aan OpenClaw leveren.",
+    intro: "Verbind en beheer MCP-servers die tools aan OpenCrustacean leveren.",
     connectorsLink: "Ontdek connectors met één klik op de pagina Plugins.",
     servers: "Servers",
     oauth: "OAuth",
@@ -2398,7 +2398,7 @@ export const nl: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "Kies hoe OpenClaw agentgeheugen opslaat, doorzoekt en onderhoudt.",
+    intro: "Kies hoe OpenCrustacean agentgeheugen opslaat, doorzoekt en onderhoudt.",
     tablistLabel: "Geheugensecties",
     tabs: {
       overview: "Overzicht",
@@ -2494,7 +2494,7 @@ export const nl: TranslationMap = {
       description:
         "Precies één geheugenplug-in bezit de geheugenslot. Een engine selecteren schakelt deze in en de andere uit.",
       rowTitle: "Geheugenengine",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "Uit",
       unavailable: "Niet beschikbaar",
       autoHint:
@@ -2514,7 +2514,7 @@ export const nl: TranslationMap = {
       rowTitle: "Ophaal-backend",
       builtin: "Ingebouwd",
       qmd: "QMD",
-      builtinHint: "Geheugenbestanden worden geïndexeerd en doorzocht door OpenClaw zelf.",
+      builtinHint: "Geheugenbestanden worden geïndexeerd en doorzocht door OpenCrustacean zelf.",
       qmdHint: "Ophalen wordt gedelegeerd aan QMD. De instellingen ervan verschijnen hieronder.",
     },
     addons: {
@@ -2713,7 +2713,8 @@ export const nl: TranslationMap = {
       notes: "Leg notities vast in Markdown, Obsidian, Notion of Bear.",
     },
     noInstalledTitle: "Geen optionele plugins geïnstalleerd",
-    noInstalledBody: "Ontdek een uitgelichte plugin of zoek in ClawHub om OpenClaw uit te breiden.",
+    noInstalledBody:
+      "Ontdek een uitgelichte plugin of zoek in ClawHub om OpenCrustacean uit te breiden.",
     noInstalledMatchTitle: "Geen geïnstalleerde plugins komen overeen",
     noMatchBody: "Probeer een andere zoekopdracht.",
     filterAll: "Alle",
@@ -2749,7 +2750,7 @@ export const nl: TranslationMap = {
     detailPluginId: "Plugin-ID",
     offlineTitle: "Gateway offline",
     offlineBody: "Maak verbinding om geïnstalleerde en aanbevolen plugins te bekijken.",
-    optionalCapability: "Optionele OpenClaw-mogelijkheid.",
+    optionalCapability: "Optionele OpenCrustacean-mogelijkheid.",
     enabled: "Ingeschakeld",
     disabled: "Uitgeschakeld",
     available: "Beschikbaar",
@@ -2825,7 +2826,7 @@ export const nl: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "Je persoonlijke AI-assistent, die op je eigen apparaten draait.",
     waveHello: "Zwaai naar Clawd",
     linksLabel: "Community en bronnen",
@@ -2835,7 +2836,7 @@ export const nl: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "Wijzigingslogboek",
-    license: "© 2026 OpenClaw Foundation — MIT-licentie.",
+    license: "© 2026 OpenCrustacean Foundation — MIT-licentie.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Identiteit die is ingesloten toen dit browserartefact werd gebouwd.",
     artifactDetails: "Buildgegevens van Control UI",
@@ -2853,7 +2854,7 @@ export const nl: TranslationMap = {
       "Gerapporteerd door de actieve Gateway-verbinding; los van deze Control UI-build.",
   },
   appsPage: {
-    heroTitle: "Neem OpenClaw overal mee naartoe",
+    heroTitle: "Neem OpenCrustacean overal mee naartoe",
     heroTagline:
       "Begeleidende apps voor je telefoon, horloge, desktop en browser — plus plug-ins om uit te breiden wat je agent kan doen.",
     sectionMobile: "Op je telefoon",
@@ -2877,11 +2878,11 @@ export const nl: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "Chat, praat, keur acties goed en deel naar OpenClaw vanaf iOS.",
+        desc: "Chat, praat, keur acties goed en deel naar OpenCrustacean vanaf iOS.",
       },
       android: {
         title: "Android",
-        desc: "Je Android-telefoon als volwaardige OpenClaw-node — chat, camera en Canvas.",
+        desc: "Je Android-telefoon als volwaardige OpenCrustacean-node — chat, camera en Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2889,7 +2890,7 @@ export const nl: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "De Android-companion breidt OpenClaw uit naar je horloge.",
+        desc: "De Android-companion breidt OpenCrustacean uit naar je horloge.",
       },
       macos: {
         title: "macOS",
@@ -2897,7 +2898,7 @@ export const nl: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "De Windows-companion verbindt je pc als een OpenClaw-node.",
+        desc: "De Windows-companion verbindt je pc als een OpenCrustacean-node.",
       },
       linux: {
         title: "Linux",
@@ -2905,11 +2906,11 @@ export const nl: TranslationMap = {
       },
       chrome: {
         title: "Chrome-extensie",
-        desc: "Laat OpenClaw je bestaande Chrome aansturen — tabbladen, pagina's en formulieren.",
+        desc: "Laat OpenCrustacean je bestaande Chrome aansturen — tabbladen, pagina's en formulieren.",
       },
       plugins: {
         title: "Plugins & ClawHub",
-        desc: "Breid OpenClaw uit met kanalen, tools en skills van de community.",
+        desc: "Breid OpenCrustacean uit met kanalen, tools en skills van de community.",
       },
     },
   },
@@ -3117,7 +3118,7 @@ export const nl: TranslationMap = {
     selfLearning: {
       pitchTitle: "Zelfleren inschakelen",
       pitchBody:
-        "OpenClaw beoordeelt correcties en omvangrijke voltooide runs en stelt vervolgens skillvoorstellen op voor dit bord. Het verbruikt extra tokens op de achtergrond en concepten verschijnen als openstaande voorstellen.",
+        "OpenCrustacean beoordeelt correcties en omvangrijke voltooide runs en stelt vervolgens skillvoorstellen op voor dit bord. Het verbruikt extra tokens op de achtergrond en concepten verschijnen als openstaande voorstellen.",
       enable: "Zelfleren inschakelen",
       enabling: "Inschakelen…",
       updateError: "De instelling voor zelfleren kon niet worden bijgewerkt.",
@@ -4035,7 +4036,7 @@ export const nl: TranslationMap = {
       heading: "Verbind je AI",
       signedInNoModels:
         "Je bent aangemeld, maar dit account biedt geen bruikbare modellen. Kies een andere provider of account om door te gaan.",
-      notConfigured: "Kies een provider en verifieer het model dat OpenClaw zal gebruiken.",
+      notConfigured: "Kies een provider en verifieer het model dat OpenCrustacean zal gebruiken.",
       noModels: "Geen modellen beschikbaar",
       modelRequired: "Model vereist",
       chooseProvider: "Kies een andere provider",
@@ -4465,7 +4466,7 @@ export const nl: TranslationMap = {
         stepDevUi:
           "Als je pnpm ui:dev gebruikt, bouw of herstart de dev-UI tegen de huidige checkout.",
         stepRestart:
-          "Herstart de Gateway na het bijwerken van OpenClaw zodat het huidige protocol wordt geserveerd.",
+          "Herstart de Gateway na het bijwerken van OpenCrustacean zodat het huidige protocol wordt geserveerd.",
       },
       network: {
         title: "Kan niet verbinden",
@@ -4689,7 +4690,7 @@ export const nl: TranslationMap = {
       remoteViewOnly: "Deze sessie bevindt zich op een gekoppeld knooppunt en is alleen-lezen.",
       unsupportedViewOnly: "Deze externe sessiebron is alleen-lezen.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4744,7 +4745,7 @@ export const nl: TranslationMap = {
     followUpModeOverriding: "Serverstandaard overschrijven ({mode})",
     followUpModeReset: "Terugzetten naar serverstandaard",
     catalogOpenTarget: "Externe sessies openen in",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Uitgeschakeld tijdens configuratie",
     commandPaletteTitle: "Zoeken of springen naar… (⌘K)",
@@ -4769,7 +4770,7 @@ export const nl: TranslationMap = {
       titleOne: "1 conflict in cloudwerkruimte",
       titleMany: "{count} conflicten in cloudwerkruimte",
       description:
-        "OpenClaw heeft je lokale versies behouden en de andere cloudwijzigingen toegepast. Bekijk het voorbereide resultaat of neem de versie ervan over voor een conflicterend pad.",
+        "OpenCrustacean heeft je lokale versies behouden en de andere cloudwijzigingen toegepast. Bekijk het voorbereide resultaat of neem de versie ervan over voor een conflicterend pad.",
       morePaths: "+{count} meer paden",
       stagedResult: "Voorbereid cloudresultaat",
       copyStagedResult: "Gestage resultaat-ref kopiëren",
@@ -4780,7 +4781,7 @@ export const nl: TranslationMap = {
       commandHelp:
         "Voer deze uit in Bash of zsh (Git Bash op Windows). Als inspect meldt dat het pad niet bestaat, heeft de cloud het verwijderd; controleer dit en verwijder het lokale pad handmatig. Als checkout een bestands-/mapconflict meldt, verplaats of verwijder het blokkerende lokale pad en probeer het opnieuw. Als de gestage ref ontbreekt, is de melding verouderd; wijzig het lokale pad niet.",
       commandsUnavailable:
-        "Deze bestandsnaam bevat terminalstuurtekens, dus OpenClaw bouwt er geen kopieerbaar shellcommando voor. Inspecteer de gestage ref rechtstreeks en voer het pad zorgvuldig handmatig in.",
+        "Deze bestandsnaam bevat terminalstuurtekens, dus OpenCrustacean bouwt er geen kopieerbaar shellcommando voor. Inspecteer de gestage ref rechtstreeks en voer het pad zorgvuldig handmatig in.",
       dismiss: "Melding over werkruimteconflict sluiten",
       eventSender: "Cloudwerkruimte",
       eventTitleOne: "Cloudresultaat toegepast met 1 conflict",
@@ -5287,7 +5288,7 @@ export const nl: TranslationMap = {
       checking: "Controleren...",
     },
     voice: {
-      asking: "OpenClaw wordt gevraagd...",
+      asking: "OpenCrustacean wordt gevraagd...",
       connecting: "Spraakinvoer verbinden...",
       listening: "Luisteren...",
     },
@@ -5508,7 +5509,7 @@ export const nl: TranslationMap = {
       filters: "Filters",
       shownOf: "{shown} van {total}",
       emptyTitle: "Nog geen geplande taken",
-      emptyHint: "Beschrijf wat OpenClaw moet doen en wanneer — het draait volgens schema.",
+      emptyHint: "Beschrijf wat OpenCrustacean moet doen en wanneer — het draait volgens schema.",
       noMatching: "Geen taken komen overeen met de huidige filters.",
       loadMore: "Meer laden",
       loading: "Laden...",
@@ -5575,7 +5576,7 @@ export const nl: TranslationMap = {
     detail: {
       tabsLabel: "Automatiseringsdetails",
       newTitle: "Nieuwe geplande taak",
-      newSubtitle: "Beschrijf wat OpenClaw moet doen en kies wanneer het wordt uitgevoerd.",
+      newSubtitle: "Beschrijf wat OpenCrustacean moet doen en kies wanneer het wordt uitgevoerd.",
       back: "Alle automatiseringen",
       settingsTab: "Instellingen",
       historyTitle: "Uitvoeringsgeschiedenis",
@@ -5648,7 +5649,7 @@ export const nl: TranslationMap = {
       descriptionPlaceholder: "Optionele context voor deze taak",
       agentPlaceholder: "main of ops",
       agentHelp: "Begin met typen om een bekende agent te kiezen, of voer een aangepaste in.",
-      promptPlaceholder: "Beschrijf wat OpenClaw moet doen...",
+      promptPlaceholder: "Beschrijf wat OpenCrustacean moet doen...",
       repeat: "Herhalen",
       repeatInterval: "Interval",
       repeatOnce: "Eén keer",

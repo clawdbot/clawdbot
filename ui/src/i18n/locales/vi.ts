@@ -369,7 +369,7 @@ export const vi: TranslationMap = {
     genericSubtitle: "Đã xảy ra lỗi khi tải bảng điều khiển này.",
     staleTitle: "Đã có phiên bản mới",
     staleSubtitle:
-      "OpenClaw đã được cập nhật trong nền. Hãy tải lại để xem bảng điều khiển mới nhất.",
+      "OpenCrustacean đã được cập nhật trong nền. Hãy tải lại để xem bảng điều khiển mới nhất.",
     reloading: "Đang tải lại…",
     retry: "Thử lại",
     stylesFailed: "Không tải được styles, nên trang có thể hiển thị lỗi.",
@@ -394,7 +394,7 @@ export const vi: TranslationMap = {
       notGitInstall:
         "Không phải bản git checkout. Chạy `openclaw update` từ CLI để cài lại toàn cục.",
       notOpenclawRoot:
-        "Chạy cập nhật từ một bản OpenClaw checkout hoặc dùng đường dẫn cài lại toàn cục qua CLI.",
+        "Chạy cập nhật từ một bản OpenCrustacean checkout hoặc dùng đường dẫn cài lại toàn cục qua CLI.",
       depsInstallFailed: "Cài đặt phụ thuộc thất bại. Sửa lỗi cài đặt và thử lại.",
       buildFailed: "Build thất bại. Sửa lỗi build và thử lại.",
       buildDirty:
@@ -425,7 +425,7 @@ export const vi: TranslationMap = {
     pairing: {
       button: "Ghép nối thiết bị di động",
       adminRequired: "Cần quyền truy cập quản trị viên để tạo mã thiết lập.",
-      title: "OpenClaw di động",
+      title: "OpenCrustacean di động",
       subtitle: "Quét mã QR này trong ứng dụng di động để kết nối điện thoại mới.",
       noApp: "Chưa có ứng dụng?",
       getApps: "Tải ứng dụng",
@@ -442,14 +442,14 @@ export const vi: TranslationMap = {
       transportLimitedHint:
         "URL Gateway này sử dụng ws:// dạng văn bản thuần. Hãy sử dụng wss:// hoặc Tailscale Serve, sau đó tạo mã mới để có toàn quyền truy cập.",
       failed: "Không thể tạo mã thiết lập.",
-      qrAlt: "Mã QR ghép nối OpenClaw di động",
+      qrAlt: "Mã QR ghép nối OpenCrustacean di động",
       qrUnavailable: "Không có mã QR. Hãy sao chép mã thiết lập thay thế.",
       copySetupCode: "Sao chép mã thiết lập",
       newCode: "Mã mới",
       showSetupCode: "Hiển thị mã thiết lập",
       pending: "Yêu cầu thiết bị đang chờ xem xét: {count}",
       review: "Đánh giá",
-      waiting: "Các ứng dụng di động OpenClaw chính thức sẽ tự động kết nối sau khi quét.",
+      waiting: "Các ứng dụng di động OpenCrustacean chính thức sẽ tự động kết nối sau khi quét.",
       help: "Trợ giúp ghép nối",
       manageDevices: "Quản lý thiết bị",
     },
@@ -594,11 +594,11 @@ export const vi: TranslationMap = {
     ownerSession: "Phiên",
     ownerWorkboard: "Workboard",
     title: "Worktree được quản lý",
-    subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenClaw sở hữu.",
+    subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenCrustacean sở hữu.",
     cleanNow: "Dọn dẹp ngay",
     cleanupTitle: "Dọn dẹp",
     cleanupSubtitle:
-      "OpenClaw định kỳ xóa các worktree cũ để giải phóng dung lượng ổ đĩa. Điều chỉnh mức độ dọn dẹp.",
+      "OpenCrustacean định kỳ xóa các worktree cũ để giải phóng dung lượng ổ đĩa. Điều chỉnh mức độ dọn dẹp.",
     cleanupMaxCount: "Số worktree tối đa",
     cleanupMaxCountHelp:
       "Số lượng worktree được quản lý tối đa cần giữ lại trên tất cả kho lưu trữ. Các worktree cũ hơn sẽ được tạo bản chụp nhanh và xóa trước. Đặt thành 0 để tắt giới hạn số lượng.",
@@ -649,8 +649,8 @@ export const vi: TranslationMap = {
     cloudWorker: "Đám mây · {profile}",
     cloudWorkerProvider: "Nhà cung cấp worker đám mây: {provider}",
     cloudRequiresWorktree: "Worker đám mây yêu cầu một worktree được quản lý",
-    cloudRequiresOpenClawRuntime:
-      "Cloud worker yêu cầu runtime OpenClaw; {runtime} đang được chọn.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "Cloud worker yêu cầu runtime OpenCrustacean; {runtime} đang được chọn.",
     cloudSecureContextRequired:
       "Worker đám mây cần ngữ cảnh trình duyệt bảo mật để tính năng khôi phục có thể bảo vệ tác vụ của bạn.",
     cloudStartFailed: "Phiên đã được tạo cục bộ, nhưng không thể khởi động trên đám mây: {error}",
@@ -1455,7 +1455,8 @@ export const vi: TranslationMap = {
       title: "Thông báo đẩy",
       nativeTitle: "Thông báo",
       hint: "Nhận thông báo đẩy trên trình duyệt từ gateway của bạn.",
-      nativeHint: "Thông báo được hiển thị nguyên bản bởi ứng dụng OpenClaw trên máy Mac này.",
+      nativeHint:
+        "Thông báo được hiển thị nguyên bản bởi ứng dụng OpenCrustacean trên máy Mac này.",
       unavailableHint: "Không khả dụng trong trình duyệt này.",
       unavailable: "Không khả dụng",
       checking: "Đang kiểm tra...",
@@ -1480,7 +1481,7 @@ export const vi: TranslationMap = {
       blockedHint:
         "Thông báo đang bị chặn. Cập nhật quyền trang web của trình duyệt để cho phép thông báo.",
       nativeBlockedHint:
-        "Thông báo đã bị tắt cho OpenClaw trong macOS. Cho phép chúng trong System Settings > Notifications.",
+        "Thông báo đã bị tắt cho OpenCrustacean trong macOS. Cho phép chúng trong System Settings > Notifications.",
     },
     appearance: {
       intro: "Tùy chọn giao diện, trò chuyện và thanh bên cho ứng dụng Control UI này.",
@@ -1621,7 +1622,7 @@ export const vi: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1630,7 +1631,7 @@ export const vi: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1807,7 +1808,7 @@ export const vi: TranslationMap = {
     forward: "Tiến",
     chat: "Trò chuyện",
     settings: "Cài đặt",
-    askOpenClaw: "Hỏi OpenClaw",
+    askOpenCrustacean: "Hỏi OpenCrustacean",
     settingsGroupConnections: "Kết nối",
     settingsGroupAgents: "Tác nhân & Công cụ",
     settingsGroupSecurity: "Quyền riêng tư & Bảo mật",
@@ -1949,7 +1950,7 @@ export const vi: TranslationMap = {
     nodes: "Nút",
     chat: "Trò chuyện",
     dashboards: "Bảng điều khiển",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "Cấu hình",
     profile: "Hồ sơ",
     communications: "Liên lạc",
@@ -2017,14 +2018,14 @@ export const vi: TranslationMap = {
   modelSetup: {
     heading: "Kết nối AI của bạn",
     intro:
-      "OpenClaw sử dụng lại quyền truy cập AI mà bạn đã có — thông tin đăng nhập CLI, khóa API hoặc thông tin đăng nhập nhà cung cấp.",
+      "OpenCrustacean sử dụng lại quyền truy cập AI mà bạn đã có — thông tin đăng nhập CLI, khóa API hoặc thông tin đăng nhập nhà cung cấp.",
     required: {
       title: "Chưa cấu hình nhà cung cấp AI",
-      body: "OpenClaw không tìm thấy nhà cung cấp và mô hình được cấu hình cho tác nhân này. Hãy thêm một cái trước khi bắt đầu cuộc trò chuyện.",
+      body: "OpenCrustacean không tìm thấy nhà cung cấp và mô hình được cấu hình cho tác nhân này. Hãy thêm một cái trước khi bắt đầu cuộc trò chuyện.",
       action: "Cấu hình nhà cung cấp",
     },
     connectionFailure: {
-      title: "OpenClaw không thể sử dụng AI đã cấu hình của bạn",
+      title: "OpenCrustacean không thể sử dụng AI đã cấu hình của bạn",
       body: "Tác nhân này đã chọn nhà cung cấp và mô hình, nhưng kết nối thất bại. Hãy kiểm tra đăng nhập nhà cung cấp hoặc khóa API, quyền truy cập mô hình và trạng thái dịch vụ, rồi thử lại.",
       action: "Kiểm tra cài đặt nhà cung cấp",
     },
@@ -2040,7 +2041,7 @@ export const vi: TranslationMap = {
     },
     access: {
       adminRequired: "Việc thiết lập mô hình yêu cầu quyền operator.admin.",
-      gatewayTooOld: "Gateway đang chạy một phiên bản OpenClaw cũ hơn",
+      gatewayTooOld: "Gateway đang chạy một phiên bản OpenCrustacean cũ hơn",
     },
     candidates: {
       title: "Tìm thấy trên Gateway này",
@@ -2089,12 +2090,12 @@ export const vi: TranslationMap = {
       connect: "Kết nối",
       connectAndVerify: "Kết nối & xác minh",
       verifyHint:
-        "OpenClaw xác minh phản hồi mô hình thực tế trước khi đánh dấu kết nối đã sẵn sàng.",
+        "OpenCrustacean xác minh phản hồi mô hình thực tế trước khi đánh dấu kết nối đã sẵn sàng.",
       required: "Chọn nhà cung cấp và nhập khóa API hoặc token.",
     },
     success: {
       title: "AI của bạn đã sẵn sàng",
-      body: "OpenClaw đã nhận được phản hồi thực từ {modelRef}. Bạn có thể bắt đầu trò chuyện ngay bây giờ.",
+      body: "OpenCrustacean đã nhận được phản hồi thực từ {modelRef}. Bạn có thể bắt đầu trò chuyện ngay bây giờ.",
       activeModel: "Mô hình đang hoạt động",
       latency: "Đã xác minh trong {latencyMs} ms",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2168,12 +2169,13 @@ export const vi: TranslationMap = {
       "Sao chép {count} tệp bộ nhớ đã chọn vào không gian làm việc của tác nhân này.",
     confirmReplace:
       "Các tệp hiện có tại đích sẽ được sao lưu trong báo cáo di chuyển trước khi bị thay thế.",
-    confirmBackup: "OpenClaw tạo bản sao lưu đã xác minh trước khi nhập rồi mới sao chép bộ nhớ.",
+    confirmBackup:
+      "OpenCrustacean tạo bản sao lưu đã xác minh trước khi nhập rồi mới sao chép bộ nhớ.",
     confirmImport: "Nhập bộ nhớ",
     disconnected: "Kết nối với Gateway để nhập bộ nhớ.",
     title: "Nhập bộ nhớ của trợ lý",
     subtitle:
-      "Xem lại bộ nhớ hợp nhất của Codex và bộ nhớ tự động của Claude Code trước khi sao chép vào OpenClaw.",
+      "Xem lại bộ nhớ hợp nhất của Codex và bộ nhớ tự động của Claude Code trước khi sao chép vào OpenCrustacean.",
     agent: "Tác nhân đích",
     replaceExisting: "Thay thế các mục đã nhập hiện có",
     replaceHint:
@@ -2215,7 +2217,7 @@ export const vi: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "Mang theo bộ nhớ của trợ lý",
-      body: "OpenClaw đã tìm thấy bộ nhớ từ các trợ lý lập trình khác. Nhập bộ nhớ đó vào không gian làm việc của tác nhân?",
+      body: "OpenCrustacean đã tìm thấy bộ nhớ từ các trợ lý lập trình khác. Nhập bộ nhớ đó vào không gian làm việc của tác nhân?",
       plannedCount: "{count} mục sẵn sàng để nhập",
       alreadyImported: "Đã nhập: {count}",
       sourceUnavailable: "Đường dẫn nguồn không khả dụng",
@@ -2231,34 +2233,34 @@ export const vi: TranslationMap = {
       unknownError: "Yêu cầu thất bại",
       doneTitle: "Đã hoàn tất nhập bộ nhớ",
       doneBody:
-        "Đã di chuyển {migrated}, bỏ qua {skipped}. Bạn có thể tiếp tục thiết lập OpenClaw.",
+        "Đã di chuyển {migrated}, bỏ qua {skipped}. Bạn có thể tiếp tục thiết lập OpenCrustacean.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "Hướng dẫn thiết lập hệ thống của bạn",
     subtitleCaretaker: "Thiết lập và bảo trì hệ thống.",
     exitSetup: "Thoát thiết lập",
     newAgent: "Agent mới",
     hatchDraft: "Dậy thôi, bạn của tôi!",
-    placeholder: "Nhắn tin cho OpenClaw…",
+    placeholder: "Nhắn tin cho OpenCrustacean…",
     sensitivePlaceholder: "Nhập giá trị nhạy cảm…",
     sensitiveReply: "Đã gửi trả lời nhạy cảm",
     send: "Gửi",
-    thinking: "OpenClaw đang suy nghĩ",
+    thinking: "OpenCrustacean đang suy nghĩ",
     earlier: "Trước đó",
-    requestFailed: "OpenClaw không thể trả lời. Hãy thử lại.",
+    requestFailed: "OpenCrustacean không thể trả lời. Hãy thử lại.",
     connectionChanged: "Kết nối Gateway đã thay đổi. Hãy thử lại để tiếp tục thiết lập này.",
     sessionRestarted:
-      "{error} OpenClaw đã bắt đầu một phiên mới; các tin nhắn trước đó vẫn được giữ lại làm ngữ cảnh.",
-    unsupportedGateway: "Cập nhật Gateway để tiếp tục thiết lập với OpenClaw.",
+      "{error} OpenCrustacean đã bắt đầu một phiên mới; các tin nhắn trước đó vẫn được giữ lại làm ngữ cảnh.",
+    unsupportedGateway: "Cập nhật Gateway để tiếp tục thiết lập với OpenCrustacean.",
     panel: {
-      title: "OpenClaw",
-      toggle: "Hỏi OpenClaw",
-      close: "Đóng Ask OpenClaw",
-      resize: "Đổi kích thước Ask OpenClaw",
-      dockBottom: "Ghim Ask OpenClaw ở dưới cùng",
-      dockRight: "Ghim Ask OpenClaw ở bên phải",
+      title: "OpenCrustacean",
+      toggle: "Hỏi OpenCrustacean",
+      close: "Đóng Ask OpenCrustacean",
+      resize: "Đổi kích thước Ask OpenCrustacean",
+      dockBottom: "Ghim Ask OpenCrustacean ở dưới cùng",
+      dockRight: "Ghim Ask OpenCrustacean ở bên phải",
     },
     history: {
       button: "Lịch sử",
@@ -2266,7 +2268,7 @@ export const vi: TranslationMap = {
       description: "Những gì đã thay đổi trên hệ thống này, mới nhất trước.",
       loading: "Đang tải thay đổi gần đây…",
       empty: "Chưa có thay đổi nào được ghi lại.",
-      requestFailed: "OpenClaw không thể tải lịch sử thay đổi.",
+      requestFailed: "OpenCrustacean không thể tải lịch sử thay đổi.",
       loadMore: "Tải thêm",
       loadingMore: "Đang tải thêm…",
       changedPaths: "Đường dẫn đã thay đổi ({count})",
@@ -2290,9 +2292,9 @@ export const vi: TranslationMap = {
       channelDegraded: "{channel} đang bị suy giảm — hãy hỏi tôi chuyện gì đã xảy ra",
       channelFallback: "Một kênh",
       dismiss: "Bỏ qua cập nhật này",
-      channelSetupTitle: "Kết nối OpenClaw bên ngoài ứng dụng này",
+      channelSetupTitle: "Kết nối OpenCrustacean bên ngoài ứng dụng này",
       channelSetupBody:
-        "Ứng dụng web đã hoạt động. Chỉ thêm kênh nếu bạn muốn nhắn tin cho OpenClaw từ một dịch vụ khác.",
+        "Ứng dụng web đã hoạt động. Chỉ thêm kênh nếu bạn muốn nhắn tin cho OpenCrustacean từ một dịch vụ khác.",
       channelSetupAction: "Thiết lập một kênh",
       channelSetupDismiss: "Tiếp tục dùng ứng dụng web",
     },
@@ -2328,7 +2330,7 @@ export const vi: TranslationMap = {
     working: "Đang làm việc…",
   },
   mcpPage: {
-    intro: "Kết nối và quản lý các máy chủ MCP cung cấp công cụ cho OpenClaw.",
+    intro: "Kết nối và quản lý các máy chủ MCP cung cấp công cụ cho OpenCrustacean.",
     connectorsLink: "Khám phá các trình kết nối một-cú-nhấp trên trang Plugins.",
     servers: "Máy chủ",
     oauth: "OAuth",
@@ -2386,7 +2388,7 @@ export const vi: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "Chọn cách OpenClaw lưu trữ, tìm kiếm và duy trì bộ nhớ tác nhân.",
+    intro: "Chọn cách OpenCrustacean lưu trữ, tìm kiếm và duy trì bộ nhớ tác nhân.",
     tablistLabel: "Các phần bộ nhớ",
     tabs: {
       overview: "Tổng quan",
@@ -2480,7 +2482,7 @@ export const vi: TranslationMap = {
       description:
         "Đúng một plugin bộ nhớ sở hữu slot bộ nhớ. Việc chọn một engine sẽ bật nó và tắt các engine khác.",
       rowTitle: "Engine bộ nhớ",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "Tắt",
       unavailable: "Không khả dụng",
       autoHint:
@@ -2500,7 +2502,7 @@ export const vi: TranslationMap = {
       rowTitle: "Backend truy xuất",
       builtin: "Tích hợp sẵn",
       qmd: "QMD",
-      builtinHint: "Các tệp bộ nhớ được lập chỉ mục và tìm kiếm bởi chính OpenClaw.",
+      builtinHint: "Các tệp bộ nhớ được lập chỉ mục và tìm kiếm bởi chính OpenCrustacean.",
       qmdHint: "Việc truy xuất được ủy quyền cho QMD. Các thiết lập của nó xuất hiện bên dưới.",
     },
     addons: {
@@ -2694,7 +2696,8 @@ export const vi: TranslationMap = {
       notes: "Ghi chú vào Markdown, Obsidian, Notion hoặc Bear.",
     },
     noInstalledTitle: "Chưa cài đặt plugin tùy chọn nào",
-    noInstalledBody: "Khám phá một plugin nổi bật hoặc tìm kiếm trên ClawHub để mở rộng OpenClaw.",
+    noInstalledBody:
+      "Khám phá một plugin nổi bật hoặc tìm kiếm trên ClawHub để mở rộng OpenCrustacean.",
     noInstalledMatchTitle: "Không có plugin đã cài đặt nào khớp",
     noMatchBody: "Thử tìm kiếm khác.",
     filterAll: "Tất cả",
@@ -2729,7 +2732,7 @@ export const vi: TranslationMap = {
     detailPluginId: "ID plugin",
     offlineTitle: "Gateway ngoại tuyến",
     offlineBody: "Kết nối để duyệt các plugin đã cài đặt và được đề xuất.",
-    optionalCapability: "Khả năng OpenClaw tùy chọn.",
+    optionalCapability: "Khả năng OpenCrustacean tùy chọn.",
     enabled: "Đã bật",
     disabled: "Đã tắt",
     available: "Có sẵn",
@@ -2803,7 +2806,7 @@ export const vi: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "Trợ lý AI cá nhân của bạn, chạy trên chính thiết bị của bạn.",
     waveHello: "Vẫy tay chào Clawd",
     linksLabel: "Cộng đồng và tài nguyên",
@@ -2813,7 +2816,7 @@ export const vi: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "Nhật ký thay đổi",
-    license: "© 2026 OpenClaw Foundation — Giấy phép MIT.",
+    license: "© 2026 OpenCrustacean Foundation — Giấy phép MIT.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Danh tính được nhúng khi artifact trình duyệt này được xây dựng.",
     artifactDetails: "Chi tiết bản dựng Control UI",
@@ -2831,7 +2834,7 @@ export const vi: TranslationMap = {
       "Do kết nối Gateway đang hoạt động báo cáo; tách biệt với bản dựng Control UI này.",
   },
   appsPage: {
-    heroTitle: "Mang OpenClaw đến mọi nơi",
+    heroTitle: "Mang OpenCrustacean đến mọi nơi",
     heroTagline:
       "Ứng dụng đồng hành cho điện thoại, đồng hồ, máy tính và trình duyệt của bạn — cùng các plugin để mở rộng khả năng của tác nhân.",
     sectionMobile: "Trên điện thoại của bạn",
@@ -2855,11 +2858,11 @@ export const vi: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "Trò chuyện, nói chuyện, phê duyệt hành động và chia sẻ vào OpenClaw từ iOS.",
+        desc: "Trò chuyện, nói chuyện, phê duyệt hành động và chia sẻ vào OpenCrustacean từ iOS.",
       },
       android: {
         title: "Android",
-        desc: "Điện thoại Android của bạn như một node OpenClaw đầy đủ — trò chuyện, camera và Canvas.",
+        desc: "Điện thoại Android của bạn như một node OpenCrustacean đầy đủ — trò chuyện, camera và Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2867,7 +2870,7 @@ export const vi: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "Ứng dụng đồng hành Android mở rộng OpenClaw đến đồng hồ của bạn.",
+        desc: "Ứng dụng đồng hành Android mở rộng OpenCrustacean đến đồng hồ của bạn.",
       },
       macos: {
         title: "macOS",
@@ -2875,7 +2878,7 @@ export const vi: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "Ứng dụng đồng hành Windows kết nối PC của bạn như một node OpenClaw.",
+        desc: "Ứng dụng đồng hành Windows kết nối PC của bạn như một node OpenCrustacean.",
       },
       linux: {
         title: "Linux",
@@ -2883,11 +2886,11 @@ export const vi: TranslationMap = {
       },
       chrome: {
         title: "Tiện ích mở rộng Chrome",
-        desc: "Cho phép OpenClaw điều khiển Chrome hiện có của bạn — thẻ, trang và biểu mẫu.",
+        desc: "Cho phép OpenCrustacean điều khiển Chrome hiện có của bạn — thẻ, trang và biểu mẫu.",
       },
       plugins: {
         title: "Plugin & ClawHub",
-        desc: "Mở rộng OpenClaw với các kênh, công cụ và Skills từ cộng đồng.",
+        desc: "Mở rộng OpenCrustacean với các kênh, công cụ và Skills từ cộng đồng.",
       },
     },
   },
@@ -3096,7 +3099,7 @@ export const vi: TranslationMap = {
     selfLearning: {
       pitchTitle: "Bật tính năng tự học",
       pitchBody:
-        "OpenClaw xem xét các chỉnh sửa và những lượt chạy quan trọng đã hoàn thành, sau đó soạn thảo các đề xuất kỹ năng cho bảng này. Tính năng này sử dụng thêm token nền và các bản nháp sẽ xuất hiện dưới dạng đề xuất đang chờ xử lý.",
+        "OpenCrustacean xem xét các chỉnh sửa và những lượt chạy quan trọng đã hoàn thành, sau đó soạn thảo các đề xuất kỹ năng cho bảng này. Tính năng này sử dụng thêm token nền và các bản nháp sẽ xuất hiện dưới dạng đề xuất đang chờ xử lý.",
       enable: "Bật tính năng tự học",
       enabling: "Đang bật…",
       updateError: "Không thể cập nhật cài đặt tự học.",
@@ -4005,7 +4008,7 @@ export const vi: TranslationMap = {
       heading: "Kết nối AI của bạn",
       signedInNoModels:
         "Bạn đã đăng nhập, nhưng tài khoản này không hiển thị mô hình nào có thể dùng được. Chọn nhà cung cấp hoặc tài khoản khác để tiếp tục.",
-      notConfigured: "Chọn nhà cung cấp và xác minh mô hình mà OpenClaw sẽ sử dụng.",
+      notConfigured: "Chọn nhà cung cấp và xác minh mô hình mà OpenCrustacean sẽ sử dụng.",
       noModels: "Không có mô hình khả dụng",
       modelRequired: "Cần có mô hình",
       chooseProvider: "Chọn nhà cung cấp khác",
@@ -4428,7 +4431,7 @@ export const vi: TranslationMap = {
         stepDevUi:
           "Nếu dùng pnpm ui:dev, hãy build lại hoặc khởi động lại UI dev theo checkout hiện tại.",
         stepRestart:
-          "Khởi động lại Gateway sau khi cập nhật OpenClaw để nó phục vụ giao thức hiện tại.",
+          "Khởi động lại Gateway sau khi cập nhật OpenCrustacean để nó phục vụ giao thức hiện tại.",
       },
       network: {
         title: "Không thể kết nối",
@@ -4652,7 +4655,7 @@ export const vi: TranslationMap = {
       remoteViewOnly: "Phiên này nằm trên một nút đã ghép nối và chỉ có thể xem.",
       unsupportedViewOnly: "Nguồn phiên bên ngoài này chỉ có thể xem.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4707,7 +4710,7 @@ export const vi: TranslationMap = {
     followUpModeOverriding: "Đang ghi đè mặc định của máy chủ ({mode})",
     followUpModeReset: "Đặt lại về mặc định máy chủ",
     catalogOpenTarget: "Mở các phiên bên ngoài trong",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Đã tắt trong quá trình thiết lập",
     commandPaletteTitle: "Tìm kiếm hoặc chuyển đến… (⌘K)",
@@ -4732,7 +4735,7 @@ export const vi: TranslationMap = {
       titleOne: "1 xung đột không gian làm việc đám mây",
       titleMany: "{count} xung đột không gian làm việc đám mây",
       description:
-        "OpenClaw đã giữ lại các phiên bản cục bộ của bạn và áp dụng các thay đổi đám mây khác. Kiểm tra kết quả đã dàn dựng hoặc lấy phiên bản của nó cho đường dẫn bị xung đột.",
+        "OpenCrustacean đã giữ lại các phiên bản cục bộ của bạn và áp dụng các thay đổi đám mây khác. Kiểm tra kết quả đã dàn dựng hoặc lấy phiên bản của nó cho đường dẫn bị xung đột.",
       morePaths: "+{count} đường dẫn khác",
       stagedResult: "Kết quả đám mây đã dàn dựng",
       copyStagedResult: "Sao chép ref kết quả đã dàn dựng",
@@ -4743,7 +4746,7 @@ export const vi: TranslationMap = {
       commandHelp:
         "Chạy các lệnh này trong Bash hoặc zsh (Git Bash trên Windows). Nếu inspect báo đường dẫn không tồn tại, tức là đám mây đã xóa nó; hãy xác minh và xóa đường dẫn cục bộ theo cách thủ công. Nếu checkout báo xung đột tệp/thư mục, hãy di chuyển hoặc xóa đường dẫn cục bộ đang chặn, rồi thử lại. Nếu thiếu ref đã dàn dựng, thông báo đã cũ; đừng thay đổi đường dẫn cục bộ.",
       commandsUnavailable:
-        "Tên tệp này chứa các ký tự điều khiển terminal, nên OpenClaw sẽ không tạo lệnh shell có thể sao chép cho nó. Hãy kiểm tra ref đã dàn dựng trực tiếp và nhập đường dẫn thủ công một cách cẩn thận.",
+        "Tên tệp này chứa các ký tự điều khiển terminal, nên OpenCrustacean sẽ không tạo lệnh shell có thể sao chép cho nó. Hãy kiểm tra ref đã dàn dựng trực tiếp và nhập đường dẫn thủ công một cách cẩn thận.",
       dismiss: "Bỏ qua thông báo xung đột không gian làm việc",
       eventSender: "Không gian làm việc đám mây",
       eventTitleOne: "Kết quả đám mây đã áp dụng với 1 xung đột",
@@ -5243,7 +5246,7 @@ export const vi: TranslationMap = {
       checking: "Đang kiểm tra...",
     },
     voice: {
-      asking: "Đang hỏi OpenClaw...",
+      asking: "Đang hỏi OpenCrustacean...",
       connecting: "Đang kết nối đầu vào giọng nói...",
       listening: "Đang lắng nghe...",
     },
@@ -5461,7 +5464,7 @@ export const vi: TranslationMap = {
       filters: "Bộ lọc",
       shownOf: "{shown} trên {total}",
       emptyTitle: "Chưa có tác vụ theo lịch nào",
-      emptyHint: "Mô tả những gì OpenClaw nên làm và khi nào — nó sẽ chạy theo lịch.",
+      emptyHint: "Mô tả những gì OpenCrustacean nên làm và khi nào — nó sẽ chạy theo lịch.",
       noMatching: "Không có tác vụ nào khớp với bộ lọc hiện tại.",
       loadMore: "Tải thêm",
       loading: "Đang tải...",
@@ -5528,7 +5531,7 @@ export const vi: TranslationMap = {
     detail: {
       tabsLabel: "Chi tiết tự động hóa",
       newTitle: "Tác vụ theo lịch mới",
-      newSubtitle: "Mô tả những gì OpenClaw nên làm, sau đó chọn thời điểm chạy.",
+      newSubtitle: "Mô tả những gì OpenCrustacean nên làm, sau đó chọn thời điểm chạy.",
       back: "Tất cả tác vụ tự động",
       settingsTab: "Cài đặt",
       historyTitle: "Lịch sử chạy",
@@ -5601,7 +5604,7 @@ export const vi: TranslationMap = {
       descriptionPlaceholder: "Ngữ cảnh tùy chọn cho tác vụ này",
       agentPlaceholder: "main hoặc ops",
       agentHelp: "Bắt đầu nhập để chọn agent đã biết, hoặc nhập agent tùy chỉnh.",
-      promptPlaceholder: "Mô tả những gì OpenClaw nên làm...",
+      promptPlaceholder: "Mô tả những gì OpenCrustacean nên làm...",
       repeat: "Lặp lại",
       repeatInterval: "Khoảng thời gian",
       repeatOnce: "Một lần",

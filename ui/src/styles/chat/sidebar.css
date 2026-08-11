@@ -183,17 +183,6 @@
   overflow: hidden;
 }
 
-.chat-main--rail-docked {
-  flex-direction: row;
-}
-
-.chat-main--rail-docked > openclaw-chat-session-rail {
-  display: block;
-  width: 400px;
-  min-width: 400px;
-  min-height: 0;
-  flex: 0 0 400px;
-}
 
 openclaw-chat-sidebar-region,
 .sidebar-region__right-runtime,

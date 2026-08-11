@@ -340,7 +340,7 @@ function readBundledChannelCatalog(
 }
 
 function createRootHelpRenderStateDir(): string {
-  return mkdtempSync(path.join(tmpdir(), "openclaw-build-root-help-"));
+  return mkdtempSync(path.join(tmpdir(), "opencrustacean-build-root-help-"));
 }
 
 function cleanupRootHelpRenderStateDir(stateDir: string): void {
@@ -385,8 +385,8 @@ function createIsolatedRootHelpRenderContext(
   const homeDir = path.join(stateDir, "home");
   const env: NodeJS.ProcessEnv = {
     HOME: homeDir,
-    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "openclaw-build",
-    USER: process.env.USER ?? process.env.LOGNAME ?? "openclaw-build",
+    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "opencrustacean-build",
+    USER: process.env.USER ?? process.env.LOGNAME ?? "opencrustacean-build",
     PATH: process.env.PATH ?? "",
     TMPDIR: process.env.TMPDIR ?? "/tmp",
     LANG: process.env.LANG ?? "C.UTF-8",

@@ -363,7 +363,7 @@ export class McpAppView extends LitElement {
 
       const bridge = new OpenClawAppBridge(
         null,
-        { name: "OpenClaw", version: "1.0.0" },
+        { name: "OpenCrustacean", version: "1.0.0" },
         buildMcpAppHostCapabilities(
           payload.csp,
           payload.messageSupported === true,

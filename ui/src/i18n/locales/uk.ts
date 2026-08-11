@@ -371,7 +371,7 @@ export const uk: TranslationMap = {
     genericSubtitle: "Під час завантаження цієї панелі сталася помилка.",
     staleTitle: "Доступна нова версія",
     staleSubtitle:
-      "OpenClaw оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
+      "OpenCrustacean оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
     reloading: "Перезавантаження…",
     retry: "Повторити",
     stylesFailed: "Не вдалося завантажити стилі, тому сторінка може виглядати некоректно.",
@@ -396,7 +396,7 @@ export const uk: TranslationMap = {
       notGitInstall:
         "Це не git checkout. Виконайте `openclaw update` з CLI для глобального перевстановлення.",
       notOpenclawRoot:
-        "Виконайте оновлення з OpenClaw checkout або скористайтеся шляхом глобального перевстановлення через CLI.",
+        "Виконайте оновлення з OpenCrustacean checkout або скористайтеся шляхом глобального перевстановлення через CLI.",
       depsInstallFailed:
         "Не вдалося встановити залежності. Виправте помилку встановлення та повторіть.",
       buildFailed: "Не вдалося виконати збірку. Виправте помилку збірки та повторіть.",
@@ -429,7 +429,7 @@ export const uk: TranslationMap = {
     pairing: {
       button: "Під’єднати мобільний пристрій",
       adminRequired: "Для створення кодів налаштування потрібен доступ адміністратора.",
-      title: "OpenClaw mobile",
+      title: "OpenCrustacean mobile",
       subtitle: "Відскануйте цей QR-код у мобільному застосунку, щоб підключити новий телефон.",
       noApp: "Ще не маєте застосунку?",
       getApps: "Отримати застосунки",
@@ -444,14 +444,15 @@ export const uk: TranslationMap = {
       transportLimitedHint:
         "Ця URL-адреса Gateway використовує незашифрований протокол ws://. Використовуйте wss:// або Tailscale Serve, а потім створіть новий код для повного доступу.",
       failed: "Не вдалося створити код налаштування.",
-      qrAlt: "QR-код сполучення OpenClaw mobile",
+      qrAlt: "QR-код сполучення OpenCrustacean mobile",
       qrUnavailable: "QR-код недоступний. Натомість скопіюйте код налаштування.",
       copySetupCode: "Скопіювати код налаштування",
       newCode: "Новий код",
       showSetupCode: "Показати код налаштування",
       pending: "Запити пристроїв, що очікують на перегляд: {count}",
       review: "Перегляд",
-      waiting: "Офіційні мобільні застосунки OpenClaw підключаються автоматично після сканування.",
+      waiting:
+        "Офіційні мобільні застосунки OpenCrustacean підключаються автоматично після сканування.",
       help: "Довідка щодо сполучення",
       manageDevices: "Керувати пристроями",
     },
@@ -598,11 +599,11 @@ export const uk: TranslationMap = {
     ownerSession: "Сесія",
     ownerWorkboard: "Workboard",
     title: "Керовані Worktrees",
-    subtitle: "Ізольовані копії репозиторію, що належать OpenClaw.",
+    subtitle: "Ізольовані копії репозиторію, що належать OpenCrustacean.",
     cleanNow: "Очистити зараз",
     cleanupTitle: "Очищення",
     cleanupSubtitle:
-      "OpenClaw періодично видаляє старі робочі дерева, щоб звільнити місце на диску. Налаштуйте інтенсивність очищення.",
+      "OpenCrustacean періодично видаляє старі робочі дерева, щоб звільнити місце на диску. Налаштуйте інтенсивність очищення.",
     cleanupMaxCount: "Максимальна кількість робочих дерев",
     cleanupMaxCountHelp:
       "Максимальна кількість керованих робочих дерев, які зберігатимуться в усіх репозиторіях. Для старіших робочих дерев спочатку створюються знімки, після чого їх видаляють. Установіть значення 0, щоб вимкнути обмеження кількості.",
@@ -653,8 +654,8 @@ export const uk: TranslationMap = {
     cloudWorker: "Хмара · {profile}",
     cloudWorkerProvider: "Постачальник хмарного виконавця: {provider}",
     cloudRequiresWorktree: "Для хмарних виконавців потрібне кероване робоче дерево",
-    cloudRequiresOpenClawRuntime:
-      "Хмарні воркери потребують середовища OpenClaw; вибрано {runtime}.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "Хмарні воркери потребують середовища OpenCrustacean; вибрано {runtime}.",
     cloudSecureContextRequired:
       "Хмарним виконавцям потрібен захищений контекст браузера, щоб відновлення могло захистити ваше завдання.",
     cloudStartFailed: "Сеанс створено локально, але запуск у хмарі завершився помилкою: {error}",
@@ -1466,7 +1467,7 @@ export const uk: TranslationMap = {
       title: "Push-сповіщення",
       nativeTitle: "Сповіщення",
       hint: "Отримуйте push-сповіщення браузера від вашого gateway.",
-      nativeHint: "Сповіщення показуються нативно застосунком OpenClaw на цьому Mac.",
+      nativeHint: "Сповіщення показуються нативно застосунком OpenCrustacean на цьому Mac.",
       unavailableHint: "Недоступно в цьому браузері.",
       unavailable: "Недоступно",
       checking: "Перевірка...",
@@ -1491,7 +1492,7 @@ export const uk: TranslationMap = {
       blockedHint:
         "Сповіщення заблоковано. Оновіть дозволи сайту в браузері, щоб дозволити сповіщення.",
       nativeBlockedHint:
-        "Сповіщення для OpenClaw вимкнено в macOS. Дозвольте їх у Системних параметрах > Сповіщення.",
+        "Сповіщення для OpenCrustacean вимкнено в macOS. Дозвольте їх у Системних параметрах > Сповіщення.",
     },
     appearance: {
       intro: "Налаштування теми, чату та бічної панелі для цього клієнта Control UI.",
@@ -1633,7 +1634,7 @@ export const uk: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1642,7 +1643,7 @@ export const uk: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1820,7 +1821,7 @@ export const uk: TranslationMap = {
     forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
-    askOpenClaw: "Запитати OpenClaw",
+    askOpenCrustacean: "Запитати OpenCrustacean",
     settingsGroupConnections: "Підключення",
     settingsGroupAgents: "Агенти й інструменти",
     settingsGroupSecurity: "Конфіденційність і безпека",
@@ -1962,7 +1963,7 @@ export const uk: TranslationMap = {
     nodes: "Вузли",
     chat: "Чат",
     dashboards: "Дашборди",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "Конфігурація",
     profile: "Профіль",
     communications: "Комунікації",
@@ -2030,14 +2031,14 @@ export const uk: TranslationMap = {
   modelSetup: {
     heading: "Підключіть свій ШІ",
     intro:
-      "OpenClaw повторно використовує вже наявний у вас доступ до ШІ — вхід через CLI, API-ключ або обліковий запис постачальника.",
+      "OpenCrustacean повторно використовує вже наявний у вас доступ до ШІ — вхід через CLI, API-ключ або обліковий запис постачальника.",
     required: {
       title: "Провайдер AI не налаштовано",
-      body: "OpenClaw не вдалося знайти провайдера та модель, налаштовані для цього агента. Додайте їх перед початком розмови.",
+      body: "OpenCrustacean не вдалося знайти провайдера та модель, налаштовані для цього агента. Додайте їх перед початком розмови.",
       action: "Налаштувати провайдера",
     },
     connectionFailure: {
-      title: "OpenClaw не вдалося використати ваш налаштований AI",
+      title: "OpenCrustacean не вдалося використати ваш налаштований AI",
       body: "Для цього агента вибрано провайдера та модель, але з'єднання не вдалося. Перевірте вхід провайдера або ключ API, доступ до моделі та стан служби, потім спробуйте ще раз.",
       action: "Перевірити налаштування провайдера",
     },
@@ -2053,7 +2054,7 @@ export const uk: TranslationMap = {
     },
     access: {
       adminRequired: "Для налаштування моделі потрібен доступ operator.admin.",
-      gatewayTooOld: "Gateway працює на застарілій версії OpenClaw",
+      gatewayTooOld: "Gateway працює на застарілій версії OpenCrustacean",
     },
     candidates: {
       title: "Знайдено на цьому Gateway",
@@ -2103,12 +2104,12 @@ export const uk: TranslationMap = {
       connect: "Підключити",
       connectAndVerify: "Підключити й перевірити",
       verifyHint:
-        "OpenClaw перевіряє справжню відповідь моделі, перш ніж позначити з'єднання як готове.",
+        "OpenCrustacean перевіряє справжню відповідь моделі, перш ніж позначити з'єднання як готове.",
       required: "Виберіть постачальника та введіть ключ API або токен.",
     },
     success: {
       title: "Ваш ШІ готовий",
-      body: "OpenClaw отримав справжню відповідь від {modelRef}. Тепер можна починати спілкування.",
+      body: "OpenCrustacean отримав справжню відповідь від {modelRef}. Тепер можна починати спілкування.",
       activeModel: "Активна модель",
       latency: "Перевірено за {latencyMs} мс",
       detail: "{modelRef} · {latencyMs} мс",
@@ -2182,12 +2183,12 @@ export const uk: TranslationMap = {
       "Скопіювати {count} вибраних файлів пам’яті до робочого простору цього агента.",
     confirmReplace:
       "Перед заміною наявні файли призначення буде збережено в резервній копії у звіті про міграцію.",
-    confirmBackup: "Перед копіюванням пам’яті OpenClaw створює перевірену резервну копію.",
+    confirmBackup: "Перед копіюванням пам’яті OpenCrustacean створює перевірену резервну копію.",
     confirmImport: "Імпортувати пам’ять",
     disconnected: "Підключіться до Gateway, щоб імпортувати пам’ять.",
     title: "Імпорт пам’яті асистента",
     subtitle:
-      "Перегляньте консолідовану пам’ять Codex і автоматичну пам’ять Claude Code, перш ніж копіювати їх до OpenClaw.",
+      "Перегляньте консолідовану пам’ять Codex і автоматичну пам’ять Claude Code, перш ніж копіювати їх до OpenCrustacean.",
     agent: "Агент призначення",
     replaceExisting: "Замінити наявні імпортовані дані",
     replaceHint:
@@ -2229,7 +2230,7 @@ export const uk: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "Перенесіть із собою пам’ять асистента",
-      body: "OpenClaw виявив пам’ять інших асистентів для програмування. Імпортувати її до робочого простору вашого агента?",
+      body: "OpenCrustacean виявив пам’ять інших асистентів для програмування. Імпортувати її до робочого простору вашого агента?",
       plannedCount: "{count} готово до імпорту",
       alreadyImported: "Уже імпортовано: {count}",
       sourceUnavailable: "Шлях до джерела недоступний",
@@ -2245,35 +2246,35 @@ export const uk: TranslationMap = {
       unknownError: "Не вдалося виконати запит",
       doneTitle: "Імпорт пам’яті завершено",
       doneBody:
-        "Перенесено: {migrated}, пропущено: {skipped}. Можна продовжити налаштування OpenClaw.",
+        "Перенесено: {migrated}, пропущено: {skipped}. Можна продовжити налаштування OpenCrustacean.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "Ваш посібник із налаштування системи",
     subtitleCaretaker: "Налаштування та обслуговування системи.",
     exitSetup: "Вийти з налаштування",
     newAgent: "Новий агент",
     hatchDraft: "Прокидайся, друже!",
-    placeholder: "Повідомлення для OpenClaw…",
+    placeholder: "Повідомлення для OpenCrustacean…",
     sensitivePlaceholder: "Введіть конфіденційне значення…",
     sensitiveReply: "Конфіденційну відповідь надіслано",
     send: "Надіслати",
-    thinking: "OpenClaw думає",
+    thinking: "OpenCrustacean думає",
     earlier: "Раніше",
-    requestFailed: "OpenClaw не зміг відповісти. Спробуйте ще раз.",
+    requestFailed: "OpenCrustacean не зміг відповісти. Спробуйте ще раз.",
     connectionChanged:
       "З'єднання з Gateway змінилося. Повторіть спробу, щоб продовжити це налаштування.",
     sessionRestarted:
-      "{error} OpenClaw розпочав новий сеанс; попередні повідомлення залишаються для контексту.",
-    unsupportedGateway: "Оновіть Gateway, щоб продовжити налаштування з OpenClaw.",
+      "{error} OpenCrustacean розпочав новий сеанс; попередні повідомлення залишаються для контексту.",
+    unsupportedGateway: "Оновіть Gateway, щоб продовжити налаштування з OpenCrustacean.",
     panel: {
-      title: "OpenClaw",
-      toggle: "Запитати OpenClaw",
-      close: "Закрити Ask OpenClaw",
-      resize: "Змінити розмір Ask OpenClaw",
-      dockBottom: "Закріпити Ask OpenClaw знизу",
-      dockRight: "Закріпити Ask OpenClaw справа",
+      title: "OpenCrustacean",
+      toggle: "Запитати OpenCrustacean",
+      close: "Закрити Ask OpenCrustacean",
+      resize: "Змінити розмір Ask OpenCrustacean",
+      dockBottom: "Закріпити Ask OpenCrustacean знизу",
+      dockRight: "Закріпити Ask OpenCrustacean справа",
     },
     history: {
       button: "Історія",
@@ -2281,7 +2282,7 @@ export const uk: TranslationMap = {
       description: "Що змінилося в цій системі, спершу найновіші.",
       loading: "Завантаження останніх змін…",
       empty: "Ще немає записаних змін.",
-      requestFailed: "OpenClaw не зміг завантажити історію змін.",
+      requestFailed: "OpenCrustacean не зміг завантажити історію змін.",
       loadMore: "Завантажити ще",
       loadingMore: "Завантаження ще…",
       changedPaths: "Змінені шляхи ({count})",
@@ -2304,9 +2305,9 @@ export const uk: TranslationMap = {
       channelDegraded: "{channel} у погіршеному стані — запитайте мене, що сталося",
       channelFallback: "Канал",
       dismiss: "Відхилити це оновлення",
-      channelSetupTitle: "Зв'язуйтеся з OpenClaw поза цим застосунком",
+      channelSetupTitle: "Зв'язуйтеся з OpenCrustacean поза цим застосунком",
       channelSetupBody:
-        "Веб-застосунок уже працює. Додавайте канал лише якщо хочете надсилати повідомлення OpenClaw з іншого сервісу.",
+        "Веб-застосунок уже працює. Додавайте канал лише якщо хочете надсилати повідомлення OpenCrustacean з іншого сервісу.",
       channelSetupAction: "Налаштувати канал",
       channelSetupDismiss: "Продовжити користуватися веб-застосунком",
     },
@@ -2342,7 +2343,7 @@ export const uk: TranslationMap = {
     working: "Працює…",
   },
   mcpPage: {
-    intro: "Підключайте та керуйте серверами MCP, які надають інструменти для OpenClaw.",
+    intro: "Підключайте та керуйте серверами MCP, які надають інструменти для OpenCrustacean.",
     connectorsLink: "Знайдіть конектори в один клік на сторінці Plugins.",
     servers: "Сервери",
     oauth: "OAuth",
@@ -2400,7 +2401,7 @@ export const uk: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "Виберіть, як OpenClaw зберігає, шукає та підтримує пам'ять агента.",
+    intro: "Виберіть, як OpenCrustacean зберігає, шукає та підтримує пам'ять агента.",
     tablistLabel: "Розділи пам'яті",
     tabs: {
       overview: "Огляд",
@@ -2495,7 +2496,7 @@ export const uk: TranslationMap = {
       description:
         "Рівно один плагін пам'яті володіє слотом пам'яті. Вибір рушія вмикає його та вимикає інші.",
       rowTitle: "Рушій пам'яті",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "Вимкнено",
       unavailable: "Недоступно",
       autoHint:
@@ -2515,7 +2516,7 @@ export const uk: TranslationMap = {
       rowTitle: "Бекенд отримання",
       builtin: "Вбудований",
       qmd: "QMD",
-      builtinHint: "Файли пам'яті індексуються та шукаються самим OpenClaw.",
+      builtinHint: "Файли пам'яті індексуються та шукаються самим OpenCrustacean.",
       qmdHint: "Отримання делегується QMD. Його налаштування наведено нижче.",
     },
     addons: {
@@ -2716,7 +2717,7 @@ export const uk: TranslationMap = {
     },
     noInstalledTitle: "Не встановлено жодних додаткових плагінів",
     noInstalledBody:
-      "Відкрийте для себе рекомендований плагін або шукайте в ClawHub, щоб розширити OpenClaw.",
+      "Відкрийте для себе рекомендований плагін або шукайте в ClawHub, щоб розширити OpenCrustacean.",
     noInstalledMatchTitle: "Немає збігів серед установлених плагінів",
     noMatchBody: "Спробуйте інший пошук.",
     filterAll: "Усі",
@@ -2750,7 +2751,7 @@ export const uk: TranslationMap = {
     detailPluginId: "ID плагіна",
     offlineTitle: "Gateway офлайн",
     offlineBody: "Підключіться, щоб переглянути встановлені й рекомендовані плагіни.",
-    optionalCapability: "Необов’язкова можливість OpenClaw.",
+    optionalCapability: "Необов’язкова можливість OpenCrustacean.",
     enabled: "Увімкнено",
     disabled: "Вимкнено",
     available: "Доступно",
@@ -2823,7 +2824,7 @@ export const uk: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "Ваш особистий ШІ-асистент, що працює на ваших власних пристроях.",
     waveHello: "Привітайтеся з Clawd",
     linksLabel: "Спільнота та ресурси",
@@ -2833,7 +2834,7 @@ export const uk: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "Журнал змін",
-    license: "© 2026 OpenClaw Foundation — ліцензія MIT.",
+    license: "© 2026 OpenCrustacean Foundation — ліцензія MIT.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Ідентифікаційні дані, вбудовані під час збірки цього браузерного артефакту.",
     artifactDetails: "Відомості про збірку Control UI",
@@ -2851,7 +2852,7 @@ export const uk: TranslationMap = {
       "Повідомляється активним підключенням Gateway; окремо від цієї збірки Control UI.",
   },
   appsPage: {
-    heroTitle: "Беріть OpenClaw всюди",
+    heroTitle: "Беріть OpenCrustacean всюди",
     heroTagline:
       "Супутні застосунки для телефона, годинника, комп’ютера та браузера — а також плагіни для розширення можливостей вашого агента.",
     sectionMobile: "На телефоні",
@@ -2875,11 +2876,11 @@ export const uk: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "Спілкуйтеся, розмовляйте, підтверджуйте дії та діліться в OpenClaw з iOS.",
+        desc: "Спілкуйтеся, розмовляйте, підтверджуйте дії та діліться в OpenCrustacean з iOS.",
       },
       android: {
         title: "Android",
-        desc: "Ваш телефон Android як повноцінний вузол OpenClaw — чат, камера та Canvas.",
+        desc: "Ваш телефон Android як повноцінний вузол OpenCrustacean — чат, камера та Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2887,7 +2888,7 @@ export const uk: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "Компаньйон для Android розширює OpenClaw на ваш годинник.",
+        desc: "Компаньйон для Android розширює OpenCrustacean на ваш годинник.",
       },
       macos: {
         title: "macOS",
@@ -2895,7 +2896,7 @@ export const uk: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "Компаньйон для Windows підключає ваш ПК як вузол OpenClaw.",
+        desc: "Компаньйон для Windows підключає ваш ПК як вузол OpenCrustacean.",
       },
       linux: {
         title: "Linux",
@@ -2903,11 +2904,11 @@ export const uk: TranslationMap = {
       },
       chrome: {
         title: "Розширення Chrome",
-        desc: "Дозвольте OpenClaw керувати вашим наявним Chrome — вкладками, сторінками та формами.",
+        desc: "Дозвольте OpenCrustacean керувати вашим наявним Chrome — вкладками, сторінками та формами.",
       },
       plugins: {
         title: "Плагіни та ClawHub",
-        desc: "Розширюйте OpenClaw каналами, інструментами та навичками від спільноти.",
+        desc: "Розширюйте OpenCrustacean каналами, інструментами та навичками від спільноти.",
       },
     },
   },
@@ -3113,7 +3114,7 @@ export const uk: TranslationMap = {
     selfLearning: {
       pitchTitle: "Увімкнути самонавчання",
       pitchBody:
-        "OpenClaw аналізує виправлення та суттєві завершені запуски, а потім створює чернетки пропозицій навичок для цієї дошки. Він використовує додаткові фонові токени, а чернетки надходять як пропозиції, що очікують розгляду.",
+        "OpenCrustacean аналізує виправлення та суттєві завершені запуски, а потім створює чернетки пропозицій навичок для цієї дошки. Він використовує додаткові фонові токени, а чернетки надходять як пропозиції, що очікують розгляду.",
       enable: "Увімкнути самонавчання",
       enabling: "Увімкнення…",
       updateError: "Не вдалося оновити налаштування самонавчання.",
@@ -4021,7 +4022,8 @@ export const uk: TranslationMap = {
       heading: "Підключіть свій ШІ",
       signedInNoModels:
         "Ви ввійшли, але цей обліковий запис не надає жодних придатних моделей. Оберіть іншого провайдера або обліковий запис, щоб продовжити.",
-      notConfigured: "Оберіть провайдера та перевірте модель, яку використовуватиме OpenClaw.",
+      notConfigured:
+        "Оберіть провайдера та перевірте модель, яку використовуватиме OpenCrustacean.",
       noModels: "Немає доступних моделей",
       modelRequired: "Потрібна модель",
       chooseProvider: "Обрати іншого провайдера",
@@ -4445,7 +4447,7 @@ export const uk: TranslationMap = {
         stepDevUi:
           "Якщо використовуєте pnpm ui:dev, перебудуйте або перезапустіть dev UI з поточного checkout.",
         stepRestart:
-          "Перезапустіть Gateway після оновлення OpenClaw, щоб він надавав поточний протокол.",
+          "Перезапустіть Gateway після оновлення OpenCrustacean, щоб він надавав поточний протокол.",
       },
       network: {
         title: "Не вдалося підключитися",
@@ -4671,7 +4673,7 @@ export const uk: TranslationMap = {
       remoteViewOnly: "Цей сеанс розташований на спареному вузлі й доступний лише для перегляду.",
       unsupportedViewOnly: "Це зовнішнє джерело сеансів доступне лише для перегляду.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4727,7 +4729,7 @@ export const uk: TranslationMap = {
     followUpModeOverriding: "Перевизначення типового значення сервера ({mode})",
     followUpModeReset: "Скинути до типового значення сервера",
     catalogOpenTarget: "Відкривати зовнішні сеанси в",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Вимкнено під час налаштування",
     commandPaletteTitle: "Пошук або перехід до… (⌘K)",
@@ -4752,7 +4754,7 @@ export const uk: TranslationMap = {
       titleOne: "1 конфлікт хмарного робочого простору",
       titleMany: "{count} конфліктів хмарного робочого простору",
       description:
-        "OpenClaw зберіг ваші локальні версії та застосував інші хмарні зміни. Перевірте підготовлений результат або візьміть його версію для конфліктного шляху.",
+        "OpenCrustacean зберіг ваші локальні версії та застосував інші хмарні зміни. Перевірте підготовлений результат або візьміть його версію для конфліктного шляху.",
       morePaths: "+ще {count} шляхів",
       stagedResult: "Підготовлений хмарний результат",
       copyStagedResult: "Копіювати посилання на підготовлений результат",
@@ -4763,7 +4765,7 @@ export const uk: TranslationMap = {
       commandHelp:
         "Виконайте це у Bash або zsh (Git Bash у Windows). Якщо inspect повідомляє, що шлях не існує, хмара видалила його; перевірте та видаліть локальний шлях вручну. Якщо checkout повідомляє про конфлікт файлу/каталогу, перемістіть або видаліть локальний шлях, що блокує, а потім повторіть спробу. Якщо staged ref відсутній, повідомлення застаріле; не змінюйте локальний шлях.",
       commandsUnavailable:
-        "Це ім'я файлу містить керуючі символи терміналу, тому OpenClaw не створюватиме для нього копійовану команду оболонки. Перевірте staged ref безпосередньо та вводьте шлях вручну з обережністю.",
+        "Це ім'я файлу містить керуючі символи терміналу, тому OpenCrustacean не створюватиме для нього копійовану команду оболонки. Перевірте staged ref безпосередньо та вводьте шлях вручну з обережністю.",
       dismiss: "Відхилити повідомлення про конфлікт робочого простору",
       eventSender: "Хмарний робочий простір",
       eventTitleOne: "Хмарний результат застосовано з 1 конфліктом",
@@ -5268,7 +5270,7 @@ export const uk: TranslationMap = {
       checking: "Перевірка...",
     },
     voice: {
-      asking: "Запит до OpenClaw...",
+      asking: "Запит до OpenCrustacean...",
       connecting: "Підключення голосового вводу...",
       listening: "Слухаю...",
     },
@@ -5487,7 +5489,8 @@ export const uk: TranslationMap = {
       filters: "Фільтри",
       shownOf: "{shown} з {total}",
       emptyTitle: "Ще немає запланованих завдань",
-      emptyHint: "Опишіть, що і коли має робити OpenClaw — воно виконуватиметься за розкладом.",
+      emptyHint:
+        "Опишіть, що і коли має робити OpenCrustacean — воно виконуватиметься за розкладом.",
       noMatching: "Немає завдань, що відповідають поточним фільтрам.",
       loadMore: "Завантажити ще",
       loading: "Завантаження...",
@@ -5554,7 +5557,7 @@ export const uk: TranslationMap = {
     detail: {
       tabsLabel: "Відомості про автоматизацію",
       newTitle: "Нове заплановане завдання",
-      newSubtitle: "Опишіть, що має зробити OpenClaw, потім виберіть час запуску.",
+      newSubtitle: "Опишіть, що має зробити OpenCrustacean, потім виберіть час запуску.",
       back: "Усі автоматизації",
       settingsTab: "Налаштування",
       historyTitle: "Історія запусків",
@@ -5627,7 +5630,7 @@ export const uk: TranslationMap = {
       descriptionPlaceholder: "Необов’язковий контекст для цього завдання",
       agentPlaceholder: "main або ops",
       agentHelp: "Почніть вводити, щоб вибрати відомого агента, або введіть власного.",
-      promptPlaceholder: "Опишіть, що має зробити OpenClaw...",
+      promptPlaceholder: "Опишіть, що має зробити OpenCrustacean...",
       repeat: "Повторювати",
       repeatInterval: "Інтервал",
       repeatOnce: "Один раз",

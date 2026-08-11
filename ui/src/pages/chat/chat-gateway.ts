@@ -476,7 +476,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     payload !== undefined &&
     // Unkeyed events must also carry a real run id: with no active run,
     // `undefined === undefined` would let sessionless internal-run terminals
-    // (e.g. companion answers) materialize into the open main thread.
+    // Fork: session companion rail removed; companion answers no longer exist.
     (chatEventSessionMatches(state, payload) ||
       (typeof payload.runId === "string" && payload.runId === activeRunIdBeforeEvent)) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)

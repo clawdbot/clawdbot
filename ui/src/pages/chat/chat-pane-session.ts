@@ -291,7 +291,6 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
         if (isCurrent()) {
           void loadChatBranches(state);
           void this.probeSessionDiscussion(sessionKey);
-          this.hydrateSessionCompanion(sessionKey);
           void this.refreshSessionPullRequests();
         }
         complete();

@@ -31,10 +31,6 @@ import type {
   ChatStreamSegment,
   MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
-import {
-  buildCompanionQuestionPrefill,
-  buildMoreDetailsCompanionQuestion,
-} from "../../../lib/chat/companion-question.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -89,7 +85,6 @@ import {
   type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
-import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -171,8 +166,6 @@ type ChatThreadProps = {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  onCompanionQuestion?: (question: string) => void;
-  onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
@@ -825,9 +818,6 @@ function dismissChatThreadPortals(paneId?: string, owner?: ParentNode): void {
   if (owner) {
     dismissConfirmedActionPopovers(owner);
   }
-  // The selection popup is body-portaled; pane teardown/route changes must
-  // drop it so it cannot outlive the render that owns its callbacks.
-  removeChatSelectionPopup();
 }
 
 export function resetChatThreadSessionPresentationState(paneId: string, owner?: ParentNode): void {
@@ -1039,29 +1029,6 @@ function createMessageActionContextButton(params: {
   tooltip.content = params.tooltip;
   tooltip.append(button);
   return { element: tooltip, button };
-}
-
-function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
-  if (
-    typeof props.onCompanionQuestion !== "function" ||
-    typeof props.onCompanionPrefill !== "function"
-  ) {
-    return;
-  }
-  handleChatSelectionPointerUp(event, {
-    onMoreDetails: (selection) => {
-      const question = buildMoreDetailsCompanionQuestion(selection);
-      if (question) {
-        props.onCompanionQuestion?.(question);
-      }
-    },
-    onAskSideChat: (selection) => {
-      const question = buildCompanionQuestionPrefill(selection);
-      if (question) {
-        props.onCompanionPrefill?.(question);
-      }
-    },
-  });
 }
 
 function selectionIntersectsElement(selection: Selection | null, element: Element): boolean {
@@ -1813,7 +1780,6 @@ function renderChatThreadContents(
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
-      @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <span
         class="chat-transcript-announcement agent-chat__sr-only"

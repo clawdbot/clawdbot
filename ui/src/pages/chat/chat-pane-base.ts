@@ -33,7 +33,6 @@ import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { ObserverDigestHistory } from "../../lib/observer-digest.ts";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -42,7 +41,6 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
   type ChatPageContext,
@@ -50,16 +48,9 @@ import {
   type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
-import {
-  ChatSessionCompanionThreads,
-  requestSessionCompanionAnswer,
-  requestSessionCompanionState,
-  resetSessionCompanion,
-} from "./chat-session-companion.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import type { SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-thread.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
@@ -136,97 +127,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   } | null = null;
   @litState() protected boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() protected resetConfirmationOpen = false;
-  @litState() protected sessionRailReady = customElements.get("openclaw-chat-session-rail") != null;
-  @litState() protected sessionRailMode: SessionRailMode = "hidden";
-  protected sessionRailModeSessionKey = "";
-  protected sessionRailLoad: Promise<void> | null = null;
-  protected sessionRailOpenRequest = 0;
-  protected sessionRailOpenSessionKey = "";
   protected deferredSessionHydrationRequestVersion = 0;
-  protected sessionCompanionHydrationKey = "";
-  protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
-    this.requestUpdate();
-  });
-  protected readonly setSessionObserverVisibility = (visible: boolean) => {
-    const state = this.state;
-    if (state?.connected && state.client) {
-      void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
-    }
-    this.requestUpdate();
-  };
-
-  protected ensureSessionRail() {
-    if (this.sessionRailReady || this.sessionRailLoad) {
-      return;
-    }
-    this.sessionRailLoad = import("./components/chat-session-rail.ts")
-      .then(() => {
-        if (this.isConnected) {
-          this.sessionRailReady = true;
-        }
-      })
-      .finally(() => {
-        this.sessionRailLoad = null;
-      });
-  }
-
-  protected openSessionRail(): void {
-    this.sessionRailOpenSessionKey = this.state?.sessionKey ?? "";
-    this.ensureSessionRail();
-    this.sessionRailOpenRequest += 1;
-    this.requestUpdate();
-  }
-
-  protected readonly submitSessionCompanionQuestion = async (question: string) => {
-    const state = this.state;
-    if (!state || !state.sessionKey) {
-      return;
-    }
-    const sessionKey = state.sessionKey;
-    this.openSessionRail();
-    if (!state.connected || !state.client) {
-      this.sessionCompanionThreads.setDraft(sessionKey, question);
-      return;
-    }
-    await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
-      requestSessionCompanionAnswer(state.client!, key, value),
-    );
-  };
-
-  protected readonly prefillSessionCompanionQuestion = (question: string) => {
-    const sessionKey = this.state?.sessionKey;
-    if (!sessionKey) {
-      return;
-    }
-    this.sessionCompanionThreads.setDraft(sessionKey, question);
-    this.openSessionRail();
-  };
-
-  protected hydrateSessionCompanion(sessionKey: string): void {
-    const state = this.state;
-    if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
-      return;
-    }
-    const hydrationKey = `${this.connectionGeneration}\0${sessionKey}`;
-    if (this.sessionCompanionHydrationKey === hydrationKey) {
-      return;
-    }
-    this.sessionCompanionHydrationKey = hydrationKey;
-    this.ensureSessionRail();
-    void this.sessionCompanionThreads.hydrate(sessionKey, (key) =>
-      requestSessionCompanionState(state.client!, key),
-    );
-  }
-
-  protected readonly clearSessionCompanion = async () => {
-    const state = this.state;
-    if (!state?.connected || !state.client || !state.sessionKey) {
-      return;
-    }
-    await this.sessionCompanionThreads
-      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key))
-      .catch(() => undefined);
-  };
   protected resetConfirmation:
     | {
         sessionKey: string;
@@ -235,7 +136,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       }
     | undefined;
   protected readonly lastVisibleBoardDock = new Map<string, VisibleBoardDock>();
-  protected readonly observerDigestHistory = new ObserverDigestHistory();
   protected builtinBoardSnapshot: BoardViewSnapshot | null = null;
   protected builtinBoardSnapshotBase: BoardSnapshot | null = null;
   protected swarmHydrator: SwarmRosterHydrator | null = null;

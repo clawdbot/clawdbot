@@ -53,6 +53,4 @@ export type ChatHost = ChatInputHistoryState &
       senderLabel?: string | null;
       sourceMessageId?: string | null;
     } | null;
-    /** Control UI route for /btw and /side; server/TUI command handling remains unchanged. */
-    openSessionCompanion?: (question: string) => Promise<void> | void;
   };

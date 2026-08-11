@@ -444,7 +444,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       pageState.requestUpdate?.();
     };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
-    pageState.openSessionCompanion = (question) => this.submitSessionCompanionQuestion(question);
     this.state = pageState;
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
@@ -626,17 +625,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
           this.requestUpdate();
         }
       });
-    }
-    const selectedSessionRow = this.state ? selectedChatSessionRow(this.state) : undefined;
-    // Active runs count even without a digest: a hidden observer generates
-    // none, and the rail module owns the restore control for turning it back on.
-    const observerRunId = resolveChatPaneObserverRunId({
-      localRunId: this.state?.chatRunId ?? null,
-      session: selectedSessionRow,
-      digest: null,
-    });
-    if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
-      this.ensureSessionRail();
     }
   }
 

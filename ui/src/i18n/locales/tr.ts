@@ -368,7 +368,8 @@ export const tr: TranslationMap = {
     errorTitle: "Panel yüklenemedi",
     genericSubtitle: "Bu panel yüklenirken bir sorun oluştu.",
     staleTitle: "Yeni bir sürüm mevcut",
-    staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
+    staleSubtitle:
+      "OpenCrustacean arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     reloading: "Yeniden yükleniyor…",
     retry: "Tekrar dene",
     stylesFailed: "Stiller yüklenemedi, bu nedenle sayfa bozuk görünebilir.",
@@ -393,7 +394,7 @@ export const tr: TranslationMap = {
       notGitInstall:
         "Git checkout değil. Genel yeniden kurulum için CLI'dan `openclaw update` komutunu çalıştırın.",
       notOpenclawRoot:
-        "Güncellemeyi bir OpenClaw checkout'undan çalıştırın veya CLI genel yeniden kurulum yolunu kullanın.",
+        "Güncellemeyi bir OpenCrustacean checkout'undan çalıştırın veya CLI genel yeniden kurulum yolunu kullanın.",
       depsInstallFailed:
         "Bağımlılık kurulumu başarısız oldu. Kurulum hatasını düzeltin ve yeniden deneyin.",
       buildFailed: "Derleme başarısız oldu. Derleme hatasını düzeltin ve yeniden deneyin.",
@@ -426,7 +427,7 @@ export const tr: TranslationMap = {
     pairing: {
       button: "Mobil cihazı eşleştir",
       adminRequired: "Kurulum kodları oluşturmak için yönetici erişimi gerekir.",
-      title: "OpenClaw mobil",
+      title: "OpenCrustacean mobil",
       subtitle: "Yeni bir telefonu bağlamak için mobil uygulamada bu QR kodunu tarayın.",
       noApp: "Uygulamanız yok mu?",
       getApps: "Uygulamaları edinin",
@@ -441,14 +442,14 @@ export const tr: TranslationMap = {
       transportLimitedHint:
         "Bu Gateway URL'si düz metin ws:// kullanıyor. Tam erişim için wss:// veya Tailscale Serve kullanın, ardından yeni bir kod oluşturun.",
       failed: "Kurulum kodu oluşturulamadı.",
-      qrAlt: "OpenClaw mobil eşleştirme QR kodu",
+      qrAlt: "OpenCrustacean mobil eşleştirme QR kodu",
       qrUnavailable: "QR kullanılamıyor. Bunun yerine kurulum kodunu kopyalayın.",
       copySetupCode: "Kurulum kodunu kopyala",
       newCode: "Yeni kod",
       showSetupCode: "Kurulum kodunu göster",
       pending: "İnceleme bekleyen cihaz istekleri: {count}",
       review: "İnceleme",
-      waiting: "Resmi OpenClaw mobil uygulamaları taramadan sonra otomatik olarak bağlanır.",
+      waiting: "Resmi OpenCrustacean mobil uygulamaları taramadan sonra otomatik olarak bağlanır.",
       help: "Eşleştirme yardımı",
       manageDevices: "Cihazları yönet",
     },
@@ -595,11 +596,11 @@ export const tr: TranslationMap = {
     ownerSession: "Oturum",
     ownerWorkboard: "Workboard",
     title: "Yönetilen Worktree'ler",
-    subtitle: "OpenClaw tarafından sahip olunan yalıtılmış depo checkout'ları.",
+    subtitle: "OpenCrustacean tarafından sahip olunan yalıtılmış depo checkout'ları.",
     cleanNow: "Şimdi temizle",
     cleanupTitle: "Temizleme",
     cleanupSubtitle:
-      "OpenClaw, disk alanı açmak için eski worktree'leri düzenli olarak kaldırır. Temizlemenin ne kadar yoğun yapılacağını ayarlayın.",
+      "OpenCrustacean, disk alanı açmak için eski worktree'leri düzenli olarak kaldırır. Temizlemenin ne kadar yoğun yapılacağını ayarlayın.",
     cleanupMaxCount: "Maksimum worktree sayısı",
     cleanupMaxCountHelp:
       "Tüm depolarda tutulacak maksimum yönetilen worktree sayısı. Önce eski worktree'lerin anlık görüntüsü alınır ve ardından bunlar kaldırılır. Sayı sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
@@ -651,8 +652,8 @@ export const tr: TranslationMap = {
     cloudWorker: "Bulut · {profile}",
     cloudWorkerProvider: "Bulut çalışanı sağlayıcısı: {provider}",
     cloudRequiresWorktree: "Bulut çalışanları yönetilen bir worktree gerektirir",
-    cloudRequiresOpenClawRuntime:
-      "Bulut çalışanları OpenClaw çalışma zamanını gerektirir; {runtime} seçili.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "Bulut çalışanları OpenCrustacean çalışma zamanını gerektirir; {runtime} seçili.",
     cloudSecureContextRequired:
       "Kurtarma işleminin görevinizi koruyabilmesi için bulut çalışanlarının güvenli bir tarayıcı bağlamına ihtiyacı vardır.",
     cloudStartFailed:
@@ -1462,7 +1463,8 @@ export const tr: TranslationMap = {
       title: "Anlık bildirimler",
       nativeTitle: "Bildirimler",
       hint: "Gateway'inizden tarayıcı anlık bildirimleri alın.",
-      nativeHint: "Bildirimler bu Mac'te OpenClaw uygulaması tarafından yerel olarak gösterilir.",
+      nativeHint:
+        "Bildirimler bu Mac'te OpenCrustacean uygulaması tarafından yerel olarak gösterilir.",
       unavailableHint: "Bu tarayıcıda kullanılamıyor.",
       unavailable: "Kullanılamıyor",
       checking: "Kontrol ediliyor...",
@@ -1487,7 +1489,7 @@ export const tr: TranslationMap = {
       blockedHint:
         "Bildirimler engellendi. Bildirimlere izin vermek için tarayıcı site izinlerinizi güncelleyin.",
       nativeBlockedHint:
-        "OpenClaw için macOS'ta bildirimler devre dışı. Sistem Ayarları > Bildirimler bölümünden izin verin.",
+        "OpenCrustacean için macOS'ta bildirimler devre dışı. Sistem Ayarları > Bildirimler bölümünden izin verin.",
     },
     appearance: {
       intro: "Bu Control UI istemcisi için tema, sohbet ve kenar çubuğu tercihleri.",
@@ -1626,7 +1628,7 @@ export const tr: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1635,7 +1637,7 @@ export const tr: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1812,7 +1814,7 @@ export const tr: TranslationMap = {
     forward: "İleri",
     chat: "Sohbet",
     settings: "Ayarlar",
-    askOpenClaw: "OpenClaw'a Sor",
+    askOpenCrustacean: "OpenCrustacean'a Sor",
     settingsGroupConnections: "Bağlantılar",
     settingsGroupAgents: "Aracılar ve Araçlar",
     settingsGroupSecurity: "Gizlilik ve Güvenlik",
@@ -1954,7 +1956,7 @@ export const tr: TranslationMap = {
     nodes: "Düğümler",
     chat: "Sohbet",
     dashboards: "Panolar",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "Yapılandırma",
     profile: "Profil",
     communications: "İletişim",
@@ -2022,14 +2024,14 @@ export const tr: TranslationMap = {
   modelSetup: {
     heading: "AI'ınıza bağlanın",
     intro:
-      "OpenClaw, hâlihazırda sahip olduğunuz AI erişimini yeniden kullanır — bir CLI oturumu, API anahtarı veya sağlayıcı oturumu.",
+      "OpenCrustacean, hâlihazırda sahip olduğunuz AI erişimini yeniden kullanır — bir CLI oturumu, API anahtarı veya sağlayıcı oturumu.",
     required: {
       title: "Yapılandırılmış AI sağlayıcı yok",
-      body: "OpenClaw, bu aracı için yapılandırılmış bir sağlayıcı ve model bulamadı. Bir konuşma başlatmadan önce bir tane ekleyin.",
+      body: "OpenCrustacean, bu aracı için yapılandırılmış bir sağlayıcı ve model bulamadı. Bir konuşma başlatmadan önce bir tane ekleyin.",
       action: "Bir sağlayıcı yapılandır",
     },
     connectionFailure: {
-      title: "OpenClaw, yapılandırdığınız AI'yı kullanamadı",
+      title: "OpenCrustacean, yapılandırdığınız AI'yı kullanamadı",
       body: "Bu aracı için bir sağlayıcı ve model seçili, ancak bağlantı başarısız oldu. Sağlayıcı girişini veya API anahtarını, model erişimini ve hizmet durumunu kontrol edin, ardından tekrar deneyin.",
       action: "Sağlayıcı ayarlarını kontrol et",
     },
@@ -2045,7 +2047,7 @@ export const tr: TranslationMap = {
     },
     access: {
       adminRequired: "Model kurulumu için operator.admin erişimi gerekir.",
-      gatewayTooOld: "Gateway, OpenClaw'ın eski bir sürümünü çalıştırıyor",
+      gatewayTooOld: "Gateway, OpenCrustacean'ın eski bir sürümünü çalıştırıyor",
     },
     candidates: {
       title: "Bu Gateway'de bulunanlar",
@@ -2094,12 +2096,12 @@ export const tr: TranslationMap = {
       connect: "Bağlan",
       connectAndVerify: "Bağlan ve doğrula",
       verifyHint:
-        "OpenClaw, bağlantıyı hazır olarak işaretlemeden önce gerçek bir model yanıtını doğrular.",
+        "OpenCrustacean, bağlantıyı hazır olarak işaretlemeden önce gerçek bir model yanıtını doğrular.",
       required: "Bir sağlayıcı seçin ve API anahtarı veya token girin.",
     },
     success: {
       title: "Yapay zekânız hazır",
-      body: "OpenClaw, {modelRef} kaynağından gerçek bir yanıt aldı. Şimdi sohbet etmeye başlayabilirsiniz.",
+      body: "OpenCrustacean, {modelRef} kaynağından gerçek bir yanıt aldı. Şimdi sohbet etmeye başlayabilirsiniz.",
       activeModel: "Etkin model",
       latency: "{latencyMs} ms içinde doğrulandı",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2172,12 +2174,12 @@ export const tr: TranslationMap = {
     confirmDescription: "Seçilen {count} bellek dosyasını bu temsilci çalışma alanına kopyalayın.",
     confirmReplace: "Mevcut hedef dosyalar değiştirilmeden önce geçiş raporunda yedeklenecektir.",
     confirmBackup:
-      "OpenClaw, belleği kopyalamadan önce doğrulanmış bir içe aktarma öncesi yedeği oluşturur.",
+      "OpenCrustacean, belleği kopyalamadan önce doğrulanmış bir içe aktarma öncesi yedeği oluşturur.",
     confirmImport: "Belleği içe aktar",
     disconnected: "Belleği içe aktarmak için Gateway'e bağlanın.",
     title: "Asistan belleğini içe aktar",
     subtitle:
-      "Codex'in birleştirilmiş belleğini ve Claude Code'un otomatik belleğini OpenClaw'a kopyalamadan önce inceleyin.",
+      "Codex'in birleştirilmiş belleğini ve Claude Code'un otomatik belleğini OpenCrustacean'a kopyalamadan önce inceleyin.",
     agent: "Hedef temsilci",
     replaceExisting: "Mevcut içe aktarılanları değiştir",
     replaceHint: "Çakışmaları yeniden önizleyin ve değiştirmeden önce öğe yedeklerini koruyun.",
@@ -2218,7 +2220,7 @@ export const tr: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "Asistan belleğinizi yanınızda getirin",
-      body: "OpenClaw, diğer kodlama asistanlarına ait bellek buldu. Bu belleği agent çalışma alanınıza aktarmak ister misiniz?",
+      body: "OpenCrustacean, diğer kodlama asistanlarına ait bellek buldu. Bu belleği agent çalışma alanınıza aktarmak ister misiniz?",
       plannedCount: "{count} öğe içe aktarılmaya hazır",
       alreadyImported: "Zaten içe aktarılan: {count}",
       sourceUnavailable: "Kaynak yolu kullanılamıyor",
@@ -2233,34 +2235,35 @@ export const tr: TranslationMap = {
       connectionChanged: "Atlandı: İçe aktarma sırasında Gateway bağlantısı değişti",
       unknownError: "İstek başarısız oldu",
       doneTitle: "Bellek içe aktarma işlemi tamamlandı",
-      doneBody: "{migrated} taşındı, {skipped} atlandı. OpenClaw kurulumuna devam edebilirsiniz.",
+      doneBody:
+        "{migrated} taşındı, {skipped} atlandı. OpenCrustacean kurulumuna devam edebilirsiniz.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "Sistem kurulum kılavuzunuz",
     subtitleCaretaker: "Sistem kurulumu ve bakımı.",
     exitSetup: "Kurulumdan çık",
     newAgent: "Yeni ajan",
     hatchDraft: "Uyan, dostum!",
-    placeholder: "OpenClaw'a mesaj gönder…",
+    placeholder: "OpenCrustacean'a mesaj gönder…",
     sensitivePlaceholder: "Hassas değeri girin…",
     sensitiveReply: "Hassas yanıt gönderildi",
     send: "Gönder",
-    thinking: "OpenClaw düşünüyor",
+    thinking: "OpenCrustacean düşünüyor",
     earlier: "Önceki",
-    requestFailed: "OpenClaw yanıt veremedi. Tekrar deneyin.",
+    requestFailed: "OpenCrustacean yanıt veremedi. Tekrar deneyin.",
     connectionChanged: "Gateway bağlantısı değişti. Bu kuruluma devam etmek için yeniden deneyin.",
     sessionRestarted:
-      "{error} OpenClaw yeni bir oturum başlattı; önceki mesajlar bağlam için korunuyor.",
-    unsupportedGateway: "OpenClaw ile kuruluma devam etmek için Gateway'i güncelleyin.",
+      "{error} OpenCrustacean yeni bir oturum başlattı; önceki mesajlar bağlam için korunuyor.",
+    unsupportedGateway: "OpenCrustacean ile kuruluma devam etmek için Gateway'i güncelleyin.",
     panel: {
-      title: "OpenClaw",
-      toggle: "OpenClaw'a Sor",
-      close: "Ask OpenClaw'u kapat",
-      resize: "Ask OpenClaw'u yeniden boyutlandır",
-      dockBottom: "Ask OpenClaw'u alta sabitle",
-      dockRight: "Ask OpenClaw'u sağa sabitle",
+      title: "OpenCrustacean",
+      toggle: "OpenCrustacean'a Sor",
+      close: "Ask OpenCrustacean'u kapat",
+      resize: "Ask OpenCrustacean'u yeniden boyutlandır",
+      dockBottom: "Ask OpenCrustacean'u alta sabitle",
+      dockRight: "Ask OpenCrustacean'u sağa sabitle",
     },
     history: {
       button: "Geçmiş",
@@ -2268,7 +2271,7 @@ export const tr: TranslationMap = {
       description: "Bu sistemde neler değişti, en yeni önce.",
       loading: "Son değişiklikler yükleniyor…",
       empty: "Henüz kaydedilmiş değişiklik yok.",
-      requestFailed: "OpenClaw değişiklik geçmişini yükleyemedi.",
+      requestFailed: "OpenCrustacean değişiklik geçmişini yükleyemedi.",
       loadMore: "Daha fazla yükle",
       loadingMore: "Daha fazla yükleniyor…",
       changedPaths: "Değişen yollar ({count})",
@@ -2292,9 +2295,9 @@ export const tr: TranslationMap = {
       channelDegraded: "{channel} bozulmuş durumda — ne olduğunu bana sorun",
       channelFallback: "Bir kanal",
       dismiss: "Bu güncellemeyi kapat",
-      channelSetupTitle: "OpenClaw'a bu uygulama dışından ulaşın",
+      channelSetupTitle: "OpenCrustacean'a bu uygulama dışından ulaşın",
       channelSetupBody:
-        "Web uygulaması zaten çalışıyor. Yalnızca OpenClaw'a başka bir servisten mesaj göndermek istiyorsanız bir kanal ekleyin.",
+        "Web uygulaması zaten çalışıyor. Yalnızca OpenCrustacean'a başka bir servisten mesaj göndermek istiyorsanız bir kanal ekleyin.",
       channelSetupAction: "Bir kanal kur",
       channelSetupDismiss: "Web uygulamasını kullanmaya devam et",
     },
@@ -2330,7 +2333,7 @@ export const tr: TranslationMap = {
     working: "Çalışıyor…",
   },
   mcpPage: {
-    intro: "OpenClaw'a araçlar sağlayan MCP sunucularını bağlayın ve yönetin.",
+    intro: "OpenCrustacean'a araçlar sağlayan MCP sunucularını bağlayın ve yönetin.",
     connectorsLink: "Eklentiler sayfasında tek tıklamayla çalışan bağlayıcıları keşfedin.",
     servers: "Sunucular",
     oauth: "OAuth",
@@ -2388,7 +2391,8 @@ export const tr: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "OpenClaw'ın aracı belleğini nasıl depolayacağını, arayacağını ve sürdüreceğini seçin.",
+    intro:
+      "OpenCrustacean'ın aracı belleğini nasıl depolayacağını, arayacağını ve sürdüreceğini seçin.",
     tablistLabel: "Bellek bölümleri",
     tabs: {
       overview: "Genel Bakış",
@@ -2482,7 +2486,7 @@ export const tr: TranslationMap = {
       description:
         "Bellek yuvasına tam olarak bir bellek eklentisi sahip olur. Bir motor seçmek onu etkinleştirir ve diğerlerini devre dışı bırakır.",
       rowTitle: "Bellek motoru",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "Kapalı",
       unavailable: "Kullanılamıyor",
       autoHint:
@@ -2502,7 +2506,7 @@ export const tr: TranslationMap = {
       rowTitle: "Alma arka ucu",
       builtin: "Yerleşik",
       qmd: "QMD",
-      builtinHint: "Bellek dosyaları OpenClaw tarafından dizinlenir ve aranır.",
+      builtinHint: "Bellek dosyaları OpenCrustacean tarafından dizinlenir ve aranır.",
       qmdHint: "Alma işlemi QMD'ye devredilir. Ayarları aşağıda görünür.",
     },
     addons: {
@@ -2707,7 +2711,7 @@ export const tr: TranslationMap = {
     },
     noInstalledTitle: "İsteğe bağlı eklenti yüklü değil",
     noInstalledBody:
-      "OpenClaw'ı genişletmek için öne çıkan bir eklenti keşfedin veya ClawHub'da arama yapın.",
+      "OpenCrustacean'ı genişletmek için öne çıkan bir eklenti keşfedin veya ClawHub'da arama yapın.",
     noInstalledMatchTitle: "Yüklü eklentilerle eşleşme yok",
     noMatchBody: "Farklı bir arama deneyin.",
     filterAll: "Tümü",
@@ -2743,7 +2747,7 @@ export const tr: TranslationMap = {
     detailPluginId: "Eklenti Kimliği",
     offlineTitle: "Gateway çevrimdışı",
     offlineBody: "Yüklü ve önerilen eklentilere göz atmak için bağlanın.",
-    optionalCapability: "İsteğe bağlı OpenClaw özelliği.",
+    optionalCapability: "İsteğe bağlı OpenCrustacean özelliği.",
     enabled: "Etkin",
     disabled: "Devre dışı",
     available: "Kullanılabilir",
@@ -2820,7 +2824,7 @@ export const tr: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "Kendi cihazlarınızda çalışan kişisel AI asistanınız.",
     waveHello: "Clawd'a el sallayın",
     linksLabel: "Topluluk ve kaynaklar",
@@ -2830,7 +2834,7 @@ export const tr: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "Değişiklik günlüğü",
-    license: "© 2026 OpenClaw Foundation — MIT Lisansı.",
+    license: "© 2026 OpenCrustacean Foundation — MIT Lisansı.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Bu tarayıcı yapıtı derlendiğinde gömülen kimlik.",
     artifactDetails: "Control UI derleme ayrıntıları",
@@ -2848,7 +2852,7 @@ export const tr: TranslationMap = {
       "Etkin Gateway bağlantısı tarafından bildirildi; bu Control UI derlemesinden ayrıdır.",
   },
   appsPage: {
-    heroTitle: "OpenClaw'u her yere taşıyın",
+    heroTitle: "OpenCrustacean'u her yere taşıyın",
     heroTagline:
       "Telefonunuz, saatiniz, masaüstünüz ve tarayıcınız için yardımcı uygulamalar — ayrıca aracınızın yapabileceklerini genişletmek için eklentiler.",
     sectionMobile: "Telefonunuzda",
@@ -2872,11 +2876,11 @@ export const tr: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "iOS'tan sohbet edin, konuşun, eylemleri onaylayın ve OpenClaw'a paylaşın.",
+        desc: "iOS'tan sohbet edin, konuşun, eylemleri onaylayın ve OpenCrustacean'a paylaşın.",
       },
       android: {
         title: "Android",
-        desc: "Android telefonunuz tam bir OpenClaw düğümü olarak — sohbet, kamera ve Canvas.",
+        desc: "Android telefonunuz tam bir OpenCrustacean düğümü olarak — sohbet, kamera ve Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2884,7 +2888,7 @@ export const tr: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "Android eşlik uygulaması OpenClaw'ı saatinize genişletir.",
+        desc: "Android eşlik uygulaması OpenCrustacean'ı saatinize genişletir.",
       },
       macos: {
         title: "macOS",
@@ -2892,7 +2896,7 @@ export const tr: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "Windows yardımcı uygulaması bilgisayarınızı bir OpenClaw düğümü olarak bağlar.",
+        desc: "Windows yardımcı uygulaması bilgisayarınızı bir OpenCrustacean düğümü olarak bağlar.",
       },
       linux: {
         title: "Linux",
@@ -2900,11 +2904,11 @@ export const tr: TranslationMap = {
       },
       chrome: {
         title: "Chrome uzantısı",
-        desc: "OpenClaw'ın mevcut Chrome'unuzu kullanmasına izin verin — sekmeler, sayfalar ve formlar.",
+        desc: "OpenCrustacean'ın mevcut Chrome'unuzu kullanmasına izin verin — sekmeler, sayfalar ve formlar.",
       },
       plugins: {
         title: "Eklentiler ve ClawHub",
-        desc: "OpenClaw'ı toplulukdan gelen kanallar, araçlar ve Skills ile genişletin.",
+        desc: "OpenCrustacean'ı toplulukdan gelen kanallar, araçlar ve Skills ile genişletin.",
       },
     },
   },
@@ -3111,7 +3115,7 @@ export const tr: TranslationMap = {
     selfLearning: {
       pitchTitle: "Kendi kendine öğrenmeyi aç",
       pitchBody:
-        "OpenClaw, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
+        "OpenCrustacean, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
       enable: "Kendi kendine öğrenmeyi etkinleştir",
       enabling: "Etkinleştiriliyor…",
       updateError: "Kendi kendine öğrenme ayarı güncellenemedi.",
@@ -4020,7 +4024,7 @@ export const tr: TranslationMap = {
       heading: "AI'ınıza bağlanın",
       signedInNoModels:
         "Oturum açtınız, ancak bu hesap kullanılabilir model sunmuyor. Devam etmek için başka bir sağlayıcı veya hesap seçin.",
-      notConfigured: "Bir sağlayıcı seçin ve OpenClaw'ın kullanacağı modeli doğrulayın.",
+      notConfigured: "Bir sağlayıcı seçin ve OpenCrustacean'ın kullanacağı modeli doğrulayın.",
       noModels: "Kullanılabilir model yok",
       modelRequired: "Model gerekli",
       chooseProvider: "Başka bir sağlayıcı seç",
@@ -4450,7 +4454,7 @@ export const tr: TranslationMap = {
         stepDevUi:
           "pnpm ui:dev kullanıyorsanız geliştirme UI’sini mevcut checkouta göre yeniden derleyin veya yeniden başlatın.",
         stepRestart:
-          "OpenClaw güncellemesinden sonra Gateway’i yeniden başlatın, böylece güncel protokolü sunsun.",
+          "OpenCrustacean güncellemesinden sonra Gateway’i yeniden başlatın, böylece güncel protokolü sunsun.",
       },
       network: {
         title: "Bağlanılamadı",
@@ -4673,7 +4677,7 @@ export const tr: TranslationMap = {
       remoteViewOnly: "Bu oturum eşleştirilmiş bir düğümdedir ve yalnızca görüntülenebilir.",
       unsupportedViewOnly: "Bu harici oturum kaynağı yalnızca görüntülenebilir.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4728,7 +4732,7 @@ export const tr: TranslationMap = {
     followUpModeOverriding: "Sunucu varsayılanı geçersiz kılınıyor ({mode})",
     followUpModeReset: "Sunucu varsayılanına sıfırla",
     catalogOpenTarget: "Harici oturumları şurada aç",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Kurulum sırasında devre dışı",
     commandPaletteTitle: "Ara veya şuraya git… (⌘K)",
@@ -4753,7 +4757,7 @@ export const tr: TranslationMap = {
       titleOne: "1 bulut çalışma alanı çakışması",
       titleMany: "{count} bulut çalışma alanı çakışması",
       description:
-        "OpenClaw yerel sürümlerinizi korudu ve diğer bulut değişikliklerini uyguladı. Hazırlanan sonucu inceleyin veya çakışan bir yol için kendi sürümünü alın.",
+        "OpenCrustacean yerel sürümlerinizi korudu ve diğer bulut değişikliklerini uyguladı. Hazırlanan sonucu inceleyin veya çakışan bir yol için kendi sürümünü alın.",
       morePaths: "+{count} yol daha",
       stagedResult: "Hazırlanan bulut sonucu",
       copyStagedResult: "Hazırlanan sonuç referansını kopyala",
@@ -4764,7 +4768,7 @@ export const tr: TranslationMap = {
       commandHelp:
         "Bunları Bash veya zsh (Windows'ta Git Bash) içinde çalıştırın. inspect yolun mevcut olmadığını söylerse, bulut onu silmiştir; doğrulayın ve yerel yolu elle kaldırın. checkout bir dosya/dizin çakışması bildirirse, engelleyen yerel yolu taşıyın veya kaldırın, ardından yeniden deneyin. Aşamalanmış ref eksikse, bildirim eskidir; yerel yolu değiştirmeyin.",
       commandsUnavailable:
-        "Bu dosya adı terminal denetim karakterleri içeriyor, bu nedenle OpenClaw bunun için kopyalanabilir bir kabuk komutu oluşturmaz. Aşamalanmış ref'i doğrudan inceleyin ve yolu dikkatle elle girin.",
+        "Bu dosya adı terminal denetim karakterleri içeriyor, bu nedenle OpenCrustacean bunun için kopyalanabilir bir kabuk komutu oluşturmaz. Aşamalanmış ref'i doğrudan inceleyin ve yolu dikkatle elle girin.",
       dismiss: "Çalışma alanı çakışması bildirimini kapat",
       eventSender: "Bulut çalışma alanı",
       eventTitleOne: "Bulut sonucu 1 çakışmayla uygulandı",
@@ -5267,7 +5271,7 @@ export const tr: TranslationMap = {
       checking: "Kontrol ediliyor...",
     },
     voice: {
-      asking: "OpenClaw'a soruluyor...",
+      asking: "OpenCrustacean'a soruluyor...",
       connecting: "Sesli giriş bağlanıyor...",
       listening: "Dinleniyor...",
     },
@@ -5489,7 +5493,7 @@ export const tr: TranslationMap = {
       shownOf: "{total} görevden {shown} tanesi",
       emptyTitle: "Henüz zamanlanmış görev yok",
       emptyHint:
-        "OpenClaw'ın ne ve ne zaman yapması gerektiğini tanımlayın — zamanlamaya göre çalışır.",
+        "OpenCrustacean'ın ne ve ne zaman yapması gerektiğini tanımlayın — zamanlamaya göre çalışır.",
       noMatching: "Geçerli filtrelerle eşleşen görev yok.",
       loadMore: "Daha fazla yükle",
       loading: "Yükleniyor...",
@@ -5557,7 +5561,7 @@ export const tr: TranslationMap = {
       tabsLabel: "Otomasyon ayrıntıları",
       newTitle: "Yeni zamanlanmış görev",
       newSubtitle:
-        "OpenClaw'ın ne yapması gerektiğini açıklayın, ardından ne zaman çalışacağını seçin.",
+        "OpenCrustacean'ın ne yapması gerektiğini açıklayın, ardından ne zaman çalışacağını seçin.",
       back: "Tüm otomasyonlar",
       settingsTab: "Ayarlar",
       historyTitle: "Çalıştırma geçmişi",
@@ -5630,7 +5634,7 @@ export const tr: TranslationMap = {
       descriptionPlaceholder: "Bu iş için isteğe bağlı bağlam",
       agentPlaceholder: "main veya ops",
       agentHelp: "Bilinen bir aracı seçmek için yazmaya başlayın veya özel bir aracı girin.",
-      promptPlaceholder: "OpenClaw'ın ne yapması gerektiğini açıklayın...",
+      promptPlaceholder: "OpenCrustacean'ın ne yapması gerektiğini açıklayın...",
       repeat: "Tekrarla",
       repeatInterval: "Aralık",
       repeatOnce: "Bir kez",

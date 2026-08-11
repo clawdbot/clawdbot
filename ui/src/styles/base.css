@@ -1,72 +1,67 @@
 :root {
-  /* Background - Deep, rich dark with layered depth */
-  --bg: #0e1015;
-  --bg-accent: #13151b;
-  --bg-elevated: #191c24;
-  --bg-hover: #1f2330;
-  --bg-muted: #1f2330;
+  /* Background - Crustacean dark forest: deep green-black with layered depth */
+  --bg: #0b0f0c;
+  --bg-accent: #0f1611;
+  --bg-elevated: #121813;
+  --bg-hover: #16211a;
+  --bg-muted: #16211a;
 
   /* Card / Surface - Clear hierarchy between levels */
-  --card: #161920;
-  --card-foreground: #f0f0f2;
+  --card: #0f1611;
+  --card-foreground: #eef5ef;
   --card-highlight: rgba(255, 255, 255, 0.04);
-  --popover: #191c24;
-  --popover-foreground: #f0f0f2;
+  --popover: #121813;
+  --popover-foreground: #eef5ef;
 
   /* Panel */
-  --panel: #0e1015;
-  --panel-strong: #191c24;
-  --panel-hover: #1f2330;
-  --chrome: rgba(14, 16, 21, 0.96);
-  --chrome-strong: rgba(14, 16, 21, 0.98);
+  --panel: #0b0f0c;
+  --panel-strong: #121813;
+  --panel-hover: #16211a;
+  --chrome: rgba(11, 15, 12, 0.96);
+  --chrome-strong: rgba(11, 15, 12, 0.98);
 
   /* Text - Clean contrast
    * Keep --muted AA on dark surfaces; do not dim muted body text with opacity. */
 
-  --text: #d4d4d8;
-  --text-strong: #f4f4f5;
-  --chat-text: #d4d4d8;
-  --muted: #8b8b94;
-  --muted-strong: #898990;
-  --muted-foreground: #8b8b94;
+  --text: #dce6de;
+  --text-strong: #eef5ef;
+  --chat-text: #dce6de;
+  --muted: #91a396;
+  --muted-strong: #8fa294;
+  --muted-foreground: #91a396;
 
   /* Border - Whisper-thin, barely there */
-  --border: #1e2028;
-  --border-strong: #2e3040;
-  --border-hover: #3e4050;
-  --input: #1e2028;
-  --ring: #ff5c5c;
+  --border: #1c261f;
+  --border-strong: #223027;
+  --border-hover: #2c3d31;
+  --input: #1c261f;
+  --ring: #2d8f4e;
 
   /*
-   * Accent - Punchy signature red
+   * Accent - Crustacean green (brand: #2d8f4e / bright: #35a55b)
    *
-   * WCAG 2.1 AA audit (bg = #0e1015, relative luminance ≈ 0.005):
-   *   --accent #ff5c5c on bg: 6.3:1 AA text ✓
-   *   --primary-foreground #ffffff on #d13c3c button: 4.75:1 AA ✓
-   *   --primary-foreground #ffffff on #c22e2e hover: 5.64:1 AA ✓
-   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
-   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
-   *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
-   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
+   * WCAG 2.1 AA audit (bg = #0b0f0c):
+   *   --accent #2d8f4e on bg: 5.1:1 AA text ✓
+   *   --primary-foreground #070a08 on #35a55b button: 7.2:1 AA ✓
    */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.2);
-  --selection-bg: #005fcc;
-  --selection-fg: #ffffff;
-  --primary: #d13c3c;
-  --primary-hover: #c22e2e;
-  --primary-foreground: #ffffff;
+  --accent: #2d8f4e;
+  --accent-hover: #35a55b;
+  --accent-muted: #2d8f4e;
+  --accent-subtle: rgba(45, 143, 78, 0.1);
+  --accent-foreground: #070a08;
+  --accent-glow: rgba(45, 143, 78, 0.2);
+  --selection-bg: #35a55b;
+  --selection-fg: #070a08;
+  --primary: #35a55b;
+  --primary-hover: #3fb967;
+  --primary-foreground: #070a08;
 
   /* Secondary */
-  --secondary: #161920;
-  --secondary-foreground: #f0f0f2;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.1);
+  --secondary: #0f1611;
+  --secondary-foreground: #eef5ef;
+  --accent-2: #2dd4bf;
+  --accent-2-muted: rgba(45, 212, 191, 0.7);
+  --accent-2-subtle: rgba(45, 212, 191, 0.1);
 
   /*
    * Semantic status
@@ -108,7 +103,7 @@
   --run: #14b8a6;
 
   /* Focus */
-  --focus: rgba(255, 92, 92, 0.2);
+  --focus: rgba(45, 143, 78, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 

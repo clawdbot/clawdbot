@@ -2971,25 +2971,22 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("routes /btw to the session companion while a main run is active", async () => {
-    const openSessionCompanion = vi.fn();
+  it("routes /btw and /side as normal chat.send commands after companion removal", async () => {
     const host = makeHost({
-      chatRunId: "run-main",
-      chatStream: "Working...",
+      requestHandlers: {
+        "chat.send": { status: "started" },
+      },
       chatMessage: "/btw what changed?",
-      openSessionCompanion,
     });
 
     await handleSendChat(host);
 
-    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe("run-main");
-    expect(host.chatStream).toBe("Working...");
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessage).toBe("");
-    expect(navigateChatInputHistory(host, "up")).toBe(true);
-    expect(host.chatMessage).toBe("/btw what changed?");
+    expect(host.request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/btw what changed?",
+      }),
+    );
   });
 
   it("sends /approve immediately while a main run is waiting without queueing it", async () => {
@@ -3020,39 +3017,6 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/approve approval-123 allow-once");
-  });
-
-  it("routes /side through the same session companion path", async () => {
-    const openSessionCompanion = vi.fn();
-    const host = makeHost({
-      chatRunId: "run-main",
-      chatStream: "Working...",
-      chatMessage: "/side what changed?",
-      openSessionCompanion,
-    });
-
-    await handleSendChat(host);
-
-    expect(openSessionCompanion).toHaveBeenCalledWith("what changed?");
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe("run-main");
-  });
-
-  it("routes /btw without adopting a main chat run when idle", async () => {
-    const openSessionCompanion = vi.fn();
-    const host = makeHost({
-      chatMessage: "/btw summarize this",
-      openSessionCompanion,
-    });
-
-    await handleSendChat(host);
-
-    expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessage).toBe("");
-    expect(navigateChatInputHistory(host, "up")).toBe(true);
-    expect(host.chatMessage).toBe("/btw summarize this");
   });
 
   it("keeps queued normal messages recallable before transcript history catches up", async () => {

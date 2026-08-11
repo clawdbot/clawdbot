@@ -62,7 +62,6 @@ describe("chat pane session hydration", () => {
     expect(listBranches).toHaveBeenCalledOnce();
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "session.discussion.info",
-      "sessions.companion.state",
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ]);
     expect(complete).toHaveBeenCalledOnce();

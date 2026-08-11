@@ -366,7 +366,7 @@ export const ko: TranslationMap = {
     genericSubtitle: "이 패널을 불러오는 중에 문제가 발생했습니다.",
     staleTitle: "새 버전을 사용할 수 있습니다",
     staleSubtitle:
-      "OpenClaw가 백그라운드에서 업데이트되었습니다. 최신 패널을 사용하려면 새로고침하세요.",
+      "OpenCrustacean가 백그라운드에서 업데이트되었습니다. 최신 패널을 사용하려면 새로고침하세요.",
     reloading: "다시 불러오는 중…",
     retry: "다시 시도",
     stylesFailed: "스타일을 불러오지 못해 페이지가 깨져 보일 수 있습니다.",
@@ -391,7 +391,7 @@ export const ko: TranslationMap = {
       notGitInstall:
         "git 체크아웃이 아닙니다. 전역 재설치를 하려면 CLI에서 `openclaw update`를 실행하세요.",
       notOpenclawRoot:
-        "OpenClaw 체크아웃에서 업데이트를 실행하거나 CLI 전역 재설치 경로를 사용하세요.",
+        "OpenCrustacean 체크아웃에서 업데이트를 실행하거나 CLI 전역 재설치 경로를 사용하세요.",
       depsInstallFailed: "종속성 설치에 실패했습니다. 설치 오류를 해결한 후 다시 시도하세요.",
       buildFailed: "빌드에 실패했습니다. 빌드 오류를 해결한 후 다시 시도하세요.",
       buildDirty:
@@ -420,7 +420,7 @@ export const ko: TranslationMap = {
     pairing: {
       button: "모바일 기기 페어링",
       adminRequired: "설정 코드를 생성하려면 관리자 권한이 필요합니다.",
-      title: "OpenClaw 모바일",
+      title: "OpenCrustacean 모바일",
       subtitle: "새 휴대폰을 연결하려면 모바일 앱에서 이 QR 코드를 스캔하세요.",
       noApp: "아직 앱이 없으신가요?",
       getApps: "앱 받기",
@@ -435,14 +435,14 @@ export const ko: TranslationMap = {
       transportLimitedHint:
         "이 Gateway URL은 암호화되지 않은 ws://를 사용합니다. wss:// 또는 Tailscale Serve를 사용한 다음, 전체 액세스를 위한 새 코드를 생성하세요.",
       failed: "설정 코드를 생성할 수 없습니다.",
-      qrAlt: "OpenClaw 모바일 페어링 QR 코드",
+      qrAlt: "OpenCrustacean 모바일 페어링 QR 코드",
       qrUnavailable: "QR을 사용할 수 없습니다. 대신 설정 코드를 복사하세요.",
       copySetupCode: "설정 코드 복사",
       newCode: "새 코드",
       showSetupCode: "설정 코드 표시",
       pending: "검토 대기 중인 기기 요청: {count}",
       review: "검토",
-      waiting: "공식 OpenClaw 모바일 앱은 스캔 후 자동으로 연결됩니다.",
+      waiting: "공식 OpenCrustacean 모바일 앱은 스캔 후 자동으로 연결됩니다.",
       help: "페어링 도움말",
       manageDevices: "기기 관리",
     },
@@ -587,11 +587,11 @@ export const ko: TranslationMap = {
     ownerSession: "세션",
     ownerWorkboard: "Workboard",
     title: "관리되는 Worktree",
-    subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
+    subtitle: "OpenCrustacean가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
     cleanupTitle: "정리",
     cleanupSubtitle:
-      "OpenClaw는 디스크 공간을 확보하기 위해 오래된 worktree를 주기적으로 제거합니다. 정리 수준을 조정하세요.",
+      "OpenCrustacean는 디스크 공간을 확보하기 위해 오래된 worktree를 주기적으로 제거합니다. 정리 수준을 조정하세요.",
     cleanupMaxCount: "최대 worktree 수",
     cleanupMaxCountHelp:
       "모든 저장소에서 유지할 관리 대상 worktree의 최대 개수입니다. 오래된 worktree부터 스냅샷을 생성한 후 제거합니다. 개수 제한을 비활성화하려면 0으로 설정하세요.",
@@ -642,8 +642,8 @@ export const ko: TranslationMap = {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloud 작업자 제공업체: {provider}",
     cloudRequiresWorktree: "Cloud 작업자를 사용하려면 관리형 worktree가 필요합니다",
-    cloudRequiresOpenClawRuntime:
-      "클라우드 워커에는 OpenClaw 런타임이 필요합니다. {runtime}이(가) 선택되어 있습니다.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "클라우드 워커에는 OpenCrustacean 런타임이 필요합니다. {runtime}이(가) 선택되어 있습니다.",
     cloudSecureContextRequired:
       "복구 기능이 작업을 보호할 수 있도록 Cloud 작업자에는 안전한 브라우저 컨텍스트가 필요합니다.",
     cloudStartFailed: "세션은 로컬에 생성되었지만 Cloud 시작에 실패했습니다: {error}",
@@ -1446,7 +1446,7 @@ export const ko: TranslationMap = {
       title: "푸시 알림",
       nativeTitle: "알림",
       hint: "Gateway에서 브라우저 푸시 알림을 받습니다.",
-      nativeHint: "이 Mac의 OpenClaw 앱에서 알림이 기본 방식으로 표시됩니다.",
+      nativeHint: "이 Mac의 OpenCrustacean 앱에서 알림이 기본 방식으로 표시됩니다.",
       unavailableHint: "이 브라우저에서는 사용할 수 없습니다.",
       unavailable: "사용 불가",
       checking: "확인 중...",
@@ -1471,7 +1471,7 @@ export const ko: TranslationMap = {
       blockedHint:
         "알림이 차단되었습니다. 알림을 허용하려면 브라우저 사이트 권한을 업데이트하세요.",
       nativeBlockedHint:
-        "macOS에서 OpenClaw 알림이 비활성화되어 있습니다. 시스템 설정 > 알림에서 허용하세요.",
+        "macOS에서 OpenCrustacean 알림이 비활성화되어 있습니다. 시스템 설정 > 알림에서 허용하세요.",
     },
     appearance: {
       intro: "이 Control UI 클라이언트의 테마, 채팅, 사이드바 환경설정입니다.",
@@ -1609,7 +1609,7 @@ export const ko: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1618,7 +1618,7 @@ export const ko: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1795,7 +1795,7 @@ export const ko: TranslationMap = {
     forward: "앞으로",
     chat: "채팅",
     settings: "설정",
-    askOpenClaw: "OpenClaw에게 물어보기",
+    askOpenCrustacean: "OpenCrustacean에게 물어보기",
     settingsGroupConnections: "연결",
     settingsGroupAgents: "에이전트 및 도구",
     settingsGroupSecurity: "개인정보 및 보안",
@@ -1936,7 +1936,7 @@ export const ko: TranslationMap = {
     nodes: "노드",
     chat: "채팅",
     dashboards: "대시보드",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "구성",
     profile: "프로필",
     communications: "커뮤니케이션",
@@ -2003,14 +2003,14 @@ export const ko: TranslationMap = {
   modelSetup: {
     heading: "AI 연결",
     intro:
-      "OpenClaw는 CLI 로그인, API 키 또는 제공업체 로그인 등 이미 보유한 AI 액세스를 재사용합니다.",
+      "OpenCrustacean는 CLI 로그인, API 키 또는 제공업체 로그인 등 이미 보유한 AI 액세스를 재사용합니다.",
     required: {
       title: "구성된 AI 공급자가 없습니다",
-      body: "OpenClaw가 이 에이전트에 구성된 공급자와 모델을 찾을 수 없습니다. 대화를 시작하기 전에 추가하세요.",
+      body: "OpenCrustacean가 이 에이전트에 구성된 공급자와 모델을 찾을 수 없습니다. 대화를 시작하기 전에 추가하세요.",
       action: "공급자 구성",
     },
     connectionFailure: {
-      title: "OpenClaw가 구성된 AI를 사용할 수 없습니다",
+      title: "OpenCrustacean가 구성된 AI를 사용할 수 없습니다",
       body: "이 에이전트에는 공급자와 모델이 선택되어 있지만 연결에 실패했습니다. 공급자 로그인 또는 API 키, 모델 접근 권한, 서비스 상태를 확인한 후 다시 시도하세요.",
       action: "공급자 설정 확인",
     },
@@ -2026,7 +2026,7 @@ export const ko: TranslationMap = {
     },
     access: {
       adminRequired: "모델을 설정하려면 operator.admin 액세스가 필요합니다.",
-      gatewayTooOld: "Gateway에서 이전 버전의 OpenClaw가 실행 중입니다",
+      gatewayTooOld: "Gateway에서 이전 버전의 OpenCrustacean가 실행 중입니다",
     },
     candidates: {
       title: "이 Gateway에서 발견됨",
@@ -2073,12 +2073,12 @@ export const ko: TranslationMap = {
       accessValuePlaceholder: "API 키 또는 토큰 붙여넣기",
       connect: "연결",
       connectAndVerify: "연결 및 확인",
-      verifyHint: "OpenClaw는 연결을 준비 완료로 표시하기 전에 실제 모델 응답을 확인합니다.",
+      verifyHint: "OpenCrustacean는 연결을 준비 완료로 표시하기 전에 실제 모델 응답을 확인합니다.",
       required: "제공업체를 선택하고 API 키 또는 토큰을 입력하세요.",
     },
     success: {
       title: "AI가 준비되었습니다",
-      body: "OpenClaw가 {modelRef}에서 실제 응답을 받았습니다. 이제 채팅을 시작할 수 있습니다.",
+      body: "OpenCrustacean가 {modelRef}에서 실제 응답을 받았습니다. 이제 채팅을 시작할 수 있습니다.",
       activeModel: "활성 모델",
       latency: "{latencyMs} ms 내에 확인됨",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2150,11 +2150,12 @@ export const ko: TranslationMap = {
     confirmTitle: "{provider}에서 가져오시겠습니까?",
     confirmDescription: "선택한 메모리 파일 {count}개를 이 에이전트 작업 공간으로 복사합니다.",
     confirmReplace: "기존 대상 파일은 교체 전에 마이그레이션 보고서에 백업됩니다.",
-    confirmBackup: "OpenClaw는 메모리를 복사하기 전에 검증된 가져오기 전 백업을 생성합니다.",
+    confirmBackup: "OpenCrustacean는 메모리를 복사하기 전에 검증된 가져오기 전 백업을 생성합니다.",
     confirmImport: "메모리 가져오기",
     disconnected: "메모리를 가져오려면 Gateway에 연결하세요.",
     title: "어시스턴트 메모리 가져오기",
-    subtitle: "Codex 통합 메모리와 Claude Code 자동 메모리를 OpenClaw로 복사하기 전에 검토하세요.",
+    subtitle:
+      "Codex 통합 메모리와 Claude Code 자동 메모리를 OpenCrustacean로 복사하기 전에 검토하세요.",
     agent: "대상 에이전트",
     replaceExisting: "기존 가져오기 항목 교체",
     replaceHint: "충돌을 다시 미리 보고 교체 전에 항목 백업을 보존합니다.",
@@ -2195,7 +2196,7 @@ export const ko: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "어시스턴트 메모리 가져오기",
-      body: "OpenClaw에서 다른 코딩 어시스턴트의 메모리를 찾았습니다. 에이전트 작업 공간으로 가져오시겠습니까?",
+      body: "OpenCrustacean에서 다른 코딩 어시스턴트의 메모리를 찾았습니다. 에이전트 작업 공간으로 가져오시겠습니까?",
       plannedCount: "{count}개 가져오기 준비 완료",
       alreadyImported: "이미 가져옴: {count}개",
       sourceUnavailable: "소스 경로를 사용할 수 없음",
@@ -2211,34 +2212,34 @@ export const ko: TranslationMap = {
       unknownError: "요청 실패",
       doneTitle: "메모리 가져오기 완료",
       doneBody:
-        "{migrated}개 마이그레이션됨, {skipped}개 건너뜀. OpenClaw 설정을 계속할 수 있습니다.",
+        "{migrated}개 마이그레이션됨, {skipped}개 건너뜀. OpenCrustacean 설정을 계속할 수 있습니다.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "시스템 설정 가이드",
     subtitleCaretaker: "시스템 설정 및 관리.",
     exitSetup: "설정 종료",
     newAgent: "새 에이전트",
     hatchDraft: "일어나, 친구!",
-    placeholder: "OpenClaw에 메시지…",
+    placeholder: "OpenCrustacean에 메시지…",
     sensitivePlaceholder: "민감한 값 입력…",
     sensitiveReply: "민감한 답장이 전송됨",
     send: "보내기",
-    thinking: "OpenClaw가 생각 중입니다",
+    thinking: "OpenCrustacean가 생각 중입니다",
     earlier: "이전",
-    requestFailed: "OpenClaw가 답장할 수 없습니다. 다시 시도하세요.",
+    requestFailed: "OpenCrustacean가 답장할 수 없습니다. 다시 시도하세요.",
     connectionChanged: "Gateway 연결이 변경되었습니다. 이 설정을 계속하려면 다시 시도하세요.",
     sessionRestarted:
-      "{error} OpenClaw가 새 세션을 시작했습니다. 이전 메시지는 컨텍스트로 유지됩니다.",
-    unsupportedGateway: "OpenClaw로 설정을 계속하려면 Gateway를 업데이트하세요.",
+      "{error} OpenCrustacean가 새 세션을 시작했습니다. 이전 메시지는 컨텍스트로 유지됩니다.",
+    unsupportedGateway: "OpenCrustacean로 설정을 계속하려면 Gateway를 업데이트하세요.",
     panel: {
-      title: "OpenClaw",
-      toggle: "OpenClaw에게 물어보기",
-      close: "Ask OpenClaw 닫기",
-      resize: "Ask OpenClaw 크기 조정",
-      dockBottom: "Ask OpenClaw를 하단에 고정",
-      dockRight: "Ask OpenClaw를 오른쪽에 고정",
+      title: "OpenCrustacean",
+      toggle: "OpenCrustacean에게 물어보기",
+      close: "Ask OpenCrustacean 닫기",
+      resize: "Ask OpenCrustacean 크기 조정",
+      dockBottom: "Ask OpenCrustacean를 하단에 고정",
+      dockRight: "Ask OpenCrustacean를 오른쪽에 고정",
     },
     history: {
       button: "기록",
@@ -2246,7 +2247,7 @@ export const ko: TranslationMap = {
       description: "이 시스템에서 변경된 내용, 최신순.",
       loading: "최근 변경 사항 로드 중…",
       empty: "아직 기록된 변경 사항이 없습니다.",
-      requestFailed: "OpenClaw가 변경 기록을 로드할 수 없습니다.",
+      requestFailed: "OpenCrustacean가 변경 기록을 로드할 수 없습니다.",
       loadMore: "더 보기",
       loadingMore: "더 로드하는 중…",
       changedPaths: "변경된 경로 ({count})",
@@ -2269,9 +2270,9 @@ export const ko: TranslationMap = {
       channelDegraded: "{channel} 상태가 저하되었습니다 — 무슨 일이 있었는지 물어보세요",
       channelFallback: "채널",
       dismiss: "이 업데이트 무시",
-      channelSetupTitle: "이 앱 외부에서 OpenClaw에 연결",
+      channelSetupTitle: "이 앱 외부에서 OpenCrustacean에 연결",
       channelSetupBody:
-        "웹 앱은 이미 작동합니다. 다른 서비스에서 OpenClaw에 메시지를 보내려는 경우에만 채널을 추가하세요.",
+        "웹 앱은 이미 작동합니다. 다른 서비스에서 OpenCrustacean에 메시지를 보내려는 경우에만 채널을 추가하세요.",
       channelSetupAction: "채널 설정",
       channelSetupDismiss: "웹 앱 계속 사용",
     },
@@ -2307,7 +2308,7 @@ export const ko: TranslationMap = {
     working: "작업 중…",
   },
   mcpPage: {
-    intro: "OpenClaw에 도구를 제공하는 MCP 서버를 연결하고 관리합니다.",
+    intro: "OpenCrustacean에 도구를 제공하는 MCP 서버를 연결하고 관리합니다.",
     connectorsLink: "플러그인 페이지에서 원클릭 커넥터를 확인하세요.",
     servers: "서버",
     oauth: "OAuth",
@@ -2363,7 +2364,7 @@ export const ko: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "OpenClaw가 에이전트 메모리를 저장, 검색, 유지하는 방식을 선택하세요.",
+    intro: "OpenCrustacean가 에이전트 메모리를 저장, 검색, 유지하는 방식을 선택하세요.",
     tablistLabel: "메모리 섹션",
     tabs: {
       overview: "개요",
@@ -2458,7 +2459,7 @@ export const ko: TranslationMap = {
       description:
         "정확히 하나의 메모리 플러그인이 메모리 슬롯을 소유합니다. 엔진을 선택하면 해당 엔진이 활성화되고 나머지는 비활성화됩니다.",
       rowTitle: "메모리 엔진",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "끔",
       unavailable: "사용 불가",
       autoHint: "config에 고정된 엔진이 없으므로 슬롯이 기본 소유자로 폴백됩니다.",
@@ -2478,7 +2479,7 @@ export const ko: TranslationMap = {
       rowTitle: "검색 백엔드",
       builtin: "기본 제공",
       qmd: "QMD",
-      builtinHint: "메모리 파일은 OpenClaw 자체에서 색인 및 검색됩니다.",
+      builtinHint: "메모리 파일은 OpenCrustacean 자체에서 색인 및 검색됩니다.",
       qmdHint: "검색은 QMD에 위임됩니다. 관련 설정은 아래에 표시됩니다.",
     },
     addons: {
@@ -2669,7 +2670,7 @@ export const ko: TranslationMap = {
       notes: "Markdown, Obsidian, Notion 또는 Bear에 노트를 캡처하세요.",
     },
     noInstalledTitle: "설치된 선택적 플러그인이 없습니다",
-    noInstalledBody: "추천 플러그인을 살펴보거나 ClawHub를 검색해 OpenClaw를 확장하세요.",
+    noInstalledBody: "추천 플러그인을 살펴보거나 ClawHub를 검색해 OpenCrustacean를 확장하세요.",
     noInstalledMatchTitle: "일치하는 설치된 플러그인이 없습니다",
     noMatchBody: "다른 검색어를 시도해 보세요.",
     filterAll: "전체",
@@ -2705,7 +2706,7 @@ export const ko: TranslationMap = {
     detailPluginId: "플러그인 ID",
     offlineTitle: "Gateway 오프라인",
     offlineBody: "설치된 플러그인과 추천 플러그인을 찾아보려면 연결하세요.",
-    optionalCapability: "선택적 OpenClaw 기능입니다.",
+    optionalCapability: "선택적 OpenCrustacean 기능입니다.",
     enabled: "사용 설정됨",
     disabled: "사용 중지됨",
     available: "사용 가능",
@@ -2780,7 +2781,7 @@ export const ko: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "내 기기에서 실행되는 나만의 AI 어시스턴트.",
     waveHello: "Clawd에게 손을 흔들어 인사하세요",
     linksLabel: "커뮤니티 및 리소스",
@@ -2790,7 +2791,7 @@ export const ko: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "변경 내역",
-    license: "© 2026 OpenClaw Foundation — MIT 라이선스.",
+    license: "© 2026 OpenCrustacean Foundation — MIT 라이선스.",
     artifactTitle: "Control UI",
     artifactSubtitle: "이 브라우저 아티팩트가 빌드될 때 포함된 ID입니다.",
     artifactDetails: "Control UI 빌드 세부 정보",
@@ -2807,7 +2808,7 @@ export const ko: TranslationMap = {
     gatewayVersionHint: "활성 Gateway 연결에서 보고됨; 이 Control UI 빌드와는 별개입니다.",
   },
   appsPage: {
-    heroTitle: "OpenClaw를 어디서나 사용하세요",
+    heroTitle: "OpenCrustacean를 어디서나 사용하세요",
     heroTagline:
       "휴대폰, 시계, 데스크톱, 브라우저용 컴패니언 앱과 에이전트의 기능을 확장하는 플러그인.",
     sectionMobile: "휴대폰에서",
@@ -2831,11 +2832,11 @@ export const ko: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "iOS에서 채팅하고, 대화하고, 작업을 승인하고, OpenClaw로 공유하세요.",
+        desc: "iOS에서 채팅하고, 대화하고, 작업을 승인하고, OpenCrustacean로 공유하세요.",
       },
       android: {
         title: "Android",
-        desc: "Android 휴대폰을 완전한 OpenClaw 노드로 — 채팅, 카메라, Canvas.",
+        desc: "Android 휴대폰을 완전한 OpenCrustacean 노드로 — 채팅, 카메라, Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2843,7 +2844,7 @@ export const ko: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "Android 컴패니언이 OpenClaw를 시계로 확장합니다.",
+        desc: "Android 컴패니언이 OpenCrustacean를 시계로 확장합니다.",
       },
       macos: {
         title: "macOS",
@@ -2851,7 +2852,7 @@ export const ko: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "Windows 컴패니언이 PC를 OpenClaw 노드로 연결합니다.",
+        desc: "Windows 컴패니언이 PC를 OpenCrustacean 노드로 연결합니다.",
       },
       linux: {
         title: "Linux",
@@ -2859,11 +2860,11 @@ export const ko: TranslationMap = {
       },
       chrome: {
         title: "Chrome 확장 프로그램",
-        desc: "OpenClaw가 기존 Chrome을 제어하도록 하세요 — 탭, 페이지, 양식.",
+        desc: "OpenCrustacean가 기존 Chrome을 제어하도록 하세요 — 탭, 페이지, 양식.",
       },
       plugins: {
         title: "플러그인 및 ClawHub",
-        desc: "커뮤니티의 채널, 도구, Skills로 OpenClaw를 확장하세요.",
+        desc: "커뮤니티의 채널, 도구, Skills로 OpenCrustacean를 확장하세요.",
       },
     },
   },
@@ -3067,7 +3068,7 @@ export const ko: TranslationMap = {
     selfLearning: {
       pitchTitle: "자기 학습 켜기",
       pitchBody:
-        "OpenClaw는 수정 사항과 완료된 주요 실행을 검토한 후 이 보드에 게시할 Skill 제안 초안을 작성합니다. 추가 백그라운드 토큰을 사용하며, 초안은 보류 중인 제안으로 등록됩니다.",
+        "OpenCrustacean는 수정 사항과 완료된 주요 실행을 검토한 후 이 보드에 게시할 Skill 제안 초안을 작성합니다. 추가 백그라운드 토큰을 사용하며, 초안은 보류 중인 제안으로 등록됩니다.",
       enable: "자기 학습 활성화",
       enabling: "활성화 중…",
       updateError: "자기 학습 설정을 업데이트할 수 없습니다.",
@@ -3974,7 +3975,7 @@ export const ko: TranslationMap = {
       heading: "AI 연결",
       signedInNoModels:
         "로그인되었지만 이 계정에는 사용 가능한 모델이 없습니다. 계속하려면 다른 공급자 또는 계정을 선택하세요.",
-      notConfigured: "공급자를 선택하고 OpenClaw가 사용할 모델을 확인하세요.",
+      notConfigured: "공급자를 선택하고 OpenCrustacean가 사용할 모델을 확인하세요.",
       noModels: "사용 가능한 모델 없음",
       modelRequired: "모델 필요",
       chooseProvider: "다른 공급자 선택",
@@ -4396,7 +4397,7 @@ export const ko: TranslationMap = {
         stepDevUi:
           "pnpm ui:dev를 사용하는 경우 현재 checkout 기준으로 개발 UI를 다시 빌드하거나 다시 시작하세요.",
         stepRestart:
-          "OpenClaw를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
+          "OpenCrustacean를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
       },
       network: {
         title: "연결할 수 없음",
@@ -4618,7 +4619,7 @@ export const ko: TranslationMap = {
       remoteViewOnly: "이 세션은 페어링된 노드에 있으며 보기 전용입니다.",
       unsupportedViewOnly: "이 외부 세션 소스는 보기 전용입니다.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4673,7 +4674,7 @@ export const ko: TranslationMap = {
     followUpModeOverriding: "서버 기본값 재정의 중 ({mode})",
     followUpModeReset: "서버 기본값으로 재설정",
     catalogOpenTarget: "외부 세션을 열 위치",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "설정 중에는 비활성화됨",
     commandPaletteTitle: "검색하거나 이동… (⌘K)",
@@ -4698,7 +4699,7 @@ export const ko: TranslationMap = {
       titleOne: "클라우드 워크스페이스 충돌 1건",
       titleMany: "클라우드 워크스페이스 충돌 {count}건",
       description:
-        "OpenClaw가 로컬 버전을 유지하고 다른 클라우드 변경 사항을 적용했습니다. 스테이징된 결과를 확인하거나 충돌한 경로에 대해 클라우드 버전을 선택하세요.",
+        "OpenCrustacean가 로컬 버전을 유지하고 다른 클라우드 변경 사항을 적용했습니다. 스테이징된 결과를 확인하거나 충돌한 경로에 대해 클라우드 버전을 선택하세요.",
       morePaths: "+{count}개 경로 더 보기",
       stagedResult: "스테이징된 클라우드 결과",
       copyStagedResult: "스테이징된 결과 ref 복사",
@@ -4709,7 +4710,7 @@ export const ko: TranslationMap = {
       commandHelp:
         "이 명령을 Bash 또는 zsh(Windows에서는 Git Bash)에서 실행하세요. 검사 결과 경로가 존재하지 않는다고 나오면 클라우드에서 삭제된 것입니다. 확인 후 로컬 경로를 수동으로 제거하세요. checkout이 파일/디렉터리 충돌을 보고하면 방해가 되는 로컬 경로를 이동하거나 제거한 후 다시 시도하세요. 스테이징된 ref가 없으면 알림이 오래된 것이므로 로컬 경로를 변경하지 마세요.",
       commandsUnavailable:
-        "이 파일 이름에는 터미널 제어 문자가 포함되어 있어 OpenClaw가 복사 가능한 셸 명령을 생성하지 않습니다. 스테이징된 ref를 직접 검사하고 경로를 주의해서 수동으로 입력하세요.",
+        "이 파일 이름에는 터미널 제어 문자가 포함되어 있어 OpenCrustacean가 복사 가능한 셸 명령을 생성하지 않습니다. 스테이징된 ref를 직접 검사하고 경로를 주의해서 수동으로 입력하세요.",
       dismiss: "워크스페이스 충돌 알림 닫기",
       eventSender: "클라우드 워크스페이스",
       eventTitleOne: "충돌 1건과 함께 클라우드 결과 적용됨",
@@ -5210,7 +5211,7 @@ export const ko: TranslationMap = {
       checking: "확인 중...",
     },
     voice: {
-      asking: "OpenClaw에 질문 중...",
+      asking: "OpenCrustacean에 질문 중...",
       connecting: "음성 입력 연결 중...",
       listening: "듣는 중...",
     },
@@ -5428,7 +5429,7 @@ export const ko: TranslationMap = {
       filters: "필터",
       shownOf: "{total}개 중 {shown}개",
       emptyTitle: "아직 예약된 작업이 없습니다",
-      emptyHint: "OpenClaw가 무엇을 언제 해야 하는지 설명하면 일정에 따라 실행됩니다.",
+      emptyHint: "OpenCrustacean가 무엇을 언제 해야 하는지 설명하면 일정에 따라 실행됩니다.",
       noMatching: "현재 필터와 일치하는 작업이 없습니다.",
       loadMore: "더 보기",
       loading: "로드 중...",
@@ -5495,7 +5496,7 @@ export const ko: TranslationMap = {
     detail: {
       tabsLabel: "자동화 세부 정보",
       newTitle: "새 예약 작업",
-      newSubtitle: "OpenClaw가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
+      newSubtitle: "OpenCrustacean가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
       back: "모든 자동화",
       settingsTab: "설정",
       historyTitle: "실행 기록",
@@ -5568,7 +5569,7 @@ export const ko: TranslationMap = {
       descriptionPlaceholder: "이 작업에 대한 선택적 컨텍스트",
       agentPlaceholder: "main 또는 ops",
       agentHelp: "입력하여 알려진 에이전트를 선택하거나 사용자 지정 값을 입력하세요.",
-      promptPlaceholder: "OpenClaw가 수행할 작업을 설명하세요...",
+      promptPlaceholder: "OpenCrustacean가 수행할 작업을 설명하세요...",
       repeat: "반복",
       repeatInterval: "간격",
       repeatOnce: "한 번",

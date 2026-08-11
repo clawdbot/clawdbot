@@ -367,7 +367,7 @@ export const id: TranslationMap = {
     genericSubtitle: "Terjadi kesalahan saat memuat panel ini.",
     staleTitle: "Versi baru tersedia",
     staleSubtitle:
-      "OpenClaw telah diperbarui di latar belakang. Muat ulang untuk mendapatkan panel terbaru.",
+      "OpenCrustacean telah diperbarui di latar belakang. Muat ulang untuk mendapatkan panel terbaru.",
     reloading: "Memuat ulang…",
     retry: "Coba lagi",
     stylesFailed: "Gaya gagal dimuat, sehingga halaman mungkin tampak rusak.",
@@ -392,7 +392,7 @@ export const id: TranslationMap = {
       notGitInstall:
         "Bukan checkout git. Jalankan `openclaw update` dari CLI untuk pemasangan ulang global.",
       notOpenclawRoot:
-        "Jalankan pembaruan dari checkout OpenClaw atau gunakan jalur pemasangan ulang global CLI.",
+        "Jalankan pembaruan dari checkout OpenCrustacean atau gunakan jalur pemasangan ulang global CLI.",
       depsInstallFailed:
         "Pemasangan dependensi gagal. Perbaiki kesalahan pemasangan dan coba lagi.",
       buildFailed: "Build gagal. Perbaiki kesalahan build dan coba lagi.",
@@ -424,7 +424,7 @@ export const id: TranslationMap = {
     pairing: {
       button: "Pasangkan perangkat seluler",
       adminRequired: "Akses administrator diperlukan untuk membuat kode penyiapan.",
-      title: "OpenClaw seluler",
+      title: "OpenCrustacean seluler",
       subtitle: "Pindai kode QR ini di aplikasi seluler untuk menghubungkan ponsel baru.",
       noApp: "Belum punya aplikasinya?",
       getApps: "Dapatkan aplikasinya",
@@ -439,14 +439,14 @@ export const id: TranslationMap = {
       transportLimitedHint:
         "URL Gateway ini menggunakan ws:// tanpa enkripsi. Gunakan wss:// atau Tailscale Serve, lalu buat kode baru untuk akses penuh.",
       failed: "Tidak dapat membuat kode penyiapan.",
-      qrAlt: "Kode QR pemasangan OpenClaw seluler",
+      qrAlt: "Kode QR pemasangan OpenCrustacean seluler",
       qrUnavailable: "QR tidak tersedia. Salin kode penyiapan sebagai gantinya.",
       copySetupCode: "Salin kode penyiapan",
       newCode: "Kode baru",
       showSetupCode: "Tampilkan kode penyiapan",
       pending: "Permintaan perangkat yang menunggu peninjauan: {count}",
       review: "Tinjau",
-      waiting: "Aplikasi seluler resmi OpenClaw terhubung otomatis setelah dipindai.",
+      waiting: "Aplikasi seluler resmi OpenCrustacean terhubung otomatis setelah dipindai.",
       help: "Bantuan pemasangan",
       manageDevices: "Kelola perangkat",
     },
@@ -591,11 +591,11 @@ export const id: TranslationMap = {
     ownerSession: "Sesi",
     ownerWorkboard: "Workboard",
     title: "Worktree Terkelola",
-    subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenClaw.",
+    subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenCrustacean.",
     cleanNow: "Bersihkan sekarang",
     cleanupTitle: "Pembersihan",
     cleanupSubtitle:
-      "OpenClaw secara berkala menghapus worktree lama untuk mengosongkan ruang disk. Atur seberapa agresif pembersihan dijalankan.",
+      "OpenCrustacean secara berkala menghapus worktree lama untuk mengosongkan ruang disk. Atur seberapa agresif pembersihan dijalankan.",
     cleanupMaxCount: "Worktree maksimum",
     cleanupMaxCountHelp:
       "Jumlah maksimum worktree terkelola yang dipertahankan di seluruh repositori. Worktree yang lebih lama dibuatkan snapshot dan dihapus terlebih dahulu. Atur ke 0 untuk menonaktifkan batas jumlah.",
@@ -646,7 +646,8 @@ export const id: TranslationMap = {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Penyedia worker cloud: {provider}",
     cloudRequiresWorktree: "Worker cloud memerlukan worktree terkelola",
-    cloudRequiresOpenClawRuntime: "Worker cloud memerlukan runtime OpenClaw; {runtime} dipilih.",
+    cloudRequiresOpenCrustaceanRuntime:
+      "Worker cloud memerlukan runtime OpenCrustacean; {runtime} dipilih.",
     cloudSecureContextRequired:
       "Worker cloud memerlukan konteks browser yang aman agar pemulihan dapat melindungi tugas Anda.",
     cloudStartFailed: "Sesi dibuat secara lokal, tetapi proses memulai cloud gagal: {error}",
@@ -1453,7 +1454,7 @@ export const id: TranslationMap = {
       title: "Notifikasi push",
       nativeTitle: "Notifications",
       hint: "Terima notifikasi push browser dari gateway Anda.",
-      nativeHint: "Notifikasi ditampilkan secara native oleh aplikasi OpenClaw di Mac ini.",
+      nativeHint: "Notifikasi ditampilkan secara native oleh aplikasi OpenCrustacean di Mac ini.",
       unavailableHint: "Tidak tersedia di browser ini.",
       unavailable: "Tidak tersedia",
       checking: "Memeriksa...",
@@ -1478,7 +1479,7 @@ export const id: TranslationMap = {
       blockedHint:
         "Notifikasi diblokir. Perbarui izin situs browser Anda untuk mengizinkan notifikasi.",
       nativeBlockedHint:
-        "Notifikasi dinonaktifkan untuk OpenClaw di macOS. Izinkan di System Settings > Notifications.",
+        "Notifikasi dinonaktifkan untuk OpenCrustacean di macOS. Izinkan di System Settings > Notifications.",
     },
     appearance: {
       intro: "Preferensi tema, obrolan, dan bilah sisi untuk klien Control UI ini.",
@@ -1619,7 +1620,7 @@ export const id: TranslationMap = {
     },
   },
   approvalPage: {
-    brandName: "OpenClaw",
+    brandName: "OpenCrustacean",
     eyebrow: "Operator approval",
     loadingTitle: "Loading approval",
     loadingDescription: "Checking the current approval state with the Gateway.",
@@ -1628,7 +1629,7 @@ export const id: TranslationMap = {
       "This approval could not be found or this device is not authorized to review it.",
     connectionErrorTitle: "Connection interrupted",
     connectionErrorDescription:
-      "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
+      "OpenCrustacean cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
     pending: "Waiting for your decision",
@@ -1805,7 +1806,7 @@ export const id: TranslationMap = {
     forward: "Maju",
     chat: "Chat",
     settings: "Pengaturan",
-    askOpenClaw: "Tanya OpenClaw",
+    askOpenCrustacean: "Tanya OpenCrustacean",
     settingsGroupConnections: "Koneksi",
     settingsGroupAgents: "Agen & Alat",
     settingsGroupSecurity: "Privasi & Keamanan",
@@ -1948,7 +1949,7 @@ export const id: TranslationMap = {
     nodes: "Node",
     chat: "Chat",
     dashboards: "Dashboard",
-    custodian: "OpenClaw",
+    custodian: "OpenCrustacean",
     config: "Konfigurasi",
     profile: "Profil",
     communications: "Komunikasi",
@@ -2015,14 +2016,14 @@ export const id: TranslationMap = {
   modelSetup: {
     heading: "Hubungkan AI Anda",
     intro:
-      "OpenClaw menggunakan kembali akses AI yang sudah Anda miliki — login CLI, kunci API, atau login penyedia.",
+      "OpenCrustacean menggunakan kembali akses AI yang sudah Anda miliki — login CLI, kunci API, atau login penyedia.",
     required: {
       title: "Tidak ada penyedia AI yang dikonfigurasi",
-      body: "OpenClaw tidak dapat menemukan penyedia dan model yang dikonfigurasi untuk agen ini. Tambahkan salah satu sebelum memulai percakapan.",
+      body: "OpenCrustacean tidak dapat menemukan penyedia dan model yang dikonfigurasi untuk agen ini. Tambahkan salah satu sebelum memulai percakapan.",
       action: "Konfigurasikan penyedia",
     },
     connectionFailure: {
-      title: "OpenClaw tidak dapat menggunakan AI yang Anda konfigurasi",
+      title: "OpenCrustacean tidak dapat menggunakan AI yang Anda konfigurasi",
       body: "Agen ini memiliki penyedia dan model yang dipilih, tetapi koneksi gagal. Periksa login penyedia atau kunci API, akses model, dan status layanan, lalu coba lagi.",
       action: "Periksa pengaturan penyedia",
     },
@@ -2038,7 +2039,7 @@ export const id: TranslationMap = {
     },
     access: {
       adminRequired: "Penyiapan model memerlukan akses operator.admin.",
-      gatewayTooOld: "Gateway menjalankan OpenClaw versi lama",
+      gatewayTooOld: "Gateway menjalankan OpenCrustacean versi lama",
     },
     candidates: {
       title: "Ditemukan di Gateway ini",
@@ -2086,12 +2087,13 @@ export const id: TranslationMap = {
       accessValuePlaceholder: "Tempelkan kunci API atau token",
       connect: "Hubungkan",
       connectAndVerify: "Sambungkan & verifikasi",
-      verifyHint: "OpenClaw memverifikasi balasan model yang nyata sebelum menandai koneksi siap.",
+      verifyHint:
+        "OpenCrustacean memverifikasi balasan model yang nyata sebelum menandai koneksi siap.",
       required: "Pilih penyedia dan masukkan kunci API atau token.",
     },
     success: {
       title: "AI Anda siap",
-      body: "OpenClaw menerima balasan nyata dari {modelRef}. Anda dapat mulai mengobrol sekarang.",
+      body: "OpenCrustacean menerima balasan nyata dari {modelRef}. Anda dapat mulai mengobrol sekarang.",
       activeModel: "Model aktif",
       latency: "Diverifikasi dalam {latencyMs} ms",
       detail: "{modelRef} · {latencyMs} ms",
@@ -2164,12 +2166,12 @@ export const id: TranslationMap = {
     confirmDescription: "Salin {count} file memori yang dipilih ke ruang kerja agen ini.",
     confirmReplace: "File tujuan yang ada akan dicadangkan dalam laporan migrasi sebelum diganti.",
     confirmBackup:
-      "OpenClaw membuat cadangan pra-impor yang terverifikasi sebelum menyalin memori.",
+      "OpenCrustacean membuat cadangan pra-impor yang terverifikasi sebelum menyalin memori.",
     confirmImport: "Impor memori",
     disconnected: "Hubungkan ke Gateway untuk mengimpor memori.",
     title: "Impor memori asisten",
     subtitle:
-      "Tinjau memori gabungan Codex dan memori otomatis Claude Code sebelum menyalinnya ke OpenClaw.",
+      "Tinjau memori gabungan Codex dan memori otomatis Claude Code sebelum menyalinnya ke OpenCrustacean.",
     agent: "Agen tujuan",
     replaceExisting: "Ganti hasil impor yang ada",
     replaceHint: "Pratinjau kembali konflik dan simpan cadangan item sebelum penggantian.",
@@ -2210,7 +2212,7 @@ export const id: TranslationMap = {
   onboarding: {
     memoryImport: {
       title: "Bawa memori asisten Anda",
-      body: "OpenClaw menemukan memori dari asisten coding lain. Impor memori tersebut ke ruang kerja agen Anda?",
+      body: "OpenCrustacean menemukan memori dari asisten coding lain. Impor memori tersebut ke ruang kerja agen Anda?",
       plannedCount: "{count} siap diimpor",
       alreadyImported: "Sudah diimpor: {count}",
       sourceUnavailable: "Jalur sumber tidak tersedia",
@@ -2226,34 +2228,34 @@ export const id: TranslationMap = {
       unknownError: "Permintaan gagal",
       doneTitle: "Impor memori selesai",
       doneBody:
-        "Berhasil memigrasikan {migrated}, melewati {skipped}. Anda dapat melanjutkan penyiapan OpenClaw.",
+        "Berhasil memigrasikan {migrated}, melewati {skipped}. Anda dapat melanjutkan penyiapan OpenCrustacean.",
     },
   },
   custodian: {
-    title: "OpenClaw",
+    title: "OpenCrustacean",
     subtitle: "Panduan penyiapan sistem Anda",
     subtitleCaretaker: "Pengaturan dan perawatan sistem.",
     exitSetup: "Keluar dari pengaturan",
     newAgent: "Agen baru",
     hatchDraft: "Bangun, teman!",
-    placeholder: "Kirim pesan ke OpenClaw…",
+    placeholder: "Kirim pesan ke OpenCrustacean…",
     sensitivePlaceholder: "Masukkan nilai sensitif…",
     sensitiveReply: "Balasan sensitif terkirim",
     send: "Kirim",
-    thinking: "OpenClaw sedang berpikir",
+    thinking: "OpenCrustacean sedang berpikir",
     earlier: "Sebelumnya",
-    requestFailed: "OpenClaw tidak dapat membalas. Coba lagi.",
+    requestFailed: "OpenCrustacean tidak dapat membalas. Coba lagi.",
     connectionChanged: "Koneksi Gateway berubah. Coba lagi untuk melanjutkan pengaturan ini.",
     sessionRestarted:
-      "{error} OpenClaw memulai sesi baru; pesan sebelumnya tetap ada sebagai konteks.",
-    unsupportedGateway: "Perbarui Gateway untuk melanjutkan pengaturan dengan OpenClaw.",
+      "{error} OpenCrustacean memulai sesi baru; pesan sebelumnya tetap ada sebagai konteks.",
+    unsupportedGateway: "Perbarui Gateway untuk melanjutkan pengaturan dengan OpenCrustacean.",
     panel: {
-      title: "OpenClaw",
-      toggle: "Tanya OpenClaw",
-      close: "Tutup Ask OpenClaw",
-      resize: "Ubah ukuran Ask OpenClaw",
-      dockBottom: "Tambatkan Ask OpenClaw di bawah",
-      dockRight: "Tambatkan Ask OpenClaw di kanan",
+      title: "OpenCrustacean",
+      toggle: "Tanya OpenCrustacean",
+      close: "Tutup Ask OpenCrustacean",
+      resize: "Ubah ukuran Ask OpenCrustacean",
+      dockBottom: "Tambatkan Ask OpenCrustacean di bawah",
+      dockRight: "Tambatkan Ask OpenCrustacean di kanan",
     },
     history: {
       button: "Riwayat",
@@ -2261,7 +2263,7 @@ export const id: TranslationMap = {
       description: "Apa yang berubah pada sistem ini, terbaru dahulu.",
       loading: "Memuat perubahan terbaru…",
       empty: "Belum ada perubahan yang tercatat.",
-      requestFailed: "OpenClaw tidak dapat memuat riwayat perubahan.",
+      requestFailed: "OpenCrustacean tidak dapat memuat riwayat perubahan.",
       loadMore: "Muat lebih banyak",
       loadingMore: "Memuat lebih banyak…",
       changedPaths: "Path yang berubah ({count})",
@@ -2284,9 +2286,9 @@ export const id: TranslationMap = {
       channelDegraded: "{channel} menurun — tanyakan apa yang terjadi",
       channelFallback: "Sebuah saluran",
       dismiss: "Tutup pembaruan ini",
-      channelSetupTitle: "Jangkau OpenClaw di luar aplikasi ini",
+      channelSetupTitle: "Jangkau OpenCrustacean di luar aplikasi ini",
       channelSetupBody:
-        "Aplikasi web sudah berfungsi. Tambahkan saluran hanya jika Anda ingin mengirim pesan ke OpenClaw dari layanan lain.",
+        "Aplikasi web sudah berfungsi. Tambahkan saluran hanya jika Anda ingin mengirim pesan ke OpenCrustacean dari layanan lain.",
       channelSetupAction: "Siapkan saluran",
       channelSetupDismiss: "Tetap gunakan aplikasi web",
     },
@@ -2322,7 +2324,7 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
   },
   mcpPage: {
-    intro: "Hubungkan dan kelola server MCP yang menyediakan tools untuk OpenClaw.",
+    intro: "Hubungkan dan kelola server MCP yang menyediakan tools untuk OpenCrustacean.",
     connectorsLink: "Temukan konektor sekali klik di halaman Plugins.",
     servers: "Server",
     oauth: "OAuth",
@@ -2380,7 +2382,7 @@ export const id: TranslationMap = {
     },
   },
   memoryPage: {
-    intro: "Pilih cara OpenClaw menyimpan, mencari, dan memelihara memori agen.",
+    intro: "Pilih cara OpenCrustacean menyimpan, mencari, dan memelihara memori agen.",
     tablistLabel: "Bagian memori",
     tabs: {
       overview: "Ikhtisar",
@@ -2475,7 +2477,7 @@ export const id: TranslationMap = {
       description:
         "Tepat satu plugin memori memiliki slot memori. Memilih engine akan mengaktifkannya dan menonaktifkan yang lain.",
       rowTitle: "Engine memori",
-      openClawMemory: "OpenClaw Memory",
+      openClawMemory: "OpenCrustacean Memory",
       off: "Nonaktif",
       unavailable: "Tidak tersedia",
       autoHint: "Tidak ada engine yang dipatok di config, jadi slot kembali ke pemilik defaultnya.",
@@ -2494,7 +2496,7 @@ export const id: TranslationMap = {
       rowTitle: "Backend pengambilan",
       builtin: "Bawaan",
       qmd: "QMD",
-      builtinHint: "File memory diindeks dan dicari oleh OpenClaw sendiri.",
+      builtinHint: "File memory diindeks dan dicari oleh OpenCrustacean sendiri.",
       qmdHint: "Pengambilan didelegasikan ke QMD. Pengaturannya muncul di bawah.",
     },
     addons: {
@@ -2687,7 +2689,7 @@ export const id: TranslationMap = {
       notes: "Simpan catatan ke Markdown, Obsidian, Notion, atau Bear.",
     },
     noInstalledTitle: "Tidak ada plugin opsional yang terinstal",
-    noInstalledBody: "Temukan plugin unggulan atau cari ClawHub untuk memperluas OpenClaw.",
+    noInstalledBody: "Temukan plugin unggulan atau cari ClawHub untuk memperluas OpenCrustacean.",
     noInstalledMatchTitle: "Tidak ada plugin terinstal yang cocok",
     noMatchBody: "Coba pencarian lain.",
     filterAll: "Semua",
@@ -2722,7 +2724,7 @@ export const id: TranslationMap = {
     detailPluginId: "ID Plugin",
     offlineTitle: "Gateway offline",
     offlineBody: "Hubungkan untuk menelusuri plugin yang terinstal dan direkomendasikan.",
-    optionalCapability: "Kapabilitas OpenClaw opsional.",
+    optionalCapability: "Kapabilitas OpenCrustacean opsional.",
     enabled: "Diaktifkan",
     disabled: "Dinonaktifkan",
     available: "Tersedia",
@@ -2799,7 +2801,7 @@ export const id: TranslationMap = {
     },
   },
   aboutPage: {
-    productName: "OpenClaw",
+    productName: "OpenCrustacean",
     tagline: "Asisten AI pribadi Anda, berjalan di perangkat Anda sendiri.",
     waveHello: "Lambaikan tangan untuk menyapa Clawd",
     linksLabel: "Komunitas dan sumber daya",
@@ -2809,7 +2811,7 @@ export const id: TranslationMap = {
     linkDiscord: "Discord",
     linkX: "X (Twitter)",
     linkChangelog: "Catatan perubahan",
-    license: "© 2026 OpenClaw Foundation — Lisensi MIT.",
+    license: "© 2026 OpenCrustacean Foundation — Lisensi MIT.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Identitas yang disematkan saat artefak browser ini dibuat.",
     artifactDetails: "Detail build Control UI",
@@ -2827,7 +2829,7 @@ export const id: TranslationMap = {
       "Dilaporkan oleh koneksi Gateway aktif; terpisah dari build Control UI ini.",
   },
   appsPage: {
-    heroTitle: "Bawa OpenClaw ke mana saja",
+    heroTitle: "Bawa OpenCrustacean ke mana saja",
     heroTagline:
       "Aplikasi pendamping untuk ponsel, jam tangan, desktop, dan browser Anda — ditambah plugin untuk memperluas kemampuan agen Anda.",
     sectionMobile: "Di ponsel Anda",
@@ -2851,11 +2853,11 @@ export const id: TranslationMap = {
     cards: {
       ios: {
         title: "iPhone",
-        desc: "Mengobrol, berbicara, menyetujui tindakan, dan berbagi ke OpenClaw dari iOS.",
+        desc: "Mengobrol, berbicara, menyetujui tindakan, dan berbagi ke OpenCrustacean dari iOS.",
       },
       android: {
         title: "Android",
-        desc: "Ponsel Android Anda sebagai node OpenClaw penuh — chat, kamera, dan Canvas.",
+        desc: "Ponsel Android Anda sebagai node OpenCrustacean penuh — chat, kamera, dan Canvas.",
       },
       appleWatch: {
         title: "Apple Watch",
@@ -2863,7 +2865,7 @@ export const id: TranslationMap = {
       },
       wearOs: {
         title: "Wear OS",
-        desc: "Pendamping Android memperluas OpenClaw ke jam tangan Anda.",
+        desc: "Pendamping Android memperluas OpenCrustacean ke jam tangan Anda.",
       },
       macos: {
         title: "macOS",
@@ -2871,7 +2873,7 @@ export const id: TranslationMap = {
       },
       windows: {
         title: "Windows",
-        desc: "Companion Windows menghubungkan PC Anda sebagai node OpenClaw.",
+        desc: "Companion Windows menghubungkan PC Anda sebagai node OpenCrustacean.",
       },
       linux: {
         title: "Linux",
@@ -2879,11 +2881,11 @@ export const id: TranslationMap = {
       },
       chrome: {
         title: "Ekstensi Chrome",
-        desc: "Biarkan OpenClaw mengendalikan Chrome Anda yang sudah ada — tab, halaman, dan formulir.",
+        desc: "Biarkan OpenCrustacean mengendalikan Chrome Anda yang sudah ada — tab, halaman, dan formulir.",
       },
       plugins: {
         title: "Plugin & ClawHub",
-        desc: "Perluas OpenClaw dengan channel, alat, dan Skills dari komunitas.",
+        desc: "Perluas OpenCrustacean dengan channel, alat, dan Skills dari komunitas.",
       },
     },
   },
@@ -3091,7 +3093,7 @@ export const id: TranslationMap = {
     selfLearning: {
       pitchTitle: "Aktifkan pembelajaran mandiri",
       pitchBody:
-        "OpenClaw meninjau koreksi dan proses penting yang telah diselesaikan, lalu menyusun draf proposal skill untuk papan ini. Fitur ini menggunakan token latar belakang tambahan dan draf akan muncul sebagai proposal tertunda.",
+        "OpenCrustacean meninjau koreksi dan proses penting yang telah diselesaikan, lalu menyusun draf proposal skill untuk papan ini. Fitur ini menggunakan token latar belakang tambahan dan draf akan muncul sebagai proposal tertunda.",
       enable: "Aktifkan pembelajaran mandiri",
       enabling: "Mengaktifkan…",
       updateError: "Tidak dapat memperbarui pengaturan pembelajaran mandiri.",
@@ -4001,7 +4003,7 @@ export const id: TranslationMap = {
       heading: "Hubungkan AI Anda",
       signedInNoModels:
         "Anda sudah masuk, tetapi akun ini tidak menampilkan model yang dapat digunakan. Pilih penyedia atau akun lain untuk melanjutkan.",
-      notConfigured: "Pilih penyedia dan verifikasi model yang akan digunakan OpenClaw.",
+      notConfigured: "Pilih penyedia dan verifikasi model yang akan digunakan OpenCrustacean.",
       noModels: "Tidak ada model tersedia",
       modelRequired: "Model diperlukan",
       chooseProvider: "Pilih penyedia lain",
@@ -4429,7 +4431,7 @@ export const id: TranslationMap = {
         stepDevUi:
           "Jika menggunakan pnpm ui:dev, bangun ulang atau mulai ulang UI dev terhadap checkout saat ini.",
         stepRestart:
-          "Mulai ulang Gateway setelah memperbarui OpenClaw agar menyajikan protokol saat ini.",
+          "Mulai ulang Gateway setelah memperbarui OpenCrustacean agar menyajikan protokol saat ini.",
       },
       network: {
         title: "Tidak dapat terhubung",
@@ -4651,7 +4653,7 @@ export const id: TranslationMap = {
       remoteViewOnly: "Sesi ini berada di node yang dipasangkan dan hanya dapat dilihat.",
       unsupportedViewOnly: "Sumber sesi eksternal ini hanya dapat dilihat.",
       sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
+      openInOpenCrustacean: "Open in OpenCrustacean",
       openInTerminal: "Open in terminal",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
@@ -4706,7 +4708,7 @@ export const id: TranslationMap = {
     followUpModeOverriding: "Menimpa default server ({mode})",
     followUpModeReset: "Setel ulang ke default server",
     catalogOpenTarget: "Buka sesi eksternal di",
-    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetViewer: "OpenCrustacean viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Dinonaktifkan selama penyiapan",
     commandPaletteTitle: "Cari atau lompat ke… (⌘K)",
@@ -4731,7 +4733,7 @@ export const id: TranslationMap = {
       titleOne: "1 konflik cloud workspace",
       titleMany: "{count} konflik cloud workspace",
       description:
-        "OpenClaw menyimpan versi lokal Anda dan menerapkan perubahan cloud lainnya. Periksa hasil yang di-stage atau ambil versinya untuk jalur yang bermasalah.",
+        "OpenCrustacean menyimpan versi lokal Anda dan menerapkan perubahan cloud lainnya. Periksa hasil yang di-stage atau ambil versinya untuk jalur yang bermasalah.",
       morePaths: "+{count} jalur lagi",
       stagedResult: "Hasil cloud yang di-stage",
       copyStagedResult: "Salin ref hasil yang di-stage",
@@ -4742,7 +4744,7 @@ export const id: TranslationMap = {
       commandHelp:
         "Jalankan ini di Bash atau zsh (Git Bash di Windows). Jika inspect mengatakan jalur tidak ada, cloud menghapusnya; verifikasi dan hapus jalur lokal secara manual. Jika checkout melaporkan konflik file/direktori, pindahkan atau hapus jalur lokal yang menghalangi, lalu coba lagi. Jika ref yang di-stage hilang, pemberitahuan sudah usang; jangan ubah jalur lokal.",
       commandsUnavailable:
-        "Nama file ini mengandung karakter kontrol terminal, sehingga OpenClaw tidak akan membuat perintah shell yang dapat disalin untuknya. Periksa ref yang di-stage secara langsung dan masukkan jalur secara manual dengan hati-hati.",
+        "Nama file ini mengandung karakter kontrol terminal, sehingga OpenCrustacean tidak akan membuat perintah shell yang dapat disalin untuknya. Periksa ref yang di-stage secara langsung dan masukkan jalur secara manual dengan hati-hati.",
       dismiss: "Tutup pemberitahuan konflik workspace",
       eventSender: "Cloud workspace",
       eventTitleOne: "Hasil cloud diterapkan dengan 1 konflik",
@@ -5243,7 +5245,7 @@ export const id: TranslationMap = {
       checking: "Memeriksa...",
     },
     voice: {
-      asking: "Menanyakan OpenClaw...",
+      asking: "Menanyakan OpenCrustacean...",
       connecting: "Menghubungkan input suara...",
       listening: "Mendengarkan...",
     },
@@ -5463,7 +5465,7 @@ export const id: TranslationMap = {
       shownOf: "{shown} dari {total}",
       emptyTitle: "Belum ada tugas terjadwal",
       emptyHint:
-        "Jelaskan apa yang harus dilakukan OpenClaw dan kapan — ia berjalan sesuai jadwal.",
+        "Jelaskan apa yang harus dilakukan OpenCrustacean dan kapan — ia berjalan sesuai jadwal.",
       noMatching: "Tidak ada tugas yang cocok dengan filter saat ini.",
       loadMore: "Muat lebih banyak",
       loading: "Memuat...",
@@ -5530,7 +5532,8 @@ export const id: TranslationMap = {
     detail: {
       tabsLabel: "Detail otomatisasi",
       newTitle: "Tugas terjadwal baru",
-      newSubtitle: "Jelaskan apa yang harus dilakukan OpenClaw, lalu pilih kapan ia berjalan.",
+      newSubtitle:
+        "Jelaskan apa yang harus dilakukan OpenCrustacean, lalu pilih kapan ia berjalan.",
       back: "Semua otomatisasi",
       settingsTab: "Pengaturan",
       historyTitle: "Riwayat proses",
@@ -5603,7 +5606,7 @@ export const id: TranslationMap = {
       descriptionPlaceholder: "Konteks opsional untuk tugas ini",
       agentPlaceholder: "main atau ops",
       agentHelp: "Mulai mengetik untuk memilih agen yang dikenal, atau masukkan agen kustom.",
-      promptPlaceholder: "Jelaskan apa yang harus dilakukan OpenClaw...",
+      promptPlaceholder: "Jelaskan apa yang harus dilakukan OpenCrustacean...",
       repeat: "Ulangi",
       repeatInterval: "Interval",
       repeatOnce: "Sekali",

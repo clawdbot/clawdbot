@@ -61,7 +61,7 @@ const ensureSupportedRuntimeVersion = () => {
       return;
     }
     process.stderr.write(
-      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
+      "opencrustacean: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
     process.exit(1);
@@ -71,7 +71,7 @@ const ensureSupportedRuntimeVersion = () => {
   }
 
   process.stderr.write(
-    `openclaw: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n` +
+    `opencrustacean: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n` +
       "If you use nvm, run:\n" +
       `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
@@ -124,7 +124,7 @@ const resolvePackagedCompileCacheDirectory = () => {
     : path.join(os.tmpdir(), "node-compile-cache");
   return path.join(
     baseDirectory,
-    "openclaw",
+    "opencrustacean",
     version,
     sanitizeCompileCachePathSegment(installMarker),
   );
@@ -238,7 +238,7 @@ const runRespawnedChild = (command, args, env) => {
   child.once("error", (error) => {
     detach();
     process.stderr.write(
-      `[openclaw] Failed to respawn launcher: ${
+      `[opencrustacean] Failed to respawn launcher: ${
         error instanceof Error ? (error.stack ?? error.message) : String(error)
       }\n`,
     );
@@ -391,7 +391,7 @@ const exists = async (specifier) => {
 };
 
 const buildMissingEntryErrorMessage = async () => {
-  const lines = ["openclaw: missing dist/entry.(m)js (build output)."];
+  const lines = ["opencrustacean: missing dist/entry.(m)js (build output)."];
   if (!(await exists("./src/entry.ts"))) {
     return lines.join("\n");
   }
@@ -403,7 +403,7 @@ const buildMissingEntryErrorMessage = async () => {
   lines.push(
     "For pinned GitHub installs, use `npm install -g github:openclaw/openclaw#<ref>` instead of a raw `/archive/<ref>.tar.gz` URL.",
   );
-  lines.push("For releases, use `npm install -g openclaw@latest`.");
+  lines.push("For releases, use `npm install -g opencrustacean@latest`.");
   return lines.join("\n");
 };
 
@@ -614,7 +614,9 @@ function tryOutputLauncherVersion(argv) {
     }
     const version = resolveLauncherVersion();
     const commit = resolveLauncherCommit();
-    process.stdout.write(commit ? `OpenClaw ${version} (${commit})\n` : `OpenClaw ${version}\n`);
+    process.stdout.write(
+      commit ? `OpenCrustacean ${version} (${commit})\n` : `OpenCrustacean ${version}\n`,
+    );
     return true;
   } catch {
     return false;

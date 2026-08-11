@@ -188,7 +188,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     },
   );
   const composerControls = props.composerControls ?? nothing;
-  const assistantName = props.assistantName || "OpenClaw";
+  const assistantName = props.assistantName || "OpenCrustacean";
   const inProgressLabel = props.waitingApproval
     ? t("chat.waitingForApproval")
     : submittedProgress?.sendState === "waiting-model"
