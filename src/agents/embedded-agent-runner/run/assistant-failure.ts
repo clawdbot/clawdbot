@@ -55,6 +55,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   terminalState: EmbeddedRunTerminalState;
   activeErrorContext: { provider: string; model: string };
   provider: string;
+  providerOwner: string | undefined;
   modelId: string;
   model: string;
   thinkLevel: ThinkLevel;
@@ -124,7 +125,9 @@ export async function handleEmbeddedAssistantFailure(input: {
   const rateLimitFailure = isRateLimitAssistantError(input.attemptAssistant);
   const billingFailure = isBillingAssistantError(input.attemptAssistant);
   const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
-  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant);
+  const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
+    provider: input.providerOwner,
+  });
   const assistantProviderStarted =
     Boolean(input.currentAttemptAssistant?.provider) ||
     input.terminalState.outcome.providerStarted === true;

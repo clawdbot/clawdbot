@@ -327,7 +327,7 @@ export default defineSingleProviderPluginEntry({
           : undefined;
       },
       classifyFailoverReason: ({ provider, errorMessage }) => {
-        if (!provider?.trim().toLowerCase().includes(PROVIDER_ID)) {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;
         }
         if (

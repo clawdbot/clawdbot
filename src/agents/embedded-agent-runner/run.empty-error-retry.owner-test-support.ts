@@ -55,6 +55,7 @@ function makeInput(
     terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
     activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
     provider: "openai",
+    providerOwner: undefined,
     modelId: "gpt-5.6-luna",
     model: "gpt-5.6-luna",
     thinkLevel: "off",

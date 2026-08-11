@@ -481,6 +481,7 @@ export async function runPreparedEmbeddedLoop(
         terminalState,
         activeErrorContext,
         provider,
+        providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin?.id,
         modelId,
         model: model.id,
         thinkLevel,

@@ -29,7 +29,7 @@ describe("OpenRouter failover classification", () => {
     expect(classifyOpenRouterFailure(errorMessage, "openrouter")).toBe(expected);
   });
 
-  it.each([undefined, "anthropic"])(
+  it.each([undefined, "anthropic", "custom-openrouter"])(
     "does not apply OpenRouter policy to provider %s",
     (providerId) => {
       expect(classifyOpenRouterFailure("Key limit exceeded", providerId)).toBeUndefined();
