@@ -14,7 +14,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
+import { findTaskByRunId } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
