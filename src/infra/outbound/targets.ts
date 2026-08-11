@@ -168,7 +168,7 @@ function resolveHeartbeatOwnerRoute(params: {
   return undefined;
 }
 
-/** Read-only owner-route probe for status/doctor surfaces. Group-shaped targets fail closed. */
+/** Read-only owner-route probe for status/doctor surfaces. Unproven targets fail closed. */
 export function hasResolvableHeartbeatOwnerRoute(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
@@ -367,7 +367,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   if (
     ownerMode &&
     !ownerTurnSource &&
-    isKnownGroupShapedHeartbeatTarget({
+    !isPositivelyDirectHeartbeatOwnerTarget({
       plugin,
       to: resolved.to,
       chatType: deliveryChatType,
@@ -425,7 +425,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   };
 }
 
-function isKnownGroupShapedHeartbeatTarget(params: {
+function isPositivelyDirectHeartbeatOwnerTarget(params: {
   plugin?: ChannelPlugin;
   to: string;
   chatType?: ChatType;
@@ -439,9 +439,9 @@ function isKnownGroupShapedHeartbeatTarget(params: {
     : params.to.trim();
   const chatType =
     normalizeChatType(params.chatType) ?? params.plugin?.messaging?.inferTargetChatType?.({ to });
-  // Sender allowlists identify people, so unknown shapes remain eligible.
-  // Explicit group syntax and per-channel classifiers close known group routes.
-  return chatType === "group" || chatType === "channel" || /^(?:group:|channel:|#)/i.test(to);
+  // Implicit delivery must prove a direct destination; unclassified shapes fail
+  // closed to no-route so operator alerts cannot escape into a shared chat.
+  return chatType === "direct" || /^(?:user:|@)/i.test(to);
 }
 
 function hasDeliverableHeartbeatTurnSource(turnSource: DeliveryContext | undefined): boolean {
@@ -489,6 +489,21 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
     allowBootstrap: true,
   });
   const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
+  if (
+    ownerRouteMustBeDirect &&
+    !isPositivelyDirectHeartbeatOwnerTarget({
+      plugin,
+      to: deliveryTo,
+      chatType: delivery.chatType,
+    })
+  ) {
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "no-route",
+      accountId: delivery.accountId,
+      lastChannel: delivery.lastChannel,
+      lastAccountId: delivery.lastAccountId,
+    });
+  }
   if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
     return delivery;
   }
@@ -528,7 +543,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   }
   if (
     ownerRouteMustBeDirect &&
-    isKnownGroupShapedHeartbeatTarget({
+    !isPositivelyDirectHeartbeatOwnerTarget({
       plugin,
       to: routeResolvedTarget?.to ?? deliveryTo,
     })
@@ -573,7 +588,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   }
   if (
     ownerRouteMustBeDirect &&
-    isKnownGroupShapedHeartbeatTarget({
+    !isPositivelyDirectHeartbeatOwnerTarget({
       plugin,
       to: route.to,
       chatType: normalizeChatType(route.chatType),

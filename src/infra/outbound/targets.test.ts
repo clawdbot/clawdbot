@@ -9,6 +9,7 @@ import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 import {
+  hasResolvableHeartbeatOwnerRoute,
   resolveHeartbeatDeliveryTarget as resolveCanonicalHeartbeatDeliveryTarget,
   resolveHeartbeatDeliveryTargetWithSessionRoute as resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute,
   resolveOutboundTarget,
@@ -1311,6 +1312,7 @@ describe("resolveSessionDeliveryTarget", () => {
             : { ok: false as const, error: new Error("target required") },
       },
       messaging: {
+        inferTargetChatType: () => "direct",
         targetResolver: {
           resolveTarget: async ({ normalized }) => ({
             to: normalized,
@@ -1345,6 +1347,7 @@ describe("resolveSessionDeliveryTarget", () => {
       id: "googlechat",
       label: "Google Chat",
       ownerId: "users/abc",
+      inferTargetChatType: ({ to }) => (to.startsWith("users/") ? "direct" : undefined),
     });
     setActivePluginRegistry(createTargetsTestRegistry([googlechat]));
 
@@ -1375,21 +1378,50 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
   });
 
-  it("delivers an unclassified WhatsApp E.164 allowlist entry to its owner route", async () => {
+  it("rejects an unclassified plugin owner id", async () => {
+    const external = createOwnerAllowlistTargetTestPlugin({
+      id: "external-channel",
+      label: "External",
+      ownerId: "opaque-owner-id",
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([external]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {
+        channels: { "external-channel": { allowFrom: ["opaque-owner-id"] } },
+      } as OpenClawConfig,
+      agentId: "main",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("delivers a classifier-proven WhatsApp E.164 owner route", async () => {
+    const inferTargetChatType = vi.fn(({ to }: { to: string }) =>
+      /^\+\d+$/.test(to) ? ("direct" as const) : undefined,
+    );
     const whatsapp = createOwnerAllowlistTargetTestPlugin({
       id: "whatsapp",
       label: "WhatsApp",
       ownerId: "+15555550166",
+      inferTargetChatType,
     });
     setActivePluginRegistry(createTargetsTestRegistry([whatsapp]));
+    const cfg = {
+      channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+    } as OpenClawConfig;
+
+    expect(hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg: { channels: { whatsapp: { allowFrom: ["+15555550166"] } } } as OpenClawConfig,
+      cfg,
       agentId: "main",
       heartbeat: { target: "owner" },
     });
 
     expect(resolved).toMatchObject({ channel: "whatsapp", to: "+15555550166" });
+    expect(inferTargetChatType).toHaveBeenCalledWith({ to: "+15555550166" });
   });
 
   it("uses an activation-aware external plugin when canonicalizing heartbeat routes", async () => {

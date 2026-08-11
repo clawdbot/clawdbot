@@ -350,6 +350,8 @@ export async function getStatusSummary(
       ...cfg.agents?.defaults?.heartbeat,
       ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
     };
+    // Owner status uses the runner's synchronous stage-1 decision.
+    // The shared probe requires positive direct proof before reporting ready.
     const hasDeliveryRoute =
       summary.target === "last"
         ? Boolean(route?.channel && route.to)

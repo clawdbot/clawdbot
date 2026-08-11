@@ -265,6 +265,12 @@ beforeAll(async () => {
           allowFrom,
         }),
     },
+    messaging: {
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeWhatsAppTargetForTest(to);
+        return target ? (isWhatsAppGroupJidForTest(target) ? "group" : "direct") : undefined;
+      },
+    },
   });
   whatsappPlugin.config = {
     ...whatsappPlugin.config,
@@ -716,6 +722,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     ).toEqual({
       channel: "whatsapp",
       to: "120363401234567890@g.us",
+      chatType: "group",
       accountId: undefined,
       lastChannel: "whatsapp",
       lastAccountId: undefined,
