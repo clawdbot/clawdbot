@@ -12,6 +12,7 @@ import { executionIdentity } from "../agents/agent-command-execution-identity.js
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
+import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -46,7 +47,7 @@ import {
   normalizeSessionDeliveryState,
 } from "../utils/delivery-context.shared.js";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
-import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
+import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -1163,7 +1164,7 @@ describe("agentCommand", () => {
       });
       mockConfig(home, store, { models: {} });
 
-      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+      const prepared = await prepareAgentCommandExecution(
         {
           message: "prepare only",
           sessionKey,
@@ -1210,7 +1211,7 @@ describe("agentCommand", () => {
       });
       cfg.messages = { visibleReplies: "automatic" };
 
-      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+      const prepared = await prepareAgentCommandExecution(
         {
           message: "child completed",
           sessionKey,

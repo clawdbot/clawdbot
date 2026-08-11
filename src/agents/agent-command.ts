@@ -30,20 +30,12 @@ import {
   shouldPersistRestartRecoveryCleanup,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
-import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
-import {
-  emitIngressModelUsageDiagnostic,
-  ingressDiagnosticChannel,
-} from "./command/ingress-diagnostics.js";
-import { resolveAgentRunLifecycleEndLogLevel } from "./command/lifecycle.js";
+import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
-import {
-  prepareAgentCommandExecution,
-  resolveExplicitAgentCommandSessionKey,
-} from "./command/prepare.js";
+import { prepareAgentCommandExecution } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
@@ -694,12 +686,3 @@ export async function agentCommandFromGatewayIngress(
 ) {
   return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
 }
-
-export const testing = {
-  resolveAgentRuntimeConfig,
-  prepareAgentCommandExecution,
-  resolveExplicitAgentCommandSessionKey,
-  resolveAgentRunLifecycleEndLogLevel,
-  ingressDiagnosticChannel,
-  emitIngressModelUsageDiagnostic,
-};
