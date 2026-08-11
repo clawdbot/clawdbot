@@ -2137,6 +2137,51 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:main");
   });
 
+  it("defers fixed-store ownership until a requester-owned sessionId resolves", async () => {
+    const sessionId = "research-session-id";
+    resetSessionStore({
+      "agent:research:incident": {
+        sessionId,
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    };
+    callGatewayMock.mockImplementation(async (requestValue: unknown) => {
+      const request = requestValue as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        if (request.params?.key) {
+          return {};
+        }
+        expect(request.params?.agentId).toBeUndefined();
+        return { agentId: "research", key: "agent:research:incident" };
+      }
+      return {};
+    });
+
+    const result = await createSessionStatusTool({
+      agentSessionKey: "agent:research:requester",
+      requesterAgentIdOverride: "research",
+      config: mockConfig as never,
+    }).execute("research-session-id", { sessionKey: sessionId });
+
+    expect(result.details).toMatchObject({ ok: true, sessionKey: "agent:research:incident" });
+  });
+
   it("resolves duplicate sessionId inputs deterministically", async () => {
     resetSessionStore({
       "agent:main:main": {

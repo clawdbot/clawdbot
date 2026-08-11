@@ -218,13 +218,15 @@ async function resolvePatchTarget(
     agentId: opts.requesterAgentIdOverride,
   }).sessionAgentId;
   const normalizedRawKey = rawKey.trim();
+  const isCurrentSession = normalizedRawKey === "current";
   const isConfiguredMainAlias =
     normalizedRawKey === "main" ||
     normalizedRawKey === "global" ||
     normalizedRawKey === context.mainKey ||
     normalizedRawKey === context.alias;
-  const inputAgentId =
-    shouldResolveSessionIdInput(rawKey) && !isConfiguredMainAlias
+  const inputAgentId = isCurrentSession
+    ? requesterAgentId
+    : shouldResolveSessionIdInput(rawKey) && !isConfiguredMainAlias
       ? undefined
       : resolveSessionToolTargetAgentId({
           cfg: context.cfg,

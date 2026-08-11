@@ -110,6 +110,44 @@ describe("sessions tool", () => {
     });
   });
 
+  it("resolves current under the requester instead of the persisted bare-row owner", async () => {
+    const resolveGateway = vi.fn(async (request: { params?: Record<string, unknown> }) => {
+      expect(request.params).toMatchObject({ agentId: "research", sessionId: "current" });
+      return { agentId: "research", key: "agent:research:main" };
+    });
+    sessionsResolutionTesting.setDepsForTest({ callGateway: resolveGateway as never });
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:research:main",
+      requesterAgentIdOverride: "research",
+      config: {
+        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("research-current", {
+      action: "patch",
+      sessionKey: "current",
+      label: "Research",
+    });
+
+    expect(resolveGateway).toHaveBeenCalledTimes(2);
+    expect(resolveGateway.mock.calls.map(([request]) => request.params?.agentId)).toEqual([
+      "research",
+      "research",
+    ]);
+    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:research:main",
+      label: "Research",
+    });
+  });
+
   it("cannot patch an incognito session through the cross-session tool", async () => {
     const sessionKey = "agent:main:dashboard:incognito-private";
     const callGateway = vi.fn();

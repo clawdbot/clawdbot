@@ -828,8 +828,32 @@ describe("sessions.abort agent scope", () => {
     ] as const) {
       const respond = await callSessions(method, params, { context, reqId: `req-${method}` });
 
-      expectRespondErrorMessage(respond, "session key agent does not match agentId");
+      expectRespondErrorMessage(respond, 'agent "work" does not match session key agent "main"');
     }
+  });
+
+  it("protects bare global when its fixed-store owner is inferred", async () => {
+    const context = createContext({
+      extra: {
+        getRuntimeConfig: () => ({
+          session: { scope: "global", store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+        }),
+      },
+    });
+
+    const respond = await callSessions(
+      "sessions.delete",
+      { key: "global" },
+      { context, reqId: "req-persisted-global-delete" },
+    );
+
+    expectRespondErrorMessage(respond, "Cannot delete the main session (global).");
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("rejects unknown explicit agentId before session mutations", async () => {

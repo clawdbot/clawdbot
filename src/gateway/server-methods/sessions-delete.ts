@@ -13,8 +13,13 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
@@ -72,10 +77,17 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+    const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
+    const protectedGlobalAgentId =
+      persistedStoreOwner.kind === "configured"
+        ? persistedStoreOwner.agentId
+        : compatibilityDefaultAgentId;
+    const explicitlySelectedGlobalAgentId =
+      normalizeOptionalString(p.agentId) ?? parseAgentSessionKey(key)?.agentId;
     const isSelectedNonDefaultGlobal =
       target.canonicalKey === "global" &&
-      requestedAgentId !== undefined &&
-      requestedAgentId !== compatibilityDefaultAgentId;
+      explicitlySelectedGlobalAgentId !== undefined &&
+      normalizeAgentId(explicitlySelectedGlobalAgentId) !== protectedGlobalAgentId;
     const isMainSession =
       target.canonicalKey !== "global" && isAgentMainSessionKey(cfg, target.canonicalKey);
     if ((target.canonicalKey === "global" || isMainSession) && !isSelectedNonDefaultGlobal) {

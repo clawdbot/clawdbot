@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
@@ -62,12 +63,15 @@ function broadcastSessionsChanged(
     : null;
   const cfg = context.getRuntimeConfig();
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionRow?.key);
+  const unscopedOwnerAgentId =
+    persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : compatibilityAgentId;
   let rowAgentId: string | undefined;
   if (sessionRow) {
     try {
       rowAgentId = resolveAgentIdFromSessionKey(
         sessionRow.key,
-        payload.agentId ?? compatibilityAgentId,
+        payload.agentId ?? unscopedOwnerAgentId,
       );
     } catch {
       rowAgentId = undefined;
@@ -75,14 +79,14 @@ function broadcastSessionsChanged(
   }
   const activeRunState =
     sessionRow &&
-    (sessionRow.key !== "global" || rowAgentId !== undefined || compatibilityAgentId !== undefined)
+    (sessionRow.key !== "global" || rowAgentId !== undefined || unscopedOwnerAgentId !== undefined)
       ? resolveVisibleActiveSessionRunState({
           context,
           requestedKey: payload.sessionKey ?? sessionRow.key,
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
           agentId: rowAgentId,
-          defaultAgentId: compatibilityAgentId,
+          defaultAgentId: unscopedOwnerAgentId,
         })
       : null;
   context.broadcastToConnIds(

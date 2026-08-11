@@ -139,6 +139,46 @@ describe("sessions.changed coalescing", () => {
     );
   });
 
+  it("projects active bare-global runs through the persisted fixed-store owner", () => {
+    const config = {
+      session: { scope: "global", store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const context = createContext(
+      new Set(["conn-1"]),
+      config,
+      new Map([
+        [
+          "ops-global-run",
+          {
+            agentId: "ops",
+            controller: new AbortController(),
+            expiresAtMs: 60_000,
+            sessionId: "global-id",
+            sessionKey: "global",
+            startedAtMs: 0,
+          } satisfies ChatAbortControllerEntry,
+        ],
+      ]),
+    );
+
+    emitSessionsChanged(context, { reason: "update", sessionKey: "global" });
+
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        activeRunIds: ["ops-global-run"],
+        hasActiveRun: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("advances the mutation fence without loading rows when nobody receives events", () => {
     const context = createContext(new Set());
     const initialVersion = readSessionsMutationVersion(context);

@@ -895,6 +895,53 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     );
   });
 
+  it("loads a persisted custom bare requester under its durable storage key", async () => {
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as never;
+    const getRequesterSessionActivity = vi.fn(() => ({
+      sessionId: "ops-incident-session",
+      isActive: true,
+    }));
+    const loadSessionEntry = vi.fn(() => ({
+      sessionId: "ops-incident-session",
+      updatedAt: 1,
+    }));
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      getRequesterSessionActivity,
+      loadSessionEntry,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "incident-42",
+      targetRequesterSessionKey: "incident-42",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-persisted-bare-requester",
+    });
+
+    expectDeliveryPath(result, "steered");
+    expect(loadSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops", sessionKey: "incident-42" }),
+    );
+    expect(getRequesterSessionActivity).toHaveBeenCalledWith("incident-42", "ops");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledWith(
+      "ops-incident-session",
+      "child done",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
   it("rejects a restored bare requester whose explicit agent conflicts with the store owner", async () => {
     const cfg = {
       session: { scope: "global", store: "/stores/shared.sqlite" },
