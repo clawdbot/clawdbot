@@ -41,7 +41,7 @@ import {
   extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantCommentaryText,
-  extractEmbeddedAssistantVisibleText,
+  extractAssistantVisibleText,
   createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
@@ -1051,7 +1051,7 @@ export function handleMessageUpdate(
   const shouldReadScopedPartialText =
     streamItemChanged || (shouldUsePhaseAwareBlockReply && (evtType === "text_end" || !chunk));
   let next = shouldReadScopedPartialText
-    ? coerceChatContentText(extractEmbeddedAssistantVisibleText(streamAssistant)).trim()
+    ? coerceChatContentText(extractAssistantVisibleText(streamAssistant)).trim()
     : "";
   let nextRawStreamText = next;
   let shouldPersistRawStreamText = false;
@@ -1330,9 +1330,7 @@ export function handleMessageEnd(
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = coerceChatContentText(extractEmbeddedAssistantText(assistantMessage));
-  const rawVisibleText = coerceChatContentText(
-    extractEmbeddedAssistantVisibleText(assistantMessage),
-  );
+  const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",

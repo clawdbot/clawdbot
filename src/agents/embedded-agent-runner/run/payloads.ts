@@ -53,7 +53,7 @@ import type {
 import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-types.js";
 import {
   extractAssistantThinking,
-  extractEmbeddedAssistantVisibleText,
+  extractAssistantVisibleText,
   sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
@@ -628,7 +628,7 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
   const fallbackAnswerText = assistantForPayload
-    ? extractEmbeddedAssistantVisibleText(assistantForPayload)
+    ? extractAssistantVisibleText(assistantForPayload)
     : "";
   const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
   const shouldSuppressRawErrorText = (text: string) => {

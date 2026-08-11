@@ -122,7 +122,7 @@ function extractEmbeddedAssistantTextForPhase(
 }
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
-export function extractEmbeddedAssistantVisibleText(msg: AssistantMessage): string {
+export function extractAssistantVisibleText(msg: AssistantMessage): string {
   const finalAnswerExtraction = extractEmbeddedAssistantTextForPhase(msg, "final_answer");
   if (finalAnswerExtraction.hadRequestedPhase) {
     return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
