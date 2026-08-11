@@ -4581,6 +4581,7 @@ export const en: TranslationMap = {
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
+      openParent: "Open parent session {title}",
       panels: "Panels",
       layout: "Layout",
       workspaceAria: "Workspace actions for {workspace}",

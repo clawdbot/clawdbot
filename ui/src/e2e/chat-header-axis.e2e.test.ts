@@ -11,7 +11,7 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   for (const colorScheme of ["light", "dark"] as const) {
-    it(`centers the project trail with the header actions in ${colorScheme} mode`, async () => {
+    it(`centers and navigates the project-parent-child trail in ${colorScheme} mode`, async () => {
       const context = await suite.newBrowserContext({
         colorScheme,
         locale: "en-US",
@@ -27,9 +27,17 @@ suite.define(() => {
         methodResponses: {
           "sessions.list": chatSessionListResponse([
             {
+              key: "agent:main:parent",
+              kind: "direct",
+              label: "Release prep",
+              spawnedCwd: "/repo/openclaw",
+              updatedAt: 1,
+            },
+            {
               key: "agent:main:session-a",
               kind: "direct",
-              label: "Session A",
+              label: "Implementation",
+              parentSessionKey: "agent:main:parent",
               spawnedCwd: "/repo/openclaw",
               updatedAt: 2,
             },
@@ -59,6 +67,7 @@ suite.define(() => {
             projectText: centerY(".chat-pane__workspace-chip span"),
             search: centerY(".chat-pane__palette-open svg"),
             separator: centerY(".chat-pane__crumb-sep"),
+            parentText: centerY(".chat-pane__parent-session-text"),
             sessionText: centerY(".chat-pane__session-title-text"),
           };
         });
@@ -66,6 +75,13 @@ suite.define(() => {
         for (const center of Object.values(centers)) {
           expect(Math.abs(center - centers.nav), JSON.stringify(centers)).toBeLessThanOrEqual(0.1);
         }
+        expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
+        const parent = header.locator(".chat-pane__parent-session");
+        expect((await parent.textContent())?.trim()).toBe("Release prep");
+        await parent.click();
+        await expect
+          .poll(() => header.locator(".chat-pane__session-title-text").textContent())
+          .toBe("Release prep");
       } finally {
         await suite.closeBrowserContext(context);
       }

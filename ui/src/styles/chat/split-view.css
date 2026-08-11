@@ -201,7 +201,8 @@ openclaw-chat-pane {
   font-size: 12px;
 }
 
-.chat-pane__session-title-button {
+.chat-pane__session-title-button,
+.chat-pane__parent-session {
   display: block;
   /* Hover padding is drawn outside the text box: the plain-span title (catalog
      and rename-disabled panes) has none, and without the pull-back the same
@@ -212,16 +213,36 @@ openclaw-chat-pane {
   border-radius: var(--radius-sm);
   background: transparent;
   text-align: left;
+}
+
+.chat-pane__session-title-button {
   cursor: text;
 }
 
 .chat-pane__session-title-button:hover,
-.chat-pane__session-title-button:focus-visible {
+.chat-pane__session-title-button:focus-visible,
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   outline: none;
 }
 
-.chat-pane__session-title-text {
+.chat-pane__parent-session {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__parent-session:hover,
+.chat-pane__parent-session:focus-visible {
+  color: var(--text);
+}
+
+.chat-pane__session-title-text,
+.chat-pane__parent-session-text {
   display: block;
   overflow: hidden;
   white-space: nowrap;
@@ -622,7 +643,7 @@ openclaw-chat-pane {
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__crumb-sep {
+  .chat-pane__workspace-menu + .chat-pane__crumb-sep {
     display: none;
   }
 

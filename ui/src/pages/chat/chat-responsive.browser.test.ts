@@ -1115,6 +1115,62 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the parent and child breadcrumb distinct in a narrow pane", async () => {
+    const page = await openBrowserPage(430, 180);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 320px;">
+            <div class="chat-pane__header">
+              <div class="chat-pane__crumbs">
+                <wa-dropdown class="chat-pane__workspace-menu">
+                  <button class="chat-pane__workspace-chip" type="button">
+                    ${iconSvg()}<span>openclaw</span>
+                  </button>
+                </wa-dropdown>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <button class="chat-pane__parent-session" type="button">
+                  <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
+                </button>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                  <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                </button>
+              </div>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const state = await page.locator(".chat-pane__header").evaluate((header) => {
+        const separators = [...header.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")];
+        const parent = header.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
+        const child = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+        return {
+          firstSeparator: getComputedStyle(separators[0]!).display,
+          secondSeparator: getComputedStyle(separators[1]!).display,
+          parentEllipses: parent.scrollWidth > parent.clientWidth,
+          childEllipses: child.scrollWidth > child.clientWidth,
+          overflow: (header as HTMLElement).scrollWidth - (header as HTMLElement).clientWidth,
+        };
+      });
+
+      expect(state).toEqual({
+        firstSeparator: "none",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps a Done status disjoint from a long compact session headline", async () => {
     const page = await openBrowserPage(320, 240);
     try {

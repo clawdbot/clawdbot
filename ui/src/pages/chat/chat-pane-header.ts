@@ -38,6 +38,7 @@ import type {
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
 import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
@@ -308,6 +309,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
+      parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches:
         this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
@@ -448,6 +450,9 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         if (row) {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
+      },
+      onOpenParentSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
       },
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
