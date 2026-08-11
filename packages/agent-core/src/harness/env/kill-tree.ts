@@ -298,9 +298,9 @@ function signalProcessTreeUnix(
     }
   }
 
-  pidsToSignal = pidsToSignal ?? getUnixProcessTreePids(pid);
+  const resolvedPidsToSignal = pidsToSignal ?? getUnixProcessTreePids(pid);
 
-  for (const p of pidsToSignal) {
+  for (const p of resolvedPidsToSignal) {
     try {
       if (
         signal === "SIGKILL" &&
@@ -314,7 +314,7 @@ function signalProcessTreeUnix(
     }
   }
 
-  return pidsToSignal;
+  return resolvedPidsToSignal;
 }
 
 function runTaskkill(args: string[], onExit?: (code: number | null) => void): Promise<void> {
