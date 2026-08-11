@@ -493,7 +493,15 @@ export function hasRelevantSetupCandidateConfig(
   if (!entries) {
     return false;
   }
-  const entryPolicyIds = new Set(Object.keys(entries).map(normalizePluginPolicyId));
+  const entryPolicyIds = new Set(
+    Object.keys(entries)
+      // An explicitly disabled entry is categorically excluded from setup candidacy
+      // (`collectConfiguredPluginEntryIds`), so it can never yield a probe-derived candidate a
+      // probe-skipping plan would miss — treating it as relevant hands ownership back to
+      // predictive tiers for channels the runtime pass decides by load order.
+      .filter((pluginId) => !isPluginEntryExplicitlyDisabled(cfg, pluginId))
+      .map(normalizePluginPolicyId),
+  );
   return registry.plugins.some(
     (record) =>
       (record.setup !== undefined || record.setupSource !== undefined) &&

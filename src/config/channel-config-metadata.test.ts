@@ -411,12 +411,15 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     label: "Modern Slack",
     uiHints: { mode: { label: "Owner Mode" } },
   });
+  // #120332 round 47 (P2): the closer claim also hints the OWNER'S sensitive key — the per-key
+  // merge must combine properties within the conflicting key, not replace the owner's object,
+  // or the label strips `sensitive: true` and Control UI raw-config diffs render the credential.
   const CLOSER_HINTS_ONLY_SLACK = createChannelPlugin({
     id: "operator-slack-labels",
     origin: "config",
     omitSchema: true,
     label: "Operator Slack",
-    uiHints: { mode: { label: "Operator Mode" } },
+    uiHints: { mode: { label: "Operator Mode" }, botToken: { label: "Operator Token" } },
   });
   for (const [order, plugins] of [
     ["closer claim first", [CLOSER_HINTS_ONLY_SLACK, HINTED_LABELED_REPLACEMENT_SLACK]],
@@ -448,7 +451,7 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       const owner = selectSlackSchemaOwner([...plugins]);
       expect(owner.configUiHints).toMatchObject({
         mode: { label: "Operator Mode" },
-        botToken: { sensitive: true },
+        botToken: { label: "Operator Token", sensitive: true },
       });
     });
   }

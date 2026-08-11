@@ -615,6 +615,32 @@ describe("exact plans survive unrelated plugin entries", () => {
     expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
   });
 
+  // #120332 round 47 (P1): an explicitly DISABLED entry is categorically excluded from setup
+  // candidacy before any probe resolves (the setup-candidate collector skips it), so a material
+  // entry with `enabled: false` on a setup-capable plugin can no more produce a probe-derived
+  // candidate than no entry at all — the plan stays exact.
+  it("keeps the plan exact beside a disabled entry for a setup-capable plugin", () => {
+    const SETUP_OFF_U: RegistryPlugins[number] = {
+      id: "acme-u-setoff",
+      origin: "global",
+      channels: ["acme-q"],
+      channelConfigs: { "acme-q": { schema: { type: "object" } } },
+      setup: {},
+    };
+    const registry = makeRegistry([PLAIN_C2, EDGE_A3, EDGE_B3, SETUP_OFF_U]);
+    const config: OpenClawConfig = {
+      channels: { "acme-x": { token: "x" } },
+      plugins: { entries: { "acme-u-setoff": { config: { extra: true }, enabled: false } } },
+    };
+    const env = makeIsolatedEnv();
+    applyPluginAutoEnable({ config, env, manifestRegistry: registry });
+
+    const owner = collectChannelSchemaMetadataWithOwnership(registry, config, env).find(
+      (entry) => entry.id === "acme-x",
+    );
+    expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
+  });
+
   // #120332 round 43 (P1): a runtime-disabled setup descriptor (`setup.requiresRuntime: false`)
   // is categorically skipped before any probe resolves, so a configured entry for such a plugin
   // can no more produce a probe-derived candidate than a setup-less one — the plan stays exact.

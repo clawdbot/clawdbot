@@ -71,8 +71,24 @@ function writeChannelPresentationField<Field extends ChannelPresentationField>(
 
 // Config UI hints merge per key instead of replacing the map: a closer losing claim's
 // presentation hints must not strip the schema owner's — dropping a `sensitive` hint would
-// render a credential in Control UI raw-config diffs. Rank still decides per-key precedence
-// (the winning map's keys overwrite), while non-conflicting keys survive from every claim.
+// render a credential in Control UI raw-config diffs. Rank decides precedence per PROPERTY
+// within a conflicting key too: the winner's properties overwrite, and every property only one
+// side supplies survives — a closer claim's label on the owner's key must not drop the owner's
+// `sensitive: true` beneath it.
+function mergeChannelConfigUiHintMaps(
+  preferred: NonNullable<ChannelMetadataRecord["configUiHints"]>,
+  other: ChannelMetadataRecord["configUiHints"],
+): NonNullable<ChannelMetadataRecord["configUiHints"]> {
+  const merged = { ...other, ...preferred };
+  for (const [key, preferredHint] of Object.entries(preferred)) {
+    const otherHint = other?.[key];
+    if (isRecord(preferredHint) && isRecord(otherHint)) {
+      merged[key] = { ...otherHint, ...preferredHint };
+    }
+  }
+  return merged;
+}
+
 function mergeChannelConfigUiHints(
   record: ChannelMetadataRecord,
   value: ChannelMetadataRecord["configUiHints"],
@@ -89,11 +105,11 @@ function mergeChannelConfigUiHints(
     rank < current.rank ||
     (rank === current.rank && (ownerTieBreak || current.pluginId === pluginId))
   ) {
-    record.configUiHints = { ...record.configUiHints, ...value };
+    record.configUiHints = mergeChannelConfigUiHintMaps(value, record.configUiHints);
     record.presentationRanks.configUiHints = { rank, pluginId };
     return;
   }
-  record.configUiHints = { ...value, ...record.configUiHints };
+  record.configUiHints = mergeChannelConfigUiHintMaps(record.configUiHints ?? {}, value);
 }
 
 /** One plugin's claim on a channel id, with the policy facts that decide ownership. */
