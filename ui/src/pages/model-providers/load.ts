@@ -19,7 +19,10 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
+  /** Global configured catalog used only by default-model selectors. */
   models: ModelCatalogEntry[] | null;
+  /** Selected agent's private configured catalog for provider-card readiness. */
+  agentModels: ModelCatalogEntry[] | null;
   catalogModels: ModelCatalogEntry[] | null;
   config: Record<string, unknown> | null;
   providerUsage: UsageSummary | null;
@@ -31,6 +34,7 @@ export type ModelProvidersData = {
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   models: null,
+  agentModels: null,
   catalogModels: null,
   config: null,
   providerUsage: null,
@@ -65,13 +69,19 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
-  const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
+  const globalModels = loadModels(client, opts).catch(() => null);
+  const [authStatus, models, agentModels, catalogModels, config, providerUsage, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
         (result) => ({ ok: true as const, result }),
         (error: unknown) => ({ ok: false as const, error }),
       ),
-      loadModels(client, opts).catch(() => null),
+      globalModels,
+      opts?.agentId
+        ? request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId: opts.agentId })
+            .then((result) => (Array.isArray(result?.models) ? result.models : null))
+            .catch(() => null)
+        : globalModels,
       request<{ models?: ModelCatalogEntry[] }>("models.list", {
         view: "all",
         includeProviderCapabilities: true,
@@ -95,6 +105,7 @@ export async function loadModelProvidersData(
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
+    agentModels,
     catalogModels,
     config,
     providerUsage,

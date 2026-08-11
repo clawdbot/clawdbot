@@ -611,6 +611,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const configBusy = this.configBusy();
     const cards = buildModelProviderCards({
       ...data,
+      models: data.agentModels,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,

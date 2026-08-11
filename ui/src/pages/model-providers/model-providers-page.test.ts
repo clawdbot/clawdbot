@@ -49,7 +49,7 @@ function createHarness(initialScopeId: string) {
     });
     return () => releaseAuthStatus?.();
   };
-  const request = vi.fn(async (method: string): Promise<unknown> => {
+  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     switch (method) {
       case "models.authStatus": {
         if (pendingAuthStatus) {
@@ -173,6 +173,72 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("shows private worker model readiness without replacing global model defaults", async () => {
+    const { context, request } = createHarness("writer");
+    const globalModels = [
+      { id: "main-default", name: "Main Default", provider: "openai", available: true },
+    ];
+    const workerModels = [
+      { id: "worker-private", name: "Worker Private", provider: "anthropic", available: true },
+    ];
+    request.mockImplementation(async (method, params) => {
+      switch (method) {
+        case "models.authStatus":
+          return {
+            ts: 1,
+            providers: [
+              {
+                provider: "anthropic",
+                displayName: "Anthropic",
+                status: "ok",
+                profiles: [{ profileId: "anthropic:writer", type: "api_key", status: "ok" }],
+              },
+            ],
+          };
+        case "chat.metadata":
+          return { models: workerModels };
+        case "models.list":
+          return {
+            models:
+              (params as { view?: string } | undefined)?.view === "configured"
+                ? globalModels
+                : [...globalModels, ...workerModels],
+          };
+        case "config.get":
+          return {
+            config: { agents: { defaults: { model: { primary: "openai/main-default" } } } },
+            hash: "hash",
+          };
+        case "usage.status":
+          return { updatedAt: 1, providers: [] };
+        case "sessions.usage":
+          return { aggregates: { byProvider: [] } };
+        default:
+          return {};
+      }
+    });
+    const page = appendPage(context);
+
+    await vi.waitFor(() => {
+      const workerCard = page.querySelector('[data-provider-id="anthropic"]');
+      expect(workerCard?.textContent).toContain("1 model");
+      expect(workerCard?.textContent).toContain("Ready");
+    });
+
+    const primaryModel = page.querySelector<HTMLSelectElement>(".model-providers__defaults select");
+    expect([...primaryModel!.options].map((option) => option.value)).toContain(
+      "openai/main-default",
+    );
+    expect([...primaryModel!.options].map((option) => option.value)).not.toContain(
+      "anthropic/worker-private",
+    );
+    expect(request).toHaveBeenCalledWith(
+      "chat.metadata",
+      { agentId: "writer" },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
   it("links the page subtitle to the model providers guide", async () => {
     const { context } = createHarness("main");
     const page = appendPage(context);
