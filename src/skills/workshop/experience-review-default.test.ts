@@ -21,7 +21,7 @@ describe("default skill experience review cancellation", () => {
   it("cancels existing work and consumes the stopped run terminal event", async () => {
     const sessionKey = "agent:main:stopped-default-review";
     const reservation = agentEndCancellation.reserve(sessionKey, ["stopped-run"]);
-    agentEndCancellation.reconcile(reservation, ["stopped-run"]);
+    agentEndCancellation.reconcile(reservation, ["stopped-run"], true);
 
     expect(schedulerMocks.cancel).toHaveBeenCalledWith(sessionKey);
 
@@ -39,7 +39,7 @@ describe("default skill experience review cancellation", () => {
   it("does not let another failed run consume the stopped run marker", async () => {
     const sessionKey = "agent:main:reordered-terminals";
     const reservation = agentEndCancellation.reserve(sessionKey, ["stopped-run"]);
-    agentEndCancellation.reconcile(reservation, ["stopped-run"]);
+    agentEndCancellation.reconcile(reservation, ["stopped-run"], true);
     const unrelated = {
       event: { success: false, messages: [] },
       ctx: { sessionKey, runId: "unrelated-run" },

@@ -164,7 +164,7 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
     aborted = embeddedAborted || aborted;
   }
   if (cancellationReservation) {
-    agentEndCancellation.reconcile(cancellationReservation, [...abortedRunIds]);
+    agentEndCancellation.reconcile(cancellationReservation, [...abortedRunIds], aborted);
   }
   return { active, aborted, abortedRunIds: [...abortedRunIds] };
 }

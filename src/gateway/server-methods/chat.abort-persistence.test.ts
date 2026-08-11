@@ -514,6 +514,7 @@ describe("chat abort transcript persistence", () => {
     expect(reconcileAgentEnd).toHaveBeenCalledWith(
       expect.objectContaining({ id: expect.any(Number) }),
       ["run-stop-1"],
+      true,
     );
 
     await terminalScheduling;
@@ -531,6 +532,7 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("releases a synchronous stopped terminal when the Gateway owner rejects abort", async () => {
+    reviewScheduler.cancel.mockClear();
     const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-rejected-");
     const terminalParams = {
       event: { success: false, messages: [] },
@@ -565,6 +567,7 @@ describe("chat abort transcript persistence", () => {
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expect(expectRecord(payload, "abort payload").runIds).toEqual([]);
+    expect(reviewScheduler.cancel).not.toHaveBeenCalled();
     expect(reviewScheduler.schedule).toHaveBeenCalledWith(terminalParams);
   });
 

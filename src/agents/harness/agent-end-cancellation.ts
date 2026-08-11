@@ -100,13 +100,14 @@ function createAgentEndCancellationState(limit = 32) {
     reconcile(
       reservation: AgentEndCancellationReservation,
       abortedRunIds: readonly string[],
+      didAbort: boolean,
     ): boolean {
       const attempt = reservation as ReservationState;
       if (attempt.reconciled) {
         return false;
       }
       attempt.reconciled = true;
-      const aborted = new Set(abortedRunIds);
+      const aborted = new Set(didAbort ? abortedRunIds : []);
       const runs = sessions.get(attempt.sessionKey);
       for (const runId of attempt.memberships) {
         const run = runs?.get(runId);
@@ -137,7 +138,7 @@ function createAgentEndCancellationState(limit = 32) {
       if (runs?.size === 0) {
         sessions.delete(attempt.sessionKey);
       }
-      return cancelPending?.(attempt.sessionKey) ?? false;
+      return didAbort ? (cancelPending?.(attempt.sessionKey) ?? false) : false;
     },
     async consumeStoppedTerminal(
       sessionKey: string | undefined,

@@ -410,7 +410,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const res = { aborted: additionalAborted || runIds.length > 0, runIds, unauthorized: false };
   if (cancellationReservation) {
-    agentEndCancellation.reconcile(cancellationReservation, runIds);
+    agentEndCancellation.reconcile(cancellationReservation, runIds, res.aborted);
   }
   if (res.aborted && snapshots.length > 0) {
     const abortedRunIds = new Set(runIds);
