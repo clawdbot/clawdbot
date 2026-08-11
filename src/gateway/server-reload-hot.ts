@@ -13,7 +13,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import {
