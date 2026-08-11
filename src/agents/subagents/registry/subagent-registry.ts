@@ -61,14 +61,7 @@ type SubagentRegistryBootstrapState = {
   ready?: boolean;
   restorer?: SubagentRegistryRestorer;
 };
-
-function getSubagentRegistryBootstrapState(): SubagentRegistryBootstrapState {
-  const owner = getSubagentRegistryBootstrapState as typeof getSubagentRegistryBootstrapState & {
-    state?: SubagentRegistryBootstrapState;
-  };
-  owner.state ??= {};
-  return owner.state;
-}
+const subagentRegistryBootstrapState: SubagentRegistryBootstrapState = {};
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
@@ -140,7 +133,9 @@ const subagentLifecycleController = new SubagentLifecycleController({
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   clearPendingLifecycleError,
-  countPendingDescendantRuns,
+  // Lifecycle wiring precedes publicApi construction; inject this read query
+  // as a late-bound callback instead of threading a partially built API object.
+  countPendingDescendantRuns: (rootSessionKey) => countPendingDescendantRuns(rootSessionKey),
   suppressAnnounceForSteerRestart: contextCleanup.suppressAnnounceForSteerRestart,
   resolveSubagentTask: findSubagentTaskForRun,
   shouldEmitEndedHookForRun: contextCleanup.shouldEmitEndedHookForRun,
@@ -593,7 +588,7 @@ export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
 export function initSubagentRegistry() {
-  const state = getSubagentRegistryBootstrapState();
+  const state = subagentRegistryBootstrapState;
   if (!state.ready || !state.restorer) {
     state.pending = true;
     return;
@@ -603,7 +598,7 @@ export function initSubagentRegistry() {
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
 
-const bootstrapState = getSubagentRegistryBootstrapState();
+const bootstrapState = subagentRegistryBootstrapState;
 bootstrapState.restorer = subagentRestorer;
 bootstrapState.ready = true;
 if (bootstrapState.pending) {
