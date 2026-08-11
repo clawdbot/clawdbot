@@ -138,9 +138,12 @@ vi.mock("../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: ({ sessionKey }: { sessionKey: string }) =>
-    statusSummaryMocks.listSessionEntries().find((candidate) => candidate.sessionKey === sessionKey)
-      ?.entry,
+  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+    const entry = statusSummaryMocks
+      .listSessionEntries()
+      .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
+    return entry ? { sessionKey, entry } : undefined;
+  },
   listSessionEntries: statusSummaryMocks.listSessionEntries,
   listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
 }));
