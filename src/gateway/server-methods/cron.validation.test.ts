@@ -134,6 +134,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
   const jobs = currentJobs ? (Array.isArray(currentJobs) ? currentJobs : [currentJobs]) : [];
   const committedAdds: Partial<CronJob>[] = [];
   const committedRuntimeAuthorities: Array<CronRuntimeAuthority | undefined> = [];
+  const committedRuntimeAuthorityCaptures: boolean[] = [];
   const committedUpdates: Array<{ id: string; patch: Partial<CronJob> }> = [];
   const update = vi.fn(async (id: string, patch: Partial<CronJob>) => {
     committedUpdates.push({ id, patch });
@@ -146,14 +147,20 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
   return {
     committedAdds,
     committedRuntimeAuthorities,
+    committedRuntimeAuthorityCaptures,
     committedUpdates,
     cron: {
       add: vi.fn(
         async (
           input: Partial<CronJob>,
-          opts?: { commitGuard?: () => CronRuntimeAuthority | undefined },
+          opts?: {
+            commitGuard?: () => void;
+            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+          },
         ) => {
-          committedRuntimeAuthorities.push(opts?.commitGuard?.());
+          opts?.commitGuard?.();
+          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
+          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
           committedAdds.push(input);
           return createCronJob({ ...input, id: "cron-1" });
         },
@@ -164,7 +171,10 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
           id: string,
           patch: Partial<CronJob>,
           precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
-          opts?: { commitGuard?: () => void },
+          opts?: {
+            commitGuard?: () => void;
+            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+          },
         ) => {
           const job = jobs.find((candidate) => candidate.id === id);
           if (!job) {
@@ -172,6 +182,8 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
           }
           await precondition(job, Date.now());
           opts?.commitGuard?.();
+          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
+          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
           return await update(id, patch);
         },
       ),
@@ -1352,8 +1364,28 @@ describe("cron method validation", () => {
     });
 
     expectCronSuccess(result.respond);
+    expect(context.committedRuntimeAuthorityCaptures).toEqual([true]);
     expect(context.committedRuntimeAuthorities).toEqual([runtimeAuthority]);
     revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("keeps delegated liveness validation separate from runtime authority capture", async () => {
+    const currentJob = createCronJob({
+      agentId: "ops",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+    });
+    const context = createCronContext(currentJob);
+    context.validateAgentRuntimeApprovalAuthority = () => true;
+
+    const result = await invokeCron(
+      "cron.update",
+      { jobId: currentJob.id, patch: { description: "routine edit" } },
+      { context, client: callerClient("ops") },
+    );
+
+    expectCronSuccess(result.respond);
+    expect(context.committedRuntimeAuthorityCaptures).toEqual([false]);
+    expect(context.committedRuntimeAuthorities).toEqual([undefined]);
   });
 
   it("rejects a mismatched cron.add runId without consuming the exact grant", async () => {
@@ -1516,6 +1548,7 @@ describe("cron method validation", () => {
     const first = await invokeCron("cron.update", params, { context, client });
     expectCronSuccess(first.respond);
     expect(context.committedUpdates).toHaveLength(1);
+    expect(context.committedRuntimeAuthorityCaptures).toEqual([true]);
 
     const replay = await invokeCron("cron.update", params, { context, client });
     expectResponseError(replay.respond, {

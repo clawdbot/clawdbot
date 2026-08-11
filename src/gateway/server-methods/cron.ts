@@ -82,7 +82,7 @@ import { assertValidParams } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
-function resolveCronCreatorAuthorityCommitGuard(
+function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
 ): (() => CronRuntimeAuthority | undefined) | undefined {
   const grant = callerScope?.cronCreatorAuthorityGrant;
@@ -101,31 +101,6 @@ function resolveAgentRuntimeAuthorityCommitGuard(
 ): (() => void) | undefined {
   return client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
     ? () => assertActiveAgentRuntimeAuthority(client, context)
-    : undefined;
-}
-
-function combineCronCommitGuards(
-  ...guards: Array<(() => void | CronRuntimeAuthority) | undefined>
-): (() => CronRuntimeAuthority | undefined) | undefined {
-  const active = guards.filter(
-    (guard): guard is () => void | CronRuntimeAuthority => guard !== undefined,
-  );
-  return active.length > 0
-    ? () => {
-        let runtimeAuthority: CronRuntimeAuthority | undefined;
-        for (const guard of active) {
-          const candidate = guard();
-          if (candidate !== undefined) {
-            // A mutation has one runtime-authority owner. Combining validation
-            // guards must not silently choose between competing authority caps.
-            if (runtimeAuthority !== undefined) {
-              throw new TypeError("multiple cron runtime authorities resolved at commit");
-            }
-            runtimeAuthority = candidate;
-          }
-        }
-        return runtimeAuthority;
-      }
     : undefined;
 }
 
@@ -748,17 +723,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
-    let cronCreatorAuthorityCommitGuard: (() => CronRuntimeAuthority | undefined) | undefined;
+    let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
-      cronCreatorAuthorityCommitGuard = resolveCronCreatorAuthorityCommitGuard(callerScope);
+      captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
     } catch (err) {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
     }
-    const commitGuard = combineCronCommitGuards(
-      resolveAgentRuntimeAuthorityCommitGuard(client, context),
-      cronCreatorAuthorityCommitGuard,
-    );
+    const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     try {
@@ -812,6 +784,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       result = await context.cron.add(jobCreate, {
         enabledExplicit,
         ...(commitGuard ? { commitGuard } : {}),
+        ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
         matchesExisting: (job) =>
           cronJobMatchesDeclarationScope({
             job,
@@ -906,17 +879,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
-    let cronCreatorAuthorityCommitGuard: (() => CronRuntimeAuthority | undefined) | undefined;
+    let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
-      cronCreatorAuthorityCommitGuard = resolveCronCreatorAuthorityCommitGuard(callerScope);
+      captureRuntimeAuthority = resolveCronCreatorAuthorityCapture(callerScope);
     } catch (err) {
       respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
       return;
     }
-    const commitGuard = combineCronCommitGuards(
-      resolveAgentRuntimeAuthorityCommitGuard(client, context),
-      cronCreatorAuthorityCommitGuard,
-    );
+    const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
     const jobId = resolveCronJobId(p);
     if (!jobId) {
       respond(
@@ -1029,9 +999,13 @@ export const cronHandlers: GatewayRequestHandlers = {
                 ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
                 : {}),
               ...(commitGuard ? { commitGuard } : {}),
+              ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
             }
-          : commitGuard
-            ? { commitGuard }
+          : commitGuard || captureRuntimeAuthority
+            ? {
+                ...(commitGuard ? { commitGuard } : {}),
+                ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
+              }
             : undefined,
       );
     } catch (err) {

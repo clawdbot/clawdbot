@@ -210,12 +210,22 @@ describe("scheduled tool policy provenance", () => {
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "run", toolsAllow: ["*"] },
       },
-      { commitGuard: () => baseAuthority },
+      { captureRuntimeAuthority: () => baseAuthority },
     );
     expect(job.runtimeAuthority).toEqual(baseAuthority);
 
     const routine = await update(state, job.id, { description: "preserve" });
     expect(routine.runtimeAuthority).toEqual(baseAuthority);
+
+    const commitGuard = vi.fn();
+    const validated = await update(
+      state,
+      job.id,
+      { description: "preserve after validation" },
+      { commitGuard },
+    );
+    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(validated.runtimeAuthority).toEqual(baseAuthority);
 
     const explicit = await update(state, job.id, {
       payload: { kind: "agentTurn", toolsAllow: ["read"] },
@@ -233,7 +243,7 @@ describe("scheduled tool policy provenance", () => {
       state,
       job.id,
       { description: "recaptured" },
-      { commitGuard: () => replacement },
+      { captureRuntimeAuthority: () => replacement },
     );
     expect(replaced.runtimeAuthority).toEqual(replacement);
     expect(replaced.runtimeAuthorityRecoveryRequired).toBeUndefined();
@@ -242,6 +252,15 @@ describe("scheduled tool policy provenance", () => {
     );
     expect(persistedReplacement?.runtimeAuthority).toEqual(replacement);
     expect(persistedReplacement?.runtimeAuthorityRecoveryRequired).toBeUndefined();
+
+    const freshEmptyCapture = await update(
+      state,
+      job.id,
+      { description: "recaptured without runtime authority" },
+      { captureRuntimeAuthority: () => undefined },
+    );
+    expect(freshEmptyCapture.runtimeAuthority).toBeUndefined();
+    expect(freshEmptyCapture.runtimeAuthorityRecoveryRequired).toBeUndefined();
 
     const triggeredTransport = await add(
       state,
@@ -254,7 +273,7 @@ describe("scheduled tool policy provenance", () => {
         trigger: { script: "return true" },
         payload: { kind: "command", argv: ["true"] },
       },
-      { commitGuard: () => baseAuthority },
+      { captureRuntimeAuthority: () => baseAuthority },
     );
     expect(triggeredTransport.runtimeAuthority).toEqual(baseAuthority);
     const nonToolRuntime = await update(state, triggeredTransport.id, { trigger: null });
@@ -271,6 +290,67 @@ describe("scheduled tool policy provenance", () => {
         .get(triggeredTransport.id),
     );
     expect(persistedAuthorityRow).toBeUndefined();
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("keeps declarative runtime authority across validation and replaces it only on capture", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const baseAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const input = {
+      declarationKey: "plugin:test:runtime-authority",
+      name: "declarative runtime authority",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["*"] },
+    };
+    const created = await add(state, input, {
+      captureRuntimeAuthority: () => baseAuthority,
+    });
+    expect(created.job.runtimeAuthority).toEqual(baseAuthority);
+
+    const commitGuard = vi.fn();
+    const validated = await add(
+      state,
+      {
+        ...input,
+        description: "validated",
+        payload: { kind: "agentTurn", message: "run" },
+      },
+      { commitGuard },
+    );
+    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(validated.job.runtimeAuthority).toEqual(baseAuthority);
+
+    const cleared = await add(state, {
+      ...input,
+      description: "new tool cap",
+      payload: { ...input.payload, toolsAllow: ["read"] },
+    });
+    expect(cleared.job.runtimeAuthority).toBeUndefined();
+    expect(cleared.job.runtimeAuthorityRecoveryRequired).toBe(true);
+
+    const replacement = { ...baseAuthority, payload: { apps: [{ id: "mail" }] } };
+    const recaptured = await add(
+      state,
+      {
+        ...input,
+        description: "recaptured",
+        payload: { ...input.payload, toolsAllow: ["read"] },
+      },
+      { captureRuntimeAuthority: () => replacement },
+    );
+    expect(recaptured.job.runtimeAuthority).toEqual(replacement);
+    expect(recaptured.job.runtimeAuthorityRecoveryRequired).toBeUndefined();
     if (state.timer) {
       clearTimeout(state.timer);
     }

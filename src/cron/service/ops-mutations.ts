@@ -267,6 +267,18 @@ function reconcileRuntimeAuthority(params: {
   }
 }
 
+function consumeRuntimeAuthorityMutationOptions(
+  opts: CronAddOptions | CronUpdateOptions | undefined,
+): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
+  // Validation-only guards must not look like an empty fresh capture: that
+  // would erase an existing runtime ceiling during an otherwise routine edit.
+  opts?.commitGuard?.();
+  return {
+    captured: opts?.captureRuntimeAuthority !== undefined,
+    runtimeAuthority: opts?.captureRuntimeAuthority?.(),
+  };
+}
+
 /** Adds or converges a declaration-keyed cron job inside one store lock and write transaction. */
 export async function add(
   state: CronServiceState,
@@ -330,11 +342,10 @@ export async function add(
         toolsAllowProvenance: opts?.toolsAllowProvenance,
         configuredChannels,
       });
-      const capturedRuntimeAuthority = opts?.commitGuard?.();
+      const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
       reconcileRuntimeAuthority({
         job: nextJob,
-        captured: opts?.commitGuard !== undefined,
-        runtimeAuthority: capturedRuntimeAuthority,
+        ...runtimeAuthorityMutation,
         explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
       });
       const includeEnabled = opts?.enabledExplicit === true;
@@ -367,11 +378,10 @@ export async function add(
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
-    const capturedRuntimeAuthority = opts?.commitGuard?.();
+    const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
       job,
-      captured: opts?.commitGuard !== undefined,
-      runtimeAuthority: capturedRuntimeAuthority,
+      ...runtimeAuthorityMutation,
       explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
     });
     state.store?.jobs.push(job);
@@ -484,11 +494,10 @@ export async function updateLoadedJob(params: {
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
-  const capturedRuntimeAuthority = opts?.commitGuard?.();
+  const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({
     job: nextJob,
-    captured: opts?.commitGuard !== undefined,
-    runtimeAuthority: capturedRuntimeAuthority,
+    ...runtimeAuthorityMutation,
     explicitlyMutatesToolsAllow:
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
   });

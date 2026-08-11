@@ -162,8 +162,11 @@ tool cap and continue non-app work, but cannot recover Codex app access
 automatically. Recreate or reauthorize only a job that needs app access, from a
 fresh authenticated owner turn. See
 [Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
-Explicitly replacing a job's `toolsAllow` cap also clears its captured app
-authority; the next run reports that app access requires reauthorization.
+Ordinary edits preserve captured app authority. Explicitly replacing a job's
+`toolsAllow` cap without a fresh authenticated Codex authority capture clears
+that authority; the next run reports that app access requires reauthorization.
+An update from a fresh authenticated owner turn can instead capture and store a
+new app ceiling for the updated job.
 
 ## Manage plugins from chat
 

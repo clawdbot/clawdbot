@@ -392,8 +392,10 @@ export type CronAddOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   /** Private proof from an authenticated agent-runtime caller. */
   toolsAllowProvenance?: CronToolsAllowProvenance;
-  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
-  commitGuard?: () => CronRuntimeAuthority | undefined;
+  /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
+  commitGuard?: () => void;
+  /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
+  captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
@@ -401,8 +403,10 @@ export type CronUpdateInput = CronJobPatch;
 export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   toolsAllowProvenance?: CronToolsAllowProvenance;
-  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
-  commitGuard?: () => CronRuntimeAuthority | undefined;
+  /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
+  commitGuard?: () => void;
+  /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
+  captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
 
 export type CronCommitGuardOptions = {
