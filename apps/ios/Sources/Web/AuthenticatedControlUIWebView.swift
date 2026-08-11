@@ -108,7 +108,7 @@ enum AuthenticatedControlUI {
     }
 
     private static func originString(for url: URL) -> String {
-        AuthenticatedControlUIOrigin(url: url)?.serialized ?? ""
+        GatewayTLSAuthority(url: url)?.serialized ?? ""
     }
 
     private static func jsStringLiteral(_ value: String) -> String {
@@ -132,56 +132,13 @@ enum AuthenticatedControlUI {
     }
 }
 
-struct AuthenticatedControlUIOrigin: Equatable {
-    let scheme: String
-    let host: String
-    let port: Int
-
-    init?(url: URL) {
-        guard let rawScheme = url.scheme,
-              let rawHost = url.host
-        else { return nil }
-        let scheme = rawScheme.lowercased()
-        let defaultPort: Int
-        switch scheme {
-        case "http": defaultPort = 80
-        case "https": defaultPort = 443
-        default: return nil
-        }
-        self.scheme = scheme
-        // Foundation may retain IPv6 URL brackets while WebKit protection spaces omit them.
-        // Keep one unbracketed form or pinned challenges can fall through to platform trust.
-        self.host = Self.canonicalHost(rawHost)
-        self.port = url.port ?? defaultPort
-    }
-
-    func matches(host: String, port: Int) -> Bool {
-        // URLProtectionSpace uses 0 for the protocol's default port. Normalize it here or
-        // a default-port Gateway challenge can miss the pinning path and use platform trust.
-        let challengePort = port == 0 ? (self.scheme == "https" ? 443 : 80) : port
-        return self.host == Self.canonicalHost(host) && self.port == challengePort
-    }
-
-    var serialized: String {
-        let hostPart = self.host.contains(":") ? "[\(self.host)]" : self.host
-        let defaultPort = self.scheme == "https" ? 443 : 80
-        return "\(self.scheme)://\(hostPart)" + (self.port == defaultPort ? "" : ":\(self.port)")
-    }
-
-    private static func canonicalHost(_ rawHost: String) -> String {
-        let host = rawHost.lowercased()
-        guard host.hasPrefix("["), host.hasSuffix("]") else { return host }
-        return String(host.dropFirst().dropLast())
-    }
-}
-
 @MainActor
 final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
-    private let expectedOrigin: AuthenticatedControlUIOrigin?
+    private let expectedOrigin: GatewayTLSAuthority?
     private let tls: GatewayTLSParams?
 
     init(url: URL, tls: GatewayTLSParams?) {
-        self.expectedOrigin = AuthenticatedControlUIOrigin(url: url)
+        self.expectedOrigin = GatewayTLSAuthority(url: url)
         self.tls = tls
     }
 
@@ -239,7 +196,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             return true
         }
         guard isMainFrame == true, let candidateURL else { return false }
-        return AuthenticatedControlUIOrigin(url: candidateURL) == self.expectedOrigin
+        return GatewayTLSAuthority(url: candidateURL) == self.expectedOrigin
     }
 
     func matchesExpectedAuthority(host: String, port: Int) -> Bool {

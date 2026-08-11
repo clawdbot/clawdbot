@@ -153,10 +153,17 @@ struct GatewayTLSPinningTests {
     @Test func `TLS authority includes normalized host and effective port`() throws {
         let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
         let route = try #require(GatewayTLSAuthority(url: url))
+        let explicitPort = try #require(GatewayTLSAuthority(
+            url: #require(URL(string: "wss://gateway.example.com:8443/path"))))
 
-        #expect(route == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(route.host == "gateway.example.com")
+        #expect(route.port == 443)
+        #expect(route.matches(host: "gateway.example.com", port: 0))
+        #expect(route.matches(host: "gateway.example.com", port: 443))
+        #expect(!route.matches(host: "redirect.example.com", port: 443))
+        #expect(!route.matches(host: "gateway.example.com", port: 8443))
+        #expect(!explicitPort.matches(host: "gateway.example.com", port: 0))
+        #expect(explicitPort.matches(host: "gateway.example.com", port: 8443))
     }
 
     @Test func `matching explicit pin overrides system trust`() {

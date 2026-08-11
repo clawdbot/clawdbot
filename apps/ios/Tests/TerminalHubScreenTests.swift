@@ -179,17 +179,17 @@ struct TerminalHubScreenTests {
         let alternatePortURL = try #require(URL(string: "https://gateway.example.com:8443/chat"))
         let alternateHostURL = try #require(URL(string: "https://replacement.example.com/chat"))
         let insecureURL = try #require(URL(string: "http://gateway.example.com/chat"))
-        let expected = try #require(AuthenticatedControlUIOrigin(url: controlURL))
+        let expected = try #require(GatewayTLSAuthority(url: controlURL))
 
-        #expect(expected == AuthenticatedControlUIOrigin(url: defaultPortURL))
-        #expect(expected != AuthenticatedControlUIOrigin(url: alternatePortURL))
-        #expect(expected != AuthenticatedControlUIOrigin(url: alternateHostURL))
-        #expect(expected != AuthenticatedControlUIOrigin(url: insecureURL))
+        #expect(expected == GatewayTLSAuthority(url: defaultPortURL))
+        #expect(expected != GatewayTLSAuthority(url: alternatePortURL))
+        #expect(expected != GatewayTLSAuthority(url: alternateHostURL))
+        #expect(expected != GatewayTLSAuthority(url: insecureURL))
     }
 
     @Test func `authenticated Control UI canonicalizes IPv6 authorities`() throws {
         let controlURL = try #require(URL(string: "https://[2001:db8::1]:8443/control"))
-        let expected = try #require(AuthenticatedControlUIOrigin(url: controlURL))
+        let expected = try #require(GatewayTLSAuthority(url: controlURL))
 
         #expect(expected.serialized == "https://[2001:db8::1]:8443")
         #expect(expected.matches(host: "2001:DB8::1", port: 8443))
