@@ -39,6 +39,48 @@ const TEST_ENTRYPOINTS = [
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function contractContents(rendered: PluginSdkApiBaselineRender): Record<string, string> {
+  return Object.fromEntries(rendered.contractFiles.map((file) => [file.fileName, file.content]));
+}
+
+function writeContractFiles(directory: string, rendered: PluginSdkApiBaselineRender): void {
+  fs.mkdirSync(directory, { recursive: true });
+  for (const file of rendered.contractFiles) {
+    fs.writeFileSync(path.join(directory, file.fileName), file.content);
+  }
+}
+
+function git(repoRoot: string, args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_EMAIL: "plugin-sdk-test@openclaw.invalid",
+      GIT_AUTHOR_NAME: "Plugin SDK Test",
+      GIT_COMMITTER_EMAIL: "plugin-sdk-test@openclaw.invalid",
+      GIT_COMMITTER_NAME: "Plugin SDK Test",
+    },
+  });
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  return result.stdout.trim();
+}
+
+function stablePatchId(repoRoot: string, revision: string): string {
+  const patch = spawnSync("git", ["show", "--pretty=format:", revision], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  expect(patch.status, patch.stderr).toBe(0);
+  const result = spawnSync("git", ["patch-id", "--stable"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    input: patch.stdout,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout.split(" ")[0] ?? "";
+}
+
 async function renderSourceFixture(
   files: Readonly<Record<string, string>>,
   entrypoints: readonly string[] = ["fixture"],
@@ -307,18 +349,19 @@ describe("Plugin SDK API baseline", () => {
     expect(findDeclaration("SessionCatalogEntrySummary")).toContain("entry: SessionEntry;");
     expect(rendered.json).not.toContain('"line":');
     expect(rendered.json).toContain('"source": {');
-    expect(rendered.jsonl).not.toContain('"sourceLine":');
-    expect(rendered.jsonl).not.toContain('"sourcePath":');
-    expect(rendered.jsonl).toContain('"contentHash":"');
-    expect(rendered.jsonl).not.toContain('"closureHash":"');
-    expect(rendered.jsonl).not.toContain("// declaration closure:");
+    const contract = rendered.contractFiles.map((file) => file.content).join("");
+    expect(contract).not.toContain('"sourceLine":');
+    expect(contract).not.toContain('"sourcePath":');
+    expect(contract).toContain('"contentHash":"');
+    expect(contract).not.toContain('"closureHash":"');
+    expect(contract).not.toContain("// declaration closure:");
   });
 
   it("renders snapshots independently of entrypoint discovery order", () => {
     const reverse = renderPluginSdkApiBaselineModules(rendered.baseline.modules.toReversed());
 
     expect(reverse.json).toBe(rendered.json);
-    expect(reverse.jsonl).toBe(rendered.jsonl);
+    expect(reverse.contractFiles).toEqual(rendered.contractFiles);
   });
 
   it("keeps unrelated module hashes byte-identical when one export changes", () => {
@@ -338,17 +381,19 @@ describe("Plugin SDK API baseline", () => {
           : moduleSurface,
       ),
     );
-    const before = rendered.jsonl.split("\n");
-    const after = changed.jsonl.split("\n");
+    const before = contractContents(rendered);
+    const after = contractContents(changed);
+    const changedFileNames = Object.keys(before).filter(
+      (fileName) => before[fileName] !== after[fileName],
+    );
 
-    expect(after[0]).not.toBe(before[0]);
-    expect(after.slice(1)).toEqual(before.slice(1));
+    expect(changedFileNames).toEqual([`${target?.entrypoint}.json`]);
   });
 
-  it("writes one line per module and merges disjoint module edits without conflicts", () => {
+  it("writes one file per module and keeps adjacent edits merge- and patch-stable", () => {
     const modules = rendered.baseline.modules;
     const left = modules[0];
-    const right = modules.at(-1);
+    const right = modules[1];
     expect(left?.exports.length).toBeGreaterThan(0);
     expect(right?.exports.length).toBeGreaterThan(0);
     expect(left?.entrypoint).not.toBe(right?.entrypoint);
@@ -373,71 +418,116 @@ describe("Plugin SDK API baseline", () => {
       );
     const ours = editModule(left, "left edit");
     const theirs = editModule(right, "right edit");
-    const lines = rendered.jsonl
-      .trimEnd()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const records = rendered.contractFiles.map((file) => JSON.parse(file.content));
 
-    expect(lines).toHaveLength(modules.length);
-    expect(lines.map((line) => line.importSpecifier)).toEqual(
+    expect(rendered.contractFiles).toHaveLength(modules.length);
+    expect(rendered.contractFiles.map((file) => file.fileName)).toEqual(
+      modules.map((moduleSurface) => `${moduleSurface.entrypoint}.json`),
+    );
+    expect(records.map((record) => record.importSpecifier)).toEqual(
       modules.map((moduleSurface) => moduleSurface.importSpecifier),
     );
-    expect(lines).toEqual(
+    expect(records).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
       ]),
     );
 
     const mergeDir = tempDirs.make("openclaw-plugin-sdk-api-merge-");
-    const basePath = path.join(mergeDir, "base.jsonl");
-    const oursPath = path.join(mergeDir, "ours.jsonl");
-    const theirsPath = path.join(mergeDir, "theirs.jsonl");
-    fs.writeFileSync(basePath, rendered.jsonl);
-    fs.writeFileSync(oursPath, ours.jsonl);
-    fs.writeFileSync(theirsPath, theirs.jsonl);
+    const contractDirectory = path.join(mergeDir, "plugin-sdk-api-baseline");
+    git(mergeDir, ["init", "-q", "--initial-branch=main"]);
+    writeContractFiles(contractDirectory, rendered);
+    git(mergeDir, ["add", "."]);
+    git(mergeDir, ["commit", "-qm", "base"]);
+    const baseRevision = git(mergeDir, ["rev-parse", "HEAD"]);
 
-    const merge = spawnSync("git", ["merge-file", "--stdout", oursPath, basePath, theirsPath], {
-      encoding: "utf8",
-    });
+    git(mergeDir, ["switch", "-qc", "feature"]);
+    fs.writeFileSync(
+      path.join(contractDirectory, `${left?.entrypoint}.json`),
+      contractContents(ours)[`${left?.entrypoint}.json`] ?? "",
+    );
+    git(mergeDir, ["add", "."]);
+    git(mergeDir, ["commit", "-qm", "feature"]);
+    const featureRevision = git(mergeDir, ["rev-parse", "HEAD"]);
+    const featurePatchId = stablePatchId(mergeDir, featureRevision);
 
-    expect(merge.status, merge.stderr).toBe(0);
-    expect(merge.stdout).toContain(ours.jsonl.trimEnd().split("\n")[0]);
-    expect(merge.stdout).toContain(theirs.jsonl.trimEnd().split("\n").at(-1));
+    git(mergeDir, ["switch", "-qc", "main-update", baseRevision]);
+    fs.writeFileSync(
+      path.join(contractDirectory, `${right?.entrypoint}.json`),
+      contractContents(theirs)[`${right?.entrypoint}.json`] ?? "",
+    );
+    git(mergeDir, ["add", "."]);
+    git(mergeDir, ["commit", "-qm", "main update"]);
+
+    git(mergeDir, ["switch", "-qc", "merge-check", featureRevision]);
+    git(mergeDir, ["merge", "-q", "--no-edit", "main-update"]);
+    git(mergeDir, ["switch", "-qc", "rebase-check", featureRevision]);
+    git(mergeDir, ["rebase", "main-update"]);
+
+    expect(stablePatchId(mergeDir, "HEAD")).toBe(featurePatchId);
+    expect(fs.readFileSync(path.join(contractDirectory, `${left?.entrypoint}.json`), "utf8")).toBe(
+      contractContents(ours)[`${left?.entrypoint}.json`],
+    );
+    expect(fs.readFileSync(path.join(contractDirectory, `${right?.entrypoint}.json`), "utf8")).toBe(
+      contractContents(theirs)[`${right?.entrypoint}.json`],
+    );
   });
 
-  it("renders byte-identical JSONL deterministically", async () => {
+  it("renders byte-identical contract files deterministically", async () => {
     const firstRender = await renderPrivateDeclarationFixture();
     const secondRender = await renderPrivateDeclarationFixture();
 
-    expect(secondRender.jsonl).toBe(firstRender.jsonl);
+    expect(secondRender.contractFiles).toEqual(firstRender.contractFiles);
   });
 
-  it("fails checks on contract drift and passes after write", async () => {
+  it("checks and repairs modified, missing, and stale contract records", async () => {
     const outputDir = tempDirs.make("openclaw-plugin-sdk-api-output-");
-    const contractPath = path.join(outputDir, "plugin-sdk-api-baseline.jsonl");
+    const contractDirectory = path.join(outputDir, "plugin-sdk-api-baseline");
     const jsonPath = path.join(outputDir, "plugin-sdk-api-baseline.json");
-    fs.writeFileSync(contractPath, "stale\n");
     const options = {
-      contractPath,
+      contractDirectory,
       jsonPath,
       rendered,
     } as const;
+    await writeRenderedPluginSdkApiBaselineArtifacts(options);
+    const [modified, missing] = rendered.contractFiles;
+    if (!modified || !missing) {
+      throw new Error("Expected at least two rendered contract files");
+    }
+    fs.writeFileSync(path.join(contractDirectory, modified.fileName), "modified\n");
+    fs.unlinkSync(path.join(contractDirectory, missing.fileName));
+    fs.writeFileSync(path.join(contractDirectory, "stale.json"), "{}\n");
 
     const drifted = await writeRenderedPluginSdkApiBaselineArtifacts({
       ...options,
       check: true,
     });
-    expect(drifted).toEqual(expect.objectContaining({ changed: true, wrote: false }));
+    expect(drifted).toEqual(
+      expect.objectContaining({
+        changed: true,
+        contractDiff: {
+          modified: [modified.fileName],
+          missing: [missing.fileName],
+          stale: ["stale.json"],
+        },
+        wrote: false,
+      }),
+    );
 
-    await writeRenderedPluginSdkApiBaselineArtifacts(options);
+    const repaired = await writeRenderedPluginSdkApiBaselineArtifacts(options);
+    expect(repaired.removedStaleCount).toBe(1);
 
     const current = await writeRenderedPluginSdkApiBaselineArtifacts({
       ...options,
       check: true,
     });
     expect(current).toEqual(expect.objectContaining({ changed: false, wrote: false }));
-    expect(fs.readFileSync(contractPath, "utf8")).toContain(
-      '"importSpecifier":"openclaw/plugin-sdk/agent-harness-runtime"',
+    expect(fs.existsSync(path.join(contractDirectory, "stale.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(contractDirectory, modified.fileName), "utf8")).toBe(
+      modified.content,
+    );
+    expect(fs.readFileSync(path.join(contractDirectory, missing.fileName), "utf8")).toBe(
+      missing.content,
     );
     expect(fs.readFileSync(jsonPath, "utf8")).toContain(
       '"generatedBy": "scripts/generate-plugin-sdk-api-baseline.ts"',
@@ -460,7 +550,7 @@ describe("Plugin SDK API baseline", () => {
       "moved/leaf.ts": "export type Leaf = { value: string };\n",
     });
 
-    expect(moved.jsonl).toBe(baseline.jsonl);
+    expect(moved.contractFiles).toEqual(baseline.contractFiles);
   });
 
   it("includes globals from side-effect imports in closure hashes", async () => {
@@ -495,7 +585,7 @@ describe("Plugin SDK API baseline", () => {
       "moved/mod.ts": "export const value = 1;\n",
     });
 
-    expect(moved.jsonl).toBe(baseline.jsonl);
+    expect(moved.contractFiles).toEqual(baseline.contractFiles);
   });
 
   it("ignores unreachable transitive declaration changes", async () => {
@@ -514,7 +604,7 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await render();
     const unrelated = await render("export type TelegramProbe = { ignored: boolean };\n");
 
-    expect(unrelated.jsonl).toBe(baseline.jsonl);
+    expect(unrelated.contractFiles).toEqual(baseline.contractFiles);
   });
 
   it("keeps cycle members complete across cached export walks", async () => {
@@ -558,7 +648,7 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await render();
     const unrelated = await render("export type Unrelated = { ignored: boolean };\n");
 
-    expect(unrelated.jsonl).toBe(baseline.jsonl);
+    expect(unrelated.contractFiles).toEqual(baseline.contractFiles);
   });
 
   it("captures transitive private declaration changes deterministically", async () => {
@@ -586,7 +676,7 @@ describe("Plugin SDK API baseline", () => {
       expect(changed.baseline.modules[0]?.exports[0]?.closureHash).not.toBe(
         declaration?.closureHash,
       );
-      expect(changed.jsonl).not.toBe(baseline.jsonl);
+      expect(changed.contractFiles).not.toEqual(baseline.contractFiles);
     }
   });
 });
