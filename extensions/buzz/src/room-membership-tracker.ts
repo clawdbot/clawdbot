@@ -405,8 +405,10 @@ export async function createBuzzRoomMembershipTracker(params: {
             onEvent: handleRoomEvent,
             signal: params.signal,
           });
-          if (roomOutcome === "timestamp-over-limit") {
+          if (roomOutcome !== "complete") {
             outcome = "incomplete";
+          }
+          if (roomOutcome === "timestamp-over-limit") {
             params.onHistoryError?.(
               new Error(
                 `Buzz room ${channelId} kept more than ${BUZZ_REPLAY_DISPATCH_MAX_PENDING} additional messages at one timestamp; older history was not recovered`,

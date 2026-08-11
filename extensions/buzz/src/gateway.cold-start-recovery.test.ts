@@ -120,8 +120,9 @@ vi.mock("./inbound.js", () => ({
 }));
 
 import { startBuzzGatewayAccount } from "./gateway.js";
-import { openBuzzRecoveryWatermarkStore } from "./recovery-watermark.js";
+import { openBuzzRecoveryWatermarkStore, resolveBuzzColdStartSince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
+import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
 
 const BUZZ_MESSAGE_KIND = 9;
@@ -338,7 +339,7 @@ afterEach(() => {
 describe("Buzz gateway cold-start recovery", () => {
   it("resumes from the persisted watermark after a process restart", async () => {
     await runGatewayProcess();
-    expect(roomSubscriptionSince()).toBe(START_SECONDS - LOOKBACK_SECONDS);
+    expect(roomSubscriptionSince()).toBe(START_SECONDS);
 
     openProcessBoundary();
     postRoomMessage("live-msg", START_SECONDS + 10);
@@ -355,13 +356,36 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(handled).toContain("outage-msg");
   });
 
-  it("recovers the retention window on the first start after an upgrade", async () => {
-    postRoomMessage("downtime-msg", START_SECONDS - 60);
-    postRoomMessage("beyond-retention-msg", START_SECONDS - LOOKBACK_SECONDS - 60);
-    await runGatewayProcess({ until: () => handled.includes("downtime-msg") });
-    expect(roomSubscriptionSince()).toBe(START_SECONDS - LOOKBACK_SECONDS);
-    expect(handled).toContain("downtime-msg");
-    expect(handled).not.toContain("beyond-retention-msg");
+  it("keeps an account with no cursor at the current time on its first start", async () => {
+    postRoomMessage("existing-room-history", START_SECONDS - 60);
+    await runGatewayProcess();
+    expect(roomSubscriptionSince()).toBe(START_SECONDS);
+    expect(handled).not.toContain("existing-room-history");
+    expect(await readWatermark()).toBe(START_SECONDS);
+  });
+
+  it("registers a cursor for every supported room", async () => {
+    const store = openBuzzRecoveryWatermarkStore();
+    const channelIds = Array.from(
+      { length: BUZZ_MAX_CONFIGURED_ROOMS },
+      (_value, index) => `room-${index}`,
+    );
+    const errors: Error[] = [];
+    const sinceByRoom = await resolveBuzzColdStartSince({
+      store,
+      accountId: ACCOUNT_ID,
+      channelIds,
+      nowSeconds: START_SECONDS,
+      lookbackSeconds: LOOKBACK_SECONDS,
+      onError: (error) => errors.push(error),
+    });
+
+    expect(errors).toEqual([]);
+    expect(sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
+    const lastChannelId = channelIds.at(-1) as string;
+    expect(await store?.lookup(`room:${ACCOUNT_ID}:${lastChannelId}`)).toEqual({
+      seconds: START_SECONDS,
+    });
   });
 
   it("keeps a room configured after the first start at the current time", async () => {
@@ -373,7 +397,7 @@ describe("Buzz gateway cold-start recovery", () => {
     await runGatewayProcess({ channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID] });
     expect(roomSubscriptionSince(SECOND_CHANNEL_ID)).toBe(nowSeconds());
     expect(handled).not.toContain("before-second-room-setup");
-    expect(roomSubscriptionSince(CHANNEL_ID)).toBe(nowSeconds() - LOOKBACK_SECONDS);
+    expect(roomSubscriptionSince(CHANNEL_ID)).toBe(START_SECONDS);
   });
 
   it("recovers a replay message still queued when the process stops", async () => {

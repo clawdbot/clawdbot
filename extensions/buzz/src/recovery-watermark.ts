@@ -1,16 +1,13 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getBuzzRuntime } from "./runtime.js";
+import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 
 const WATERMARK_NAMESPACE = "buzz.recovery-watermark";
-const WATERMARK_MAX_ENTRIES = 1_000;
+const WATERMARK_MAX_ENTRIES = BUZZ_MAX_CONFIGURED_ROOMS;
 
 export type BuzzRecoveryWatermark = { seconds: number };
 
 export type BuzzRecoveryWatermarkStore = PluginStateKeyedStore<BuzzRecoveryWatermark>;
-
-function accountStartKey(accountId: string): string {
-  return `account:${accountId}`;
-}
 
 function roomCursorKey(accountId: string, channelId: string): string {
   return `room:${accountId}:${channelId}`;
@@ -51,20 +48,15 @@ export async function resolveBuzzColdStartSince(params: {
     return sinceByRoom;
   }
   try {
-    const startedBefore = isUsableWatermark(await store.lookup(accountStartKey(accountId)));
-    if (!startedBefore) {
-      await store.register(accountStartKey(accountId), { seconds: nowSeconds });
-    }
     const floor = nowSeconds - lookbackSeconds;
     for (const channelId of channelIds) {
-      const persisted = await store.lookup(roomCursorKey(accountId, channelId));
+      const key = roomCursorKey(accountId, channelId);
+      const persisted = await store.lookup(key);
       if (isUsableWatermark(persisted)) {
         sinceByRoom.set(channelId, Math.min(Math.max(persisted.seconds, floor), nowSeconds));
         continue;
       }
-      const since = startedBefore ? nowSeconds : floor;
-      sinceByRoom.set(channelId, since);
-      await store.register(roomCursorKey(accountId, channelId), { seconds: since });
+      await store.register(key, { seconds: nowSeconds });
     }
   } catch (error) {
     params.onError?.(error instanceof Error ? error : new Error(String(error)));
