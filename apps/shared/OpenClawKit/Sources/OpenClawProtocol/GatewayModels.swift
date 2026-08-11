@@ -13868,18 +13868,22 @@ public struct ModelsListParams: Codable, Sendable {
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
     public let provideroutcomes: [[String: AnyCodable]]?
+    public let catalogmode: String?
 
     public init(
         models: [ModelChoice],
-        provideroutcomes: [[String: AnyCodable]]? = nil)
+        provideroutcomes: [[String: AnyCodable]]? = nil,
+        catalogmode: String? = nil)
     {
         self.models = models
         self.provideroutcomes = provideroutcomes
+        self.catalogmode = catalogmode
     }
 
     private enum CodingKeys: String, CodingKey {
         case models
         case provideroutcomes = "providerOutcomes"
+        case catalogmode = "catalogMode"
     }
 }
 

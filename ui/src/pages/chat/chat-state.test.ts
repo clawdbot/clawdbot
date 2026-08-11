@@ -1527,6 +1527,24 @@ describe("refreshChatMetadata", () => {
     } as unknown as ChatPageHost;
   }
 
+  it("clears replace-mode catalog state while disconnected", async () => {
+    const request = vi.fn();
+    const state = createMetadataState(request, {
+      chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
+      chatModelCatalogMode: "replace",
+      chatModelsLoading: true,
+      client: null,
+      connected: false,
+    });
+
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalogMode).toBeUndefined();
+    expect(state.chatModelsLoading).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:
       | ((value: {
