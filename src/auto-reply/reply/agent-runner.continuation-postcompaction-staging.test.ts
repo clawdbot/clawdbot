@@ -34,12 +34,15 @@ const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 const stagePostCompactionDelegateMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: {
     provider: string;
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&

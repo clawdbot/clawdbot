@@ -1,3 +1,16 @@
+/**
+ * Scenario: post-compaction delivery guards for accepted retries and queue hops.
+ *
+ * Covers:
+ * - finalize an already-accepted source-backed retry before charging another hop
+ * - dead-letter / deferred queue outcomes stay isolated from chain budget
+ * - artifact policy prepare/remove stays behind the accepted-child gate
+ *
+ * Stubs:
+ * - `delegate-artifacts` prepare/remove helpers (assert policy only)
+ * - `subagents/registry/subagent-registry-read` accepted-child lookup
+ * Real session-store + delivery-queue paths stay live under temp dirs.
+ */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

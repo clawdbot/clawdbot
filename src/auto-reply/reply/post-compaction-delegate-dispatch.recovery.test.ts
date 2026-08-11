@@ -1,3 +1,17 @@
+/**
+ * Scenario: post-compaction delegate recovery + one-way ownership.
+ *
+ * Covers:
+ * - recovery of accepted/replayed chain hops and source-less entries
+ * - batch dispatch vs single-entry delivery ownership stays one-way
+ * - restart-sentinel delivery may call the delivery owner, never dispatch
+ *
+ * Stubs: `subagents/registry/subagent-registry-read` for accepted-child
+ * lookup only. Ownership assertions are source inspection: delivery lives in
+ * `post-compaction-delegate-delivery.ts`; gateway restart sentinel imports that
+ * leaf via `../auto-reply/reply/post-compaction-delegate-delivery.js` and must
+ * not import the dispatch module.
+ */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -633,8 +647,12 @@ describe("post-compaction delegate dispatch extraction", () => {
 
     expect(dispatchSource).toContain('from "./post-compaction-delegate-delivery.js"');
     expect(deliverySource).not.toContain("post-compaction-delegate-dispatch");
-    expect(restartDeliverySource).toContain('from "./post-compaction-delegate-delivery.js"');
-    expect(restartDeliverySource).not.toContain('from "./post-compaction-delegate-dispatch.js"');
+    // Restart sentinel lives under gateway/, so its delivery import is absolute
+    // to the auto-reply reply leaf — not a same-directory `./` specifier.
+    expect(restartDeliverySource).toContain(
+      'from "../auto-reply/reply/post-compaction-delegate-delivery.js"',
+    );
+    expect(restartDeliverySource).not.toContain("post-compaction-delegate-dispatch");
     expect(
       combinedSource.match(/export async function deliverQueuedPostCompactionDelegate/g),
     ).toHaveLength(1);

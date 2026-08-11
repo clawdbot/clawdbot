@@ -1,8 +1,26 @@
+/**
+ * Scenario: continuation runtime packaging + announce-host boundary.
+ *
+ * Covers:
+ * - tsdown main-graph entry for `subagent-announce.continuation.runtime`
+ * - real coordinator/return-router exports (not a facade)
+ * - announce host stays a thin lazy-loader into the coordinator
+ *
+ * Stubs: none. This is source/export inspection only. After the
+ * `src/agents/*` → `src/agents/subagents/announce/*` move, the host lives at
+ * `subagents/announce/subagent-announce.ts` and lazy-imports the runtime via
+ * `../../subagent-announce.continuation.runtime.js`.
+ */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import tsdownConfig from "../../tsdown.config.ts";
 import * as continuationRuntime from "./subagent-announce.continuation.runtime.js";
+
+const ANNOUNCE_HOST_PATH = "src/agents/subagents/announce/subagent-announce.ts";
+const CONTINUATION_RUNTIME_PATH = "src/agents/subagent-announce.continuation.runtime.ts";
+const CONTINUATION_RUNTIME_LAZY_IMPORT =
+  'import("../../subagent-announce.continuation.runtime.js")';
 
 type TsdownConfigEntry = {
   entry?: Record<string, string> | string[];
@@ -23,7 +41,7 @@ function entriesOfMainGraph(): Record<string, string> {
 describe("subagent-announce continuation runtime entry", () => {
   it("registers the continuation runtime as a tsdown bundler entry", () => {
     expect(entriesOfMainGraph()["subagent-announce.continuation.runtime"]).toBe(
-      "src/agents/subagent-announce.continuation.runtime.ts",
+      CONTINUATION_RUNTIME_PATH,
     );
   });
 
@@ -33,8 +51,8 @@ describe("subagent-announce continuation runtime entry", () => {
   });
 
   it("keeps the upstream announce host bounded to coordinator calls", () => {
-    const source = readFileSync(resolve(process.cwd(), "src/agents/subagent-announce.ts"), "utf8");
-    expect(source).toContain('import("./subagent-announce.continuation.runtime.js")');
+    const source = readFileSync(resolve(process.cwd(), ANNOUNCE_HOST_PATH), "utf8");
+    expect(source).toContain(CONTINUATION_RUNTIME_LAZY_IMPORT);
     expect(source).toContain("coordinateSubagentContinuation");
     expect(source).toContain("routeSubagentContinuationReturn");
     expect(source).not.toContain("../auto-reply/continuation/delegate-dispatch.js");
@@ -42,10 +60,7 @@ describe("subagent-announce continuation runtime entry", () => {
   });
 
   it("is not a re-export facade", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "src/agents/subagent-announce.continuation.runtime.ts"),
-      "utf8",
-    );
+    const source = readFileSync(resolve(process.cwd(), CONTINUATION_RUNTIME_PATH), "utf8");
     expect(source).toContain("export async function coordinateSubagentContinuation");
     expect(source).toContain("./subagent-announce.continuation.accounting.js");
     expect(source).toContain("./subagent-announce.continuation-return.js");

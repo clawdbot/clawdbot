@@ -35,12 +35,15 @@ const compactState = vi.hoisted(() => ({
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./model-fallback.js", () => ({
+vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: {
     provider: string;
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+}));
+
+vi.mock("./model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&

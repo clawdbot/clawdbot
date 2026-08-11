@@ -277,10 +277,6 @@ vi.mock("../config/sessions/targets.js", () => ({
   resolveAllAgentSessionStoreTargetsSync: () => [{ storePath: "/tmp/sessions.json" }],
 }));
 
-vi.mock("../config/sessions/store-load.js", () => ({
-  loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-}));
-
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   updateSessionEntry: (
