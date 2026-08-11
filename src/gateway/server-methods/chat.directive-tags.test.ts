@@ -17,7 +17,8 @@ import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-prot
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
-  runWithCronCreatorAuthorityResolver,
+  runWithCronCreatorAuthorityCapabilityResolver,
+  type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -164,7 +165,10 @@ const mockState = vi.hoisted(() => ({
   runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
   runtimeAssistantTextsBeforeDelivery: [] as string[],
   cronAuthorityProbe: undefined as
-    | ((runId: string | undefined) => Promise<void> | void)
+    | ((
+        runId: string | undefined,
+        capability: CronCreatorAuthorityCapability | undefined,
+      ) => Promise<void> | void)
     | undefined,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
@@ -334,6 +338,7 @@ dispatchInboundMessageMock.mockImplementation(
       ) => void;
       replyOptions?: {
         runId?: string;
+        cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
@@ -359,7 +364,10 @@ dispatchInboundMessageMock.mockImplementation(
         params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
       mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
       mockState.lastMessageInjectionAttempted = params.replyOptions?.messageInjectionAttempted;
-      await mockState.cronAuthorityProbe?.(params.replyOptions?.runId);
+      await mockState.cronAuthorityProbe?.(
+        params.replyOptions?.runId,
+        params.replyOptions?.cronCreatorAuthorityCapability,
+      );
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -7265,10 +7273,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 });
 
-describe("chat.send operator UI client sender context", () => {
+describe("chat.send local operator client sender context", () => {
   it.each([
     [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web"],
     [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, "darwin"],
+    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin"],
   ] as const)(
     "binds lazy configured-MCP cron authority to an admitted local %s turn",
     async (clientId, mode, platform) => {
@@ -7276,13 +7285,27 @@ describe("chat.send operator UI client sender context", () => {
       const { send } = createChatRequestFixture();
       let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
       let resolvedGrant: { runId: string; token: string } | undefined;
-      mockState.cronAuthorityProbe = async (runId) => {
-        await runWithCronCreatorAuthorityResolver({
-          runId: runId ?? "",
-          resolve: async () => ({
+      mockState.cronAuthorityProbe = async (runId, capability) => {
+        await new Promise<void>((resolveTick) => {
+          setTimeout(resolveTick, 0);
+        });
+        const resolve = async () =>
+          ({
             tools: ["read", { name: "configured__lookup", pluginId: "bundle-mcp" }],
             provenance: { version: 1, source: "final-executable-surface" },
-          }),
+          }) as const;
+        runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId: "other-run",
+          resolve,
+          run: () => {
+            expect(bindActiveCronCreatorAuthorityResolver(runId)).toBeUndefined();
+          },
+        });
+        await runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId,
+          resolve,
           run: async () => {
             retainedResolver = bindActiveCronCreatorAuthorityResolver(runId);
             const snapshot = await retainedResolver!();
@@ -7320,9 +7343,10 @@ describe("chat.send operator UI client sender context", () => {
   it("denies otherwise-eligible internal chat.send re-entry, including Talk consults", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-internal-reentry-");
     let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId) => {
-      runWithCronCreatorAuthorityResolver({
-        runId: runId ?? "",
+    mockState.cronAuthorityProbe = async (runId, capability) => {
+      runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId,
         resolve: async () => ({
           tools: ["read", "configured__lookup"],
           provenance: { version: 1, source: "final-executable-surface" },
@@ -7383,6 +7407,11 @@ describe("chat.send operator UI client sender context", () => {
       requestParams: { systemInputProvenance: { kind: "external_user" } },
     },
     {
+      name: "explicit origin",
+      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
+      requestParams: { originatingChannel: "slack", originatingTo: "D123" },
+    },
+    {
       name: "delegated handoff",
       client: {
         internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
@@ -7412,9 +7441,10 @@ describe("chat.send operator UI client sender context", () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-cron-authority-negative-");
     mockState.sessionEntry = testCase.sessionEntry ?? {};
     let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId) => {
-      runWithCronCreatorAuthorityResolver({
-        runId: runId ?? "",
+    mockState.cronAuthorityProbe = async (runId, capability) => {
+      runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId,
         resolve: async () => ({
           tools: ["read"],
           provenance: { version: 1, source: "final-executable-surface" },

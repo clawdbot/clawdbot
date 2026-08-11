@@ -27,6 +27,7 @@ import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
@@ -83,7 +84,7 @@ type CronJobIdParams = { id?: string; jobId?: string };
 
 function resolveCronCreatorAuthorityCommitGuard(
   callerScope: CronCallerScope | undefined,
-): (() => void) | undefined {
+): (() => CronRuntimeAuthority | undefined) | undefined {
   const grant = callerScope?.cronCreatorAuthorityGrant;
   if (!grant) {
     return undefined;
@@ -735,7 +736,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
-    let cronCreatorAuthorityCommitGuard: (() => void) | undefined;
+    let cronCreatorAuthorityCommitGuard: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
       cronCreatorAuthorityCommitGuard = resolveCronCreatorAuthorityCommitGuard(callerScope);
     } catch (err) {
@@ -893,7 +894,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
-    let cronCreatorAuthorityCommitGuard: (() => void) | undefined;
+    let cronCreatorAuthorityCommitGuard: (() => CronRuntimeAuthority | undefined) | undefined;
     try {
       cronCreatorAuthorityCommitGuard = resolveCronCreatorAuthorityCommitGuard(callerScope);
     } catch (err) {

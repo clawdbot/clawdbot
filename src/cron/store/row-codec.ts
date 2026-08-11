@@ -7,6 +7,7 @@ import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
+import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type {
@@ -291,6 +292,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     jobJson.toolsAllowProvenance.source === "final-executable-surface"
       ? ({ version: 1, source: "final-executable-surface" } as const)
       : undefined;
+  const runtimeAuthority = normalizeCronRuntimeAuthority(jobJson.runtimeAuthority);
   if (!schedule || !payload) {
     return null;
   }
@@ -310,6 +312,10 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
       : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(toolsAllowProvenance ? { toolsAllowProvenance } : {}),
+    ...(runtimeAuthority ? { runtimeAuthority } : {}),
+    ...(jobJson.runtimeAuthorityRecoveryRequired === true
+      ? { runtimeAuthorityRecoveryRequired: true as const }
+      : {}),
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
     enabled: row.enabled !== 0,

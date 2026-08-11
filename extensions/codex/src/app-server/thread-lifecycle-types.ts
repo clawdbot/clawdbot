@@ -34,11 +34,13 @@ type CodexThreadFinalConfigPatchResult = {
 
 export type CodexPluginThreadConfigProvider = {
   enabled: boolean;
+  /** Rebuild before reuse so live policy can narrow or revoke stored authority. */
+  requiresCurrentPolicyCheck?: boolean;
   inputFingerprint?: string;
   enabledPluginConfigKeys?: readonly string[];
   recoverablePluginConfigKeys?: readonly string[];
   accountAppRecoveryEnabled?: boolean;
-  build: () => Promise<CodexPluginThreadConfig>;
+  build: (options?: { threadId?: string }) => Promise<CodexPluginThreadConfig>;
 };
 
 export type CodexStartOrResumeThreadParams = {

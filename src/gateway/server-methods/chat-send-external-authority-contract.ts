@@ -1,3 +1,4 @@
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -15,5 +16,5 @@ export type ChatSendExternalAuthorityAdmission = {
     isSystemGenerated: boolean;
     turnKind: "btw" | "main";
   }): Readonly<{ runId: string }> | undefined;
-  run<T>(authority: Readonly<{ runId: string }>, run: () => T, signal?: AbortSignal): T;
+  run<T>(capability: CronCreatorAuthorityCapability, run: () => T, signal?: AbortSignal): T;
 };

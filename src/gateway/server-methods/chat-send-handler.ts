@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
@@ -442,6 +443,9 @@ export async function handleChatSend(
               }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
+            const cronCreatorAuthorityCapability = cronCreatorAuthority
+              ? createCronCreatorAuthorityCapability(cronCreatorAuthority.runId)
+              : undefined;
             const dispatchInbound = () =>
               dispatchInboundMessageWithProjectedDispatcher({
                 ctx,
@@ -454,6 +458,7 @@ export async function handleChatSend(
                 },
                 replyOptions: {
                   runId: clientRunId,
+                  ...(cronCreatorAuthorityCapability ? { cronCreatorAuthorityCapability } : {}),
                   ...(isOperatorUiClient(clientInfo)
                     ? {
                         promptCacheKey: resolveWebchatPromptCacheKey({
@@ -567,9 +572,10 @@ export async function handleChatSend(
                   },
                 },
               });
-            const dispatchResult = await (cronCreatorAuthority && externalAuthorityAdmission
+            const dispatchResult = await (cronCreatorAuthorityCapability &&
+            externalAuthorityAdmission
               ? externalAuthorityAdmission.run(
-                  cronCreatorAuthority,
+                  cronCreatorAuthorityCapability,
                   dispatchInbound,
                   activeRunAbort.controller.signal,
                 )

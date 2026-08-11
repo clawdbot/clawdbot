@@ -1,8 +1,14 @@
+import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
 } from "../../agents/agent-scope.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+  shouldAdmitFreshChannelOwnerCronAuthority,
+} from "../../agents/cron-creator-authority-context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
@@ -446,45 +452,82 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       ? { ...sessionCtx.ReplyThreading, implicitCurrentMessage: "deny" as const }
       : undefined;
 
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    transcriptCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    queueAdmissionState,
-    isActive,
-    isRunActive: () => {
-      const latestSessionState = resolvePreparedSessionState();
-      const latestActiveSessionId =
-        resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
-        latestSessionState.sessionId;
-      return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
-    },
-    opts,
-    typing,
-    sessionEntry: preparedSessionState.sessionEntry,
-    sessionStore,
-    sessionKey,
-    runtimePolicySessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    toolProgressDetail:
-      normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
-      normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
-    isNewSession: params.isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-    resetTriggered: effectiveResetTriggered,
-    replyThreadingOverride,
-    replyOperation: providedReplyOperation,
+  const admitFreshChannelOwnerCronAuthority = shouldAdmitFreshChannelOwnerCronAuthority({
+    senderIsOwner: command.senderIsOwner,
+    messageProvider,
+    senderId: sessionCtx.SenderId,
+    isHeartbeat,
+    isRoomEvent,
+    inputProvenance,
+    spawnedBy: preparedSessionState.sessionEntry?.spawnedBy,
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
   });
+  const authorityRunId = admitFreshChannelOwnerCronAuthority
+    ? (opts?.runId ?? crypto.randomUUID())
+    : undefined;
+  const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
+  const createdCronCreatorAuthorityCapability =
+    !inheritedCronCreatorAuthorityCapability && authorityRunId
+      ? createCronCreatorAuthorityCapability(authorityRunId)
+      : undefined;
+  const cronCreatorAuthorityCapability =
+    inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
+  const execute = () =>
+    runReplyAgent({
+      commandBody: prefixedCommandBody,
+      transcriptCommandBody,
+      followupRun,
+      queueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      queueAdmissionState,
+      isActive,
+      isRunActive: () => {
+        const latestSessionState = resolvePreparedSessionState();
+        const latestActiveSessionId =
+          resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
+          latestSessionState.sessionId;
+        return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
+      },
+      opts:
+        authorityRunId || cronCreatorAuthorityCapability
+          ? {
+              ...opts,
+              ...(authorityRunId ? { runId: authorityRunId } : {}),
+              ...(cronCreatorAuthorityCapability ? { cronCreatorAuthorityCapability } : {}),
+            }
+          : opts,
+      typing,
+      sessionEntry: preparedSessionState.sessionEntry,
+      sessionStore,
+      sessionKey,
+      runtimePolicySessionKey,
+      storePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      toolProgressDetail:
+        normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+        normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
+      isNewSession: params.isNewSession,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+      resetTriggered: effectiveResetTriggered,
+      replyThreadingOverride,
+      replyOperation: providedReplyOperation,
+    });
+  // The scope surrounds the whole immediate turn, including provider fallbacks.
+  // If runReplyAgent queues this input, the scope settles before later drain/replay.
+  return createdCronCreatorAuthorityCapability
+    ? runWithCronCreatorAuthorityCapability(
+        createdCronCreatorAuthorityCapability,
+        execute,
+        opts?.abortSignal,
+      )
+    : execute();
 }

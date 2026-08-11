@@ -14,11 +14,13 @@ import {
   type CodexDynamicToolFunctionSpec,
 } from "./protocol.js";
 import {
+  createCodexAppServerBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerPendingSupervisionBranch,
 } from "./session-binding.js";
 import {
+  createCodexTestBindingStateStore,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
@@ -2174,6 +2176,46 @@ describe("Codex plugin binding recovery", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
+  it("rechecks scheduled current policy against the exact existing thread", async () => {
+    const sessionFile = path.join(tempDir, "session-current-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-current-policy");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-current-policy");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi.fn(async (_options?: { threadId?: string }) => ({
+      enabled: true,
+      configPatch: { apps: { _default: { enabled: false } } },
+      fingerprint: "plugin-config-current-policy",
+      inputFingerprint: "plugin-input-current-policy",
+      policyContext: { fingerprint: "plugin-policy-current", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      pluginThreadConfig: {
+        enabled: true,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint: "plugin-input-current-policy",
+        build,
+      },
+    };
+
+    await startOrResumeThread(common);
+    await startOrResumeThread(common);
+
+    expect(build).toHaveBeenNthCalledWith(1);
+    expect(build).toHaveBeenNthCalledWith(2, { threadId: "thread-current-policy" });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
   it("rebuilds once when a settled negative binding still enables the plugin", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2248,6 +2290,127 @@ describe("Codex plugin binding recovery", () => {
       "thread/start",
       "thread/resume",
     ]);
+  });
+
+  it("rotates warm bindings across scheduled authority changes and resumes after store restart", async () => {
+    const sessionFile = path.join(tempDir, "session-authority.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-authority");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const stateStore = createCodexTestBindingStateStore();
+    let bindingStore = createCodexAppServerBindingStore(stateStore);
+    let threadSequence = 0;
+    const threadStarts: Array<Record<string, unknown>> = [];
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        threadSequence += 1;
+        threadStarts.push(requestParams as Record<string, unknown>);
+        return threadStartResult(`thread-authority-${threadSequence}`);
+      }
+      if (method === "thread/resume") {
+        const threadId = (requestParams as { threadId?: string })?.threadId;
+        return threadStartResult(threadId ?? "thread-resumed");
+      }
+      if (method === "app/installed") {
+        return {
+          apps: [{ id: "calendar", runtimeName: "Calendar", enabled: true, callable: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const provider = (inputFingerprint: string, destructive: boolean) => {
+      const base = createProvisionalPluginThreadConfigProvider("calendar");
+      return {
+        ...base,
+        requiresCurrentPolicyCheck: true,
+        inputFingerprint,
+        build: vi.fn(async () => {
+          const config = await base.build();
+          const apps = config.configPatch?.apps as Record<string, Record<string, unknown>>;
+          return {
+            ...config,
+            inputFingerprint,
+            fingerprint: `${inputFingerprint}:${destructive}`,
+            configPatch: {
+              ...config.configPatch,
+              apps: {
+                ...apps,
+                calendar: {
+                  ...apps.calendar,
+                  destructive_enabled: destructive,
+                  tools: {
+                    edit: { approval_mode: destructive ? "approve" : "prompt" },
+                  },
+                },
+              },
+            },
+          };
+        }),
+      };
+    };
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+    const revokedProvider = provider("unrestricted", true);
+    revokedProvider.build.mockRejectedValueOnce(new Error("calendar revoked by current policy"));
+    await expect(
+      startOrResumeThreadImpl({
+        ...common,
+        bindingStore,
+        pluginThreadConfig: revokedProvider,
+      }),
+    ).rejects.toThrow("calendar revoked by current policy");
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("scheduled-cap-1", false),
+    });
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+    bindingStore = createCodexAppServerBindingStore(stateStore);
+    await startOrResumeThreadImpl({
+      ...common,
+      bindingStore,
+      pluginThreadConfig: provider("unrestricted", true),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/start",
+      "app/installed",
+      "thread/start",
+      "app/installed",
+      "thread/resume",
+    ]);
+    expect(threadStarts).toHaveLength(3);
+    expect(threadStarts[1]?.config).toMatchObject({
+      apps: { calendar: { destructive_enabled: false } },
+    });
+    expect(threadStarts[2]?.config).toMatchObject({
+      apps: { calendar: { destructive_enabled: true } },
+    });
+    const resumeCall = request.mock.calls.find(([method]) => method === "thread/resume");
+    expect((resumeCall?.[1] as { config?: unknown })?.config).toMatchObject({
+      apps: {
+        calendar: {
+          destructive_enabled: true,
+          tools: { edit: { approval_mode: "approve" } },
+        },
+      },
+    });
   });
 });
 
