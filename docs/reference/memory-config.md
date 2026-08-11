@@ -220,6 +220,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     <Warning>
     Changing model or `outputDimensionality` changes the index identity. OpenClaw
     pauses vector search until you explicitly rebuild the memory index.
+
+    Upgrading an existing configuration that already uses `gemini-embedding-2`
+    can trigger the same pause even when you do not edit the configuration. This
+    release resolves the model's previously unknown default dimensionality to
+    3072 and includes that value in the index identity. Check the affected agent
+    with `openclaw memory status --index --agent <id>`, then rebuild when ready
+    with `openclaw memory index --force --agent <id>`.
     </Warning>
 
   </Accordion>
