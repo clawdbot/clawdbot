@@ -4560,12 +4560,70 @@ describe("requester settle wake trigger", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(settleWake).toHaveBeenCalledTimes(1);
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      expect(vi.getTimerCount()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(29_999);
       expect(settleWake).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(settleWake).toHaveBeenCalledTimes(2);
       expect(entry.requesterSettleWake).toBeUndefined();
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a fresh yield wake preempt a stale retry timer", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "delivered" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        nextAttemptAt: 120_000,
+        rearmGeneration: 1,
+      },
+    });
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration);
+        return true;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      expect(vi.getTimerCount()).toBe(1);
+
+      entry.requesterTurnRunId = "run-requester";
+      entry.requesterTurnYielded = true;
+      expect(
+        controller.settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: entry.requesterSessionKey,
+          requesterTurnRunId: "run-requester",
+          requesterYielded: true,
+          acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settleWake).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(settleWake).toHaveBeenCalledOnce();
     } finally {
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();
