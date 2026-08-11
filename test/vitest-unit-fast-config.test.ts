@@ -258,11 +258,11 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("isolates tests that import stateful test helpers", () => {
+    // Fixture files must genuinely import a stateful test helper; #121923
+    // rewrote the outbound poll tests to be stateless, so they left this list.
     const files = [
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
-      "src/infra/outbound/message-action-execution.poll.test.ts",
-      "src/infra/outbound/message-action-runner.poll.test.ts",
     ];
     for (const file of files) {
       const analysis = unitFastAnalysis.find((entry) => entry.file === file);
