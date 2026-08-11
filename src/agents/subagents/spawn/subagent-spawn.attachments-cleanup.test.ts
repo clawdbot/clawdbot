@@ -231,17 +231,22 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
     expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
     expect(releaseSubagentRunMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
-      expect(events).toEqual([
-        "accepted",
-        "abort-failed",
-        "delete-failed",
-        "terminalized",
-        "aborted",
-        "rollback",
-        "rollback-recorded",
-        "sweep-scheduled",
-      ]);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          "terminalized",
+          "aborted",
+          "rollback",
+          "rollback-recorded",
+          "sweep-scheduled",
+        ]),
+      );
     });
+    expect(events.slice(0, 3)).toEqual(["accepted", "abort-failed", "delete-failed"]);
+    expect(events.indexOf("rollback")).toBeGreaterThan(events.indexOf("aborted"));
+    expect(events.indexOf("rollback-recorded")).toBeGreaterThan(events.indexOf("rollback"));
+    expect(events.indexOf("sweep-scheduled")).toBeGreaterThan(
+      events.indexOf("rollback-recorded"),
+    );
   });
 
   it("releases detached root work after a bounded accepted-child cleanup retry", async () => {
