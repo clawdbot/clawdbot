@@ -193,6 +193,7 @@ export async function finalizeHeartbeatOutcome(params: {
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
   const outcome = params.outcome;
   if (outcome.kind === "failure") {
+    const failureReplyPayload = outcome.replyPayload;
     const failureChannel = delivery.channel;
     const failureTarget = delivery.to;
     const heartbeatPlugin =
@@ -233,8 +234,8 @@ export async function finalizeHeartbeatOutcome(params: {
                 identity: params.outboundIdentity,
                 threadId: delivery.threadId,
                 payloads: [
-                  copyReplyPayloadMetadata(outcome.replyPayload ?? {}, {
-                    ...outcome.replyPayload,
+                  copyReplyPayloadMetadata(failureReplyPayload ?? {}, {
+                    ...failureReplyPayload,
                     text: outcome.normalized.text || undefined,
                   }),
                 ],
@@ -248,12 +249,12 @@ export async function finalizeHeartbeatOutcome(params: {
             },
           }
         : {}),
-      ...(outcome.replyPayload
+      ...(failureReplyPayload
         ? {
             clearSatisfiedPendingFinalDelivery: async () => {
-              const pendingFinalText =
-                getReplyPayloadMetadata(outcome.replyPayload)?.pendingFinalDeliveryRetryText ??
-                buildRecoverablePendingFinalDeliveryText([outcome.replyPayload]);
+              const pendingFinalText = buildRecoverablePendingFinalDeliveryText([
+                failureReplyPayload,
+              ]);
               if (!pendingFinalText) {
                 return;
               }
