@@ -2483,7 +2483,7 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
   border: none;
   border-radius: var(--menu-item-radius);
@@ -2654,7 +2654,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
   border: none;
   border-radius: var(--menu-item-radius);

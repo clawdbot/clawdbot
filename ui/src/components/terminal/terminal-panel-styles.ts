@@ -77,7 +77,7 @@ export const terminalPanelStyles = css`
     gap: 8px;
     width: 100%;
     border: 0;
-    min-height: 28px;
+    min-height: var(--menu-item-height);
     border-radius: var(--menu-item-radius);
     background: transparent;
     color: var(--text, #d7dae0);

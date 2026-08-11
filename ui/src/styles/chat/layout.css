@@ -1566,7 +1566,7 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   border-radius: var(--menu-item-radius);
   text-align: left;
 }
@@ -1598,7 +1598,7 @@ openclaw-chat-video-player {
   border: none;
   background: none;
   color: var(--text);
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   border-radius: var(--menu-item-radius);
   font-size: 12px;
   white-space: nowrap;

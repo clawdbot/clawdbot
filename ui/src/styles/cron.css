@@ -783,7 +783,7 @@
 }
 
 .cron-job-menu__item {
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   border: 0;
   background: transparent;
   color: var(--text);

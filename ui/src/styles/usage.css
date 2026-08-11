@@ -574,7 +574,7 @@
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   border-radius: var(--menu-item-radius);
   background: transparent;
   font-size: 12px;

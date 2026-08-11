@@ -309,7 +309,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__gateway-menu-item {
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   padding: 0 8px;
   border-radius: var(--menu-item-radius);
   color: var(--text);

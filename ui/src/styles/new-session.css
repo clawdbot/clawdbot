@@ -494,7 +494,7 @@ wa-dropdown.new-session-page__start-menu {
   gap: 8px;
   padding: 6px 8px;
   border: 0;
-  min-height: 28px;
+  min-height: var(--menu-item-height);
   border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
