@@ -958,14 +958,6 @@ function resolveAuthTokenForSignature(opts?: {
   return opts?.token ?? opts?.bootstrapToken ?? opts?.deviceToken;
 }
 
-export function testOnlyResolveAuthTokenForSignature(opts?: {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-}) {
-  return resolveAuthTokenForSignature(opts);
-}
-
 type ConnectReqClient = {
   id: string;
   displayName?: string;
