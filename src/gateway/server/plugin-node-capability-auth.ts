@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
@@ -69,6 +70,9 @@ export async function authorizePluginNodeCapabilityRequest(params: {
       browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     });
     if (authResult.ok) {
+      return authResult;
+    }
+    if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
       return authResult;
     }
     lastAuthFailure = authResult;

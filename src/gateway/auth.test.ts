@@ -518,10 +518,7 @@ describe("gateway auth", () => {
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter" });
     expect(limiter.check).not.toHaveBeenCalled();
-    expect(limiter.reset).toHaveBeenCalledWith(
-      "identity:forwarded-loopback:127.0.0.1",
-      "shared-secret",
-    );
+    expect(limiter.reset).toHaveBeenCalledWith("100.64.0.1", "shared-secret");
   });
 
   it("keeps verified Tailscale avatars outside a locked shared proxy bucket", async () => {
@@ -554,7 +551,7 @@ describe("gateway auth", () => {
         rateLimiter: limiter,
         browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
       });
-      expect(rejected).toMatchObject({ ok: false, reason: "rate_limited" });
+      expect(rejected).toMatchObject({ ok: false, reason: "proxy_attribution_required" });
     } finally {
       limiter.dispose();
     }
@@ -645,11 +642,13 @@ describe("gateway auth", () => {
         delete req.headers["tailscale-user-login"];
       },
       whois: createTailscaleWhois(),
+      expectedReason: "proxy_attribution_required",
     },
     {
       name: "mismatched identity",
       mutate: () => {},
       whois: async () => ({ login: "mallory", name: "Mallory" }),
+      expectedReason: "proxy_attribution_required",
     },
     {
       name: "non-loopback source",
@@ -657,6 +656,7 @@ describe("gateway auth", () => {
         req.socket.remoteAddress = "192.0.2.10";
       },
       whois: createTailscaleWhois(),
+      expectedReason: "token_missing",
     },
     {
       name: "incomplete forwarded headers",
@@ -664,31 +664,37 @@ describe("gateway auth", () => {
         delete req.headers["x-forwarded-host"];
       },
       whois: createTailscaleWhois(),
+      expectedReason: "proxy_attribution_required",
     },
-  ])("rejects $name on the profile avatar HTTP surface", async ({ mutate, whois }) => {
-    const req = createTailscaleForwardedReq();
-    mutate(req);
+  ])(
+    "rejects $name on the profile avatar HTTP surface",
+    async ({ mutate, whois, expectedReason }) => {
+      const req = createTailscaleForwardedReq();
+      mutate(req);
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      connectAuth: null,
-      tailscaleWhois: whois,
-      req,
-      browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
-    });
+      const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+        auth: { mode: "token", token: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: whois,
+        req,
+        browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
+      });
 
-    expect(res).toMatchObject({ ok: false, reason: "token_missing" });
-  });
+      expect(res).toMatchObject({ ok: false, reason: expectedReason });
+    },
+  );
 
   it.each([
     {
       auth: { mode: "token" as const, token: "secret", allowTailscale: true },
       connectAuth: { token: "secret" },
+      tailscaleWhois: createTailscaleWhois(),
       method: "token",
     },
     {
       auth: { mode: "password" as const, password: "secret", allowTailscale: true },
       connectAuth: { password: "secret" },
+      tailscaleWhois: createTailscaleWhois(),
       method: "password",
     },
   ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
@@ -776,71 +782,41 @@ describe("gateway auth", () => {
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
   });
 
-  it("rate-limits forwarded requests that collapse to a loopback socket", async () => {
-    const limiter = createAuthRateLimiter({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
-    const params = {
-      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
-      connectAuth: { password: "wrong" },
+  it("rejects unattributable loopback proxy ingress before checking credentials", async () => {
+    const limiter = createLimiterSpy();
+    const result = await authorizeHttpGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "secret" },
       req: {
         socket: { remoteAddress: "127.0.0.1" },
         headers: { "x-forwarded-for": "203.0.113.10" },
       } as never,
       trustedProxies: [],
       rateLimiter: limiter,
-    };
+    });
 
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-      ok: false,
-      reason: "password_mismatch",
-    });
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-      ok: false,
-      reason: "password_mismatch",
-    });
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-      ok: false,
-      reason: "rate_limited",
-      rateLimited: true,
-    });
+    expect(result).toEqual({ ok: false, reason: "proxy_attribution_required" });
+    expect(limiter.check).not.toHaveBeenCalled();
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
   });
 
-  it("keeps forwarded-loopback failures across a successful authentication", async () => {
-    const limiter = createAuthRateLimiter({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-    });
-    const params = {
-      auth: { mode: "password" as const, password: "secret", allowTailscale: false },
-      connectAuth: { password: "wrong" },
+  it("accepts attributable loopback proxy ingress after narrow trust configuration", async () => {
+    const limiter = createLimiterSpy();
+    const result = await authorizeHttpGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "secret" },
       req: {
         socket: { remoteAddress: "127.0.0.1" },
         headers: { "x-forwarded-for": "203.0.113.10" },
       } as never,
-      trustedProxies: [],
+      trustedProxies: ["127.0.0.1"],
       rateLimiter: limiter,
-    };
+    });
 
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-      ok: false,
-      reason: "password_mismatch",
-    });
-    params.connectAuth.password = "secret";
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({ ok: true });
-    params.connectAuth.password = "wrong";
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-      ok: false,
-      reason: "password_mismatch",
-    });
-    await expect(authorizeHttpGatewayConnect(params)).resolves.toMatchObject({
-      ok: false,
-      reason: "rate_limited",
-      rateLimited: true,
-    });
+    expect(result).toMatchObject({ ok: true, method: "password" });
+    expect(limiter.check).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
+    expect(limiter.reset).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
   });
 
   it("keeps genuinely direct loopback requests exempt from lockout", async () => {
@@ -869,18 +845,22 @@ describe("gateway auth", () => {
     });
   });
 
-  it("does not trust X-Real-IP by default but still rate-limits the forwarded request", async () => {
-    const limiter = await expectTokenMismatchWithLimiter({
-      reqHeaders: { "x-real-ip": "203.0.113.77" },
+  it("rejects X-Real-IP attribution unless fallback is explicitly enabled", async () => {
+    const limiter = createLimiterSpy();
+    const result = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { "x-real-ip": "203.0.113.77" },
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      rateLimiter: limiter,
     });
-    expect(limiter.check).toHaveBeenCalledWith(
-      "identity:forwarded-loopback:127.0.0.1",
-      "shared-secret",
-    );
-    expect(limiter.recordFailure).toHaveBeenCalledWith(
-      "identity:forwarded-loopback:127.0.0.1",
-      "shared-secret",
-    );
+
+    expect(result).toEqual({ ok: false, reason: "proxy_attribution_required" });
+    expect(limiter.check).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
   });
 
   it("uses X-Real-IP when fallback is explicitly enabled", async () => {

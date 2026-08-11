@@ -10,6 +10,7 @@ import {
 import {
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
@@ -238,6 +239,13 @@ async function resolveConnectAuthDecisionCore(
       authMethod,
       deviceTokenSharedGatewaySessionGeneration,
     };
+  }
+
+  // Proxy attribution is an ingress failure, not another credential candidate.
+  // Device and bootstrap fallbacks must not turn an untrusted forwarded chain
+  // into an authenticated request.
+  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    return await finish();
   }
 
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;

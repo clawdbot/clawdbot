@@ -25,6 +25,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   isLocalDirectRequest,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
@@ -211,17 +212,20 @@ async function handleGatewayProbeRequest(
     if (!includeDetails && resolvedAuth.mode !== "none") {
       const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
       const bearerToken = getBearerToken(req);
-      includeDetails = (
-        await authorizeHttpGatewayConnect({
-          auth: resolvedAuth,
-          connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
-          req,
-          trustedProxies,
-          allowRealIpFallback,
-          rateLimiter,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
-        })
-      ).ok;
+      const authResult = await authorizeHttpGatewayConnect({
+        auth: resolvedAuth,
+        connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+        rateLimiter,
+        browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+      });
+      if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+        sendGatewayAuthFailure(res, authResult);
+        return true;
+      }
+      includeDetails = authResult.ok;
     }
     try {
       const result = getReadiness();

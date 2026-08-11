@@ -36,6 +36,8 @@ export { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
+export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
+
 /** Normalized outcome for gateway shared-secret, Tailscale, device, and proxy auth. */
 export type GatewayAuthResult = {
   ok: boolean;
@@ -108,6 +110,7 @@ type GatewayAuthRequestContext = {
   ip?: string;
   rateLimitScope: string;
   localDirect: boolean;
+  unattributableProxy: boolean;
 };
 
 function resolveGatewayAuthRequestContext(
@@ -115,10 +118,12 @@ function resolveGatewayAuthRequestContext(
 ): GatewayAuthRequestContext {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
-  const resolvedIp =
-    params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
-    req?.socket?.remoteAddress;
+  const requestClientIp = resolveRequestClientIp(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
+  const resolvedIp = params.clientIp ?? requestClientIp ?? req?.socket?.remoteAddress;
   const localDirect = isLocalDirectRequest(
     req,
     trustedProxies,
@@ -129,6 +134,14 @@ function resolveGatewayAuthRequestContext(
     hasProxyHeaders: hasForwardedRequestHeaders(req),
     isLocalClient: localDirect,
   });
+  // A header-bearing loopback proxy is not attributable until its socket is
+  // trusted and its forwarded chain resolves a non-loopback client. Reject it
+  // before credentials or fallbacks can share one cross-client limiter bucket.
+  const unattributableProxy = Boolean(
+    hasForwardedRequestHeaders(req) &&
+    !localDirect &&
+    isLoopbackAddress(requestClientIp ?? req?.socket?.remoteAddress),
+  );
 
   return {
     authSurface,
@@ -136,6 +149,7 @@ function resolveGatewayAuthRequestContext(
     ip,
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
     localDirect,
+    unattributableProxy,
   };
 }
 
@@ -494,9 +508,51 @@ async function authorizeGatewayConnectCore(
 ): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
+  const { authSurface, limiter, ip, rateLimitScope, localDirect, unattributableProxy } =
     resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  let effectiveIp = ip;
+  let verifiedTailscaleUser: TailscaleUser | undefined;
+
+  if (
+    authSurface === "http-user-profile-avatar" &&
+    auth.allowTailscale &&
+    !localDirect &&
+    !hasExplicitSharedSecretAuth(connectAuth)
+  ) {
+    // Reject cross-origin ambient avatar requests before the Tailscale WhoIs
+    // lookup. Explicit shared-secret auth is not subject to this browser gate.
+    const originResult = authorizeHttpBrowserOrigin({
+      authSurface,
+      browserOriginPolicy: params.browserOriginPolicy,
+      isLocalClient: localDirect,
+      reason: "origin_not_allowed",
+      requireSameOriginFetchWithoutOrigin: true,
+      allowWildcardOrigin: false,
+    });
+    if (originResult) {
+      return originResult;
+    }
+  }
+
+  // OpenClaw-managed Tailscale ingress is attributable even though its local
+  // proxy socket is loopback. Verify that identity before deciding whether the
+  // forwarded request needs ordinary trusted-proxy configuration.
+  if (unattributableProxy && auth.allowTailscale && hasTailscaleProxyHeaders(req)) {
+    const tailscaleCheck = await resolveVerifiedTailscaleUser({
+      req,
+      tailscaleWhois,
+    });
+    if (tailscaleCheck.ok) {
+      verifiedTailscaleUser = tailscaleCheck.user;
+      effectiveIp = resolveTailscaleClientIp(req) ?? ip;
+    }
+  }
+  const proxyAttributionRequired = unattributableProxy && !verifiedTailscaleUser;
+
+  if (proxyAttributionRequired && auth.mode === "none") {
+    return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+  }
 
   if (auth.mode === "trusted-proxy") {
     // Same-host reverse proxies may forward identity headers without a full
@@ -526,7 +582,7 @@ async function authorizeGatewayConnectCore(
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     if (localDirect && auth.password && connectAuth?.password) {
-      const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+      const rateLimitResult = rejectIfRateLimited({ limiter, ip: effectiveIp, rateLimitScope });
       if (rateLimitResult) {
         return rateLimitResult;
       }
@@ -534,7 +590,7 @@ async function authorizeGatewayConnectCore(
         authPassword: auth.password,
         connectPassword: connectAuth.password,
         limiter,
-        ip,
+        ip: effectiveIp,
         rateLimitScope,
         deferRateLimitFailure: params.deferRateLimitFailure,
       });
@@ -560,39 +616,16 @@ async function authorizeGatewayConnectCore(
     auth.allowTailscale &&
     !localDirect &&
     !hasExplicitSharedSecretAuth(connectAuth);
-  const verifyAvatarIdentityBeforeSharedLimit =
-    authSurface === "http-user-profile-avatar" && canAttemptTailscaleHeaderAuth;
-
-  if (!verifyAvatarIdentityBeforeSharedLimit) {
-    const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
-    if (rateLimitResult) {
-      return rateLimitResult;
-    }
-  }
 
   if (canAttemptTailscaleHeaderAuth) {
-    if (authSurface === "http-user-profile-avatar") {
-      // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
-      // their source. Ambient identity accepts that omission only for same-origin loads,
-      // and wildcard CORS never grants ambient identity.
-      const originResult = authorizeHttpBrowserOrigin({
-        authSurface,
-        browserOriginPolicy: params.browserOriginPolicy,
-        isLocalClient: localDirect,
-        reason: "origin_not_allowed",
-        requireSameOriginFetchWithoutOrigin: true,
-        allowWildcardOrigin: false,
-      });
-      if (originResult) {
-        return originResult;
-      }
-    }
-    const tailscaleCheck = await resolveVerifiedTailscaleUser({
-      req,
-      tailscaleWhois,
-    });
+    const tailscaleCheck = verifiedTailscaleUser
+      ? ({ ok: true, user: verifiedTailscaleUser } as const)
+      : await resolveVerifiedTailscaleUser({
+          req,
+          tailscaleWhois,
+        });
     if (tailscaleCheck.ok) {
-      limiter?.reset(ip, rateLimitScope);
+      limiter?.reset(effectiveIp, rateLimitScope);
       return {
         ok: true,
         method: "tailscale",
@@ -601,13 +634,13 @@ async function authorizeGatewayConnectCore(
     }
   }
 
-  if (verifyAvatarIdentityBeforeSharedLimit) {
-    // Verified avatar identity is independent of the aggregate shared-secret
-    // bucket. A failed identity check still falls through to that bucket.
-    const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
-    if (rateLimitResult) {
-      return rateLimitResult;
-    }
+  if (proxyAttributionRequired && auth.mode !== "trusted-proxy") {
+    return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+  }
+
+  const rateLimitResult = rejectIfRateLimited({ limiter, ip: effectiveIp, rateLimitScope });
+  if (rateLimitResult) {
+    return rateLimitResult;
   }
 
   if (auth.mode === "token") {
@@ -615,7 +648,7 @@ async function authorizeGatewayConnectCore(
       authToken: auth.token,
       connectToken: connectAuth?.token,
       limiter,
-      ip,
+      ip: effectiveIp,
       rateLimitScope,
       deferRateLimitFailure: params.deferRateLimitFailure,
     });
@@ -626,13 +659,13 @@ async function authorizeGatewayConnectCore(
       authPassword: auth.password,
       connectPassword: connectAuth?.password,
       limiter,
-      ip,
+      ip: effectiveIp,
       rateLimitScope,
       deferRateLimitFailure: params.deferRateLimitFailure,
     });
   }
 
-  await limiter?.recordFailureAndDelay(ip, rateLimitScope);
+  await limiter?.recordFailureAndDelay(effectiveIp, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }
 

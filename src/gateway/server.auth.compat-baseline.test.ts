@@ -298,7 +298,7 @@ describe("gateway auth compatibility baseline", () => {
     });
   });
 
-  describe("proxied token mode deferred failure accounting", () => {
+  describe("unattributable proxy ingress", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port = 0;
     let prevToken: string | undefined;
@@ -320,11 +320,11 @@ describe("gateway auth compatibility baseline", () => {
       restoreGatewayToken(prevToken);
     });
 
-    test("records a deferred shared failure before rejecting device proof", async () => {
+    test("rejects before a valid device credential can bypass attribution", async () => {
       const headers = { "x-forwarded-for": "203.0.113.10" };
-      const first = await openWs(port, headers);
+      const ws = await openWs(port, headers);
       try {
-        const nonce = await readConnectChallengeNonce(first);
+        const nonce = await readConnectChallengeNonce(ws);
         const signed = await createSignedDevice({
           token: "wrong",
           scopes: ["operator.admin"],
@@ -332,33 +332,19 @@ describe("gateway auth compatibility baseline", () => {
           clientMode: GATEWAY_CLIENT_MODES.TEST,
           nonce,
         });
-        const response = await connectReq(first, {
-          token: "wrong",
-          device: { ...signed.device, signature: `${signed.device.signature}invalid` },
-        });
-        expect(response.ok).toBe(false);
-        expect(response.error?.message ?? "").toContain("signature");
-      } finally {
-        first.close();
-      }
-
-      const second = await openWs(port, headers);
-      try {
-        const nonce = await readConnectChallengeNonce(second);
-        const signed = await createSignedDevice({
-          token: "wrong",
-          scopes: ["operator.admin"],
-          clientId: GATEWAY_CLIENT_NAMES.TEST,
-          clientMode: GATEWAY_CLIENT_MODES.TEST,
-          nonce,
-        });
-        const response = await connectReq(second, { token: "wrong", device: signed.device });
+        const response = await connectReq(ws, { token: "wrong", device: signed.device });
         expectAuthErrorDetails({
           details: response.error?.details,
-          expectedCode: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+          expectedCode: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+          canRetryWithDeviceToken: false,
+          recommendedNextStep: "review_auth_configuration",
         });
+        expect(response.error?.message ?? "").toContain("gateway.trustedProxies");
+        expect((response.error?.details as { authReason?: string } | undefined)?.authReason).toBe(
+          "proxy_attribution_required",
+        );
       } finally {
-        second.close();
+        ws.close();
       }
     });
   });

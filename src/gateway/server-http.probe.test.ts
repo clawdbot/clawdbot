@@ -14,7 +14,6 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ChannelManager } from "./server-channels.js";
 import {
   AUTH_TOKEN,
@@ -617,49 +616,36 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  it("rate limits repeated proxy-shaped readiness authentication failures", async () => {
-    const rateLimiter = createAuthRateLimiter({
-      maxAttempts: 2,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      pruneIntervalMs: 0,
-    });
+  it("fails closed with guidance for unattributable proxied readiness", async () => {
     const getReadiness: ReadinessChecker = () => ({
-      ready: false,
-      failing: ["discord"],
-      uptimeMs: 8_000,
+      ready: true,
+      failing: [],
+      uptimeMs: 45_000,
     });
 
-    try {
-      await withGatewayServer({
-        prefix: "probe-ready-proxy-rate-limit",
-        resolvedAuth: AUTH_TOKEN,
-        overrides: { getReadiness, rateLimiter },
-        run: async (server) => {
-          const sendReady = async (authorization: string) => {
-            const { getBody } = await sendGatewayRequest(server, {
-              path: "/ready",
-              remoteAddress: "127.0.0.1",
-              host: "gateway.test",
-              authorization,
-              headers: { forwarded: "for=203.0.113.10" },
-            });
-            return JSON.parse(getBody());
-          };
+    await withGatewayServer({
+      prefix: "probe-unattributable-proxy",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/ready",
+          remoteAddress: "127.0.0.1",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+          headers: { forwarded: "for=203.0.113.10" },
+        });
 
-          await expect(sendReady("Bearer test-token")).resolves.toEqual({
-            ready: false,
-            failing: ["discord"],
-            uptimeMs: 8_000,
-          });
-          await expect(sendReady("Bearer wrong-one")).resolves.toEqual({ ready: false });
-          await expect(sendReady("Bearer wrong-two")).resolves.toEqual({ ready: false });
-          await expect(sendReady("Bearer test-token")).resolves.toEqual({ ready: false });
-        },
-      });
-    } finally {
-      rateLimiter.dispose();
-    }
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(getBody())).toEqual({
+          error: {
+            message:
+              "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+            type: "proxy_attribution_required",
+          },
+        });
+      },
+    });
   });
 
   it("re-resolves auth for remote /ready requests after shared auth rotation", async () => {

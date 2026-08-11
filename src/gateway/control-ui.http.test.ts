@@ -2056,7 +2056,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("rate limits proxy-shaped bootstrap device-token failures", async () => {
+  it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
     const rateLimiter = createAuthRateLimiter({
       maxAttempts: 2,
       windowMs: 60_000,
@@ -2080,10 +2080,8 @@ describe("handleControlUiHttpRequest", () => {
                   rateLimiter,
                 });
 
-              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(200);
-              expect((await sendBootstrap("wrong-one")).res.statusCode).toBe(401);
-              expect((await sendBootstrap("wrong-two")).res.statusCode).toBe(401);
-              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(429);
+              expect((await sendBootstrap(operatorToken)).res.statusCode).toBe(403);
+              expect((await sendBootstrap("wrong-one")).res.statusCode).toBe(403);
             },
           });
         },
@@ -2093,7 +2091,7 @@ describe("handleControlUiHttpRequest", () => {
     }
   });
 
-  it("serializes concurrent proxy-shaped device-token fallback failures", async () => {
+  it("rejects concurrent unattributable proxy fallbacks consistently", async () => {
     const rateLimiter = createAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
@@ -2118,9 +2116,7 @@ describe("handleControlUiHttpRequest", () => {
                 });
 
               const results = await Promise.all([sendBootstrap(), sendBootstrap()]);
-              expect(results.map(({ res }) => res.statusCode).toSorted((a, b) => a - b)).toEqual([
-                401, 429,
-              ]);
+              expect(results.map(({ res }) => res.statusCode)).toEqual([403, 403]);
             },
           });
         },

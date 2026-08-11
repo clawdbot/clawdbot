@@ -596,6 +596,41 @@ describe("gateway plugin node capability auth", () => {
     });
   }, 60_000);
 
+  test("does not let node capability fallback bypass missing proxy attribution", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener, clients }) => {
+        const capability = "active-node";
+        clients.add(
+          makeWsClient({
+            connId: "c-active-node",
+            clientIp: "203.0.113.99",
+            role: "node",
+            mode: "node",
+            capability,
+            capabilityExpiresAtMs: Date.now() + 60_000,
+          }),
+        );
+
+        const response = await fetchCanvas(
+          `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+          {
+            headers: {
+              authorization: "Bearer stale-token",
+              "x-forwarded-for": "203.0.113.99",
+            },
+          },
+        );
+
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { type: "proxy_attribution_required" },
+        });
+      },
+    });
+  }, 60_000);
+
   test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
     await withCanvasGatewayHarness({
       resolvedAuth: tokenResolvedAuth,

@@ -6,7 +6,7 @@ import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
-import type { GatewayAuthResult } from "./auth.js";
+import { PROXY_ATTRIBUTION_REQUIRED_REASON, type GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
 
 /**
@@ -84,6 +84,16 @@ export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
 export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayAuthResult) {
   if (authResult.rateLimited) {
     sendRateLimited(res, authResult.retryAfterMs);
+    return;
+  }
+  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    sendJson(res, 403, {
+      error: {
+        message:
+          "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
     return;
   }
   sendUnauthorized(res);

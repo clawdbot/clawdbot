@@ -46,7 +46,11 @@ import {
   resolveAuthRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -377,7 +381,12 @@ async function authorizeControlUiReadRequestCore(
   );
   let resolvedAuthResult = authResult;
   let verifiedDeviceScopes: string[] | undefined;
-  if (!resolvedAuthResult.ok && canUseDeviceTokenFallback && token) {
+  if (
+    !resolvedAuthResult.ok &&
+    resolvedAuthResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
+    canUseDeviceTokenFallback &&
+    token
+  ) {
     const recordDeferredSharedSecretFailure = async () => {
       if (authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch") {
         await opts.rateLimiter?.recordFailureAndDelay(
