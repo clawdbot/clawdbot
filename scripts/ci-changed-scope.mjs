@@ -75,6 +75,8 @@ const WINDOWS_HOME_DISPLAY_SCOPE_RE =
   /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
   /^src\/(?:agents\/provider-local-service(?:\.env-case\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
+const WINDOWS_AGENT_HOME_PATH_SCOPE_RE =
+  /^src\/(?:infra\/home-dir(?:\.test)?|agents\/(?:agent-tools\.read(?:\.host-operations|\.windows)?\.test|agent-tools\.read|sessions\/tools\/path-utils(?:\.test)?))\.ts$/;
 const WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE =
   /^(?:packages\/memory-host-sdk\/src\/host\/(?:(?:internal|read-file)(?:\.test)?|explicit-extra-markdown)|extensions\/memory-core\/src\/(?:cli-runtime-common|memory-extra-file-path\.windows\.test))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -188,6 +190,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path) ||
         WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
+        WINDOWS_AGENT_HOME_PATH_SCOPE_RE.test(path) ||
         WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
         WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
@@ -198,6 +201,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path) ||
         WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
+        WINDOWS_AGENT_HOME_PATH_SCOPE_RE.test(path) ||
         WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
         WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path))
     ) {

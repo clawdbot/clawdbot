@@ -45,6 +45,7 @@ export type McpOAuthStore = {
   clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
   tokenExpiresAt?: number;
+  tokensAuthorizationServerUrl?: string;
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
@@ -185,6 +186,19 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   }
   if (value.tokenExpiresAt !== undefined && value.tokens === undefined) {
     throw new McpOAuthStoreCorruptionError(storeKey, "tokenExpiresAt requires tokens");
+  }
+  if (
+    value.tokensAuthorizationServerUrl !== undefined &&
+    (typeof value.tokensAuthorizationServerUrl !== "string" ||
+      !URL.canParse(value.tokensAuthorizationServerUrl))
+  ) {
+    throw new McpOAuthStoreCorruptionError(storeKey, "tokensAuthorizationServerUrl is invalid");
+  }
+  if (value.tokensAuthorizationServerUrl !== undefined && value.tokens === undefined) {
+    throw new McpOAuthStoreCorruptionError(
+      storeKey,
+      "tokensAuthorizationServerUrl requires tokens",
+    );
   }
   assertOptionalString(storeKey, value, "codeVerifier");
   assertOptionalString(storeKey, value, "lastAuthorizationUrl");

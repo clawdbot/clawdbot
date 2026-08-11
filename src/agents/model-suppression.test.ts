@@ -15,7 +15,7 @@ vi.mock("../plugins/manifest-model-suppression.js", () => ({
 import { setCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
-  buildShouldSuppressBuiltInModel,
+  buildShouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModel,
 } from "./model-suppression.js";
 
@@ -147,7 +147,7 @@ describe("model suppression", () => {
     expect(secondResolver).toHaveBeenCalledOnce();
   });
 
-  describe("buildShouldSuppressBuiltInModel", () => {
+  describe("buildShouldSuppressBuiltInModelCore", () => {
     beforeEach(() => {
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
     });
@@ -160,7 +160,7 @@ describe("model suppression", () => {
       const config = {};
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
-      const shouldSuppress = buildShouldSuppressBuiltInModel({ config });
+      const shouldSuppress = buildShouldSuppressBuiltInModelCore({ config });
 
       expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
       expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
@@ -183,7 +183,7 @@ describe("model suppression", () => {
       const resolver = vi.fn();
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
-      const shouldSuppress = buildShouldSuppressBuiltInModel({});
+      const shouldSuppress = buildShouldSuppressBuiltInModelCore({});
 
       expect(shouldSuppress({ provider: "openai", id: "" })).toBe(false);
       expect(shouldSuppress({ provider: "", id: "gpt-5.5" })).toBe(false);

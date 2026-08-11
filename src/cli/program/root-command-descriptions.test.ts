@@ -9,7 +9,7 @@ import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registr
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
-import { getSubCliEntries } from "./subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 const RESERVED_CATALOG_ROOTS = {
   tool: "reserved so plugin registration cannot claim this unregistered root",
@@ -233,7 +233,7 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   for (const name of getCoreCliCommandNames()) {
     await registerCoreCliByName(program, ctx, name, argv);
   }
-  for (const entry of getSubCliEntries()) {
+  for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });
   }
   return program;
@@ -295,7 +295,7 @@ describe("root command descriptions", () => {
       }
     }
 
-    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntries()];
+    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()];
     const missing: string[] = [];
     const mismatches: string[] = [];
     for (const descriptor of descriptors) {
