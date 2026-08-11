@@ -400,6 +400,29 @@ describe("SystemAgentChatEngine operations", () => {
     expect(engine.hasPendingProposal()).toBe(true);
   });
 
+  it("records an executor-reported interactive exit without sniffing reply text", async () => {
+    const executeOperation = vi.fn(async (_operation, runtime) => {
+      runtime.log("Interactive session closed.");
+      return { applied: false, exitsInteractive: true };
+    });
+    const engine = new SystemAgentChatEngine({
+      yes: true,
+      executeOperation,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => ({
+        reply: "Checking the local session.",
+        command: "status",
+        modelLabel: "openai/gpt-5.5",
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("show status");
+
+    expect(reply.text).toContain("Interactive session closed.");
+    expect(reply.action).toBe("exit");
+  });
+
   it("rebinds the live conversation after changing its default model", async () => {
     useTempStateDir();
     const baseConfig = structuredClone(sharedVerifiedInferenceConfig);

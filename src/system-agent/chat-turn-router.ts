@@ -578,7 +578,7 @@ export class ChatTurnRouter {
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
     const reply = [provenance, capture.read(), verify, followUp].filter(Boolean).join("\n\n");
-    if (operation.kind === "none" && reply.includes("Bye.")) {
+    if (result?.exitsInteractive === true) {
       return { text: reply, action: "exit" };
     }
     return { text: reply, action: "none" };
