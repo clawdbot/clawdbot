@@ -783,6 +783,11 @@
 
 .chat-tool-card__widget-actions::part(menu) {
   min-width: 176px;
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
 }
 
 .chat-tool-card__widget-actions-trigger,
