@@ -37,6 +37,7 @@ export function sessionRow(
   updatedAt: number,
   options: {
     archived?: boolean;
+    sessionId?: string;
     category?: string;
     pinned?: boolean;
     pinnedAt?: number;
@@ -57,6 +58,7 @@ export function sessionRow(
     displayName: label,
     hasActiveRun: false,
     key,
+    sessionId: `session:${key}`,
     kind: "direct",
     label,
     model: "gpt-5.5",

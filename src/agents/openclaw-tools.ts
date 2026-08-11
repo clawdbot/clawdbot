@@ -505,6 +505,7 @@ export function createOpenClawTools(
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
           }),

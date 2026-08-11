@@ -245,6 +245,7 @@ async function invokeArchiveHandler(params: {
   client: GatewayClient;
   context: GatewayRequestContext;
   sessionKey: string;
+  expectedSessionId: string;
 }): Promise<LifecycleHandlerResponse> {
   const handlers = await getSessionsHandlers();
   let response: LifecycleHandlerResponse | undefined;
@@ -253,7 +254,11 @@ async function invokeArchiveHandler(params: {
   };
   await handlers["sessions.patch"]?.({
     req: {} as never,
-    params: { key: params.sessionKey, archived: true },
+    params: {
+      key: params.sessionKey,
+      archived: true,
+      expectedSessionId: params.expectedSessionId,
+    },
     client: params.client,
     context: params.context,
     isWebchatConnect: () => false,
@@ -317,7 +322,7 @@ test("sessions.patch cancels active work and commits only after admission and te
   try {
     const archive = directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: active.context,
         client: { connId: "archive-writer", connect: { scopes: ["operator.write"] } } as never,
@@ -441,6 +446,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
       client: viewer,
       context: requestContext,
       sessionKey,
+      expectedSessionId: sessionId,
     }).finally(() => {
       archiveSettled = true;
     });
@@ -523,6 +529,7 @@ test("archive retains the lifecycle fence until drain and commit before sharing 
       client: owner,
       context: requestContext,
       sessionKey,
+      expectedSessionId: sessionId,
     });
     await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
 
@@ -585,7 +592,7 @@ test("alias archive lets the canonical cloud reclaim barrier reenter without dea
   });
   const archive = directSessionReq(
     "sessions.patch",
-    { key: aliasKey, archived: true },
+    { key: aliasKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerSessionPlacementService: placementReader(() => placement),
@@ -634,7 +641,11 @@ test("sessions.patch returns retryable UNAVAILABLE when runtime drain does not s
   embeddedRunMock.activeIds.add(sessionId);
   embeddedRunMock.waitResults.set(sessionId, false);
 
-  const archived = await directSessionReq("sessions.patch", { key: sessionKey, archived: true });
+  const archived = await directSessionReq("sessions.patch", {
+    key: sessionKey,
+    archived: true,
+    expectedSessionId: sessionId,
+  });
 
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
@@ -660,7 +671,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerEnvironmentService,
@@ -682,7 +693,7 @@ test("sessions.patch fails closed when active worker inference has no archive dr
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerEnvironmentService: {
@@ -709,7 +720,7 @@ test("sessions.patch retains the archive drain through the ordered audit append"
   try {
     const archived = await directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         client: {
           authenticatedUserId: "archive-reviewer@example.com",
@@ -757,7 +768,7 @@ test("sessions.patch returns UNAVAILABLE when terminal persistence fails", async
   try {
     const archive = directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: active.context,
       },
@@ -832,7 +843,10 @@ test("sessions.patchMany independently archives active and idle sessions in targ
   const result = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [{ key: activeKey }, { key: idleKey }],
+      targets: [
+        { key: activeKey, expectedSessionId: activeSessionId },
+        { key: idleKey, expectedSessionId: "session-batch-idle" },
+      ],
       patch: { archived: true },
     },
   );
@@ -874,7 +888,10 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
   const archive = directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [{ key: firstKey }, { key: secondKey }],
+      targets: [
+        { key: firstKey, expectedSessionId: firstSessionId },
+        { key: secondKey, expectedSessionId: secondSessionId },
+      ],
       patch: { archived: true },
     },
     {
@@ -936,7 +953,10 @@ test("sessions.patchMany attempts every archive drain release without masking su
   const result = await directSessionReq<{ outcomes: Array<{ key: string; ok: boolean }> }>(
     "sessions.patchMany",
     {
-      targets: [{ key: firstKey }, { key: secondKey }],
+      targets: [
+        { key: firstKey, expectedSessionId: firstSessionId },
+        { key: secondKey, expectedSessionId: secondSessionId },
+      ],
       patch: { archived: true },
     },
     {
@@ -987,7 +1007,10 @@ test("sessions.patchMany isolates a failed archive drain and continues later tar
   const result = await directSessionReq<{
     outcomes: Array<{ error?: { code: string; retryable?: boolean }; key: string; ok: boolean }>;
   }>("sessions.patchMany", {
-    targets: [{ key: stuckKey }, { key: idleKey }],
+    targets: [
+      { key: stuckKey, expectedSessionId: stuckSessionId },
+      { key: idleKey, expectedSessionId: "session-batch-after-stuck" },
+    ],
     patch: { archived: true },
   });
 
@@ -1023,7 +1046,7 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
   try {
     const archive = directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: {
           ...active.context,
@@ -1041,7 +1064,10 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
 
     const archived = await archive;
     expect(archived.ok).toBe(false);
-    expect(archived.error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(archived.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "session-changed" },
+    });
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       sessionId: "session-archive-generation-replacement",
     });

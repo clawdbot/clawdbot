@@ -639,6 +639,7 @@ describe("sessions tools", () => {
       expect(details.sessions).toStrictEqual([
         {
           key: "agent:main:main",
+          sessionId: "visible",
           agentId: "main",
           kind: "other",
           channel: "unknown",
@@ -655,7 +656,7 @@ describe("sessions tools", () => {
     }
   });
 
-  it("sessions_list omits transcript paths from model-facing rows", async () => {
+  it("sessions_list exposes lifecycle identity without transcript paths", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -682,7 +683,7 @@ describe("sessions tools", () => {
     };
     const main = details.sessions?.find((session) => session.key === "main");
     expect(main).not.toHaveProperty("transcriptPath");
-    expect(main).not.toHaveProperty("sessionId");
+    expect(main).toHaveProperty("sessionId", "sess-main");
   });
 
   it("sessions_history filters tool messages by default", async () => {

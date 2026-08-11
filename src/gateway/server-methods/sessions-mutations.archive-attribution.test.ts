@@ -65,7 +65,7 @@ function context(): GatewayRequestContext {
 }
 
 async function patchSession(
-  params: { key: string; archived: boolean; label?: string },
+  params: { key: string; archived: boolean; expectedSessionId: string; label?: string },
   requestClient: GatewayClient,
 ) {
   const responses = await invokePatchSession(params, requestClient);
@@ -74,7 +74,7 @@ async function patchSession(
 }
 
 async function invokePatchSession(
-  params: { key: string; archived: boolean; label?: string },
+  params: { key: string; archived: boolean; expectedSessionId: string; label?: string },
   requestClient: GatewayClient,
 ) {
   const responses: Parameters<RespondFn>[] = [];
@@ -97,20 +97,29 @@ describe("sessions.patch archive attribution", () => {
         { sessionId, updatedAt: 1, pinnedAt: 2 },
       );
 
-      await patchSession({ key: sessionKey, archived: true }, client("profile-ada", "Ada"));
+      await patchSession(
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        client("profile-ada", "Ada"),
+      );
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
         archivedAt: expect.any(Number),
         archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
       });
 
-      await patchSession({ key: sessionKey, archived: true }, client("profile-bob", "Bob"));
+      await patchSession(
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        client("profile-bob", "Bob"),
+      );
       expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedBy).toEqual({
         type: "human",
         id: "profile-ada",
         label: "Ada",
       });
 
-      await patchSession({ key: sessionKey, archived: false }, client("profile-bob", "Bob"));
+      await patchSession(
+        { key: sessionKey, archived: false, expectedSessionId: sessionId },
+        client("profile-bob", "Bob"),
+      );
       const restored = loadSessionEntry({ agentId: "main", sessionKey });
       expect(restored?.archivedAt).toBeUndefined();
       expect(restored?.archivedBy).toBeUndefined();
@@ -147,7 +156,10 @@ describe("sessions.patch archive attribution", () => {
       const sessionId = "session-solo-archive";
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
 
-      await patchSession({ key: sessionKey, archived: true }, client());
+      await patchSession(
+        { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        client(),
+      );
 
       const archived = loadSessionEntry({ agentId: "main", sessionKey });
       expect(archived?.archivedAt).toEqual(expect.any(Number));
@@ -172,7 +184,14 @@ describe("sessions.patch archive attribution", () => {
         { sessionId: "session-alias-happy-archive", updatedAt: 2 },
       );
 
-      await patchSession({ key: aliasKey, archived: true }, client("profile-ada", "Ada"));
+      await patchSession(
+        {
+          key: aliasKey,
+          archived: true,
+          expectedSessionId: "session-alias-happy-archive",
+        },
+        client("profile-ada", "Ada"),
+      );
 
       expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
         archived: true,
@@ -238,7 +257,11 @@ describe("sessions.patch archive attribution", () => {
 
       try {
         const responses = await invokePatchSession(
-          { key: aliasKey, archived: true },
+          {
+            key: aliasKey,
+            archived: true,
+            expectedSessionId: "session-alias-before-archive",
+          },
           client("profile-ada", "Ada"),
         );
         expect(responses).toHaveLength(1);
