@@ -148,4 +148,18 @@ describe("resolveRuntimePolicySessionKey", () => {
       }),
     ).toThrow(AgentSelectionRequiredError);
   });
+
+  it("uses an explicit agent for a bare main alias without config", () => {
+    expect(
+      resolveRuntimePolicySessionKey({
+        agentId: "research",
+        sessionKey: "main",
+        ctx: {
+          OriginatingChannel: "slack" as MsgContext["OriginatingChannel"],
+          ChatType: "direct",
+          SenderId: "U123",
+        },
+      }),
+    ).toBe("agent:research:slack:default:direct:u123");
+  });
 });

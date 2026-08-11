@@ -11,6 +11,7 @@ import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js
 
 export function isHeartbeatEnabledForSessionAgent(params: {
   cfg: OpenClawConfig;
+  requesterAgentId?: string;
   sessionKey?: string;
 }): boolean {
   if (!areHeartbeatsEnabled()) {
@@ -21,6 +22,7 @@ export function isHeartbeatEnabledForSessionAgent(params: {
   }
   const requesterAgentId = resolveSessionAgentIds({
     config: params.cfg,
+    agentId: params.requesterAgentId,
     sessionKey: params.sessionKey,
   }).sessionAgentId;
 

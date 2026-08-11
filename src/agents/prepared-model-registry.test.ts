@@ -22,6 +22,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) => `/workspaces/${agentId}`,
   resolveDefaultAgentDir: () => "/agents/main",
   resolveDefaultAgentId: () => "main",
+  tryResolveLegacyCompatibilityAgentId: () => undefined,
 }));
 
 vi.mock("./legacy-inherited-auth-dir.js", () => ({

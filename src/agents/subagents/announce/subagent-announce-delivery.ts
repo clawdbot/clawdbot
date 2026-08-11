@@ -631,7 +631,7 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
 export function loadRequesterSessionEntry(requesterSessionKey: string, explicitAgentId?: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const storageKey = requesterSessionKey.trim();
-  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
+  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey, explicitAgentId);
   const agentId = tryResolveRequesterAgentId(cfg, storageKey, explicitAgentId);
   if (!agentId) {
     return { cfg, entry: undefined, canonicalKey };
@@ -688,7 +688,7 @@ async function maybeSteerSubagentAnnounce(params: {
     params.requesterSessionKey,
     requesterAgentId,
   );
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
+  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey, requesterAgentId);
   const { sessionId, isActive } = resolveRequesterSessionActivity(
     params.requesterSessionKey,
     requesterAgentId,
@@ -997,6 +997,7 @@ async function sendSubagentAnnounceDirectly(params: {
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
+    params.requesterAgentId,
   );
   try {
     // Merge completionDirectOrigin with directOrigin so that missing fields
@@ -1517,7 +1518,11 @@ export async function deliverSubagentAnnouncement(params: {
   if (durableGeneratedMediaHandoff) {
     try {
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-      const canonicalSessionKey = resolveRequesterStoreKey(cfg, params.targetRequesterSessionKey);
+      const canonicalSessionKey = resolveRequesterStoreKey(
+        cfg,
+        params.targetRequesterSessionKey,
+        params.requesterAgentId,
+      );
       const queuedRoute = resolveGeneratedMediaSessionDeliveryRoute({
         sessionKey: canonicalSessionKey,
         completionDirectOrigin: params.completionDirectOrigin,

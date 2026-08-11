@@ -602,6 +602,25 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
   });
 
+  it("dispatches a config-less bare recovery under the legacy implicit owner", async () => {
+    const storePath = path.join(tmpDir, "legacy-shared", "sessions.json");
+    await writeStorePath(storePath, {
+      global: mainSessionEntry({
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    });
+
+    await expect(
+      recoverStore({
+        gatewayRuntime: mockRecoveryRuntime,
+        resumedSessionKeys: new Set(),
+        storePath,
+      }),
+    ).resolves.toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({ agentId: "main", sessionKey: "global" });
+  });
+
   it("persists abort-registry runs after their event context was cleared", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({

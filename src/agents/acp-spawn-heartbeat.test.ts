@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isHeartbeatEnabledForSessionAgent } from "./acp-spawn-heartbeat.js";
+import { resolveAcpSpawnRequesterState } from "./acp-spawn-requester.js";
 
 describe("isHeartbeatEnabledForSessionAgent", () => {
   it("uses the persisted fixed-store owner for a bare requester key", () => {
@@ -33,5 +34,35 @@ describe("isHeartbeatEnabledForSessionAgent", () => {
     } satisfies OpenClawConfig;
 
     expect(isHeartbeatEnabledForSessionAgent({ cfg, sessionKey: "global" })).toBe(true);
+  });
+
+  it("uses the prepared requester owner for a bare key in an ownerless fleet", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: {},
+          research: { heartbeat: { every: "5m" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      isHeartbeatEnabledForSessionAgent({
+        cfg,
+        requesterAgentId: "research",
+        sessionKey: "global",
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveAcpSpawnRequesterState({
+        cfg,
+        parentSessionKey: "global",
+        requesterAgentId: "research",
+        targetAgentId: "ops",
+        ctx: {},
+      }).heartbeatEnabled,
+    ).toBe(true);
   });
 });

@@ -599,6 +599,22 @@ describe("resolveSessionStoreTargets", () => {
     );
   });
 
+  it("rejects a path-inferred agent that conflicts with the persisted fixed-store owner", () => {
+    const storePath = path.resolve("/tmp/agents/research/sessions/sessions.json");
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    expect(() => resolveSessionStoreTargets(cfg, { store: storePath })).toThrow(
+      'Session store belongs to agent "research", not requested agent "ops"',
+    );
+  });
+
   it("allows an explicit store path with an explicit fleet agent", () => {
     const storePath = path.resolve("/tmp/explicit-fleet-sessions.json");
     const cfg: OpenClawConfig = {

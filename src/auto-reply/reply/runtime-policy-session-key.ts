@@ -110,7 +110,9 @@ export function resolveRuntimePolicySessionKey(params: {
         sessionKey,
         agentId: params.agentId ?? normalizeOptionalString(params.ctx?.AgentId),
       })
-    : (parseAgentSessionKey(sessionKey)?.agentId ?? normalizeOptionalString(params.ctx?.AgentId));
+    : (parseAgentSessionKey(sessionKey)?.agentId ??
+      normalizeOptionalString(params.agentId) ??
+      normalizeOptionalString(params.ctx?.AgentId));
   if (!agentId) {
     return sessionKey;
   }

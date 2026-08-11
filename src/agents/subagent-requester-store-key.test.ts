@@ -15,4 +15,17 @@ describe("resolveRequesterStoreKey", () => {
 
     expect(resolveRequesterStoreKey(cfg, "work")).toBe("agent:ops:work");
   });
+
+  it("scopes a bare key to the explicit requester owner in an ownerless fleet", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveRequesterStoreKey(cfg, "incident-42", "research")).toBe(
+      "agent:research:incident-42",
+    );
+  });
 });
