@@ -1213,11 +1213,17 @@ describe("stuck session diagnostics threshold", () => {
       "ageMs",
       "stateGeneration",
     ]);
+  });
+
   it("keeps a quiet model call alive while its CLI background child is outstanding", () => {
     const recoverStuckSession = vi.fn();
     const refs = { sessionId: "s1", sessionKey: "main", runId: "background-run" };
     startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
-    logSessionStateChange({ sessionId: refs.sessionId, sessionKey: refs.sessionKey, state: "processing" });
+    logSessionStateChange({
+      sessionId: refs.sessionId,
+      sessionKey: refs.sessionKey,
+      state: "processing",
+    });
     markDiagnosticEmbeddedRunStarted(refs);
     markDiagnosticModelStartedForTest({
       ...refs,
@@ -1239,7 +1245,12 @@ describe("stuck session diagnostics threshold", () => {
 
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: refs.sessionId, sessionKey: refs.sessionKey, queueDepth: 0, allowActiveAbort: true },
+      {
+        sessionId: refs.sessionId,
+        sessionKey: refs.sessionKey,
+        queueDepth: 0,
+        allowActiveAbort: true,
+      },
       ["ageMs", "stateGeneration"],
     );
   });

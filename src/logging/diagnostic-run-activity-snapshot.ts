@@ -73,9 +73,7 @@ export function buildDiagnosticSessionActivitySnapshot(
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
-    ...(activity.outstandingBackgroundWorkRunId
-      ? { hasOutstandingBackgroundWork: true }
-      : {}),
+    ...(activity.outstandingBackgroundWorkRunId ? { hasOutstandingBackgroundWork: true } : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,

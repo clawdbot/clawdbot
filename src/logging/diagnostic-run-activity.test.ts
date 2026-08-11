@@ -1042,12 +1042,20 @@ describe("outstanding CLI background work", () => {
       hasOutstandingBackgroundWork: true,
     });
 
-    markDiagnosticOutstandingBackgroundWork({ ...ref, runId: "replacement-run", outstanding: false });
+    markDiagnosticOutstandingBackgroundWork({
+      ...ref,
+      runId: "replacement-run",
+      outstanding: false,
+    });
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       hasOutstandingBackgroundWork: true,
     });
 
-    markDiagnosticOutstandingBackgroundWork({ ...ref, runId: "background-run", outstanding: false });
+    markDiagnosticOutstandingBackgroundWork({
+      ...ref,
+      runId: "background-run",
+      outstanding: false,
+    });
     expect(getDiagnosticSessionActivitySnapshot(ref)).not.toHaveProperty(
       "hasOutstandingBackgroundWork",
     );

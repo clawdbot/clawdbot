@@ -2,6 +2,10 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
 import type {
   CliBackendExecute,
   CliBackendExecuteContext,
@@ -11,10 +15,6 @@ import type {
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import {
-  getDiagnosticSessionActivitySnapshot,
-  resetDiagnosticRunActivityForTest,
-} from "../../logging/diagnostic-run-activity.js";
 import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
@@ -125,6 +125,13 @@ function runPlugin(
     ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),
+  });
+}
+
+function diagnosticActivity(context: PreparedCliRunContext) {
+  return getDiagnosticSessionActivitySnapshot({
+    sessionId: context.params.sessionId,
+    sessionKey: context.params.sessionKey,
   });
 }
 
@@ -869,8 +876,8 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it("reports result-holding background work to diagnostic activity", async () => {
     const { context } = await createExecution({ runId: "plugin-diagnostic-background" });
-    const backgroundObserved = createDeferred<void>();
-    const backgroundFinished = createDeferred<void>();
+    const backgroundObserved = createDeferred();
+    const backgroundFinished = createDeferred();
     const run = runPlugin(
       context,
       async function* () {
@@ -888,29 +895,19 @@ describe("plugin-owned CLI execution host boundary", () => {
 
     try {
       await backgroundObserved.promise;
-      expect(
-        getDiagnosticSessionActivitySnapshot({
-          sessionId: context.params.sessionId,
-          sessionKey: context.params.sessionKey,
-        }),
-      ).toMatchObject({ hasOutstandingBackgroundWork: true });
+      expect(diagnosticActivity(context)).toMatchObject({ hasOutstandingBackgroundWork: true });
     } finally {
       backgroundFinished.resolve();
     }
 
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
-    expect(
-      getDiagnosticSessionActivitySnapshot({
-        sessionId: context.params.sessionId,
-        sessionKey: context.params.sessionKey,
-      }),
-    ).not.toHaveProperty("hasOutstandingBackgroundWork");
+    expect(diagnosticActivity(context)).not.toHaveProperty("hasOutstandingBackgroundWork");
   });
 
   it("releases diagnostic background work after a terminal plugin result", async () => {
     const { context } = await createExecution({ runId: "plugin-diagnostic-terminal" });
-    const backgroundObserved = createDeferred<void>();
-    const allowTerminalResult = createDeferred<void>();
+    const backgroundObserved = createDeferred();
+    const allowTerminalResult = createDeferred();
     const run = runPlugin(
       context,
       async function* () {
@@ -933,23 +930,13 @@ describe("plugin-owned CLI execution host boundary", () => {
 
     try {
       await backgroundObserved.promise;
-      expect(
-        getDiagnosticSessionActivitySnapshot({
-          sessionId: context.params.sessionId,
-          sessionKey: context.params.sessionKey,
-        }),
-      ).toMatchObject({ hasOutstandingBackgroundWork: true });
+      expect(diagnosticActivity(context)).toMatchObject({ hasOutstandingBackgroundWork: true });
     } finally {
       allowTerminalResult.resolve();
     }
 
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
-    expect(
-      getDiagnosticSessionActivitySnapshot({
-        sessionId: context.params.sessionId,
-        sessionKey: context.params.sessionKey,
-      }),
-    ).not.toHaveProperty("hasOutstandingBackgroundWork");
+    expect(diagnosticActivity(context)).not.toHaveProperty("hasOutstandingBackgroundWork");
   });
 
   it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {

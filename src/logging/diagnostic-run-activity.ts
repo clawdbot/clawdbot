@@ -12,6 +12,12 @@ import type {
 import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "../infra/diagnostic-model-request.js";
 import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
 import {
+  diagnosticModelCallKey,
+  diagnosticSessionActivityRefs,
+  diagnosticToolKey,
+  resolveEmbeddedRunWorkKey,
+} from "./diagnostic-activity-keys.js";
+import {
   applyArgumentChurnObservation,
   clearArgumentChurnActivity,
   clearArgumentChurnPolicyWaits,
@@ -20,6 +26,7 @@ import {
   mergeArgumentChurnActivity,
   recordDiagnosticActivityProgress,
 } from "./diagnostic-argument-churn-activity.js";
+import { recordDiagnosticOutstandingBackgroundWork } from "./diagnostic-background-work.js";
 import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
   clearRepeatedRequestActivity,
@@ -83,27 +90,11 @@ type RunProgressEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "reason"
 > & { progressKind?: "semantic" | "liveness" };
 
-// Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
-// truly silent children within its own deadline. This floor bounds every
-// staleness consumer (diagnostic recovery aborts, reply-run stale takeover,
-// steer gates): lowering it reopens #88870, removing it reopens #96168.
-export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
-
-// Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
-export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
-
-// Quiet-but-alive tool phases and CLI-owned background work get the blocked-tool
-// floor so a human message cannot reclaim work that recovery would not touch yet.
-export function resolveRunStaleThresholdMs(
-  activity: Pick<
-    DiagnosticSessionActivitySnapshot,
-    "activeWorkKind" | "hasOutstandingBackgroundWork"
-  >,
-): number {
-  return activity.activeWorkKind === "tool_call" || activity.hasOutstandingBackgroundWork === true
-    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
-    : RUN_STALE_TAKEOVER_MS;
-}
+export {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  resolveRunStaleThresholdMs,
+  RUN_STALE_TAKEOVER_MS,
+} from "./diagnostic-run-stale-threshold.js";
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
@@ -115,26 +106,13 @@ const activeDiagnosticOwners = new Map<
 const closedDiagnosticOwnerGenerations = new WeakSet<CoreModelRequestOwnerGeneration>();
 let embeddedRunSequence = 0;
 
-function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
-  const refs: string[] = [];
-  const sessionId = params.sessionId?.trim();
-  const sessionKey = params.sessionKey?.trim();
-  if (sessionId) {
-    refs.push(`id:${sessionId}`);
-  }
-  if (sessionKey) {
-    refs.push(`key:${sessionKey}`);
-  }
-  return refs;
-}
-
 function registerSessionActivityRefs(
   activity: SessionActivity,
   params: { sessionId?: string; sessionKey?: string; runId?: string },
 ): void {
   activity.sessionId ??= params.sessionId;
   activity.sessionKey ??= params.sessionKey;
-  for (const ref of sessionRefs(params)) {
+  for (const ref of diagnosticSessionActivityRefs(params)) {
     activityByRef.set(ref, activity);
   }
   if (params.runId) {
@@ -215,7 +193,7 @@ function resolveSessionActivity(params: {
     }
   }
 
-  for (const ref of sessionRefs(params)) {
+  for (const ref of diagnosticSessionActivityRefs(params)) {
     const byRef = activityByRef.get(ref);
     if (!byRef) {
       continue;
@@ -265,29 +243,13 @@ function touchSemanticSessionActivity(
   touchSessionActivity(activity, reason, params.now);
 }
 
-function toolKey(event: {
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  toolCallId?: string;
-  toolName: string;
-}): string {
-  return `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${
-    event.toolCallId ?? event.toolName
-  }`;
-}
-
-function modelCallKey(event: { runId?: string; provider?: string; model?: string }): string {
-  return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
-}
-
 function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity || shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
   const now = Date.now();
-  activity.activeTools.set(toolKey(event), {
+  activity.activeTools.set(diagnosticToolKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
@@ -310,7 +272,7 @@ function recordToolEnded(
   if (!activity) {
     return;
   }
-  activity.activeTools.delete(toolKey(event));
+  activity.activeTools.delete(diagnosticToolKey(event));
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
 }
 
@@ -362,7 +324,7 @@ function recordModelStarted(
   if (coreRequestForTest) {
     recordRepeatedRequestObservation(activity, activity.activeEmbeddedRuns.values(), event);
   }
-  activity.activeModelCalls.set(modelCallKey(event), {
+  activity.activeModelCalls.set(diagnosticModelCallKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
@@ -389,7 +351,7 @@ function recordModelEnded(
       Object.is(ownerActivity, activity),
     )
   ) {
-    activity.activeModelCalls.delete(modelCallKey(event));
+    activity.activeModelCalls.delete(diagnosticModelCallKey(event));
     return;
   }
   if (provenance?.phase === "ended" && registration) {
@@ -403,7 +365,7 @@ function recordModelEnded(
     touchSessionActivity(activity, "model_call:ended");
     return;
   }
-  activity.activeModelCalls.delete(modelCallKey(event));
+  activity.activeModelCalls.delete(diagnosticModelCallKey(event));
   touchSessionActivity(activity, "model_call:ended");
 }
 
@@ -425,19 +387,11 @@ export function markDiagnosticOutstandingBackgroundWork(params: {
   sessionKey?: string;
   outstanding: boolean;
 }): void {
-  const runId = params.runId.trim();
-  if (!runId) {
-    return;
-  }
-  const activity = resolveSessionActivity({ ...params, runId, create: params.outstanding });
-  if (!activity) {
-    return;
-  }
-  if (params.outstanding) {
-    activity.outstandingBackgroundWorkRunId = runId;
-  } else if (activity.outstandingBackgroundWorkRunId === runId) {
-    activity.outstandingBackgroundWorkRunId = undefined;
-  }
+  recordDiagnosticOutstandingBackgroundWork(
+    params,
+    ({ runId, sessionId, sessionKey, outstanding }) =>
+      resolveSessionActivity({ runId, sessionId, sessionKey, create: outstanding }),
+  );
 }
 
 function applyRunProgress(params: RunProgressEvent, semantic = false): void {
@@ -598,10 +552,6 @@ export function markDiagnosticEmbeddedRunEnded(params: {
     clearArgumentChurnPolicyWaits(activity);
   }
   touchSessionActivity(activity, "embedded_run:ended"); // Retained retry evidence is inert here.
-}
-
-function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
-  return params.workKey ?? params.sessionId;
 }
 
 // Reconciles a session's terminal embedded-run activity at once. Used when an
