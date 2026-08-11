@@ -32,6 +32,20 @@ describe("parseSlackTarget", () => {
     }
   });
 
+  it("accepts lowercase user IDs (uppercasing is downstream in resolveChannelId)", () => {
+    const cases = [
+      { input: "<@u123>", id: "u123", kind: "user" },
+      { input: "user:u456", id: "u456", kind: "user" },
+      { input: "slack:u789", id: "u789", kind: "user" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
+        kind: testCase.kind,
+        id: testCase.id,
+      });
+    }
+  });
+
   it("rejects invalid @ and # targets", () => {
     const cases = [
       { input: "@bob-1", expectedMessage: /Slack DMs require a user id/ },
