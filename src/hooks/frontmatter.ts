@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 
 /** Parse HOOK.md frontmatter into the generic hook frontmatter record. */
-export function parseFrontmatter(content: string): ParsedHookFrontmatter {
+export function parseHookFrontmatter(content: string): ParsedHookFrontmatter {
   return parseFrontmatterBlock(content);
 }
 

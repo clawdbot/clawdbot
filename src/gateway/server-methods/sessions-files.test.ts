@@ -24,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-  readSessionTranscriptVisibleMessageDelta: vi.fn(),
+  readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
 }));
 
 vi.mock("./open-path.js", async () => {
@@ -52,13 +52,14 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
-    readSessionTranscriptVisibleMessageDelta: hoisted.readSessionTranscriptVisibleMessageDelta,
+    readSessionTranscriptVisibleMessageDeltaCore:
+      hoisted.readSessionTranscriptVisibleMessageDeltaCore,
   };
 });
 
 const invokeSessionFilesHandler = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
 const mockVisibleMessages = createVisibleMessagesMock(
-  hoisted.readSessionTranscriptVisibleMessageDelta,
+  hoisted.readSessionTranscriptVisibleMessageDeltaCore,
 );
 
 describe("sessions.files RPC handlers", () => {
@@ -66,7 +67,7 @@ describe("sessions.files RPC handlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.readSessionTranscriptVisibleMessageDelta.mockReset();
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
     workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);

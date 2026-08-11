@@ -60,7 +60,7 @@ import type {
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -267,7 +267,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
               () =>
-                loadCombinedSessionStoreForGateway(cfg, {
+                loadCombinedSessionStoreForGatewayCore(cfg, {
                   agentId: p.agentId,
                   projection: "list",
                 }),

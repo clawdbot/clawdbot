@@ -14,7 +14,7 @@ import {
   hasRestartRecoveryTerminalRun,
 } from "../../config/sessions/restart-recovery-state.js";
 import {
-  patchSessionEntry,
+  patchSessionEntryCore,
   type SessionTranscriptTurnExpectedState,
   type SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
@@ -389,7 +389,7 @@ export async function terminalizeRestartSafeChatAdmission(params: {
 }): Promise<boolean> {
   const endedAt = Date.now();
   let terminalized = false;
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (current) => {
       if (

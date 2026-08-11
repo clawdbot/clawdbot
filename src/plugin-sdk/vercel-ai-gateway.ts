@@ -2,7 +2,7 @@
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 } from "./facade-loader.js";
 
 type ModelCost = ModelDefinitionConfig["cost"];
@@ -21,7 +21,7 @@ type FacadeModule = {
 };
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModule>({
     dirName: "vercel-ai-gateway",
     artifactBasename: "api.js",
   });

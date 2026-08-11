@@ -21,7 +21,7 @@ const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSes
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
 } = await import("../config/sessions/session-accessor.js");
@@ -55,7 +55,9 @@ describe("runBootOnce", () => {
     vi.clearAllMocks();
     const { storePath } = resolveMainStore();
     await fs.rm(storePath, { force: true });
-    const removals = listSessionEntries({ storePath }).map(({ sessionKey }) => ({ sessionKey }));
+    const removals = listSessionEntriesCore({ storePath }).map(({ sessionKey }) => ({
+      sessionKey,
+    }));
     await applySessionEntryLifecycleMutation({ storePath, removals, skipMaintenance: true });
   });
 

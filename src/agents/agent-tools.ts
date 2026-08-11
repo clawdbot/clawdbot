@@ -86,7 +86,7 @@ import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
 } from "./tool-policy.js";
 import {
@@ -466,7 +466,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
   ).some((toolName) => {
-    const normalized = normalizeToolName(toolName);
+    const normalized = normalizeToolPolicyName(toolName);
     return normalized === "*" || normalized === "message";
   });
   // The verified requester profile owns completion authority; its delivery grant

@@ -35,7 +35,7 @@ export async function hasRunnableInstalledNpmPayload(params: {
   return validation.ok;
 }
 
-export function pathsEqual(
+export function userPathsEqual(
   left: string | undefined,
   right: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -53,7 +53,7 @@ export function resolveRecordedExtensionsDir(params: {
   const parentDir = path.dirname(params.installPath);
   try {
     const canonicalInstallPath = resolvePluginInstallDir(params.pluginId, parentDir);
-    return pathsEqual(canonicalInstallPath, params.installPath) ? parentDir : undefined;
+    return userPathsEqual(canonicalInstallPath, params.installPath) ? parentDir : undefined;
   } catch {
     return undefined;
   }
@@ -138,8 +138,8 @@ export function isBridgeBundledPathRecord(params: {
   }
   if (
     params.bundledLocalPath &&
-    (pathsEqual(params.record.sourcePath, params.bundledLocalPath, params.env) ||
-      pathsEqual(params.record.installPath, params.bundledLocalPath, params.env))
+    (userPathsEqual(params.record.sourcePath, params.bundledLocalPath, params.env) ||
+      userPathsEqual(params.record.installPath, params.bundledLocalPath, params.env))
   ) {
     return true;
   }

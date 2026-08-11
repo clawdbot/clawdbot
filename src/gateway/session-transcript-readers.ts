@@ -31,7 +31,7 @@ import type { SessionPreviewItem } from "./session-utils.types.js";
 
 export type { ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
-export { readSessionTranscriptVisibleMessageDelta } from "../config/sessions/session-accessor.js";
+export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.js";
 
 export type { SessionTranscriptReadScope };
 

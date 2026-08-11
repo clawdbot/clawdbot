@@ -74,9 +74,9 @@ const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: vi.fn().mockReturnValue([]),
+  listSessionEntriesCore: vi.fn().mockReturnValue([]),
   loadSessionEntry: loadSessionEntryMock,
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
 }));
 

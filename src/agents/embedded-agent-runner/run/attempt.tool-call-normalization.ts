@@ -33,7 +33,10 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
-import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
+import {
+  couldNormalizeToolNamePrefixToAllowedTool,
+  normalizeToolPolicyName,
+} from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
@@ -79,7 +82,7 @@ function resolveExactAllowedToolName(
   if (allowedToolNames.has(rawName)) {
     return rawName;
   }
-  const normalized = normalizeToolName(rawName);
+  const normalized = normalizeToolPolicyName(rawName);
   if (allowedToolNames.has(normalized)) {
     return normalized;
   }
@@ -107,7 +110,7 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   };
 
   addCandidate(trimmed);
-  addCandidate(normalizeToolName(trimmed));
+  addCandidate(normalizeToolPolicyName(trimmed));
   const structuredSeeds = [trimmed];
 
   const xmlFragmentOffset = ['"', "'", "<"]
@@ -120,21 +123,21 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   if (xmlFragmentOffset !== undefined) {
     const prefix = trimmed.slice(0, xmlFragmentOffset);
     addCandidate(prefix);
-    addCandidate(normalizeToolName(prefix));
+    addCandidate(normalizeToolPolicyName(prefix));
     structuredSeeds.push(prefix);
   }
 
   for (const seed of structuredSeeds) {
     const normalizedDelimiter = seed.replace(/\//g, ".");
     addCandidate(normalizedDelimiter);
-    addCandidate(normalizeToolName(normalizedDelimiter));
+    addCandidate(normalizeToolPolicyName(normalizedDelimiter));
 
     const segments = normalizeStringEntries(normalizedDelimiter.split("."));
     if (segments.length > 1) {
       for (let index = 1; index < segments.length; index += 1) {
         const suffix = segments.slice(index).join(".");
         addCandidate(suffix);
-        addCandidate(normalizeToolName(suffix));
+        addCandidate(normalizeToolPolicyName(suffix));
       }
     }
   }
@@ -769,7 +772,7 @@ function classifyToolCallMessage(
       sawAllowedToolCall = true;
       continue;
     }
-    const normalizedUnknownToolName = normalizeToolName(rawName);
+    const normalizedUnknownToolName = normalizeToolPolicyName(rawName);
     if (!unknownToolName) {
       unknownToolName = normalizedUnknownToolName;
       continue;

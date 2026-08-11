@@ -160,7 +160,7 @@ function buildCatalogTools(
  * Materialize only static configured MCP for an authenticated scheduled turn.
  * No requester identity is accepted here, so requester resolvers stay unreachable.
  */
-export async function materializeStaticMcpToolsForScheduledHarnessRun(
+export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
   params: Omit<
     MaterializeRequesterScopedMcpToolsForHarnessRunParams,
     "requesterSenderId" | "agentAccountId" | "messageChannel"
@@ -252,7 +252,7 @@ export async function materializeStaticMcpToolsForScheduledHarnessRun(
  * Updates the session advertised-catalog cache when a requester resolves a catalog.
  * Before any requester resolves in the session, returns undefined (nothing to advertise).
  */
-export async function materializeRequesterScopedMcpToolsForHarnessRun(
+export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
   const scopedRuntime = await getOrCreateRequesterScopedMcpRuntime({

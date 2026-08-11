@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
+  readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
@@ -17,14 +17,14 @@ import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../confi
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
-  cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntry as patchAccessorSessionEntry,
-  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+  patchSessionEntryCore as patchAccessorSessionEntry,
+  readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,

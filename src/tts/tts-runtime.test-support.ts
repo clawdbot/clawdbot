@@ -135,8 +135,7 @@ export const {
   textToSpeechStream,
   textToSpeechTelephony,
 } = await import("./runtime-api.js");
-export const { maybeApplyTtsToPayload: maybeApplyTtsToPayloadCore } =
-  await import("./tts-payload.js");
+export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
 export const { textToSpeech: textToSpeechCore } = await import("./tts-synthesis.js");
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;

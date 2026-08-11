@@ -23,7 +23,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
-import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
+import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
 import {
   inspectRuntimeToolInputSchemas,
   type RuntimeToolSchemaDiagnostic,
@@ -979,8 +979,8 @@ function synthesizeBundleMcpAllowlistSentinelName(params: {
   safeServerName: string;
   allowlistEntry: string;
 }): string | undefined {
-  const normalized = normalizeToolName(params.allowlistEntry);
-  const serverPrefix = normalizeToolName(`${params.safeServerName}${TOOL_NAME_SEPARATOR}`);
+  const normalized = normalizeToolPolicyName(params.allowlistEntry);
+  const serverPrefix = normalizeToolPolicyName(`${params.safeServerName}${TOOL_NAME_SEPARATOR}`);
   if (normalized.startsWith(serverPrefix)) {
     return normalized;
   }

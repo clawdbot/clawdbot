@@ -3,7 +3,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -324,7 +324,9 @@ describe("session sharing handlers", () => {
       // The awaited model-catalog step flips the session to draft after the
       // pre-await draft filter ran, exercising the final fresh-target filter.
       const listWith = async (client: GatewayClient) => {
-        await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+        await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+          visibility: "shared",
+        }));
         invalidateSessionSharingSnapshot(sessionKey);
         const responses: Parameters<RespondFn>[] = [];
         await sessionReadHandlers["sessions.list"]?.({
@@ -333,7 +335,7 @@ describe("session sharing handlers", () => {
           context: {
             ...context(vi.fn()),
             readPreparedGatewayModelCatalog: async () => {
-              await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
+              await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
                 visibility: "draft",
               }));
               invalidateSessionSharingSnapshot(sessionKey);
@@ -409,7 +411,7 @@ describe("session sharing handlers", () => {
         context: {
           ...context(vi.fn()),
           readPreparedGatewayModelCatalog: async () => {
-            await patchSessionEntry({ agentId: "main", sessionKey: hiddenKey }, () => ({
+            await patchSessionEntryCore({ agentId: "main", sessionKey: hiddenKey }, () => ({
               visibility: "draft",
             }));
             invalidateSessionSharingSnapshot(hiddenKey);
@@ -597,10 +599,12 @@ describe("session sharing handlers", () => {
       };
 
       expectAccess(true);
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
       invalidateSessionSharingSnapshot(sessionKey);
       expectAccess(false);
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+        visibility: "shared",
+      }));
       invalidateSessionSharingSnapshot(sessionKey);
       expectAccess(true);
     });
@@ -695,7 +699,9 @@ describe("session sharing handlers", () => {
         ],
       ]);
 
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+        visibility: "shared",
+      }));
       invalidateSessionSharingSnapshot();
       const viewerClient = identifiedClient("viewer") as never;
       expect(
@@ -706,7 +712,7 @@ describe("session sharing handlers", () => {
           agentId: "main",
         }),
       ).toBe(true);
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
       invalidateSessionSharingSnapshot(sessionKey);
       expect(
         canReceiveSessionEvent({
@@ -717,7 +723,9 @@ describe("session sharing handlers", () => {
         }),
       ).toBe(false);
 
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+        visibility: "shared",
+      }));
       const append = vi
         .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {

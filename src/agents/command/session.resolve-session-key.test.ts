@@ -14,7 +14,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
+  listSessionEntriesCore: (scope?: { storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
 }));
 
