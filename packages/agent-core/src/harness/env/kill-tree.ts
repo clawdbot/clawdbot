@@ -7,7 +7,8 @@ const MAX_GRACE_MS = 60_000;
 const TASKKILL_COMPLETION_TIMEOUT_MS = 3000;
 
 type ProcessSnapshot = { pid: number; startTime: string | undefined };
-const treeSnapshotCache = new Map<number, ProcessSnapshot[]>();
+type TreeSnapshot = { rootStartTime: string | undefined; pids: ProcessSnapshot[] };
+const treeSnapshotCache = new Map<number, TreeSnapshot>();
 
 export type KillProcessTreeOptions = {
   graceMs?: number;
@@ -56,12 +57,25 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
   const graceMs = normalizeGraceMs(opts?.graceMs);
   signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
   setTimeout(() => {
-    const pids = useGroupKill
-      ? [{ pid, startTime: getProcessStartTime(pid) }]
-      : (treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid));
+    let pids: ProcessSnapshot[];
+    if (useGroupKill) {
+      pids = [{ pid, startTime: getProcessStartTime(pid) }];
+    } else {
+      const cached = treeSnapshotCache.get(pid);
+      if (cached && getProcessStartTime(pid) === cached.rootStartTime) {
+        pids = cached.pids;
+      } else {
+        pids = getUnixProcessTreePids(pid);
+      }
+    }
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : pids.some((p) => isProcessAlive(p.pid) && getProcessStartTime(p.pid) === p.startTime);
+      : pids.some(
+          (p) =>
+            isProcessAlive(p.pid) &&
+            p.startTime !== undefined &&
+            getProcessStartTime(p.pid) === p.startTime,
+        );
     if (!stillAlive) {
       treeSnapshotCache.delete(pid);
       return;
@@ -174,9 +188,9 @@ function getProcessStartTime(pid: number): string | undefined {
     const res = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" });
     if (!res.error && res.status === 0 && res.stdout) {
       const lines = res.stdout.trim().split("\n");
-      if (lines.length > 1) {
-        const lstart = lines[1];
-        if (lstart !== undefined) {
+      if (lines.length > 0) {
+        const lstart = lines[0];
+        if (lstart !== undefined && lstart.length > 0) {
           return lstart.trim();
         }
       }
@@ -294,16 +308,26 @@ function signalProcessTreeUnix(
   }
 
   let pidsToSignal: ProcessSnapshot[];
+  const rootStartTime = getProcessStartTime(pid);
 
   if (signal === "SIGTERM") {
-    pidsToSignal = treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid);
-    treeSnapshotCache.set(pid, pidsToSignal);
-
-    setTimeout(() => {
-      treeSnapshotCache.delete(pid);
-    }, MAX_GRACE_MS + 5000).unref();
+    const cached = treeSnapshotCache.get(pid);
+    if (cached && cached.rootStartTime === rootStartTime) {
+      pidsToSignal = cached.pids;
+    } else {
+      pidsToSignal = getUnixProcessTreePids(pid);
+      treeSnapshotCache.set(pid, { rootStartTime, pids: pidsToSignal });
+      setTimeout(() => {
+        treeSnapshotCache.delete(pid);
+      }, MAX_GRACE_MS + 5000).unref();
+    }
   } else if (signal === "SIGKILL") {
-    pidsToSignal = treeSnapshotCache.get(pid) ?? getUnixProcessTreePids(pid);
+    const cached = treeSnapshotCache.get(pid);
+    if (cached && cached.rootStartTime === rootStartTime) {
+      pidsToSignal = cached.pids;
+    } else {
+      pidsToSignal = getUnixProcessTreePids(pid);
+    }
     treeSnapshotCache.delete(pid);
   } else {
     pidsToSignal = getUnixProcessTreePids(pid);
