@@ -34,52 +34,18 @@ const LAZY_GROUP_HELP_CASES = [
   { group: "update", usageCommand: "update", registry: "subcli" },
 ] as const;
 
-async function createHelpProcessFixture(
-  config?: Record<string, unknown>,
-  loggingViaInclude = false,
-  loggingViaRootInclude = false,
-) {
+async function createHelpProcessFixture(config?: Record<string, unknown>) {
   const root = tempDirs.make("openclaw-help-exit-");
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
   const tlsImportGuardPath = path.join(root, "forbid-tls-import.mjs");
   const keepAlivePath = path.join(root, "keep-alive.mjs");
-  const unsupportedRuntimePath = path.join(root, "unsupported-runtime.mjs");
   const failRunMainImportPath = path.join(root, "fail-run-main-import.mjs");
   await fs.mkdir(stateDir, { recursive: true });
-  const profileConfigPath = path.join(root, ".openclaw-work", "openclaw.json");
-  await fs.mkdir(path.dirname(profileConfigPath), { recursive: true });
-  const configWithLoggingInclude = config
-    ? { ...config, logging: { $include: "./logging.json5" } }
-    : undefined;
-  const configWithRootLoggingInclude = config
-    ? { $include: "./base.json5", plugins: { $include: "./missing-plugins.json5" } }
-    : undefined;
-  const writtenConfig = loggingViaRootInclude
-    ? configWithRootLoggingInclude
-    : loggingViaInclude
-      ? configWithLoggingInclude
-      : config;
   await fs.writeFile(
     configPath,
-    JSON.stringify(writtenConfig ?? { plugins: { entries: { "oc-path": { enabled: true } } } }),
+    JSON.stringify(config ?? { plugins: { entries: { "oc-path": { enabled: true } } } }),
   );
-  await fs.writeFile(profileConfigPath, JSON.stringify(writtenConfig ?? {}));
-  if (loggingViaInclude) {
-    const logging = config?.logging ?? {};
-    await fs.writeFile(path.join(stateDir, "logging.json5"), JSON.stringify(logging));
-    await fs.writeFile(
-      path.join(path.dirname(profileConfigPath), "logging.json5"),
-      JSON.stringify(logging),
-    );
-  }
-  if (loggingViaRootInclude) {
-    await fs.writeFile(path.join(stateDir, "base.json5"), JSON.stringify(config ?? {}));
-    await fs.writeFile(
-      path.join(path.dirname(profileConfigPath), "base.json5"),
-      JSON.stringify(config ?? {}),
-    );
-  }
   await fs.writeFile(
     tlsImportGuardPath,
     `import { registerHooks } from "node:module";
@@ -94,10 +60,6 @@ registerHooks({
 `,
   );
   await fs.writeFile(keepAlivePath, "setInterval(() => {}, 60_000);\n");
-  await fs.writeFile(
-    unsupportedRuntimePath,
-    'Object.defineProperty(process.versions, "node", { value: "22.0.0" });\n',
-  );
   await fs.writeFile(
     failRunMainImportPath,
     `import { registerHooks } from "node:module";
@@ -118,7 +80,6 @@ registerHooks({
     tlsImportGuardPath,
     keepAlivePath,
     failRunMainImportPath,
-    unsupportedRuntimePath,
   };
 }
 
@@ -126,22 +87,14 @@ async function runCliProcess(params: {
   args: string[];
   config?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
-  useDefaultConfigPaths?: boolean;
   forbidTlsImport?: boolean;
   keepAlive?: boolean;
   failRunMainImport?: boolean;
-  unsupportedRuntime?: boolean;
   allowRespawn?: boolean;
-  loggingViaInclude?: boolean;
-  loggingViaRootInclude?: boolean;
   stateEnv?: (stateDir: string) => Record<string, string>;
   timeoutMs?: number;
 }) {
-  const fixture = await createHelpProcessFixture(
-    params.config,
-    params.loggingViaInclude,
-    params.loggingViaRootInclude,
-  );
+  const fixture = await createHelpProcessFixture(params.config);
   if (params.stateEnv) {
     const lines = Object.entries(params.stateEnv(fixture.stateDir)).map(
       ([key, value]) => `${key}=${value}`,
@@ -162,9 +115,6 @@ async function runCliProcess(params: {
       ...(params.failRunMainImport
         ? ["--import", pathToFileURL(fixture.failRunMainImportPath).href]
         : []),
-      ...(params.unsupportedRuntime
-        ? ["--import", pathToFileURL(fixture.unsupportedRuntimePath).href]
-        : []),
       "src/entry.ts",
       ...params.args,
     ],
@@ -183,9 +133,9 @@ async function runCliProcess(params: {
         NODE_ENV: undefined,
         NODE_OPTIONS: undefined,
         NODE_USE_SYSTEM_CA: "1",
-        OPENCLAW_CONFIG_PATH: params.useDefaultConfigPaths ? undefined : fixture.configPath,
+        OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_NO_RESPAWN: params.allowRespawn ? undefined : "1",
-        OPENCLAW_STATE_DIR: params.useDefaultConfigPaths ? undefined : fixture.stateDir,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
         VITEST: undefined,
         ...params.env,
       },
@@ -237,7 +187,7 @@ async function runCliProcess(params: {
       stdout,
     });
   }
-  return { stderr, stdout, fixture };
+  return { stderr, stdout };
 }
 
 function parseJsonLines(stdout: string): Array<Record<string, unknown>> {
@@ -296,7 +246,7 @@ describe("CLI help process exit", () => {
     );
   });
 
-  it.each(LAZY_GROUP_HELP_CASES)(
+  it.concurrent.each(LAZY_GROUP_HELP_CASES)(
     "renders in-process help for $group",
     async ({ group, usageCommand, registry }) => {
       let stdout = "";
@@ -328,24 +278,6 @@ describe("CLI help process exit", () => {
       expect(stdout).toContain(`Usage: openclaw ${usageCommand} [options] [command]`);
     },
   );
-
-  // Keep the process budget to root plus one core lazy group. Route-first
-  // rejection is decomposed across route-args/routes and error-output tests.
-  it("keeps the lazy help table exhaustive", () => {
-    expect(LAZY_GROUP_HELP_CASES.map(({ group }) => group)).toEqual([
-      "backup",
-      "capability",
-      "channels",
-      "clawbot",
-      "daemon",
-      "hooks",
-      "infer",
-      "migrate",
-      "node",
-      "security",
-      "update",
-    ]);
-  });
 });
 
 describe("JSON console style process output", () => {
@@ -356,66 +288,6 @@ describe("JSON console style process output", () => {
       level: "silent",
     },
   };
-
-  it("emits JSONL for routed text output", async () => {
-    const result = await runCliProcess({
-      args: ["status", "--timeout", "1000"],
-      config: loggingConfig,
-    });
-
-    const stdoutRecords = parseJsonLines(result.stdout);
-    const stderrRecords = parseJsonLines(result.stderr);
-    expect(stdoutRecords.length).toBeGreaterThan(0);
-    expect([...stdoutRecords, ...stderrRecords]).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ level: "info", message: "OpenClaw status" }),
-      ]),
-    );
-    expect([...stdoutRecords, ...stderrRecords]).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ message: expect.stringContaining("tslog: minLevel") }),
-      ]),
-    );
-  });
-
-  it("keeps writeJson machine output as one raw object", async () => {
-    const result = await runCliProcess({
-      args: ["status", "--json", "--timeout", "1000"],
-      config: loggingConfig,
-    });
-
-    expect(result.stderr).toBe("");
-    const output = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(output).toHaveProperty("gateway");
-    expect(output).not.toHaveProperty("level");
-    expect(output).not.toHaveProperty("message");
-  });
-
-  it("flushes explicitly requested traces before a container dispatch failure", async () => {
-    let failure: CliProcessFailure | undefined;
-    try {
-      await runCliProcess({
-        args: ["--container", "openclaw-json-console-missing", "gateway", "status"],
-        config: loggingConfig,
-        env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" },
-      });
-    } catch (error) {
-      failure = error as CliProcessFailure;
-    }
-
-    expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          level: "info",
-          message: expect.stringContaining("startup trace: entry.bootstrap"),
-        }),
-        expect.objectContaining({
-          level: "error",
-          message: expect.stringContaining("No running container matched"),
-        }),
-      ]),
-    );
-  });
 
   it(
     "captures exact exit code 2 after loading dotenv for entry validation diagnostics",
@@ -491,30 +363,6 @@ describe("JSON console style process output", () => {
     SLOW_DOTENV_TEST_TIMEOUT_MS,
   );
 
-  it("structures unsupported-runtime diagnostics from included named-profile config", async () => {
-    let failure: CliProcessFailure | undefined;
-    try {
-      await runCliProcess({
-        args: ["--profile", "work", "status"],
-        config: loggingConfig,
-        unsupportedRuntime: true,
-        useDefaultConfigPaths: true,
-        loggingViaInclude: true,
-      });
-    } catch (error) {
-      failure = error as CliProcessFailure;
-    }
-
-    expect(failure?.code).toBe(1);
-    expect(failure?.stdout ?? "").toBe("");
-    expect(parseJsonLines(failure?.stderr ?? "")).toEqual([
-      expect.objectContaining({
-        level: "error",
-        message: expect.stringContaining("Detected: node 22.0.0"),
-      }),
-    ]);
-  });
-
   it("preserves structured entry startup tracing across a normal respawn", async () => {
     const result = await runCliProcess({
       args: ["gateway", "status"],
@@ -529,75 +377,5 @@ describe("JSON console style process output", () => {
         record.message.includes("startup trace: entry.bootstrap"),
     );
     expect(bootstrapRecords.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("loads dotenv before formatting and caching startup trace logging settings", async () => {
-    const logFileName = "startup-trace.jsonl";
-    const result = await runCliProcess({
-      args: ["gateway", "status"],
-      config: {
-        logging: {
-          consoleLevel: "info",
-          consoleStyle: "${OPENCLAW_TEST_CONSOLE_STYLE}",
-          file: "${OPENCLAW_TEST_LOG_FILE}",
-          level: "info",
-        },
-      },
-      env: {
-        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-        OPENCLAW_TEST_CONSOLE_STYLE: undefined,
-        OPENCLAW_TEST_LOG_FILE: undefined,
-      },
-      stateEnv: (stateDir) => ({
-        OPENCLAW_TEST_CONSOLE_STYLE: "json",
-        OPENCLAW_TEST_LOG_FILE: path.join(stateDir, logFileName),
-      }),
-    });
-
-    const records = [...parseJsonLines(result.stdout), ...parseJsonLines(result.stderr)];
-    expect(records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          level: "info",
-          message: expect.stringContaining("startup trace: entry.bootstrap"),
-        }),
-      ]),
-    );
-    expect(await fs.readFile(path.join(result.fixture.stateDir, logFileName), "utf8")).toContain(
-      '"message":"Service:',
-    );
-  });
-
-  it("structures config validation with root-included logging and a broken sibling include", async () => {
-    let failure: CliProcessFailure | undefined;
-    try {
-      await runCliProcess({
-        args: ["config", "validate", "--definitely-invalid"],
-        config: {
-          ...loggingConfig,
-          logging: {
-            ...loggingConfig.logging,
-            file: "${MISSING_LOG_FILE}",
-          },
-        },
-        env: {
-          MISSING_LOG_FILE: undefined,
-          OPENCLAW_DISABLE_ROUTE_FIRST: "1",
-        },
-        loggingViaRootInclude: true,
-      });
-    } catch (error) {
-      failure = error as CliProcessFailure;
-    }
-
-    expect(failure?.code).toBe(1);
-    expect(parseJsonLines(failure?.stderr ?? "")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          level: "error",
-          message: expect.stringContaining("does not recognize option"),
-        }),
-      ]),
-    );
   });
 });

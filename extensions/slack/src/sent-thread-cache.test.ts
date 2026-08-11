@@ -1,5 +1,11 @@
 // Slack tests cover sent thread cache plugin behavior.
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "./runtime.js";
 import {
@@ -13,6 +19,7 @@ describe("slack sent-thread-cache", () => {
   afterEach(() => {
     clearSlackThreadParticipationCache();
     setSlackRuntime(null as never);
+    resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
 
@@ -35,6 +42,14 @@ describe("slack sent-thread-cache", () => {
     recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
     expect(hasSlackThreadParticipation("A2", "C123", "1700000000.000001")).toBe(false);
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
+  });
+
+  it("scopes participation by enterprise workspace without matching unscoped threads", () => {
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001", { teamId: "T1" });
+
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001", "T1")).toBe(true);
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001", "T2")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
   });
 
   it("ignores empty accountId, channelId, or threadTs", () => {
@@ -77,11 +92,10 @@ describe("slack sent-thread-cache", () => {
     }
   });
 
-  it("expired entries return false and are cleaned up on read", () => {
+  it("retains thread participation more than 24 hours after the bot replied", () => {
     recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
-    // Advance time past the 24-hour TTL
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
-    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
   });
 
   it("enforces maximum entries by evicting oldest fresh entries", () => {
@@ -93,14 +107,14 @@ describe("slack sent-thread-cache", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.005000")).toBe(true);
   });
 
-  it("restores persistent thread participation without extending its original expiry", async () => {
+  it("restores persistent thread participation more than 24 hours after the bot replied", async () => {
     const repliedAt = 1_711_406_400_000;
-    const ttlMs = 24 * 60 * 60 * 1000;
     const now = vi.spyOn(Date, "now").mockReturnValue(repliedAt);
-    const register = vi.fn().mockResolvedValue(undefined);
-    const lookup = vi
-      .fn()
-      .mockImplementation(async () => (Date.now() < repliedAt + ttlMs ? { repliedAt } : undefined));
+    const persistedRecords = new Map<string, { repliedAt: number }>();
+    const register = vi.fn(async (key: string, value: { repliedAt: number }) => {
+      persistedRecords.set(key, value);
+    });
+    const lookup = vi.fn(async (key: string) => persistedRecords.get(key));
     const openKeyedStore = vi.fn(() => ({
       register,
       lookup,
@@ -120,8 +134,12 @@ describe("slack sent-thread-cache", () => {
     expect(register).toHaveBeenCalledWith("A1:C123:1700000000.000002", {
       repliedAt,
     });
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "slack.thread-participation",
+      maxEntries: 1000,
+    });
 
-    now.mockReturnValue(repliedAt + ttlMs - 1000);
+    now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
     clearSlackThreadParticipationCache();
     await expect(
       hasSlackThreadParticipationWithPersistence({
@@ -143,15 +161,183 @@ describe("slack sent-thread-cache", () => {
     ).resolves.toBe(true);
     expect(lookup).not.toHaveBeenCalled();
 
-    now.mockReturnValue(repliedAt + ttlMs + 1000);
+    now.mockReturnValue(repliedAt + 365 * 24 * 60 * 60 * 1000);
     await expect(
       hasSlackThreadParticipationWithPersistence({
         accountId: "A1",
         channelId: "C123",
         threadTs: "1700000000.000002",
       }),
+    ).resolves.toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("preserves hydrated legacy expiration while new participation survives restart", async () => {
+    await withOpenClawTestState(
+      { label: "slack-thread-participation", layout: "state-only", applyEnv: false },
+      async (state) => {
+        resetPluginStateStoreForTests();
+        const repliedAt = 1_711_406_400_000;
+        const now = vi.spyOn(Date, "now").mockReturnValue(repliedAt);
+        const legacyThreadTs = "1700000000.000004";
+        const legacyKey = `A1:T1:C123:${legacyThreadTs}`;
+        const legacyStore = createPluginStateKeyedStoreForTests<{ repliedAt: number }>("slack", {
+          namespace: "slack.thread-participation",
+          maxEntries: 1000,
+          defaultTtlMs: 24 * 60 * 60 * 1000,
+          env: state.env,
+        });
+        await legacyStore.register(legacyKey, { repliedAt });
+        const legacyEntry = (await legacyStore.entries()).find((entry) => entry.key === legacyKey);
+        expect(legacyEntry?.expiresAt).toBe(repliedAt + 24 * 60 * 60 * 1000);
+        resetPluginStateStoreForTests();
+
+        const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<{ repliedAt: number }>("slack", {
+            ...options,
+            env: state.env,
+          }),
+        );
+        setSlackRuntime({
+          state: { openKeyedStore },
+          logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+        } as never);
+
+        now.mockReturnValue(repliedAt + 23 * 60 * 60 * 1000);
+        await expect(
+          hasSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            teamId: "T1",
+            channelId: "C123",
+            threadTs: legacyThreadTs,
+          }),
+        ).resolves.toBe(true);
+        expect(hasSlackThreadParticipation("A1", "C123", legacyThreadTs, "T1")).toBe(false);
+        expect(openKeyedStore).toHaveBeenCalledExactlyOnceWith({
+          namespace: "slack.thread-participation",
+          maxEntries: 1000,
+        });
+        const store = createPluginStateKeyedStoreForTests<{ repliedAt: number }>("slack", {
+          namespace: "slack.thread-participation",
+          maxEntries: 1000,
+          env: state.env,
+        });
+        const preservedLegacyEntry = (await store.entries()).find(
+          (candidate) => candidate.key === legacyKey,
+        );
+        expect(preservedLegacyEntry?.expiresAt).toBe(legacyEntry?.expiresAt);
+
+        now.mockReturnValue(repliedAt + 25 * 60 * 60 * 1000);
+        await expect(
+          hasSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            teamId: "T1",
+            channelId: "C123",
+            threadTs: legacyThreadTs,
+          }),
+        ).resolves.toBe(false);
+        expect(hasSlackThreadParticipation("A1", "C123", legacyThreadTs, "T1")).toBe(false);
+        expect(await store.lookup(legacyKey)).toBeUndefined();
+        recordSlackThreadParticipation("A1", "C123", "1700000000.000003", { teamId: "T1" });
+        await vi.waitFor(async () => {
+          await expect(store.lookup("A1:T1:C123:1700000000.000003")).resolves.toEqual({
+            repliedAt: repliedAt + 25 * 60 * 60 * 1000,
+          });
+        });
+        const entry = (await store.entries()).find(
+          (candidate) => candidate.key === "A1:T1:C123:1700000000.000003",
+        );
+        expect(entry).toBeDefined();
+        expect(entry).not.toHaveProperty("expiresAt");
+
+        now.mockReturnValue(repliedAt + 50 * 60 * 60 * 1000);
+        resetPluginStateStoreForTests();
+        clearSlackThreadParticipationCache();
+
+        await expect(
+          hasSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            teamId: "T1",
+            channelId: "C123",
+            threadTs: legacyThreadTs,
+          }),
+        ).resolves.toBe(false);
+        await expect(
+          hasSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            teamId: "T1",
+            channelId: "C123",
+            threadTs: "1700000000.000003",
+          }),
+        ).resolves.toBe(true);
+        expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000003", "T1")).toBe(true);
+        expect(openKeyedStore).toHaveBeenCalledTimes(2);
+
+        for (const probe of [
+          { accountId: "A2", teamId: "T1", channelId: "C123", threadTs: "1700000000.000003" },
+          { accountId: "A1", teamId: "T2", channelId: "C123", threadTs: "1700000000.000003" },
+          { accountId: "A1", channelId: "C123", threadTs: "1700000000.000003" },
+          { accountId: "A1", teamId: "T1", channelId: "C456", threadTs: "1700000000.000003" },
+          { accountId: "A1", teamId: "T1", channelId: "C123", threadTs: "1700000000.000005" },
+        ]) {
+          await expect(hasSlackThreadParticipationWithPersistence(probe)).resolves.toBe(false);
+        }
+      },
+    );
+  });
+
+  it("bounds persistent participation to 1,000 entries and evicts the oldest", async () => {
+    const persistedRecords = new Map<string, { repliedAt: number }>();
+    const register = vi.fn(async (key: string, value: { repliedAt: number }) => {
+      persistedRecords.delete(key);
+      persistedRecords.set(key, value);
+      if (persistedRecords.size > 1000) {
+        const oldestKey = persistedRecords.keys().next().value;
+        if (oldestKey !== undefined) {
+          persistedRecords.delete(oldestKey);
+        }
+      }
+    });
+    const lookup = vi.fn(async (key: string) => persistedRecords.get(key));
+    const openKeyedStore = vi.fn(() => ({ register, lookup }));
+    setSlackRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    for (let i = 0; i < 1001; i += 1) {
+      recordSlackThreadParticipation("A1", "C123", `1700000000.${String(i).padStart(6, "0")}`);
+    }
+
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1001));
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "slack.thread-participation",
+      maxEntries: 1000,
+    });
+    expect(persistedRecords.size).toBe(1000);
+    clearSlackThreadParticipationCache();
+
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000000",
+      }),
     ).resolves.toBe(false);
-    expect(lookup).toHaveBeenCalledWith("A1:C123:1700000000.000002");
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000001",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      hasSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.001000",
+      }),
+    ).resolves.toBe(true);
   });
 
   it("falls back to in-memory thread participation when persistent state cannot open", async () => {
