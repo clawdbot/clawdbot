@@ -504,7 +504,7 @@ export const en: TranslationMap = {
   },
   devices: {
     pairing: {
-      button: "Pair mobile device",
+      button: "Pair device",
       adminRequired: "Administrator access is required to create setup codes.",
       title: "Pair a device",
       subtitle: "Create a secure setup for a mobile app or node host.",
