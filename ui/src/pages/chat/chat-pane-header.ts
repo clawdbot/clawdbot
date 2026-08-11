@@ -24,6 +24,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -31,7 +32,10 @@ import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import "./components/chat-header-session-menu.ts";
-import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
+import type {
+  HeaderMenuAction,
+  HeaderMenuQuickAction,
+} from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
@@ -157,23 +161,119 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           session: row,
         })
       : {};
-    const desktopPanelAction = isDesktopPanelAvailable(this.context.gateway.snapshot)
+    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const openDesktopPanel = () =>
+      window.dispatchEvent(
+        new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
+          detail: { open: true },
+        }),
+      );
+    const desktopPanelAction = desktopPanelAvailable
       ? html`<openclaw-tooltip .content=${t("desktop.toggle")}>
           <button
             class="btn btn--ghost btn--icon chat-icon-btn chat-desktop-panel-toggle"
             type="button"
             aria-label=${t("desktop.toggle")}
-            @click=${() =>
-              window.dispatchEvent(
-                new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
-                  detail: { open: true },
-                }),
-              )}
+            @click=${openDesktopPanel}
           >
             ${icons.monitor}
           </button>
         </openclaw-tooltip>`
       : nothing;
+    const discussion = this.resolveSessionDiscussionAction();
+    const sessionRailMode = this.selectedSessionRailMode(this.state?.sessionKey ?? "");
+    const toggleSessionRail = () => this.requestSessionRail("toggle");
+    const panelMenuActions: HeaderMenuQuickAction[] = [];
+    if (sessionWorkspace.onToggleTerminal) {
+      panelMenuActions.push({
+        id: "terminal",
+        label: t("terminal.toggle"),
+        icon: icons.terminal,
+        onActivate: sessionWorkspace.onToggleTerminal,
+      });
+    }
+    if (desktopPanelAvailable) {
+      panelMenuActions.push({
+        id: "desktop",
+        label: t("desktop.toggle"),
+        icon: icons.monitor,
+        onActivate: openDesktopPanel,
+      });
+    }
+    if (discussion) {
+      panelMenuActions.push({
+        id: "discussion",
+        label: discussion.label,
+        icon: icons.messageSquare,
+        active: discussion.active,
+        onActivate: discussion.onToggle,
+      });
+    }
+    if (sessionWorkspace.onOpenDiff) {
+      panelMenuActions.push({
+        id: "changes",
+        label: t("chat.sessionDiff.show"),
+        icon: icons.fileDiff,
+        disabledReason: sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : undefined,
+        onActivate: sessionWorkspace.onOpenDiff,
+      });
+    }
+    if (backgroundTasks) {
+      panelMenuActions.push({
+        id: "background-tasks",
+        label: t(
+          backgroundTasks.collapsed ? "chat.backgroundTasks.show" : "chat.backgroundTasks.collapse",
+        ),
+        icon: icons.listChecks,
+        active: !backgroundTasks.collapsed,
+        badge: backgroundTasks.tasks?.filter(isActiveTask).length ?? 0,
+        onActivate: backgroundTasks.onToggleCollapsed,
+      });
+    }
+    panelMenuActions.push({
+      id: "session-files",
+      label: t(
+        sessionWorkspace.collapsed
+          ? "chat.workspaceFiles.showFiles"
+          : "chat.workspaceFiles.collapse",
+      ),
+      icon: icons.fileText,
+      active: !sessionWorkspace.collapsed,
+      badge: sessionWorkspace.list?.files.filter((file) => file.kind === "modified").length ?? 0,
+      onActivate: sessionWorkspace.onToggleCollapsed,
+    });
+    panelMenuActions.push({
+      id: "session-companion",
+      label: t(sessionRailMode === "expanded" ? "chat.rail.collapse" : "chat.rail.show"),
+      icon: icons.spark,
+      active: sessionRailMode === "expanded",
+      onActivate: toggleSessionRail,
+    });
+    const layoutMenuActions: HeaderMenuQuickAction[] = [];
+    if (this.onOpenSplitView) {
+      layoutMenuActions.push({
+        id: "open-split-view",
+        label: t("chat.splitView.open"),
+        icon: icons.columns2,
+        onActivate: this.onOpenSplitView,
+      });
+    }
+    if (!this.narrow && this.onSplitDown) {
+      layoutMenuActions.push({
+        id: "split-down",
+        label: t("chat.splitView.splitDown"),
+        icon: icons.panelBottomOpen,
+        onActivate: () => this.onSplitDown?.(this.paneId),
+      });
+    }
+    if (!this.narrow && this.onSplitRight) {
+      layoutMenuActions.push({
+        id: "split-right",
+        label: t("chat.splitView.splitRight"),
+        icon: icons.panelRightOpen,
+        onActivate: () => this.onSplitRight?.(this.paneId),
+      });
+    }
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -206,12 +306,12 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         this.catalogSession,
         sessionWorkspace.onToggleTerminal,
       )}${desktopPanelAction}`,
-      discussionAction: this.renderSessionDiscussionAction(),
+      discussionAction: this.renderSessionDiscussionAction(discussion),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       sessionRailAction: renderSessionRailToggle({
-        mode: this.selectedSessionRailMode(this.state?.sessionKey ?? ""),
-        onToggle: () => this.requestSessionRail("toggle"),
+        mode: sessionRailMode,
+        onToggle: toggleSessionRail,
       }),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
       presence:
@@ -298,7 +398,10 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
               this.context.runtimeConfig.canPatch === false}
+              .compact=${this.narrow}
               .settings=${this.state.settings}
+              .panelActions=${panelMenuActions}
+              .layoutActions=${layoutMenuActions}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .archiveAllowed=${archiveAllowed}
@@ -508,7 +611,11 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
     return true;
   }
 
-  protected renderSessionDiscussionAction() {
+  private resolveSessionDiscussionAction(): {
+    active: boolean;
+    label: string;
+    onToggle: () => void;
+  } | null {
     const state = this.state;
     const sessionKey = state?.sessionKey.trim() ?? "";
     const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
@@ -520,26 +627,37 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       known === "none" ||
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
     ) {
-      return nothing;
+      return null;
     }
     if (!this.buildSessionDiscussionPanel(state, sessionKey)) {
-      return nothing;
+      return null;
     }
     const active = state.sidebarLayout.columns.some((column) =>
       column.panels.some((panel) => panel.slot === "discussion"),
     );
     const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
+    return {
+      active,
+      label,
+      onToggle: () =>
+        active
+          ? state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
+          : this.openSessionDiscussionSlot(),
+    };
+  }
+
+  protected renderSessionDiscussionAction(action = this.resolveSessionDiscussionAction()) {
+    if (!action) {
+      return nothing;
+    }
     return html`
-      <openclaw-tooltip .content=${label}>
+      <openclaw-tooltip .content=${action.label}>
         <button
           class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle"
           type="button"
-          aria-label=${label}
-          aria-pressed=${String(active)}
-          @click=${() =>
-            active
-              ? state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
-              : this.openSessionDiscussionSlot()}
+          aria-label=${action.label}
+          aria-pressed=${String(action.active)}
+          @click=${action.onToggle}
         >
           ${icons.messageSquare}
         </button>

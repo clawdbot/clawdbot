@@ -253,6 +253,41 @@ describe("chat pane header", () => {
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });
 
+  it("moves session panel shortcuts out of a narrow header while keeping shell actions", () => {
+    const { container } = mount({
+      narrow: true,
+      mergedChrome: true,
+      panelActions: html`<button data-action="terminal"></button>`,
+      discussionAction: html`<button data-action="discussion"></button>`,
+      diffAction: html`<button data-action="diff"></button>`,
+      backgroundTasksAction: html`<button data-action="tasks"></button>`,
+      workspaceAction: html`<button data-action="workspace"></button>`,
+      sessionRailAction: html`<button data-action="rail"></button>`,
+      sessionMenuAction: html`<button data-action="session-menu"></button>`,
+    });
+
+    expect(container.querySelector('[data-action="terminal"]')).toBeNull();
+    expect(container.querySelector('[data-action="discussion"]')).toBeNull();
+    expect(container.querySelector('[data-action="diff"]')).toBeNull();
+    expect(container.querySelector('[data-action="tasks"]')).toBeNull();
+    expect(container.querySelector('[data-action="workspace"]')).toBeNull();
+    expect(container.querySelector('[data-action="rail"]')).toBeNull();
+    expect(container.querySelector('[data-action="session-menu"]')).not.toBeNull();
+    expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__palette-open")).not.toBeNull();
+  });
+
+  it("keeps narrow catalog panel shortcuts visible without a session menu", () => {
+    const { container } = mount({
+      narrow: true,
+      catalog: true,
+      session: undefined,
+      panelActions: html`<button data-action="terminal"></button>`,
+    });
+
+    expect(container.querySelector('[data-action="terminal"]')).not.toBeNull();
+  });
+
   it("renders an editable title and workspace chip", () => {
     const { container, props } = mount();
     const title = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button");

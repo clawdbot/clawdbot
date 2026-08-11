@@ -240,6 +240,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       : t("chat.sessionHeader.copyBranch");
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
+  const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
 
   return html`
     <div class="chat-pane__header" @mousedown=${beginNativeWindowDrag}>
@@ -432,8 +433,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.panelActions} ${props.discussionAction}
-        ${props.catalog
+        ${compactSessionActions ? nothing : html`${props.panelActions} ${props.discussionAction}`}
+        ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
             ${props.sessionRailAction}`}

@@ -517,6 +517,22 @@ openclaw-chat-pane {
   }
 }
 
+.chat-header-session-menu--compact .session-menu__item {
+  min-height: 44px;
+}
+
+.chat-header-session-menu--compact .session-menu__section-label {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+}
+
+.chat-header-session-menu--compact::part(menu) {
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
 /* Plain web shell chrome overlays the first pane header. Expanded navigation
    shows toggle + search; collapsed navigation adds new-thread between them. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
