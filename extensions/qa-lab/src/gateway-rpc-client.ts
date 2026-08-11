@@ -18,10 +18,10 @@ type QaGatewayRpcClient = {
 };
 
 type QaGatewayConnectionGate = {
+  connected: boolean;
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
-  state: "pending" | "connected" | "failed";
 };
 
 const QA_GATEWAY_RPC_TIMEOUT_MS = 20_000;
@@ -29,30 +29,13 @@ const QA_GATEWAY_RPC_TIMEOUT_MS = 20_000;
 function createQaGatewayConnectionGate(): QaGatewayConnectionGate {
   let resolvePromise!: () => void;
   let rejectPromise!: (error: Error) => void;
-  const gate: QaGatewayConnectionGate = {
-    promise: new Promise<void>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    }),
-    resolve: () => {
-      if (gate.state !== "pending") {
-        return;
-      }
-      gate.state = "connected";
-      resolvePromise();
-    },
-    reject: (error) => {
-      if (gate.state !== "pending") {
-        return;
-      }
-      gate.state = "failed";
-      rejectPromise(error);
-    },
-    state: "pending",
-  };
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
   // A terminal reconnect error can arrive without an active request waiter.
-  void gate.promise.catch(() => {});
-  return gate;
+  void promise.catch(() => {});
+  return { connected: false, promise, reject: rejectPromise, resolve: resolvePromise };
 }
 
 function formatQaGatewayRpcError(error: unknown, logs: () => string) {
@@ -110,9 +93,12 @@ export async function startQaGatewayRpcClient(params: {
     deviceIdentity: null,
     mode: "backend",
     scopes: ["operator.admin"],
-    onHelloOk: () => connection.resolve(),
+    onHelloOk: () => {
+      connection.connected = true;
+      connection.resolve();
+    },
     onClose: () => {
-      if (!stopped && connection.state === "connected") {
+      if (!stopped && connection.connected) {
         connection = createQaGatewayConnectionGate();
       }
     },
@@ -120,7 +106,7 @@ export async function startQaGatewayRpcClient(params: {
       const error = new Error(
         `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,
       );
-      if (connection.state === "connected") {
+      if (connection.connected) {
         connection = createQaGatewayConnectionGate();
       }
       connection.reject(error);
@@ -175,7 +161,7 @@ export async function startQaGatewayRpcClient(params: {
             assertNotStopped();
             // A close can race between gate resolution and request dispatch. No frame was sent,
             // so waiting for the next hello and retrying is safe even for non-idempotent methods.
-            if (connection === requestConnection && connection.state === "connected") {
+            if (connection === requestConnection && connection.connected) {
               connection = createQaGatewayConnectionGate();
             }
           }

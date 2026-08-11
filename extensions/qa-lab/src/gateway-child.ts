@@ -682,7 +682,6 @@ function createQaGatewayChildLogCollector() {
   };
   let recent = "";
   let end = 0;
-  let dropped = false;
 
   const readFrom = (mark: number) => {
     const start = end - recent.length;
@@ -697,7 +696,6 @@ function createQaGatewayChildLogCollector() {
       recent += text;
       if (recent.length > QA_GATEWAY_CHILD_RECENT_LOG_CHARS) {
         recent = sliceUtf16Safe(recent, -QA_GATEWAY_CHILD_RECENT_LOG_CHARS);
-        dropped = true;
       }
     },
     mark() {
@@ -707,7 +705,7 @@ function createQaGatewayChildLogCollector() {
       return readFrom(mark);
     },
     text() {
-      return `${dropped ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();
+      return `${end > recent.length ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();
     },
   };
 }
