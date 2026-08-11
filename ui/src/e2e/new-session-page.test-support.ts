@@ -77,7 +77,9 @@ export const SESSION_LIST_DEFAULTS = {
   modelProvider: "openai",
 };
 
-export function pollLocatorText(locator: Locator) {
+type LocatorTextPoll = ReturnType<typeof expect.poll<Promise<string | null>>>;
+
+export function pollLocatorText(locator: Locator): LocatorTextPoll {
   return expect.poll(() => locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS }), {
     timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS,
   });
