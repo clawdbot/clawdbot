@@ -15,6 +15,12 @@ import {
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  setGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
+
+const TEST_TAILSCALE_GATEWAY_PORT = 18_789;
 
 function createLimiterSpy(): AuthRateLimiter & {
   check: ReturnType<typeof vi.fn>;
@@ -48,8 +54,9 @@ type TailscaleForwardedRequest = IncomingMessage & {
 };
 
 function createTailscaleForwardedReq(): TailscaleForwardedRequest {
+  setGatewayTailscaleIngressMode(TEST_TAILSCALE_GATEWAY_PORT, "serve");
   return {
-    socket: { remoteAddress: "127.0.0.1" },
+    socket: { remoteAddress: "127.0.0.1", localPort: TEST_TAILSCALE_GATEWAY_PORT },
     headers: {
       host: "gateway.local",
       "x-forwarded-for": "100.64.0.1",
@@ -80,6 +87,10 @@ function createAvatarBrowserOriginPolicy(
 }
 
 describe("gateway auth", () => {
+  afterEach(() => {
+    clearGatewayTailscaleIngressMode(TEST_TAILSCALE_GATEWAY_PORT);
+  });
+
   async function expectTokenMismatchWithLimiter(params: {
     reqHeaders: Record<string, string>;
     allowRealIpFallback?: boolean;
@@ -508,6 +519,20 @@ describe("gateway auth", () => {
       name: "Peter",
       profilePic: "https://avatars.example.test/peter.png",
     });
+  });
+
+  it("rejects matching Tailscale-shaped identity without managed Serve provenance", async () => {
+    const req = createTailscaleForwardedReq();
+    clearGatewayTailscaleIngressMode(TEST_TAILSCALE_GATEWAY_PORT);
+
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req,
+    });
+
+    expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
   });
 
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {

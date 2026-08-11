@@ -24,6 +24,10 @@ vi.mock("../infra/tailscale.js", () => ({
 
 import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  readGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
 
 function createLogger() {
   return { info: vi.fn(), warn: vi.fn() };
@@ -34,6 +38,7 @@ function resetMcpAppChannelOrigin() {
 }
 
 afterEach(() => {
+  clearGatewayTailscaleIngressMode(18789);
   resetMcpAppChannelOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
@@ -61,6 +66,20 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
+    expect(readGatewayTailscaleIngressMode(18789)).toBe("serve");
+  });
+
+  it("clears managed Serve provenance only after owned route cleanup succeeds", async () => {
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      resetOnExit: true,
+      logTailscale: createLogger(),
+    });
+
+    expect(readGatewayTailscaleIngressMode(18789)).toBe("serve");
+    await cleanup?.();
+    expect(readGatewayTailscaleIngressMode(18789)).toBeUndefined();
   });
 
   it("skips enableTailscaleServe when preserveFunnel is true and a Funnel route covers the port", async () => {

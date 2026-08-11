@@ -26,6 +26,7 @@ import {
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
+import { readGatewayTailscaleIngressMode } from "./tailscale-ingress-state.js";
 export {
   resolveEffectiveSharedGatewayAuth,
   resolveGatewayAuth,
@@ -513,6 +514,7 @@ async function authorizeGatewayConnectCore(
   const { authSurface, limiter, ip, rateLimitScope, localDirect, unattributableProxy } =
     resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const managedTailscaleServe = readGatewayTailscaleIngressMode(req?.socket?.localPort) === "serve";
   let effectiveIp = ip;
   let verifiedTailscaleUser: TailscaleUser | undefined;
 
@@ -540,7 +542,12 @@ async function authorizeGatewayConnectCore(
   // OpenClaw-managed Tailscale ingress is attributable even though its local
   // proxy socket is loopback. Verify that identity before deciding whether the
   // forwarded request needs ordinary trusted-proxy configuration.
-  if (unattributableProxy && auth.allowTailscale && hasTailscaleProxyHeaders(req)) {
+  if (
+    unattributableProxy &&
+    managedTailscaleServe &&
+    auth.allowTailscale &&
+    hasTailscaleProxyHeaders(req)
+  ) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -617,6 +624,7 @@ async function authorizeGatewayConnectCore(
     allowTailscaleHeaderAuth &&
     auth.allowTailscale &&
     !localDirect &&
+    (!unattributableProxy || managedTailscaleServe) &&
     !hasExplicitSharedSecretAuth(connectAuth);
 
   if (canAttemptTailscaleHeaderAuth) {

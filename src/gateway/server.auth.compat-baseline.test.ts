@@ -20,6 +20,7 @@ import {
   restoreGatewayToken,
   startTestGatewayServer,
   testState,
+  testTailscaleWhois,
   installGatewayTestHooks,
 } from "./server.auth.test-helpers.js";
 
@@ -321,7 +322,13 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("rejects before a valid device credential can bypass attribution", async () => {
-      const headers = { "x-forwarded-for": "203.0.113.10" };
+      testTailscaleWhois.value = { login: "spoofed@example.com", name: "Spoofed" };
+      const headers = {
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.example.com",
+        "tailscale-user-login": "spoofed@example.com",
+      };
       const ws = await openWs(port, headers);
       try {
         const nonce = await readConnectChallengeNonce(ws);

@@ -12,6 +12,10 @@ import {
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  setGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -56,6 +60,9 @@ export async function startGatewayTailscaleExposure(params: {
     } else {
       await enableTailscaleFunnel(params.port);
     }
+    // Successful route setup is the provenance boundary for forwarded
+    // Tailscale requests arriving on this process-owned Gateway port.
+    setGatewayTailscaleIngressMode(params.port, effectiveMode);
     const host = await (
       params.tailscaleMode === "serve" && !preservedFunnel
         ? getTailnetHostnameAfterServe()
@@ -108,6 +115,7 @@ export async function startGatewayTailscaleExposure(params: {
       } else {
         await disableTailscaleFunnel();
       }
+      clearGatewayTailscaleIngressMode(params.port);
     } catch (err) {
       params.logTailscale.warn(
         `${params.tailscaleMode} cleanup failed: ${formatErrorMessage(err)}`,
