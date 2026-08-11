@@ -1,4 +1,4 @@
-import { skillExperienceReviewCancellation } from "./experience-review-cancellation.js";
+import { agentEndCancellation } from "../../agents/harness/agent-end-cancellation.js";
 import {
   createSkillExperienceReviewScheduler,
   type ExperienceReviewCandidate,
@@ -24,12 +24,14 @@ const defaultScheduler = createSkillExperienceReviewScheduler({
   runReview: (candidate, abortSignal) => runSkillExperienceReview(candidate, { abortSignal }),
 });
 
-skillExperienceReviewCancellation.register((sessionKey) => defaultScheduler.cancel(sessionKey));
+agentEndCancellation.register((sessionKey) => defaultScheduler.cancel(sessionKey));
 
 /** Queues a conservative, post-run learning review after the agent system becomes idle. */
-export function scheduleSkillExperienceReview(params: SkillExperienceReviewParams): void {
+export async function scheduleSkillExperienceReview(
+  params: SkillExperienceReviewParams,
+): Promise<void> {
   if (
-    skillExperienceReviewCancellation.consumeStoppedTerminal(
+    await agentEndCancellation.consumeStoppedTerminal(
       params.ctx.sessionKey,
       params.ctx.runId,
       params.event.success,

@@ -93,6 +93,12 @@ export type SkillProposalApplyTransitionDependencies = {
   ) => Promise<SkillProposalReadResult>;
 };
 
+export const skillProposalApplyAbortSignal = Symbol("skillProposalApplyAbortSignal");
+
+type CancellableSkillProposalActionInput = SkillProposalActionInput & {
+  [skillProposalApplyAbortSignal]?: AbortSignal;
+};
+
 export type SkillProposalTransitionInput = Pick<
   SkillProposalActionInput,
   "agentId" | "correlationId" | "env" | "eventActor" | "workspaceDir"
@@ -119,10 +125,7 @@ export async function applySkillProposalTransition(
   input: SkillProposalActionInput,
   dependencies: SkillProposalApplyTransitionDependencies,
 ): Promise<SkillProposalApplyResult> {
-  // Autonomous review cancellation is internal apply context, not a public Workshop action field.
-  const abortSignal = (input as SkillProposalActionInput & { abortSignal?: AbortSignal })
-    .abortSignal;
-  abortSignal?.throwIfAborted();
+  const abortSignal = (input as CancellableSkillProposalActionInput)[skillProposalApplyAbortSignal];
   const recoveryReadOptions = input.config ? { config: input.config } : undefined;
   const lockedReadOptions = {
     ...(input.config ? { config: input.config } : {}),
@@ -186,8 +189,6 @@ export async function applySkillProposalTransition(
     }
     throw error;
   }
-
-  abortSignal?.throwIfAborted();
 
   const blocking = evaluated.evaluation.outcomes.find(
     (outcome) => outcome.status === "completed" && outcome.result.decision === "block",
@@ -281,9 +282,17 @@ export async function applySkillProposalTransition(
         store: storeOptions(input.env),
       });
 
+      if (abortSignal?.aborted) {
+        await clearSkillProposalRollback({
+          proposalId: record.id,
+          expectedRecordJson: JSON.stringify(record),
+          store: storeOptions(input.env),
+        });
+        abortSignal.throwIfAborted();
+      }
+
       try {
-        abortSignal?.throwIfAborted();
-        await applyWorkspaceSkillMutation(mutation, undefined, abortSignal);
+        await applyWorkspaceSkillMutation(mutation);
       } catch (error) {
         // A rejected filesystem write may have partially changed its target
         // before throwing. Keep recovery facts unless the full bundle is
@@ -306,6 +315,15 @@ export async function applySkillProposalTransition(
             sourceVersion: record.proposedVersion,
           })
         : undefined;
+      if (abortSignal?.aborted) {
+        await restoreWorkspaceSkillMutation(mutation);
+        await clearSkillProposalRollback({
+          proposalId: record.id,
+          expectedRecordJson: JSON.stringify(record),
+          store: storeOptions(input.env),
+        });
+        abortSignal.throwIfAborted();
+      }
       const now = new Date().toISOString();
       const applied: SkillProposalRecord = {
         ...record,

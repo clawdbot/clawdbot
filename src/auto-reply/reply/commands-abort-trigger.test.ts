@@ -12,7 +12,7 @@ const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
 );
 const setAbortMemoryMock = vi.hoisted(() => vi.fn());
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
-  vi.fn(() => ({ active: false, aborted: false })),
+  vi.fn(() => ({ active: false, aborted: false, abortedRunIds: [] })),
 );
 const formatAbortReplyTextMock = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
 
@@ -97,7 +97,11 @@ function buildAbortParams(): HandleCommandsParams {
 describe("handleAbortTrigger", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: false, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({
+      active: false,
+      aborted: false,
+      abortedRunIds: [],
+    });
   });
 
   it("rejects unauthorized natural-language abort triggers", async () => {
@@ -113,7 +117,11 @@ describe("handleAbortTrigger", () => {
     const params = buildAbortParams();
     params.command.isAuthorizedSender = true;
     params.command.senderIsOwner = true;
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: true, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({
+      active: true,
+      aborted: false,
+      abortedRunIds: [],
+    });
     formatAbortReplyTextMock.mockReturnValue(
       "Agent reply is already finalizing and can no longer be aborted.",
     );

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agentEndCancellation } from "../../agents/harness/agent-end-cancellation.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessageSync,
@@ -47,6 +48,16 @@ const sessionEntryState = vi.hoisted(() => ({
   loadCalls: [] as Array<{ sessionKey: string; opts?: { agentId?: string } }>,
 }));
 
+const reviewScheduler = vi.hoisted(() => ({
+  schedule: vi.fn(),
+  cancel: vi.fn(() => false),
+  clear: vi.fn(),
+}));
+
+vi.mock("../../skills/workshop/experience-review.js", () => ({
+  createSkillExperienceReviewScheduler: () => reviewScheduler,
+}));
+
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
@@ -70,6 +81,8 @@ vi.mock("../session-utils.js", async () => {
 });
 
 const { chatHandlers } = await import("./chat.js");
+const { scheduleSkillExperienceReview } =
+  await import("../../skills/workshop/experience-review-default.js");
 
 const transcriptFixtures = new Map<string, { sessionId: string; storePath: string }>();
 const fixtureDirs = new Set<string>();
@@ -452,8 +465,18 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("persists /stop partials with stop-command metadata", async () => {
+    const reconcileAgentEnd = vi.spyOn(agentEndCancellation, "reconcile");
     const { transcriptPath, sessionId } = await createTranscriptFixture("openclaw-chat-stop-");
     const respond = vi.fn();
+    const unrelatedTerminal = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "run-unrelated" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    const stoppedTerminal = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "run-stop-1" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    let terminalScheduling: Promise<void> | undefined;
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["run-stop-1", createActiveRun("main", { sessionId })]]),
       chatRunState: createAbortTestRunState([
@@ -461,6 +484,12 @@ describe("chat abort transcript persistence", () => {
       ]),
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
+      cancelRunBoundApprovals: () => {
+        terminalScheduling = Promise.all([
+          scheduleSkillExperienceReview(unrelatedTerminal),
+          scheduleSkillExperienceReview(stoppedTerminal),
+        ]).then(() => undefined);
+      },
     });
 
     await expectDefined(
@@ -482,6 +511,14 @@ describe("chat abort transcript persistence", () => {
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: ["run-stop-1"] });
+    expect(reconcileAgentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.any(Number) }),
+      ["run-stop-1"],
+    );
+
+    await terminalScheduling;
+    expect(reviewScheduler.schedule).toHaveBeenCalledWith(unrelatedTerminal);
+    expect(reviewScheduler.schedule).not.toHaveBeenCalledWith(stoppedTerminal);
 
     const lines = await readTranscriptLines(transcriptPath);
     const persisted = findMessageWithIdempotencyKey(lines, "run-stop-1:assistant");
@@ -491,6 +528,44 @@ describe("chat abort transcript persistence", () => {
       origin: "stop-command",
       runId: "run-stop-1",
     });
+  });
+
+  it("releases a synchronous stopped terminal when the Gateway owner rejects abort", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-rejected-");
+    const terminalParams = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "run-stop-rejected" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    let terminalScheduling: Promise<void> | undefined;
+    const active = {
+      ...createActiveRun("main", { sessionId }),
+      isAbortable: () => {
+        terminalScheduling = scheduleSkillExperienceReview(terminalParams);
+        return false;
+      },
+    };
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-rejected", active]]),
+    });
+
+    await expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send test invariant",
+    )({
+      params: { sessionKey: "main", message: "/stop", idempotencyKey: "idem-stop-rejected" },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    await terminalScheduling;
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(expectRecord(payload, "abort payload").runIds).toEqual([]);
+    expect(reviewScheduler.schedule).toHaveBeenCalledWith(terminalParams);
   });
 
   it.each([

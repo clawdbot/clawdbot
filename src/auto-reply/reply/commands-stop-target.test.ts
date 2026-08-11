@@ -25,7 +25,11 @@ const stopSubagentsForRequesterMock = vi.hoisted(() =>
   vi.fn(async () => ({ stopped: 0, failed: 0 })),
 );
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
-  vi.fn(() => ({ active: false, aborted: false })),
+  vi.fn<() => { active: boolean; aborted: boolean; abortedRunIds: string[] }>(() => ({
+    active: false,
+    aborted: false,
+    abortedRunIds: [],
+  })),
 );
 const formatAbortReplyTextMock = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
 
@@ -142,7 +146,11 @@ describe("handleStopCommand target fallback", () => {
   beforeEach(() => {
     previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: false, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({
+      active: false,
+      aborted: false,
+      abortedRunIds: [],
+    });
     persistAbortTargetEntryMock.mockResolvedValue(true);
   });
 
@@ -212,7 +220,11 @@ describe("handleStopCommand target fallback", () => {
 
   it("reports a finalizing target without persisting abort state", async () => {
     const params = buildStopParams();
-    abortSessionRunTargetWithOutcomeMock.mockReturnValue({ active: true, aborted: false });
+    abortSessionRunTargetWithOutcomeMock.mockReturnValue({
+      active: true,
+      aborted: false,
+      abortedRunIds: [],
+    });
     formatAbortReplyTextMock.mockReturnValue(
       "Agent reply is already finalizing and can no longer be aborted.",
     );
