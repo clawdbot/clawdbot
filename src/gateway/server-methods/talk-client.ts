@@ -313,6 +313,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         const gatewayControlOwner = wantsGatewayControl
           ? createTalkClientGatewayControlOwner({
               voiceSessionId: activeVoiceSessionId!,
+              providerId: resolution.provider.id,
               sessionKey,
               connId: ownerConnId!,
               runAgentConsult: consultRunner.runArgs,
@@ -338,6 +339,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
                   voiceSessionId: activeVoiceSessionId!,
                   config: runtimeConfig,
                 });
+              },
+              onTalkEvent: (talkEvent) => {
+                context.broadcastToConnIds(
+                  "talk.event",
+                  { voiceSessionId: activeVoiceSessionId!, talkEvent },
+                  new Set([ownerConnId!]),
+                  { dropIfSlow: talkEvent.final !== true },
+                );
               },
               warn: (message) => context.logGateway.warn(message),
             })

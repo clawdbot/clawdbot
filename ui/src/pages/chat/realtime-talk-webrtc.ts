@@ -1,6 +1,7 @@
 // Control UI chat module implements realtime talk webrtc behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
+import { normalizeRealtimeVoiceResponseOutcome } from "../../../../src/talk/provider-types.js";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
 import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
@@ -49,6 +50,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseActive = false;
   private responseCreateInFlight = false;
   private responseCreatePending = false;
+  private activeResponseId: string | undefined;
+  private unkeyedResponseSettled = false;
+  private readonly settledResponseIds = new Set<string>();
   private readonly completedToolCallIds = new Set<string>();
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
   private mediaSetupController: AbortController | null = null;
@@ -275,6 +279,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     this.consultAbortControllers.clear();
     this.completedToolCallIds.clear();
+    this.settledResponseIds.clear();
+    this.activeResponseId = undefined;
+    this.unkeyedResponseSettled = false;
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
@@ -392,30 +399,77 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       case "response.created":
         this.responseActive = true;
         this.responseCreateInFlight = false;
+        this.activeResponseId = event.response?.id;
+        this.unkeyedResponseSettled = false;
         this.ctx.callbacks.onStatus?.("thinking", "Generating response");
         return;
       case "response.cancelled":
-      case "response.done":
-        if (event.type === "response.done") {
-          this.handleCompletedResponse(event);
-          if (this.closed) {
-            return;
-          }
+      case "response.done": {
+        const outcome =
+          event.type === "response.cancelled"
+            ? ({
+                status: "cancelled",
+                ...(event.response?.id ? { responseId: event.response.id } : {}),
+              } as const)
+            : normalizeRealtimeVoiceResponseOutcome({
+                providerLabel: "OpenAI realtime voice",
+                response: event.response,
+              });
+        if (outcome.responseId && this.settledResponseIds.has(outcome.responseId)) {
+          return;
         }
-        this.responseActive = false;
-        this.responseCreateInFlight = false;
-        this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
-        this.emitTalkEvent({
-          type: "turn.ended",
-          final: true,
-          payload: {
-            status:
-              event.response?.status ??
-              (event.type === "response.cancelled" ? "cancelled" : "completed"),
-          },
-        });
-        this.flushPendingResponseCreate();
+        if (!outcome.responseId && this.unkeyedResponseSettled) {
+          return;
+        }
+        if (
+          outcome.responseId &&
+          this.activeResponseId &&
+          outcome.responseId !== this.activeResponseId
+        ) {
+          return;
+        }
+        try {
+          if (outcome.status === "completed") {
+            this.handleCompletedResponse(event);
+            if (this.closed) {
+              return;
+            }
+          }
+          if (outcome.status === "failed" || outcome.status === "incomplete") {
+            this.ctx.callbacks.onStatus?.("error", outcome.message);
+            this.emitTalkEvent({
+              type: "session.error",
+              final: true,
+              payload: outcome,
+            });
+          } else {
+            this.ctx.callbacks.onStatus?.(
+              "listening",
+              outcome.status === "cancelled" ? "Response cancelled" : undefined,
+            );
+          }
+          this.emitTalkEvent({
+            type: outcome.status === "cancelled" ? "turn.cancelled" : "turn.ended",
+            final: true,
+            payload: outcome,
+          });
+        } finally {
+          if (outcome.responseId) {
+            if (this.settledResponseIds.size >= MAX_COMPLETED_TOOL_CALL_IDS) {
+              this.failConnection("Realtime response session limit exceeded");
+            } else {
+              this.settledResponseIds.add(outcome.responseId);
+            }
+          } else {
+            this.unkeyedResponseSettled = true;
+          }
+          this.activeResponseId = undefined;
+          this.responseActive = false;
+          this.responseCreateInFlight = false;
+          this.flushPendingResponseCreate();
+        }
         return;
+      }
       case "error":
         this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
@@ -427,11 +481,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 
       default:
     }
-  }
-
-  private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
-    const status = event.response?.status;
-    return status && status !== "completed" ? `Response ${status}` : undefined;
   }
 
   private emitAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {

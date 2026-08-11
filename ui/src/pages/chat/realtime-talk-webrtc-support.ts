@@ -17,8 +17,10 @@ export type RealtimeServerEvent = {
   arguments?: string;
   error?: unknown;
   response?: {
+    id?: string;
     status?: string;
     status_details?: unknown;
+    output?: unknown[];
   };
   item?: {
     id?: string;
