@@ -1,4 +1,4 @@
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
@@ -11,7 +11,7 @@ const NATIVE_COMMAND_CASES = [
 
 describe("Crabline Telegram native command arguments", () => {
   it("preserves full command text while restricting native names and entities to the command token", async () => {
-    await withTempDir("qa-crabline-native-command-", async (outputDir) => {
+    await withTestDir("qa-crabline-native-command-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: {

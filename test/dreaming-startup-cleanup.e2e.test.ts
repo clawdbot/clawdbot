@@ -2,10 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import {
-  getSessionEntry,
-  upsertSessionEntryCore,
-} from "../src/plugin-sdk/session-store-runtime.js";
+import { getSessionEntry, upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import {
   appendSqliteSessionTranscriptEventForTest,
   closeOpenClawAgentDatabasesForTest,
@@ -35,7 +32,7 @@ async function seedSession(params: {
 }): Promise<string> {
   const sessionKey = `agent:${params.agentId}:${params.suffix}`;
   const sessionId = `${params.agentId}-${params.suffix}`;
-  await upsertSessionEntryCore({
+  await upsertSessionEntry({
     agentId: params.agentId,
     sessionKey,
     entry: {

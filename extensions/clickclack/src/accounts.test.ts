@@ -1,7 +1,7 @@
 // Clickclack tests cover accounts plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listClickClackAccountIds,
@@ -197,7 +197,7 @@ describe("ClickClack account resolution", () => {
   });
 
   it("reads tokenFile credentials without overriding a named account token", async () => {
-    await withTempDir("clickclack-token-", async (tempDir) => {
+    await withTestDir("clickclack-token-", async (tempDir) => {
       const tokenFile = path.join(tempDir, "token");
       fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
       const cfg = {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendFileTransferAudit } from "./audit.js";
 
@@ -11,7 +11,7 @@ describe("file-transfer audit diagnostics", () => {
   });
 
   it("routes append failures through captured console diagnostics", async () => {
-    await withTempDir("openclaw-file-transfer-audit-", async (root) => {
+    await withTestDir("openclaw-file-transfer-audit-", async (root) => {
       const homeFile = path.join(root, "home-file");
       await fs.writeFile(homeFile, "not a directory", "utf8");
       vi.spyOn(os, "homedir").mockReturnValue(homeFile);

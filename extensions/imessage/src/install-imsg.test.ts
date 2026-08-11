@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { resolveBrewExecutableMock, runPluginCommandWithTimeoutMock } = vi.hoisted(() => ({
@@ -38,7 +38,7 @@ describe("installIMessageCli", () => {
 
   it("installs imsg through Homebrew on macOS", async () => {
     setProcessPlatform("darwin");
-    await withTempDir("openclaw-imsg-brew-", async (brewPrefix) => {
+    await withTestDir("openclaw-imsg-brew-", async (brewPrefix) => {
       await fs.mkdir(path.join(brewPrefix, "bin"), { recursive: true });
       await fs.writeFile(path.join(brewPrefix, "bin", "imsg"), "");
       resolveBrewExecutableMock.mockReturnValue("/opt/homebrew/bin/brew");
@@ -63,7 +63,7 @@ describe("installIMessageCli", () => {
 
   it("updates imsg through Homebrew when requested", async () => {
     setProcessPlatform("darwin");
-    await withTempDir("openclaw-imsg-brew-", async (brewPrefix) => {
+    await withTestDir("openclaw-imsg-brew-", async (brewPrefix) => {
       await fs.mkdir(path.join(brewPrefix, "bin"), { recursive: true });
       await fs.writeFile(path.join(brewPrefix, "bin", "imsg"), "");
       resolveBrewExecutableMock.mockReturnValue("/opt/homebrew/bin/brew");

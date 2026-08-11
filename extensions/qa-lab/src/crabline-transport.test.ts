@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
@@ -30,7 +30,7 @@ function requireString(value: unknown, label: string): string {
 
 describe("crabline transport", () => {
   it("cancels a failed inbound response before surfacing the provider error", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection(),
@@ -66,7 +66,7 @@ describe("crabline transport", () => {
   });
 
   it("configures OpenClaw's Telegram plugin against a Crabline local provider server", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection(),
@@ -117,7 +117,7 @@ describe("crabline transport", () => {
   });
 
   it("configures distinct Telegram actors for canonical sender allowlist flows", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         transportPolicy: {
@@ -167,7 +167,7 @@ describe("crabline transport", () => {
   });
 
   it("rejects canonical sender-policy flows on non-Telegram Crabline bridges", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       await expect(
         createQaCrablineTransportAdapter({
           outputDir,
@@ -180,7 +180,7 @@ describe("crabline transport", () => {
   });
 
   it("injects Telegram native commands through the shared transport adapter", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection(),
@@ -233,7 +233,7 @@ describe("crabline transport", () => {
   });
 
   it("observes Telegram preview edits through the shared transport adapter", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection(),
@@ -291,7 +291,7 @@ describe("crabline transport", () => {
   });
 
   it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("slack"),
@@ -325,7 +325,7 @@ describe("crabline transport", () => {
   });
 
   it("injects inbound messages through Crabline and mirrors Slack sends into normalized state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("slack"),
@@ -399,7 +399,7 @@ describe("crabline transport", () => {
   });
 
   it("configures OpenClaw's WhatsApp plugin against a Crabline Baileys WebSocket server", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("whatsapp"),
@@ -444,7 +444,7 @@ describe("crabline transport", () => {
   });
 
   it("injects WhatsApp inbound messages through Crabline into normalized state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("whatsapp"),
@@ -477,7 +477,7 @@ describe("crabline transport", () => {
   });
 
   it("binds Signal config and normalizes transport targets", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("signal"),
@@ -536,7 +536,7 @@ describe("crabline transport", () => {
   });
 
   it("normalizes native Signal JSON-RPC sends into outbound state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("signal"),
@@ -586,7 +586,7 @@ describe("crabline transport", () => {
   });
 
   it("binds Mattermost config and normalizes transport targets", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("mattermost"),
@@ -640,7 +640,7 @@ describe("crabline transport", () => {
   });
 
   it("normalizes native Mattermost post creation into outbound state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("mattermost"),
@@ -694,7 +694,7 @@ describe("crabline transport", () => {
   });
 
   it("binds Matrix config and normalizes transport targets", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("matrix"),
@@ -784,7 +784,7 @@ describe("crabline transport", () => {
   });
 
   it("normalizes native Matrix room message sends into outbound state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("matrix"),
@@ -838,7 +838,7 @@ describe("crabline transport", () => {
   });
 
   it("configures Zalo and normalizes native message sends", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection("zalo"),
@@ -914,7 +914,7 @@ describe("crabline transport", () => {
   });
 
   it("injects inbound messages through Crabline and mirrors Telegram sends into normalized state", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    await withTestDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
         selection: createSelection(),

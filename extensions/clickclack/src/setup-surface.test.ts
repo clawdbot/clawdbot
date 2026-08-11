@@ -8,7 +8,7 @@ import {
   runSetupWizardConfigure,
   runSetupWizardFinalize,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -108,7 +108,7 @@ describe("ClickClack setup wizard", () => {
       envValue: "ccb_env",
     });
 
-    await withTempDir("clickclack-setup-token-", async (tempDir) => {
+    await withTestDir("clickclack-setup-token-", async (tempDir) => {
       const tokenFile = path.join(tempDir, "token");
       fs.writeFileSync(tokenFile, "ccb_file\n", "utf8");
       expect(

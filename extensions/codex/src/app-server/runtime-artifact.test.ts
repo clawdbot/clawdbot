@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -60,7 +60,7 @@ async function captureBinding(params: {
 
 describe("Codex app-server runtime artifact", () => {
   it("binds a native executable and its adjacent code-mode host", async () => {
-    await withTempDir("openclaw-codex-runtime-artifact-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-artifact-", async (root) => {
       const command = path.join(root, "codex");
       const codeModeHost = path.join(root, "codex-code-mode-host");
       await fs.writeFile(command, "native-v1");
@@ -78,7 +78,7 @@ describe("Codex app-server runtime artifact", () => {
   it.runIf(process.platform !== "win32")(
     "resolves relative launch paths and shebang targets from the spawn cwd",
     async () => {
-      await withTempDir("openclaw-codex-runtime-cwd-", async (root) => {
+      await withTestDir("openclaw-codex-runtime-cwd-", async (root) => {
         const spawnCwd = path.join(root, "workspace");
         const binDir = path.join(spawnCwd, "bin");
         const interpreterDir = path.join(spawnCwd, "interpreters");
@@ -119,7 +119,7 @@ describe("Codex app-server runtime artifact", () => {
   );
 
   it("attests that an adjacent code-mode host is absent", async () => {
-    await withTempDir("openclaw-codex-runtime-no-host-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-no-host-", async (root) => {
       const command = path.join(root, "codex");
       const codeModeHost = path.join(root, "codex-code-mode-host");
       await fs.writeFile(command, "native-v1");
@@ -132,7 +132,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("binds the complete canonical package tree", async () => {
-    await withTempDir("openclaw-codex-package-artifact-", async (root) => {
+    await withTestDir("openclaw-codex-package-artifact-", async (root) => {
       const binDir = path.join(root, "bin");
       const resourcesDir = path.join(root, "codex-resources");
       const pathDir = path.join(root, "codex-path");
@@ -157,7 +157,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("produces the same package binding regardless of directory enumeration order", async () => {
-    await withTempDir("openclaw-codex-package-order-", async (root) => {
+    await withTestDir("openclaw-codex-package-order-", async (root) => {
       const binDir = path.join(root, "bin");
       await fs.mkdir(binDir, { recursive: true });
       const command = path.join(binDir, "codex");
@@ -179,7 +179,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("binds an explicit code-mode host override", async () => {
-    await withTempDir("openclaw-codex-host-override-", async (root) => {
+    await withTestDir("openclaw-codex-host-override-", async (root) => {
       const command = path.join(root, "codex");
       const codeModeHost = path.join(root, "custom-code-mode-host");
       await fs.writeFile(command, "native-v1");
@@ -195,7 +195,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("detects candidate bytes changing between spawn snapshots", async () => {
-    await withTempDir("openclaw-codex-runtime-race-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-race-", async (root) => {
       const command = path.join(root, "codex");
       await fs.writeFile(command, "native-v1");
       const options = startOptions(command);
@@ -218,7 +218,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("keeps raw argv out of the server-minted artifact id", async () => {
-    await withTempDir("openclaw-codex-runtime-secret-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-secret-", async (root) => {
       const command = path.join(root, "codex");
       await fs.writeFile(command, "native-v1");
       const secret = "provider.api_key=super-secret-value";
@@ -276,7 +276,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("allows bounded Node resource and warning options", async () => {
-    await withTempDir("openclaw-codex-runtime-node-options-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-node-options-", async (root) => {
       const command = path.join(root, "codex");
       await fs.writeFile(command, "native-v1");
       const options = startOptions(command, {
@@ -307,7 +307,7 @@ describe("Codex app-server runtime artifact", () => {
     ["bundled trust", "--use-bundled-ca"],
     ["OpenSSL trust", "--use-openssl-ca"],
   ])("allows bounded %s NODE_OPTIONS", async (_label, nodeOptions) => {
-    await withTempDir("openclaw-codex-runtime-node-options-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-node-options-", async (root) => {
       const command = path.join(root, "codex");
       await fs.writeFile(command, "native-v1");
       const options = startOptions(command, { env: { NODE_OPTIONS: nodeOptions } });
@@ -319,7 +319,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("binds the Windows npm shim, Node entrypoint, native binary, and mixed-case host override", async () => {
-    await withTempDir("openclaw-codex-runtime-windows-", async (root) => {
+    await withTestDir("openclaw-codex-runtime-windows-", async (root) => {
       const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
       const originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath");
       if (!originalPlatform || !originalExecPath) {
@@ -392,7 +392,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it("rejects packages beyond the bounded directory depth", async () => {
-    await withTempDir("openclaw-codex-package-depth-", async (root) => {
+    await withTestDir("openclaw-codex-package-depth-", async (root) => {
       const binDir = path.join(root, "bin");
       await fs.mkdir(binDir, { recursive: true });
       const command = path.join(binDir, "codex");
@@ -426,7 +426,7 @@ describe("Codex app-server runtime artifact", () => {
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinks inside a package artifact", async () => {
-    await withTempDir("openclaw-codex-package-link-", async (root) => {
+    await withTestDir("openclaw-codex-package-link-", async (root) => {
       const binDir = path.join(root, "bin");
       await fs.mkdir(binDir, { recursive: true });
       const command = path.join(binDir, "codex");

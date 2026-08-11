@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 
@@ -54,7 +54,7 @@ function restoreEnv(name: string, value: string | undefined): void {
 
 describe("Gemini CLI isolated completion", () => {
   it("keeps an incompatible explicit profile out of shared auth health", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const preparation = buildGoogleGeminiCliBackend().prepareExecution?.({
         workspaceDir,
         agentDir: path.join(workspaceDir, "agent"),
@@ -79,7 +79,7 @@ describe("Gemini CLI isolated completion", () => {
   });
 
   it("stages a prompt-only environment through native overrides", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const isolatedCompletionCwd = path.join(workspaceDir, "isolated-cwd");
       await fs.mkdir(isolatedCompletionCwd);
       await fs.writeFile(path.join(workspaceDir, ".env"), "GOOGLE_GENAI_USE_GCA=true\n");
@@ -226,7 +226,7 @@ describe("Gemini CLI isolated completion", () => {
   it.each(["", "  preserve surrounding whitespace  "])(
     "preserves an isolated system prompt verbatim: %j",
     async (systemPrompt) => {
-      await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+      await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
         const context: GeminiPrepareContext = {
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
           toolAvailability: { native: [], openClaw: [], mcp: [] },
@@ -251,7 +251,7 @@ describe("Gemini CLI isolated completion", () => {
     { prompt: "Read @\u202Fsecret.txt", syntax: "@-include" },
     { prompt: "/memory show", syntax: "/command" },
   ])("rejects native $syntax preprocessing in isolated prompts", async ({ prompt, syntax }) => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
@@ -268,7 +268,7 @@ describe("Gemini CLI isolated completion", () => {
   });
 
   it.each([1, 2, 3])("accepts an @-path escaped by %i backslashes", async (backslashes) => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
         ...buildGeminiApiKeyPrepareContext(workspaceDir),
         toolAvailability: { native: [], openClaw: [], mcp: [] },
@@ -283,7 +283,7 @@ describe("Gemini CLI isolated completion", () => {
   it.each(["Return the literal @", "Return @! verbatim", "Return @. verbatim"])(
     "preserves non-path at-sign text: %s",
     async (prompt) => {
-      await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+      await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
         const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
           toolAvailability: { native: [], openClaw: [], mcp: [] },
@@ -297,7 +297,7 @@ describe("Gemini CLI isolated completion", () => {
   );
 
   it("preserves slash text after leading whitespace", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
         ...buildGeminiApiKeyPrepareContext(workspaceDir),
         toolAvailability: { native: [], openClaw: [], mcp: [] },
@@ -310,7 +310,7 @@ describe("Gemini CLI isolated completion", () => {
   });
 
   it("rejects ambient OAuth because Code Assist can inject administrator tools", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const ambientHome = path.join(workspaceDir, "ambient-home");
       const ambientGeminiDir = path.join(ambientHome, ".gemini");
       await fs.mkdir(ambientGeminiDir, { recursive: true });
@@ -344,7 +344,7 @@ describe("Gemini CLI isolated completion", () => {
   });
 
   it("rejects system-enforced OAuth even when ambient API-key auth is available", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const ambientHome = path.join(workspaceDir, "ambient-home");
       await fs.mkdir(path.join(ambientHome, ".gemini"), { recursive: true });
       await fs.writeFile(path.join(ambientHome, ".gemini", ".env"), "GEMINI_API_KEY=ambient-key\n");
@@ -377,7 +377,7 @@ describe("Gemini CLI isolated completion", () => {
   });
 
   it("resolves ambient auth from the prepared Gemini home before the process home", async () => {
-    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+    await withTestDir("openclaw-test-workspace-", async (workspaceDir) => {
       const processHome = path.join(workspaceDir, "process-home");
       const preparedHome = path.join(workspaceDir, "prepared-home");
       await fs.mkdir(path.join(processHome, ".gemini"), { recursive: true });

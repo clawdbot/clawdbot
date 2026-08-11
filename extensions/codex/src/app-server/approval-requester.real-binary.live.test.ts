@@ -6,7 +6,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -27,7 +27,7 @@ afterEach(() => {
 
 describeLive("Codex app-server approval requester real-binary bridge", () => {
   it("preserves an owner requester through promoted apply_patch approval", async () => {
-    await withTempDir("openclaw-codex-approval-requester-", async (root) => {
+    await withTestDir("openclaw-codex-approval-requester-", async (root) => {
       const workspace = path.join(root, "workspace");
       const agentDir = path.join(root, "agent");
       const target = path.join(workspace, "memory", "real-binary-owner.md");

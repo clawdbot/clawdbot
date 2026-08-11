@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import type { SpeechProviderConfig } from "openclaw/plugin-sdk/speech-core";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildCliSpeechProvider } from "./speech-provider.js";
 
@@ -12,7 +12,7 @@ const describeLive = process.env.OPENCLAW_LIVE_TEST === "1" ? describe : describ
 
 describeLive("buildCliSpeechProvider live", () => {
   it("synthesizes through a real local CLI fixture and ffmpeg", async () => {
-    await withTempDir("openclaw-cli-tts-live-", async (dir) => {
+    await withTestDir("openclaw-cli-tts-live-", async (dir) => {
       const script = path.join(dir, "copy-audio.mjs");
       const wavPath = path.join(dir, "source.wav");
       await runFfmpeg([

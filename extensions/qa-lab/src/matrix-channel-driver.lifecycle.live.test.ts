@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { QaChannelDriverRuntime } from "./channel-driver-lifecycle.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
@@ -22,7 +22,7 @@ async function withChannelDriverOutputDir(
 ) {
   let runError: Error | undefined;
   try {
-    await withTempDir(`matrix-${driver}-lifecycle-`, async (outputDir) => {
+    await withTestDir(`matrix-${driver}-lifecycle-`, async (outputDir) => {
       try {
         await run(outputDir);
       } catch (error) {

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { senseaudioMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
@@ -21,7 +21,7 @@ if (!transcribeSenseAudioAudio) {
 
 describeLive("SenseAudio live", () => {
   it("transcribes generated speech", async () => {
-    await withTempDir("openclaw-senseaudio-live-", async (tempDir) => {
+    await withTestDir("openclaw-senseaudio-live-", async (tempDir) => {
       const aiffPath = path.join(tempDir, "speech.aiff");
       const mp3Path = path.join(tempDir, "speech.mp3");
       const sayResult = spawnSync("say", ["-o", aiffPath, "open claw live transcription test"], {

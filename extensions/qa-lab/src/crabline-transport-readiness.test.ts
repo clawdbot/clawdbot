@@ -1,4 +1,4 @@
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
@@ -6,7 +6,7 @@ import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 async function withTelegramCrablineTransport(
   run: (transport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>) => Promise<void>,
 ) {
-  await withTempDir("qa-crabline-transport-", async (outputDir) => {
+  await withTestDir("qa-crabline-transport-", async (outputDir) => {
     const transport = await createQaCrablineTransportAdapter({
       outputDir,
       selection: {

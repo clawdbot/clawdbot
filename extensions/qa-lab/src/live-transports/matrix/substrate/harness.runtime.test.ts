@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
@@ -237,7 +237,7 @@ describe("matrix harness runtime", () => {
 
   it("stops Tuwunel when recorder startup fails", async () => {
     const calls: string[] = [];
-    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+    await withTestDir("matrix-qa-harness-", async (outputDir) => {
       await expect(
         startMatrixQaHarness(
           { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },
@@ -263,7 +263,7 @@ describe("matrix harness runtime", () => {
 
   it("stops Tuwunel when post-start health setup fails", async () => {
     const calls: string[] = [];
-    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+    await withTestDir("matrix-qa-harness-", async (outputDir) => {
       await expect(
         startMatrixQaHarness(
           { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },

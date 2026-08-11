@@ -1,4 +1,4 @@
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
@@ -28,7 +28,7 @@ describe("Crabline provider-native inbound message identity", () => {
   it.each(PROVIDER_CASES)(
     "keeps $channel message IDs consistent across the returned message and bus state",
     async ({ channel, conversation, senderId, nativeMessageId }) => {
-      await withTempDir("qa-crabline-message-id-", async (outputDir) => {
+      await withTestDir("qa-crabline-message-id-", async (outputDir) => {
         const busState = createQaBusState();
         const transport = await createQaCrablineTransportAdapter({
           outputDir,
@@ -78,7 +78,7 @@ describe("Crabline provider-native inbound message identity", () => {
   );
 
   it("preserves Telegram message IDs repeated across independent chats", async () => {
-    await withTempDir("qa-crabline-colliding-message-ids-", async (outputDir) => {
+    await withTestDir("qa-crabline-colliding-message-ids-", async (outputDir) => {
       const busState = createQaBusState();
       const createTelegramTransport = async (name: string) =>
         await createQaCrablineTransportAdapter({

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -99,7 +99,7 @@ function callData<T>(
 
 async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
-  return await withTempDir("openclaw-feishu-media-", async (tempHome) => {
+  return await withTestDir("openclaw-feishu-media-", async (tempHome) => {
     try {
       process.env.HOME = tempHome;
       return await run();

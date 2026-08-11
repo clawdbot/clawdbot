@@ -1,7 +1,7 @@
 // Codex tests cover shared client plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
@@ -486,7 +486,7 @@ describe("shared Codex app-server client", () => {
   });
 
   it("keeps capture clients separate from ordinary shared clients", async () => {
-    await withTempDir("openclaw-codex-capture-client-", async (root) => {
+    await withTestDir("openclaw-codex-capture-client-", async (root) => {
       const command = path.join(root, "codex");
       await fs.writeFile(command, "native-v1");
       const normal = createClientHarness();
@@ -527,7 +527,7 @@ describe("shared Codex app-server client", () => {
   });
 
   it("binds the managed fallback candidate that actually initialized", async () => {
-    await withTempDir("openclaw-codex-capture-fallback-", async (root) => {
+    await withTestDir("openclaw-codex-capture-fallback-", async (root) => {
       const desktopCommand = path.join(root, "desktop-codex");
       const fallbackCommand = path.join(root, "package-codex");
       await Promise.all([
@@ -600,7 +600,7 @@ describe("shared Codex app-server client", () => {
   });
 
   it("detects persisted Computer Use enabled after managed client startup", async () => {
-    await withTempDir("openclaw-codex-managed-selection-", async (root) => {
+    await withTestDir("openclaw-codex-managed-selection-", async (root) => {
       const harness = createClientHarness();
       vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
       mocks.resolveManagedCodexAppServerStartOptions.mockImplementationOnce(
@@ -697,7 +697,7 @@ describe("shared Codex app-server client", () => {
   it.each(["abort", "timeout"] as const)(
     "holds the native config fence through process exit after a post-write %s",
     async (mode) => {
-      await withTempDir("openclaw-codex-guarded-request-cancel-", async (root) => {
+      await withTestDir("openclaw-codex-guarded-request-cancel-", async (root) => {
         const harness = createClientHarness();
         vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
         mocks.resolveManagedCodexAppServerStartOptions.mockImplementationOnce(
@@ -1453,7 +1453,7 @@ describe("shared Codex app-server client", () => {
   });
 
   it("rechecks persisted native Computer Use before managed binary resolution", async () => {
-    await withTempDir("openclaw-codex-shared-native-", async (agentDir) => {
+    await withTestDir("openclaw-codex-shared-native-", async (agentDir) => {
       const codexHome = path.join(agentDir, "codex-home");
       await fs.mkdir(codexHome);
       await fs.writeFile(

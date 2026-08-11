@@ -7,7 +7,7 @@ import {
   evaluateWrapperShadowing,
   type WrapperShadowingViolation,
 } from "../../scripts/check-wrapper-shadowing.mts";
-import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { withTestDir } from "../../src/test-utils/temp-dir.js";
 
 const guardScriptPath = fileURLToPath(
   new URL("../../scripts/check-wrapper-shadowing.mts", import.meta.url),
@@ -19,7 +19,7 @@ type GuardFixture = {
 };
 
 async function runFixture(fixture: GuardFixture) {
-  return await withTempDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
+  return await withTestDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
     await Promise.all(
       Object.entries(fixture.files).map(async ([repoPath, content]) => {
         const filePath = path.join(repoRoot, repoPath);

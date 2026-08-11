@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withTestDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
@@ -27,7 +27,7 @@ async function withClient<T>(
 
 describeLive("native Codex thread coexistence", () => {
   it("shares thread storage across independent app-server processes", async () => {
-    await withTempDir("openclaw-codex-coexistence-", async (root) => {
+    await withTestDir("openclaw-codex-coexistence-", async (root) => {
       try {
         const codexHome = path.join(root, "codex-home");
         const agentDir = path.join(root, "agent");
