@@ -5317,6 +5317,23 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to plain text when an HTML edit renders empty", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "<b>visible</b>", {
+      token: "tok",
+      cfg: {},
+      textMode: "html",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(1, "123", 1, "<b>visible</b>", {
+      parse_mode: "HTML",
+    });
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(2, "123", 1, "visible");
+  });
+
   it("uses editMessageCaption when requested for media captions", async () => {
     botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
