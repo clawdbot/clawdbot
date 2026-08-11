@@ -3389,6 +3389,40 @@ describe("openclaw agent database", () => {
     ).toEqual({ main_key: "main" });
   });
 
+  it("leaves same-version receipt provenance lazy during ordinary database open", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(
+        "ALTER TABLE conversation_deliveries DROP COLUMN platform_message_id_source;",
+      );
+      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+    } finally {
+      shippedSchema.close();
+    }
+
+    const opened = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+    expect(
+      (
+        opened.db.prepare("PRAGMA table_info(conversation_deliveries)").all() as Array<{
+          name?: unknown;
+        }>
+      ).some((column) => column.name === "platform_message_id_source"),
+    ).toBe(false);
+    expect(() =>
+      assertOpenClawAgentDatabaseForMaintenance(opened.db, {
+        agentId: "worker-1",
+        pathname: databasePath,
+      }),
+    ).not.toThrow();
+  });
+
   it("installs same-version session additions before maintenance index repair", () => {
     const stateDir = createTempStateDir();
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);

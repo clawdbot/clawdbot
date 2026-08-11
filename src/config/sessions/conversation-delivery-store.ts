@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
+  ensureConversationDeliveryReceiptSourceProjection,
+  hasPendingConversationDeliveryReceiptSourceProjection,
+} from "../../state/openclaw-agent-db-session-migrations.js";
+import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -29,6 +33,7 @@ export type ConversationDeliveryRecord = {
   status: ConversationDeliveryStatus;
   preparedMessageId?: string;
   platformMessageId?: string;
+  platformMessageIdSource?: "receipt" | "inbound-reply";
   queueId?: string;
   rejectionError?: string;
   reply?: {
@@ -56,6 +61,7 @@ type ConversationDeliveryRow = {
   operation_kind: string;
   operation_id: string;
   platform_message_id: string | null;
+  platform_message_id_source: string | null;
   prepared_message_id: string | null;
   queue_id: string | null;
   rejection_error: string | null;
@@ -77,6 +83,19 @@ function resolveDatabaseOptions(scope: ConversationDeliveryStoreScope) {
       ...(scope.storePath ? { storePath: scope.storePath } : {}),
     }),
   );
+}
+
+function openConversationDeliveryDatabase(scope: ConversationDeliveryStoreScope) {
+  const databaseOptions = resolveDatabaseOptions(scope);
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  if (hasPendingConversationDeliveryReceiptSourceProjection(database.db)) {
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => ensureConversationDeliveryReceiptSourceProjection(db),
+      databaseOptions,
+      { operationLabel: "conversation-delivery.ensure-schema" },
+    );
+  }
+  return database;
 }
 
 function normalizeOperationId(value: string): string {
@@ -113,6 +132,15 @@ function normalizeOperationKind(value: string): ConversationDeliveryRecord["oper
   throw new Error(`Invalid conversation delivery operation kind: ${value}`);
 }
 
+function normalizePlatformMessageIdSource(
+  value: string,
+): NonNullable<ConversationDeliveryRecord["platformMessageIdSource"]> {
+  if (value === "receipt" || value === "inbound-reply") {
+    return value;
+  }
+  throw new Error(`Invalid conversation delivery platform message id source: ${value}`);
+}
+
 function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   const reply =
     row.reply_message_id && row.reply_text !== null && row.reply_timestamp !== null
@@ -134,6 +162,11 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
     status: normalizeStatus(row.status),
     ...(row.prepared_message_id ? { preparedMessageId: row.prepared_message_id } : {}),
     ...(row.platform_message_id ? { platformMessageId: row.platform_message_id } : {}),
+    ...(row.platform_message_id_source
+      ? {
+          platformMessageIdSource: normalizePlatformMessageIdSource(row.platform_message_id_source),
+        }
+      : {}),
     ...(row.queue_id ? { queueId: row.queue_id } : {}),
     ...(row.rejection_error ? { rejectionError: row.rejection_error } : {}),
     ...(reply ? { reply } : {}),
@@ -178,7 +211,7 @@ export function getConversationDeliveryOperation(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
 ): ConversationDeliveryRecord | undefined {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
+  const database = openConversationDeliveryDatabase(scope);
   return selectOperation(database, normalizeOperationId(operationId));
 }
 
@@ -199,6 +232,7 @@ export function beginConversationDeliveryOperation(
   const messageHash = hashMessage(params.message);
   return runOpenClawAgentWriteTransaction(
     (database) => {
+      ensureConversationDeliveryReceiptSourceProjection(database.db);
       const existing = selectOperation(database, operationId);
       if (existing) {
         if (
@@ -226,6 +260,7 @@ export function beginConversationDeliveryOperation(
           status: "created",
           prepared_message_id: params.preparedMessageId ?? null,
           platform_message_id: null,
+          platform_message_id_source: null,
           queue_id: null,
           rejection_error: null,
           reply_message_id: null,
@@ -255,19 +290,29 @@ function updateConversationDeliveryOperation(
     status: ConversationDeliveryStatus;
     queueId?: string | null;
     platformMessageId?: string | null;
+    platformMessageIdSource?: ConversationDeliveryRecord["platformMessageIdSource"] | null;
     rejectionError?: string | null;
     reply?: ConversationDeliveryRecord["reply"];
     allowedFrom: readonly ConversationDeliveryStatus[];
+    allowReceiptEvidenceEnrichment?: boolean;
   },
 ): ConversationDeliveryRecord {
   const operationId = normalizeOperationId(params.operationId);
   return runOpenClawAgentWriteTransaction(
     (database) => {
+      ensureConversationDeliveryReceiptSourceProjection(database.db);
       const current = selectOperation(database, operationId);
       if (!current) {
         throw new Error(`Conversation delivery operation not found: ${operationId}`);
       }
-      if (!params.allowedFrom.includes(current.status)) {
+      const isAllowedTransition = params.allowedFrom.includes(current.status);
+      const isReceiptEvidenceEnrichment =
+        params.allowReceiptEvidenceEnrichment === true &&
+        params.platformMessageIdSource === "receipt" &&
+        Boolean(params.platformMessageId) &&
+        (current.status === "sent" || current.status === "replied") &&
+        current.platformMessageIdSource !== "receipt";
+      if (!isAllowedTransition && !isReceiptEvidenceEnrichment) {
         return current;
       }
       const db = getSessionKysely(database.db);
@@ -276,10 +321,13 @@ function updateConversationDeliveryOperation(
         db
           .updateTable("conversation_deliveries")
           .set({
-            status: params.status,
+            status: isAllowedTransition ? params.status : current.status,
             ...(params.queueId !== undefined ? { queue_id: params.queueId } : {}),
             ...(params.platformMessageId !== undefined
               ? { platform_message_id: params.platformMessageId }
+              : {}),
+            ...(params.platformMessageIdSource !== undefined
+              ? { platform_message_id_source: params.platformMessageIdSource }
               : {}),
             ...(params.rejectionError !== undefined
               ? { rejection_error: params.rejectionError }
@@ -324,12 +372,21 @@ export function markConversationDeliveryQueued(
 export function markConversationDeliverySent(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
-  platformMessageId?: string,
+  platformEvidence?: {
+    messageId: string;
+    source: NonNullable<ConversationDeliveryRecord["platformMessageIdSource"]>;
+  },
 ): ConversationDeliveryRecord {
   return updateConversationDeliveryOperation(scope, {
     operationId,
     status: "sent",
-    ...(platformMessageId ? { platformMessageId } : {}),
+    ...(platformEvidence
+      ? {
+          platformMessageId: platformEvidence.messageId,
+          platformMessageIdSource: platformEvidence.source,
+          allowReceiptEvidenceEnrichment: platformEvidence.source === "receipt",
+        }
+      : {}),
     allowedFrom: ["created", "queued"],
   });
 }
@@ -393,7 +450,7 @@ export function findConversationTurnDeliveryByReplyTarget(
   scope: ConversationDeliveryStoreScope,
   params: { conversationRef: string; replyToId: string },
 ): ConversationDeliveryRecord | undefined {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
+  const database = openConversationDeliveryDatabase(scope);
   const db = getSessionKysely(database.db);
   const row = executeSqliteQuerySync(
     database.db,

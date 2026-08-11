@@ -3,6 +3,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import {
   backfillSessionConversations,
+  ensureConversationDeliveryReceiptSourceProjection,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
 
@@ -13,6 +14,43 @@ describe("agent DB conversation migration", () => {
     for (const database of databases.splice(0)) {
       database.close();
     }
+  });
+
+  it("adds receipt provenance without trusting legacy platform ids", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    databases.push(database);
+    database.exec(`
+      CREATE TABLE conversation_deliveries (
+        operation_id TEXT PRIMARY KEY,
+        platform_message_id TEXT
+      ) STRICT;
+      INSERT INTO conversation_deliveries (operation_id, platform_message_id)
+      VALUES ('legacy-operation', 'legacy-unproven-id');
+    `);
+
+    ensureConversationDeliveryReceiptSourceProjection(database);
+    ensureConversationDeliveryReceiptSourceProjection(database);
+
+    const columns = database.prepare("PRAGMA table_info(conversation_deliveries)").all() as Array<{
+      name?: unknown;
+    }>;
+    expect(columns.some((column) => column.name === "platform_message_id_source")).toBe(true);
+    const tableSql = database
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("conversation_deliveries") as { sql?: unknown } | undefined;
+    expect(tableSql?.sql).toContain("platform_message_id_source TEXT");
+    expect(tableSql?.sql).not.toContain("platform_message_id_source IN");
+    expect(
+      database
+        .prepare(
+          "SELECT platform_message_id, platform_message_id_source FROM conversation_deliveries WHERE operation_id = ?",
+        )
+        .get("legacy-operation"),
+    ).toEqual({
+      platform_message_id: "legacy-unproven-id",
+      platform_message_id_source: null,
+    });
   });
 
   it("backfills direct addresses and keeps shared-main peers as participants", () => {

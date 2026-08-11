@@ -53,8 +53,8 @@ function conversationResult(record: ConversationDeliveryRecord): DurableDelivery
           record.status === "unknown"
         ? record.status
         : "queued",
-    ...(delivered && (record.platformMessageId || record.preparedMessageId)
-      ? { platformMessageId: record.platformMessageId ?? record.preparedMessageId }
+    ...(delivered && record.platformMessageIdSource === "receipt" && record.platformMessageId
+      ? { platformMessageId: record.platformMessageId }
       : {}),
     ...(record.status === "rejected" && record.rejectionError
       ? { rejectionError: record.rejectionError }
@@ -154,9 +154,11 @@ export async function settlePendingFinalDelivery(
   return { state: settled };
 }
 
-function readPlatformMessageId(result: OutboundDeliveryResult): string | undefined {
-  const receiptId = result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined;
-  return receiptId ?? (result.messageId.trim() || undefined);
+function readPlatformReceiptEvidence(
+  result: OutboundDeliveryResult,
+): { messageId: string; source: "receipt" } | undefined {
+  const messageId = result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined;
+  return messageId ? { messageId, source: "receipt" } : undefined;
 }
 
 /** Records queue ownership before either the live sender or recovery crosses platform I/O. */
@@ -194,7 +196,7 @@ export async function completeDurableDelivery(
         markConversationDeliverySent(
           scopeForCompletion(completion),
           completion.operationId,
-          readPlatformMessageId(result),
+          readPlatformReceiptEvidence(result),
         ),
       );
 }

@@ -90,6 +90,7 @@ export interface ConversationDeliveries {
   operation_id: string;
   operation_kind: string;
   platform_message_id: string | null;
+  platform_message_id_source: string | null;
   prepared_message_id: string | null;
   queue_id: string | null;
   rejection_error: string | null;

@@ -40,7 +40,16 @@ function sentResult(messageId = "reef-outbound-1"): Extract<MessageActionResult,
       to: conversation.target,
       via: "direct",
       mediaUrl: null,
-      result: { messageId },
+      result: {
+        channel: "reef",
+        messageId,
+        receipt: {
+          primaryPlatformMessageId: messageId,
+          platformMessageIds: [messageId],
+          parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+          sentAt: 100,
+        },
+      },
       deliveryStatus: "sent",
     },
     dryRun: false,
@@ -108,11 +117,21 @@ function createDeps() {
     markQueued: vi.fn((_scope: unknown, operationId: string, queueId: string) =>
       update(operationId, { status: "queued", queueId }),
     ),
-    markSent: vi.fn((_scope: unknown, operationId: string, platformMessageId?: string) =>
-      update(operationId, {
-        status: "sent",
-        ...(platformMessageId ? { platformMessageId } : {}),
-      }),
+    markSent: vi.fn(
+      (
+        _scope: unknown,
+        operationId: string,
+        platformEvidence?: { messageId: string; source: "receipt" | "inbound-reply" },
+      ) =>
+        update(operationId, {
+          status: "sent",
+          ...(platformEvidence
+            ? {
+                platformMessageId: platformEvidence.messageId,
+                platformMessageIdSource: platformEvidence.source,
+              }
+            : {}),
+        } as Partial<ConversationDeliveryRecord>),
     ),
     markSuppressed: vi.fn((_scope: unknown, operationId: string) =>
       update(operationId, { status: "suppressed" }),
@@ -338,6 +357,51 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.resolveConversation).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
     expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+  });
+
+  it("does not project inbound reply evidence as the outbound message id after restart", async () => {
+    const deps = createDeps();
+    deps.operations.set("turn-inbound-evidence", {
+      operationId: "turn-inbound-evidence",
+      operationKind: "turn",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello",
+      status: "replied",
+      preparedMessageId: "reef-outbound-prepared",
+      platformMessageId: "reef-inbound-reply-target",
+      platformMessageIdSource: "inbound-reply",
+      reply: {
+        messageId: "reply-1",
+        replyToId: "reef-inbound-reply-target",
+        text: "ack",
+        timestamp: 300,
+      },
+      createdAt: 100,
+      updatedAt: 300,
+    });
+    deps.resolveConversation.mockReturnValue(undefined);
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-inbound-evidence",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).resolves.toMatchObject({
+      status: "replied",
+      messageId: "reef-outbound-prepared",
+      reply: { messageId: "reply-1", text: "ack" },
+    });
+    expect(deps.resolveConversation).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
   it("returns queued state without retrying recipient-visible I/O", async () => {

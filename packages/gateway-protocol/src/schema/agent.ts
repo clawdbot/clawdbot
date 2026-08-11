@@ -192,6 +192,7 @@ export const ConversationSendResultSchema = closedObject({
   conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
   channel: NonEmptyString,
   messageId: Type.Optional(NonEmptyString),
+  messageIdSource: Type.Optional(Type.Union([Type.Literal("platform"), Type.Literal("prepared")])),
   queueId: Type.Optional(NonEmptyString),
 });
 

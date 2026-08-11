@@ -73,7 +73,10 @@ function persistSentOperation(params: {
     preparedMessageId: params.outboundMessageId,
   });
   markConversationDeliveryQueued(params.scope, params.operationId, `queue-${params.operationId}`);
-  markConversationDeliverySent(params.scope, params.operationId, params.outboundMessageId);
+  markConversationDeliverySent(params.scope, params.operationId, {
+    messageId: params.outboundMessageId,
+    source: "receipt",
+  });
 }
 
 describe("conversation turn capture", () => {

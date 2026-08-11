@@ -23,20 +23,36 @@ const conversation = {
   lastSeenAt: 200,
 };
 
-function sentResult(): Extract<MessageActionResult, { kind: "send" }> {
+function sentResult(
+  evidence: "receipt" | "bare" | "payload" = "receipt",
+): Extract<MessageActionResult, { kind: "send" }> {
   return {
     kind: "send",
     channel: "reef",
     action: "send",
     to: conversation.target,
     handledBy: "core",
-    payload: {},
+    payload: evidence === "payload" ? { messageId: "reef-payload-fallback" } : {},
     sendResult: {
       channel: "reef",
       to: conversation.target,
       via: "direct",
       mediaUrl: null,
-      result: { messageId: "reef-outbound-1" },
+      result:
+        evidence === "receipt"
+          ? {
+              channel: "reef",
+              messageId: "reef-outbound-1",
+              receipt: {
+                primaryPlatformMessageId: "reef-outbound-1",
+                platformMessageIds: ["reef-outbound-1"],
+                parts: [{ platformMessageId: "reef-outbound-1", kind: "text", index: 0 }],
+                sentAt: 100,
+              },
+            }
+          : evidence === "bare"
+            ? { messageId: "reef-outbound-1" }
+            : undefined,
       deliveryStatus: "sent",
     },
     dryRun: false,
@@ -117,11 +133,21 @@ function createDeps() {
     markQueued: vi.fn((_scope: unknown, operationId: string, queueId: string) =>
       update(operationId, { status: "queued", queueId }),
     ),
-    markSent: vi.fn((_scope: unknown, operationId: string, platformMessageId?: string) =>
-      update(operationId, {
-        status: "sent",
-        ...(platformMessageId ? { platformMessageId } : {}),
-      }),
+    markSent: vi.fn(
+      (
+        _scope: unknown,
+        operationId: string,
+        platformEvidence?: { messageId: string; source: "receipt" | "inbound-reply" },
+      ) =>
+        update(operationId, {
+          status: "sent",
+          ...(platformEvidence
+            ? {
+                platformMessageId: platformEvidence.messageId,
+                platformMessageIdSource: platformEvidence.source,
+              }
+            : {}),
+        } as Partial<ConversationDeliveryRecord>),
     ),
     markSuppressed: vi.fn((_scope: unknown, operationId: string) =>
       update(operationId, { status: "suppressed" }),
@@ -172,9 +198,93 @@ describe("runGatewayConversationSend", () => {
       conversationRef: conversation.conversationRef,
       channel: "reef",
       messageId: "reef-outbound-1",
+      messageIdSource: "platform",
       queueId: "queue-1",
     });
+    expect(deps.operations.get("send-1")).toMatchObject({
+      platformMessageId: "reef-outbound-1",
+      platformMessageIdSource: "receipt",
+    });
   });
+
+  it("classifies a legacy stored platform id without provenance as uncertain", async () => {
+    const deps = createDeps();
+    deps.operations.set("send-legacy-stored", {
+      operationId: "send-legacy-stored",
+      operationKind: "send",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello legacy",
+      status: "sent",
+      platformMessageId: "legacy-unproven-id",
+      createdAt: 100,
+      updatedAt: 101,
+    });
+
+    const result = await runGatewayConversationSend(
+      {
+        config: {},
+        agentId: "main",
+        senderIsOwner: true,
+        operationId: "send-legacy-stored",
+        conversationRef: conversation.conversationRef,
+        message: "hello legacy",
+      },
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: "sent",
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+    });
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["bare", "payload"] as const)(
+    "does not promote %s legacy message identity to platform receipt evidence",
+    async (evidence) => {
+      const deps = createDeps();
+      deps.runMessageActionMock.mockImplementationOnce(
+        async (actionInput: Record<string, unknown>) => {
+          const onDeliveryIntent = actionInput.onDeliveryIntent as (intent: {
+            id: string;
+            channel: string;
+            to: string;
+            durability: "required";
+          }) => void;
+          onDeliveryIntent({
+            id: `queue-${evidence}`,
+            channel: "reef",
+            to: "molty",
+            durability: "required",
+          });
+          return sentResult(evidence);
+        },
+      );
+
+      const operationId = `send-${evidence}-legacy`;
+      const result = await runGatewayConversationSend(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          operationId,
+          conversationRef: conversation.conversationRef,
+          message: "hello molty",
+        },
+        deps,
+      );
+
+      expect(result).toEqual({
+        status: "sent",
+        conversationRef: conversation.conversationRef,
+        channel: "reef",
+        queueId: `queue-${evidence}`,
+      });
+      expect(deps.operations.get(operationId)).not.toHaveProperty("platformMessageId");
+    },
+  );
 
   it("returns durable completed state without recipient-visible I/O", async () => {
     const deps = createDeps();
@@ -186,6 +296,7 @@ describe("runGatewayConversationSend", () => {
       messageHash: "hello",
       status: "sent",
       platformMessageId: "reef-existing",
+      platformMessageIdSource: "receipt",
       queueId: "queue-existing",
       createdAt: 100,
       updatedAt: 200,
@@ -207,6 +318,40 @@ describe("runGatewayConversationSend", () => {
     ).resolves.toMatchObject({ status: "sent", messageId: "reef-existing" });
     expect(deps.resolveConversation).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes a locally prepared id from a platform receipt", async () => {
+    const deps = createDeps();
+    deps.operations.set("send-prepared", {
+      operationId: "send-prepared",
+      operationKind: "send",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello",
+      status: "sent",
+      preparedMessageId: "prepared-local-1",
+      queueId: "queue-existing",
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    await expect(
+      runGatewayConversationSend(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          operationId: "send-prepared",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+        },
+        deps,
+      ),
+    ).resolves.toMatchObject({
+      status: "sent",
+      messageId: "prepared-local-1",
+      messageIdSource: "prepared",
+    });
   });
 
   it("namespaces stable queue intents across agents", async () => {

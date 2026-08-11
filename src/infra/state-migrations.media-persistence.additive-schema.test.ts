@@ -18,6 +18,34 @@ describe("legacy media persistence additive schema repair", () => {
     cleanupTempDirs(tempDirs);
   });
 
+  it("accepts a current database whose receipt provenance is still lazy", () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-current-receipt-lazy-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec("ALTER TABLE conversation_deliveries DROP COLUMN platform_message_id_source;");
+    database.close();
+
+    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    const validated = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        (
+          validated.prepare("PRAGMA table_info(conversation_deliveries)").all() as Array<{
+            name?: unknown;
+          }>
+        ).some((column) => column.name === "platform_message_id_source"),
+      ).toBe(false);
+    } finally {
+      validated.close();
+    }
+  });
+
   it("repairs same-version additive session schema before media validation", () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-current-additive-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

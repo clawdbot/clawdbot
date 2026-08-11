@@ -57,7 +57,10 @@ function resultForCompletedOperation(params: {
   operation: ReturnType<ConversationDeliveryDeps["beginOperation"]>["record"];
 }): ConversationTurnResult | undefined {
   const { operation } = params;
-  const messageId = operation.platformMessageId ?? operation.preparedMessageId;
+  const messageId =
+    operation.platformMessageIdSource === "receipt"
+      ? operation.platformMessageId
+      : operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
     return {
       status: "replied",

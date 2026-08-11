@@ -7,6 +7,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { resolveOpenClawAgentSchemaForCurrentDatabase } from "./openclaw-agent-db-receipt-source-schema.js";
 import {
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentSchemaContains,
@@ -14,7 +15,6 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 /** Require exact agent ownership without requiring the latest schema. */
@@ -64,7 +64,11 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertOpenClawAgentSchemaContains(
+    database,
+    options.pathname,
+    resolveOpenClawAgentSchemaForCurrentDatabase(database),
+  );
 }
 
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */
