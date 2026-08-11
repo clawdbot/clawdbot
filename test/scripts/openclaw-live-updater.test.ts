@@ -2700,6 +2700,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
               });
             }
           },
+          waitForGatewayProcess: () => {
+            throw new Error("managed process was not observed");
+          },
         },
       );
     } catch (error) {
@@ -3195,6 +3198,126 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE already-enabled`,
       "disarm launchd environment restore",
     ]);
+  });
+
+  test("accepts an observed LaunchAgent process after bootstrap reports failure", async () => {
+    const uid = process.getuid?.() ?? 501;
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const calls: string[] = [];
+    let processObserved = false;
+
+    const output = await maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand(command: string, args: string[]) {
+          const call = [command, ...args].join(" ");
+          calls.push(call);
+          if (command === "/bin/launchctl" && args[0] === "bootstrap") {
+            throw Object.assign(new Error("Bootstrap failed: 5: Input/output error"), {
+              status: 5,
+            });
+          }
+        },
+        inspectGatewayDeployment: () => ({
+          configPath: path.join(root, "openclaw.json"),
+          entrypoint: source,
+          entrypointIndex: 1,
+          executable: process.execPath,
+          invocationPrefix: [source],
+          label: "ai.openclaw.gateway",
+          plistPath,
+          port: 18789,
+          runtime: process.execPath,
+        }),
+        isGatewayLoaded: () => false,
+        verifyGateway: () => {
+          throw new Error("managed job is unloaded");
+        },
+        verifyAndAuditGateway: () => ({
+          entries: 0,
+          errorCount: 0,
+          warningCount: 0,
+          errors: [],
+          warnings: [],
+        }),
+        verifyGatewayRuntime: () => ({ entrypoint: source, pid: 123, port: 18789 }),
+        waitForGatewayProcess: () => {
+          processObserved = true;
+        },
+      },
+    );
+
+    expect(processObserved).toBe(true);
+    expect(output.actions).toMatchObject({
+      gatewayBuild: false,
+      gatewayRestart: true,
+      gatewaySelfHeal: true,
+    });
+    expect(calls).toContain(`/bin/launchctl bootstrap gui/${uid} ${plistPath}`);
+  });
+
+  test("rejects unsafe bootstrap command cleanup before process observation", async () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let processObserved = false;
+
+    const failure = await maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        inspectGatewayDeployment: () => ({
+          configPath: path.join(root, "openclaw.json"),
+          entrypoint: source,
+          entrypointIndex: 1,
+          executable: process.execPath,
+          invocationPrefix: [source],
+          label: "ai.openclaw.gateway",
+          plistPath,
+          port: 18789,
+          runtime: process.execPath,
+        }),
+        isGatewayLoaded: () => false,
+        runManagedCommand: ({ args, bin }: { args: string[]; bin: string }) => {
+          if (bin === "/bin/launchctl" && args[0] === "bootstrap") {
+            throw Object.assign(new Error("launchctl cleanup remained live"), {
+              code: "EPROCESSGROUP_CLEANUP_FAILED",
+              processGroupId: 4321,
+              processTreeState: "live",
+            });
+          }
+          return 0;
+        },
+        verifyGateway: () => {
+          throw new Error("managed job is unloaded");
+        },
+        waitForGatewayProcess: () => {
+          processObserved = true;
+        },
+      },
+    ).catch((error: unknown) => error);
+
+    expect(processObserved).toBe(false);
+    expect(formatUpdateFailure(failure)).toMatchObject({
+      error: {
+        code: "command_cleanup_failed",
+        diagnostics: {
+          kind: "invariant",
+          code: "command_cleanup_failed",
+          details: {
+            processTreeState: "live",
+            serviceState: "stopped",
+          },
+        },
+      },
+    });
   });
 
   test("keeps successful CLI stdout as one machine-readable JSON object", () => {

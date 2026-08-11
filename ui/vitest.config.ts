@@ -96,6 +96,7 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/sessions/view.browser.test.ts",
   "src/styles/cursor-policy.browser.test.ts",
   "src/styles/chat-file-link-presentation.browser.test.ts",
+  "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
   ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),

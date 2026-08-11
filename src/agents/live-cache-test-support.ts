@@ -11,7 +11,7 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   isMissingProviderAuthError,
   isProviderAuthError,
   requireApiKey,
@@ -269,7 +269,7 @@ export async function resolveLiveDirectModelPool(params: {
   let apiKey: string;
   try {
     apiKey = requireApiKey(
-      await getApiKeyForModel({
+      await getApiKeyForModelCore({
         model: resolvedModel,
         cfg,
         agentDir,

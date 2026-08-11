@@ -118,7 +118,7 @@ vi.mock("../agents/models-config.js", async () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
+  getApiKeyForModelCore: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));
@@ -273,7 +273,7 @@ describe("describeImageWithModelCore", () => {
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
     const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
-      throw new Error(`Expected getApiKeyForModel call ${index}`);
+      throw new Error(`Expected getApiKeyForModelCore call ${index}`);
     }
     return call[0] as AuthRequestCall;
   }

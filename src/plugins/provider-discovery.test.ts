@@ -6,6 +6,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+  runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
 import * as providerDiscoveryModule from "./provider-discovery.js";
@@ -130,6 +131,51 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
     },
   ] as const)("$name", ({ providers, expected }) => {
     expectGroupedProviderIds(providers, expected);
+  });
+});
+
+describe("runProviderCatalog", () => {
+  it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
+    const outcomes: Array<{
+      provider: string;
+      profileId?: string;
+      status: "ready" | "auth-rejected" | "unavailable";
+    }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async () => {
+          await Promise.resolve();
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:chatgpt",
+                status: "auth-rejected",
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+    ]);
   });
 });
 

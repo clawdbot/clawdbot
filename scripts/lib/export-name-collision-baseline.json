@@ -8,13 +8,6 @@
     "sdk": true
   },
   {
-    "name": "clearSecretsRuntimeSnapshot",
-    "files": [
-      "src/secrets/runtime-state.ts",
-      "src/secrets/runtime.ts"
-    ]
-  },
-  {
     "name": "createPluginLoaderLogger",
     "files": [
       "src/plugins/loader-shared.ts",

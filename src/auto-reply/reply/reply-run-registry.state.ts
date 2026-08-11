@@ -5,7 +5,7 @@ import {
   markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
@@ -229,7 +229,7 @@ export function registerReplyOperationSuccessorBarrier(params: {
   sessionKeys: readonly string[];
   start: () => PromiseLike<unknown>;
 }): void {
-  const settlement = createDeferred();
+  const settlement = createDeferredCore();
   const barriers = new Set<ReplyRunAdmissionBarrier>();
   for (const sessionKey of new Set(params.sessionKeys.map(normalizeOptionalString))) {
     if (sessionKey) {

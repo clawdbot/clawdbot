@@ -148,7 +148,7 @@ export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDesc
 }
 
 /** Return names for all core root commands. */
-export function getCoreCliCommandNames(): string[] {
+export function getCoreCliCommandNamesCore(): string[] {
   return visibleCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 

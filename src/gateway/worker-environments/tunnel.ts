@@ -4,7 +4,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { createDeferred, type Deferred } from "../../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
   advanceWorkerSshAfterTransportExit,
@@ -314,7 +314,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
             // Each established child owns one readiness barrier. Replace it as soon as that child
             // is lost so same-owner callers wait for the reconnect instead of using a stale handle.
             entry.status = "reconnecting";
-            const readiness = createDeferred<WorkerTunnelHandle>();
+            const readiness = createDeferredCore<WorkerTunnelHandle>();
             void readiness.promise.catch(() => undefined);
             entry.readiness = readiness;
           }
@@ -418,7 +418,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
     const environmentKey = stableWorkerPathComponent(request.environmentId, 16);
     const remoteDirectory = `/tmp/ocw-${environmentKey}-${request.ownerEpoch}`;
-    const readiness = createDeferred<WorkerTunnelHandle>();
+    const readiness = createDeferredCore<WorkerTunnelHandle>();
     void readiness.promise.catch(() => undefined);
     const entry: TunnelEntry = {
       environmentId: request.environmentId,

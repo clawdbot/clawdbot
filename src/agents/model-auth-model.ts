@@ -232,7 +232,7 @@ export async function hasAvailableAuthForProvider(params: {
 }
 
 /** Resolves request credentials from the provider attached to a model descriptor. */
-export async function getApiKeyForModel(params: {
+export async function getApiKeyForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;
   profileId?: string;

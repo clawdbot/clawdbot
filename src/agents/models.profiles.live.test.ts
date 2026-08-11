@@ -49,7 +49,7 @@ import {
   isLiveRateLimitDrift,
 } from "./live-test-provider-drift.test-support.js";
 import {
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   requireApiKey,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
@@ -487,7 +487,7 @@ async function resolveLiveModelApiKeyInfo(params: {
   model: Model;
   cfg: OpenClawConfig;
   requireProfileKeys: boolean;
-}): Promise<Awaited<ReturnType<typeof getApiKeyForModel>>> {
+}): Promise<Awaited<ReturnType<typeof getApiKeyForModelCore>>> {
   if (isLiveLocalOllamaModel(params.model, params.cfg)) {
     const configuredKey = canReuseConfiguredLocalOllamaApiKey(params.model, params.cfg)
       ? resolveUsableCustomProviderApiKey({
@@ -508,7 +508,7 @@ async function resolveLiveModelApiKeyInfo(params: {
       mode: "api-key",
     };
   }
-  return await getApiKeyForModel({
+  return await getApiKeyForModelCore({
     model: params.model,
     cfg: params.cfg,
     credentialPrecedence: resolveLiveCredentialPrecedence(
@@ -1829,7 +1829,7 @@ describeLive("live models (profile keys)", () => {
       const skipped: Array<{ model: string; reason: string }> = [];
       const candidates: Array<{
         model: Model;
-        apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>>;
+        apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
       }> = [];
 
       for (const model of models) {

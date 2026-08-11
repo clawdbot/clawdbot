@@ -179,7 +179,7 @@ let hasRuntimeAvailableProviderAuth: typeof import("./model-auth.js").hasRuntime
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
-let getApiKeyForModel: typeof import("./model-auth.js").getApiKeyForModel;
+let getApiKeyForModelCore: typeof import("./model-auth.js").getApiKeyForModelCore;
 let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
@@ -210,7 +210,7 @@ beforeAll(async () => {
     hasAvailableAuthForProvider,
     hasRuntimeAvailableProviderAuth,
     hasSyntheticLocalProviderAuthConfig,
-    getApiKeyForModel,
+    getApiKeyForModelCore,
     hasUsableCustomProviderApiKey,
     requireApiKey,
     resolveApiKeyForProvider,
@@ -1586,7 +1586,7 @@ describe("resolveApiKeyForProvider", () => {
   it("preserves explicit subscription modes for literal provider credentials", async () => {
     for (const mode of ["oauth", "token"] as const) {
       const provider = `custom-${mode}`;
-      const resolved = await getApiKeyForModel({
+      const resolved = await getApiKeyForModelCore({
         model: {
           id: "subscription-model",
           provider,
@@ -1617,7 +1617,7 @@ describe("resolveApiKeyForProvider", () => {
 
   it("does not reinterpret explicit OpenAI oauth material as a Platform API key", async () => {
     await expect(
-      getApiKeyForModel({
+      getApiKeyForModelCore({
         model: {
           id: "platform-model",
           provider: "openai",
@@ -1645,7 +1645,7 @@ describe("resolveApiKeyForProvider", () => {
       "OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN",
       "env-subscription-credential",
       async () => {
-        const resolved = await getApiKeyForModel({
+        const resolved = await getApiKeyForModelCore({
           model: {
             id: "subscription-model",
             provider: "custom-token-env",
@@ -1758,7 +1758,7 @@ describe("resolveApiKeyForProvider", () => {
       sourceConfig,
     );
 
-    const resolved = await getApiKeyForModel({
+    const resolved = await getApiKeyForModelCore({
       model: {
         id: "subscription-model",
         provider: "custom-oauth-ref",
@@ -2013,7 +2013,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
   });
 
   it("resolves synthetic auth when model overrides api to ollama within a non-ollama provider", async () => {
-    const auth = await getApiKeyForModel({
+    const auth = await getApiKeyForModelCore({
       model: {
         id: "my-router/local-llama",
         name: "Local Llama",
@@ -2254,7 +2254,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
   });
 
   it("uses implicit aws-sdk auth for built-in Bedrock Converse models", async () => {
-    const auth = await getApiKeyForModel({
+    const auth = await getApiKeyForModelCore({
       model: {
         id: "us.anthropic.claude-sonnet-4-6-v1",
         name: "Claude Sonnet",

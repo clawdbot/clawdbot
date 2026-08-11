@@ -1,5 +1,5 @@
 import { normalizeStringifiedEntries } from "@openclaw/normalization-core/string-coerce";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 
 export const REPLY_ADMISSION_TICKET = Symbol("openclaw.replyAdmissionTicket");
@@ -21,7 +21,7 @@ export function reserveReplyAdmissionTicket(
   if (keys.length === 0) {
     return undefined;
   }
-  const { promise: completed, resolve: finish } = createDeferred();
+  const { promise: completed, resolve: finish } = createDeferredCore();
   const predecessors = keys.map((key) => tails.get(key) ?? Promise.resolve());
   const owned = keys.map((key, index) => {
     const tail = predecessors[index]!.then(() => completed);

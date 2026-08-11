@@ -8274,6 +8274,41 @@
       "translated": "+${toolCalls.size - 4} daha"
     },
     {
+      "id": "native.android.f2da5ffc1adaad58",
+      "source": "+${moreWorkingCount} more working",
+      "translated": "+${moreWorkingCount} tane daha çalışıyor"
+    },
+    {
+      "id": "native.android.db391c2712f7340b",
+      "source": "+${diff.added}",
+      "translated": "+${diff.added}"
+    },
+    {
+      "id": "native.android.babb72da2d6270a2",
+      "source": "−${diff.removed}",
+      "translated": "−${diff.removed}"
+    },
+    {
+      "id": "native.android.e58b3c8805c79bd0",
+      "source": "Subagent working",
+      "translated": "Alt aracı çalışıyor"
+    },
+    {
+      "id": "native.android.bdfea93e16940c82",
+      "source": "Subagent failed",
+      "translated": "Alt aracı başarısız oldu"
+    },
+    {
+      "id": "native.android.9fde542e43b4e73b",
+      "source": "Subagent cancelled",
+      "translated": "Alt aracı iptal edildi"
+    },
+    {
+      "id": "native.android.0bba48c12caa076a",
+      "source": "Subagent finished",
+      "translated": "Alt aracı tamamlandı"
+    },
+    {
       "id": "native.android.22d747642a3887cd",
       "source": "$completedCount/${steps.size}",
       "translated": "$completedCount/${steps.size}"
@@ -21824,6 +21859,21 @@
       "translated": "İleri"
     },
     {
+      "id": "native.apple.77671f1903c73f44",
+      "source": " (\\(command) pid \\(pid))",
+      "translated": " (\\(command) pid \\(pid))"
+    },
+    {
+      "id": "native.apple.69779351bd137b5b",
+      "source": "Existing gateway detected",
+      "translated": "Mevcut gateway algılandı"
+    },
+    {
+      "id": "native.apple.ff1e86b4eb896434",
+      "source": "Port \\(port) already in use",
+      "translated": "Port \\(port) zaten kullanımda"
+    },
+    {
       "id": "native.apple.3db546546fbaf38e",
       "source": "OpenClaw is preparing a local model.",
       "translated": "OpenClaw yerel bir model hazırlıyor."
@@ -22272,21 +22322,6 @@
       "id": "native.apple.d54084b48f40aa0a",
       "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
       "translated": "Tamam — OpenClaw henüz hiçbir şey başlatmayacak. Daha sonra Ayarlar → Genel bölümünde Yerel veya Uzak seçeneğini belirleyin."
-    },
-    {
-      "id": "native.apple.8d9eb247d41a0ca7",
-      "source": "Existing gateway detected",
-      "translated": "Mevcut Gateway algılandı"
-    },
-    {
-      "id": "native.apple.335bb6b21095d15a",
-      "source": "Port \\(probe.port) already in use",
-      "translated": "\\(probe.port) bağlantı noktası zaten kullanımda"
-    },
-    {
-      "id": "native.apple.de453cb637c46670",
-      "source": " (\\(probe.command) pid \\(probe.pid))",
-      "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
       "id": "native.apple.9ab228a4cb7d4403",
@@ -25977,6 +26012,11 @@
       "id": "native.apple.b09b91392835fe58",
       "source": "Delete",
       "translated": "Sil"
+    },
+    {
+      "id": "native.apple.d5a544f5ba642c60",
+      "source": "+%1$lld more working",
+      "translated": "+%1$lld tane daha çalışıyor"
     },
     {
       "id": "native.apple.946b677d8dbf0f37",

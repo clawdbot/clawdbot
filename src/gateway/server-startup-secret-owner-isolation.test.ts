@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
@@ -591,7 +591,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         expect(active?.degradedOwners).toMatchObject([
           { ownerKind: "account", ownerId, state: "unavailable" },
         ]);
-        const store = getRuntimeAuthProfileStoreSnapshot(agentDir);
+        const store = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
         if (!store || !active) {
           throw new Error("Expected activated Gateway auth profile snapshot");
         }

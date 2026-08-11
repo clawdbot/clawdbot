@@ -180,7 +180,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       resolveAwsSdkEnvVarName: vi.fn(() => undefined),
       resolveEnvApiKey: vi.fn(() => null),
       resolveModelAuthMode: vi.fn(() => "api-key"),
-      getApiKeyForModel: getApiKeyForModelMock,
+      getApiKeyForModelCore: getApiKeyForModelMock,
       getCustomProviderApiKey: vi.fn(() => undefined),
       ensureAuthProfileStore: vi.fn(async () => ({})),
       resolveAuthProfileOrder: vi.fn(() => []),
