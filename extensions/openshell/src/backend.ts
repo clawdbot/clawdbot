@@ -48,16 +48,6 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
-
-function formatRemoteDirectoryMode(mode?: number): string | undefined {
-  if (mode === undefined) {
-    return undefined;
-  }
-  if (!Number.isInteger(mode) || mode < 0 || mode > 0o777) {
-    throw new Error("remote directory mode must be an integer between 0000 and 0777");
-  }
-  return mode.toString(8);
-}
 function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
   localPath: string;
@@ -83,7 +73,6 @@ const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   '  root="$1"',
   '  relative="$2"',
   '  create="$3"',
-  '  mkdir_mode="${4:-}"',
   '  case "$root" in /*) ;; *) die "remote root must be absolute: $root" ;; esac',
   '  root="${root%/}"',
   '  [ -n "$root" ] || root="/"',
@@ -103,7 +92,7 @@ const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   '      if [ ! -d "$next" ]; then die "unsafe remote directory component: $next"; fi',
   "    else",
   '      if [ "$create" != "1" ]; then die "remote directory not found: $next"; fi',
-  '      if [ -n "$mkdir_mode" ]; then mkdir -m "$mkdir_mode" -- "$next"; else mkdir -- "$next"; fi',
+  '      mkdir -- "$next"',
   "    fi",
   '    current="$next"',
   "  done",
@@ -145,7 +134,7 @@ const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   'operation="$1"',
   'case "$operation" in',
   "  mkdirp)",
-  '    pin_dir "$2" "$3" 1 "${4:-}" >/dev/null',
+  '    pin_dir "$2" "$3" 1 >/dev/null',
   "    ;;",
   "  remove)",
   '    validate_basename "$4"',
@@ -353,8 +342,8 @@ class OpenShellSandboxBackendImpl {
               backend: this.asHandle(),
             }),
       runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
-      mkdirpRemotePath: async (remotePath, signal, mode) =>
-        await this.mkdirpRemotePath(remotePath, signal, mode),
+      mkdirpRemotePath: async (remotePath, signal) =>
+        await this.mkdirpRemotePath(remotePath, signal),
       removeRemotePath: async (remotePath, removeParams) =>
         await this.removeRemotePath(remotePath, removeParams),
       renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
@@ -498,11 +487,10 @@ class OpenShellSandboxBackendImpl {
     return await this.runRemoteShellScriptInternal(params);
   }
 
-  async mkdirpRemotePath(remotePath: string, signal?: AbortSignal, mode?: number): Promise<void> {
+  async mkdirpRemotePath(remotePath: string, signal?: AbortSignal): Promise<void> {
     const target = this.resolveRemoteTarget(remotePath);
-    const formattedMode = formatRemoteDirectoryMode(mode);
     await this.runPinnedRemotePathMutation({
-      args: ["mkdirp", target.root, target.relativePath, ...(formattedMode ? [formattedMode] : [])],
+      args: ["mkdirp", target.root, target.relativePath],
       signal,
     });
   }

@@ -1,9 +1,5 @@
 import path from "node:path";
-import {
-  ensureDirectoryWithinRoot,
-  removePathWithinRoot,
-  root as fsRoot,
-} from "openclaw/plugin-sdk/file-access-runtime";
+import { removePathWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
   type SandboxBackendHandle,
@@ -125,21 +121,13 @@ class MxcFsBridge implements SandboxFsBridge {
     }
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; mode?: number }): Promise<void> {
+  async mkdirp(params: { filePath: string; cwd?: string }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
     if (target.mountRelativePath.length === 0) {
       return;
     }
-    const result = await ensureDirectoryWithinRoot({
-      rootDir: target.mount.hostRoot,
-      requestedPath: target.mountRelativePath,
-      scopeLabel: "MXC writable mount",
-      mode: params.mode,
-    });
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+    await (await fsRoot(target.mount.hostRoot)).mkdir(target.mountRelativePath);
   }
 
   async remove(params: {

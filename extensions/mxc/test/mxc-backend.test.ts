@@ -781,11 +781,6 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       ]);
       expect(raceOutcomes.toSorted()).toEqual(["created", "exists"]);
 
-      await bridge?.mkdirp({ filePath: "private/receipt", cwd: workdir, mode: 0o700 });
-      if (process.platform !== "win32") {
-        expect(statSync(path.join(workdir, "private", "receipt")).mode & 0o777).toBe(0o700);
-      }
-
       await bridge?.writeFile({ filePath: "notes/one.txt", data: "hello mxc", cwd: workdir });
       expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
         Buffer.from("hello mxc"),

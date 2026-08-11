@@ -1,6 +1,5 @@
 // Safe local-file helpers for plugin runtime media and bridge code.
 
-export { ensureDirectoryWithinRoot } from "@openclaw/fs-safe/advanced";
 export {
   canonicalPathFromExistingAncestor,
   readFileWithinRoot,
