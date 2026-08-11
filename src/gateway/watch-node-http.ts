@@ -23,10 +23,7 @@ import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
-import {
-  captureAuthenticatedNodePairingState,
-  isPairedDeviceNodeBindingCurrent,
-} from "../infra/device-pairing-node-state.js";
+import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -41,6 +38,7 @@ import {
   ensureDeviceToken,
   getPairedDevice,
   requestDevicePairing,
+  resolveNodePairingState,
   verifyDeviceToken,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -775,8 +773,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       // Device lifecycle mutations run asynchronously after marking current sessions.
       // Reverify after every pairing await, then publish without another yield so a
       // concurrent revoke either fails admission or sees this registered transport.
-      let finalTokenVerification: Awaited<ReturnType<typeof verifyDeviceToken>>;
-      finalTokenVerification = await verifyDeviceToken({
+      const finalTokenVerification = await verifyDeviceToken({
         deviceId: derivedDeviceId,
         token: issuedDeviceToken,
         role: "node",
@@ -803,6 +800,13 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         const consumed = await consumeSetupHandoff({
           token: bootstrapToken,
           deviceId: derivedDeviceId,
+          pairedDeviceMatches: (device) => {
+            const currentNodePairing = resolveNodePairingState(device);
+            return (
+              currentNodePairing?.identity.key === nodePairingState.identity.key &&
+              currentNodePairing.generation?.key === nodePairingGeneration.key
+            );
+          },
           baseDir: options.pairingBaseDir,
           ts: now(),
         });
@@ -811,21 +815,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           return;
         }
         bootstrapHandoff = consumed;
-        if (
-          !isPairedDeviceNodeBindingCurrent(
-            derivedDeviceId,
-            {
-              identity: nodePairingState.identity.key,
-              generation: nodePairingGeneration.key,
-            },
-            options.pairingBaseDir,
-          )
-        ) {
-          if (!closed && !responseLifecycle.isAborted()) {
-            sendUnauthorized(res);
-          }
-          return;
-        }
       }
       if (closed || responseLifecycle.isAborted()) {
         return;

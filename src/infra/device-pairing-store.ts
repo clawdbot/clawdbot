@@ -541,6 +541,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   completedAtMs: number;
   retentionNowMs: number;
   retainUntilMs: number;
+  pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
   baseDir?: string;
 }): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const token = params.token.trim();
@@ -559,16 +560,14 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
       return null;
     }
     const record = fromBootstrapRow(tokenRow);
-    const paired = record.setupId
-      ? executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("device_pairing_paired")
-            .select(["display_name", "operator_label"])
-            .where("device_id", "=", deviceId),
-        )
-      : undefined;
-    const deviceName = paired?.operator_label ?? paired?.display_name ?? undefined;
+    const paired =
+      record.setupId || params.pairedDeviceMatches
+        ? loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId)
+        : null;
+    if (params.pairedDeviceMatches && !params.pairedDeviceMatches(paired)) {
+      return null;
+    }
+    const deviceName = paired?.operatorLabel ?? paired?.displayName;
     const completion: DevicePairSetupCompletionRecord | undefined = record.setupId
       ? {
           setupId: record.setupId,

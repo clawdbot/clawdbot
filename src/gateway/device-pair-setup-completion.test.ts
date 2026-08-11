@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDevicePairSetupCompletion } from "../infra/device-bootstrap.js";
 import {
+  loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "../infra/device-pairing-store.js";
@@ -193,5 +194,50 @@ describe("device pair setup completion", () => {
     expect(handoff).toMatchObject({ record: { token: "generic" } });
     broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("does not consume a setup credential after its paired binding changed", async () => {
+    const baseDir = await tempDirs.make("openclaw-setup-completion-stale-binding-");
+    persistDeviceBootstrapTokenRecords(
+      {
+        "bootstrap-secret": {
+          token: "bootstrap-secret",
+          setupId: "setup-stale-binding",
+          ts: 1,
+          deviceId: "device-123",
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          issuedAtMs: 1,
+        },
+      },
+      baseDir,
+    );
+    persistDevicePairingStoreState(
+      {
+        pendingById: {},
+        pairedByDeviceId: {
+          "device-123": {
+            deviceId: "device-123",
+            publicKey: "replacement-key",
+            createdAtMs: 1,
+            approvedAtMs: 2,
+          },
+        },
+      },
+      baseDir,
+      "paired",
+    );
+
+    await expect(
+      consumeSetupHandoff({
+        token: "bootstrap-secret",
+        deviceId: "device-123",
+        pairedDeviceMatches: (device) => device?.publicKey === "original-key",
+        baseDir,
+      }),
+    ).resolves.toBeNull();
+    expect(loadDeviceBootstrapTokenRecords(baseDir)).toHaveProperty("bootstrap-secret");
+    await expect(
+      readDevicePairSetupCompletion({ baseDir, setupId: "setup-stale-binding" }),
+    ).resolves.toBeNull();
   });
 });

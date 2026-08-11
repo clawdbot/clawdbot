@@ -3,6 +3,7 @@ import { consumeDeviceBootstrapTokenWithSetupCompletion } from "../infra/device-
 import type {
   DeviceBootstrapTokenRecord,
   DevicePairSetupCompletionRecord,
+  PairedDevice,
 } from "../infra/device-pairing.types.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
@@ -16,6 +17,7 @@ export type SetupHandoff = {
 export async function consumeSetupHandoff(params: {
   token: string;
   deviceId: string;
+  pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
   baseDir?: string;
   ts?: number;
 }): Promise<SetupHandoff | null> {
@@ -24,6 +26,7 @@ export async function consumeSetupHandoff(params: {
     token: params.token,
     deviceId: params.deviceId,
     completedAtMs,
+    ...(params.pairedDeviceMatches ? { pairedDeviceMatches: params.pairedDeviceMatches } : {}),
     ...(params.baseDir ? { baseDir: params.baseDir } : {}),
   });
   return consumed;

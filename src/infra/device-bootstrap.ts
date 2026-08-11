@@ -23,7 +23,11 @@ import {
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
 } from "./device-pairing-store.js";
-import type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
+import type {
+  DeviceBootstrapTokenRecord,
+  DevicePairSetupCompletionRecord,
+  PairedDevice,
+} from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
@@ -257,6 +261,7 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
   token: string;
   deviceId: string;
   completedAtMs: number;
+  pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
   baseDir?: string;
 }) {
   return await withLock(async () => {
@@ -268,6 +273,7 @@ export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
       // Retention follows the store clock rather than an injected event time.
       retentionNowMs: nowMs,
       retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,
+      ...(params.pairedDeviceMatches ? { pairedDeviceMatches: params.pairedDeviceMatches } : {}),
       ...(params.baseDir ? { baseDir: params.baseDir } : {}),
     });
   });
