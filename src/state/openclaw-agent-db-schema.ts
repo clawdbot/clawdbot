@@ -27,6 +27,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
+import { resolveOpenClawAgentSchemaForCurrentDatabase } from "./openclaw-agent-db-receipt-source-schema.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   assertExistingAgentSchemaOwner,
@@ -41,6 +42,7 @@ import {
   backfillSessionConversations,
   ensureConversationDeliveryReceiptSourceProjection,
   ensureSessionEntryValidityProjection,
+  hasPendingConversationDeliveryReceiptSourceProjection,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
@@ -149,11 +151,6 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
       .get(),
   );
   return !sessionNodeColumns.has("entry_valid") || !hasContractTable;
-}
-
-function hasPendingConversationDeliveryReceiptSourceMigration(db: DatabaseSync): boolean {
-  const columns = readSqliteTableColumns(db, "conversation_deliveries");
-  return Boolean(columns && !columns.has("platform_message_id_source"));
 }
 
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
@@ -563,7 +560,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
     hasPendingSessionKeyContractSchemaMigration(database);
   const hasPendingConversationReceiptSourceMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
-    hasPendingConversationDeliveryReceiptSourceMigration(database);
+    hasPendingConversationDeliveryReceiptSourceProjection(database);
   const hasPendingAdditiveMigration =
     hasPendingMemoryMigration ||
     hasPendingSessionContractMigration ||
@@ -597,7 +594,11 @@ function assertAgentSchemaVersion(
       `OpenClaw agent database ${options.pathname} did not converge on schema version ${options.version}.`,
     );
   }
-  assertOpenClawAgentSchemaContains(db, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertOpenClawAgentSchemaContains(
+    db,
+    options.pathname,
+    resolveOpenClawAgentSchemaForCurrentDatabase(db),
+  );
 }
 
 function ensureAgentSchema(
@@ -625,7 +626,6 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion === targetVersion) {
-        ensureConversationDeliveryReceiptSourceProjection(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {

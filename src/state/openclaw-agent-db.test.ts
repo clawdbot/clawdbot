@@ -3389,7 +3389,7 @@ describe("openclaw agent database", () => {
     ).toEqual({ main_key: "main" });
   });
 
-  it("repairs same-version receipt provenance before schema validation", () => {
+  it("leaves same-version receipt provenance lazy during ordinary database open", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
@@ -3407,19 +3407,20 @@ describe("openclaw agent database", () => {
       shippedSchema.close();
     }
 
-    const repaired = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
+    const opened = migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
     expect(
       (
-        repaired.db.prepare("PRAGMA table_info(conversation_deliveries)").all() as Array<{
+        opened.db.prepare("PRAGMA table_info(conversation_deliveries)").all() as Array<{
           name?: unknown;
         }>
       ).some((column) => column.name === "platform_message_id_source"),
-    ).toBe(true);
-    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(repaired.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(
-        createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
-      ),
-    );
+    ).toBe(false);
+    expect(() =>
+      assertOpenClawAgentDatabaseForMaintenance(opened.db, {
+        agentId: "worker-1",
+        pathname: databasePath,
+      }),
+    ).not.toThrow();
   });
 
   it("installs same-version session additions before maintenance index repair", () => {

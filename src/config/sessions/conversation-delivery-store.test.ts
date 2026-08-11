@@ -1,9 +1,13 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { completeDurableDelivery } from "../../infra/outbound/delivery-completion.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -21,6 +25,7 @@ import {
   deleteSessionEntryLifecycle,
   upsertSessionEntry as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
+import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 type LegacyDeliveryFixture = Partial<SessionEntry> & {
@@ -73,6 +78,29 @@ async function withConversationStore(
 }
 
 describe("conversation delivery store", () => {
+  it("installs receipt provenance on first delivery-owner use", async () => {
+    await withConversationStore(({ scope }) => {
+      const databaseOptions = toDatabaseOptions(resolveSqliteReadScope(scope));
+      const databasePath = openOpenClawAgentDatabase(databaseOptions).path;
+      closeOpenClawAgentDatabasesForTest();
+
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec("ALTER TABLE conversation_deliveries DROP COLUMN platform_message_id_source;");
+      legacy.close();
+
+      expect(getConversationDeliveryOperation(scope, "missing-operation")).toBeUndefined();
+      const upgraded = openOpenClawAgentDatabase(databaseOptions);
+      expect(
+        (
+          upgraded.db.prepare("PRAGMA table_info(conversation_deliveries)").all() as Array<{
+            name?: unknown;
+          }>
+        ).some((column) => column.name === "platform_message_id_source"),
+      ).toBe(true);
+    });
+  });
+
   it("creates idempotent operations and rejects operation-id input reuse", async () => {
     await withConversationStore(({ scope, conversationRef }) => {
       const first = beginConversationDeliveryOperation(scope, {

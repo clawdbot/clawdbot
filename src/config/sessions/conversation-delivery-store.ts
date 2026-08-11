@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
+  ensureConversationDeliveryReceiptSourceProjection,
+  hasPendingConversationDeliveryReceiptSourceProjection,
+} from "../../state/openclaw-agent-db-session-migrations.js";
+import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -79,6 +83,19 @@ function resolveDatabaseOptions(scope: ConversationDeliveryStoreScope) {
       ...(scope.storePath ? { storePath: scope.storePath } : {}),
     }),
   );
+}
+
+function openConversationDeliveryDatabase(scope: ConversationDeliveryStoreScope) {
+  const databaseOptions = resolveDatabaseOptions(scope);
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  if (hasPendingConversationDeliveryReceiptSourceProjection(database.db)) {
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => ensureConversationDeliveryReceiptSourceProjection(db),
+      databaseOptions,
+      { operationLabel: "conversation-delivery.ensure-schema" },
+    );
+  }
+  return database;
 }
 
 function normalizeOperationId(value: string): string {
@@ -194,7 +211,7 @@ export function getConversationDeliveryOperation(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
 ): ConversationDeliveryRecord | undefined {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
+  const database = openConversationDeliveryDatabase(scope);
   return selectOperation(database, normalizeOperationId(operationId));
 }
 
@@ -215,6 +232,7 @@ export function beginConversationDeliveryOperation(
   const messageHash = hashMessage(params.message);
   return runOpenClawAgentWriteTransaction(
     (database) => {
+      ensureConversationDeliveryReceiptSourceProjection(database.db);
       const existing = selectOperation(database, operationId);
       if (existing) {
         if (
@@ -282,6 +300,7 @@ function updateConversationDeliveryOperation(
   const operationId = normalizeOperationId(params.operationId);
   return runOpenClawAgentWriteTransaction(
     (database) => {
+      ensureConversationDeliveryReceiptSourceProjection(database.db);
       const current = selectOperation(database, operationId);
       if (!current) {
         throw new Error(`Conversation delivery operation not found: ${operationId}`);
@@ -431,7 +450,7 @@ export function findConversationTurnDeliveryByReplyTarget(
   scope: ConversationDeliveryStoreScope,
   params: { conversationRef: string; replyToId: string },
 ): ConversationDeliveryRecord | undefined {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
+  const database = openConversationDeliveryDatabase(scope);
   const db = getSessionKysely(database.db);
   const row = executeSqliteQuerySync(
     database.db,

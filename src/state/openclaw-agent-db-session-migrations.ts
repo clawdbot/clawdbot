@@ -286,10 +286,15 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
   db.exec("ALTER TABLE conversations ADD COLUMN delivery_target TEXT NOT NULL DEFAULT '';");
 }
 
+/** Reports whether durable delivery provenance must be installed before owner use. */
+export function hasPendingConversationDeliveryReceiptSourceProjection(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "conversation_deliveries");
+  return Boolean(columns && !columns.has("platform_message_id_source"));
+}
+
 /** Adds explicit provenance while leaving every preexisting platform id untrusted. */
 export function ensureConversationDeliveryReceiptSourceProjection(db: DatabaseSync): void {
-  const columns = readSqliteTableColumns(db, "conversation_deliveries");
-  if (!columns || columns.has("platform_message_id_source")) {
+  if (!hasPendingConversationDeliveryReceiptSourceProjection(db)) {
     return;
   }
   db.exec("ALTER TABLE conversation_deliveries ADD COLUMN platform_message_id_source TEXT;");

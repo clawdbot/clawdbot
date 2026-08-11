@@ -18,6 +18,7 @@ import {
   hasMeaningfulRetiredMediaCarrier,
 } from "../media/media-facts.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import { resolveOpenClawAgentSchemaForCurrentDatabase } from "../state/openclaw-agent-db-receipt-source-schema.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
 import {
@@ -29,7 +30,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
@@ -349,14 +349,15 @@ function migrateAgentDatabase(params: {
         path: params.pathname,
       });
     }
+    const schemaSql = resolveOpenClawAgentSchemaForCurrentDatabase(database);
     // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
-      repairCanonicalSqliteIndexes(database, params.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+      repairCanonicalSqliteIndexes(database, params.pathname, schemaSql, {
         validateAfterRepair: () =>
-          assertOpenClawAgentSchemaContains(database, params.pathname, OPENCLAW_AGENT_SCHEMA_SQL),
+          assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql),
       });
     }
-    assertOpenClawAgentSchemaContains(database, params.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+    assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql);
     const planned = planTranscriptRows(database, params.pathname);
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
     const plannedTrajectoryRows = executeSqliteQuerySync(
