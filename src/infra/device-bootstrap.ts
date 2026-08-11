@@ -14,7 +14,6 @@ import {
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
-  type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";

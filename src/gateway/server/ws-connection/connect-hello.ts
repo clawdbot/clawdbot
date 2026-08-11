@@ -219,7 +219,7 @@ export async function sendGatewayHello(
       });
     } catch (err) {
       logGateway.warn(
-        `setup completion broadcast failed device=${device.id}: ${formatForLog(err)}`,
+        `setup completion broadcast failed device=${device?.id ?? "unknown"}: ${formatForLog(err)}`,
       );
     }
   }
