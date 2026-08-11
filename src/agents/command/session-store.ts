@@ -8,7 +8,10 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
+import {
+  rebaseSessionGoalTokenCursor,
+  resolveSessionGoalDisplayState,
+} from "../../config/sessions/goals.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -308,14 +311,28 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // recreate rows that were reset/deleted while the run was active.
         return null;
       }
-      return preserveUserFacingRunState
-        ? metadataPatch
-        : projectSessionSnapshotChanges({
-            initial: entry,
-            next,
-            current: currentEntry,
-            reassertAbortedLastRun: result.meta.aborted === true,
-          });
+      if (preserveUserFacingRunState) {
+        return metadataPatch;
+      }
+      const snapshotPatch = projectSessionSnapshotChanges({
+        initial: entry,
+        next,
+        current: currentEntry,
+        reassertAbortedLastRun: result.meta.aborted === true,
+      });
+      if (
+        currentEntry.goal &&
+        typeof next.totalTokens === "number" &&
+        next.totalTokensFresh === true
+      ) {
+        snapshotPatch.goal = entry.goal
+          ? resolveSessionGoalDisplayState(
+              { goal: currentEntry.goal, totalTokens: next.totalTokens, totalTokensFresh: true },
+              now,
+            )
+          : rebaseSessionGoalTokenCursor(currentEntry.goal, next.totalTokens, { resetStart: true });
+      }
+      return snapshotPatch;
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),
@@ -556,7 +573,15 @@ export async function recordCliCompactionInStore(params: {
       ) {
         return null;
       }
-      return next;
+      return {
+        ...next,
+        // The durable row owns concurrent Goal edits. Rebase that exact Goal to the new token
+        // epoch instead of restoring the caller's stale in-memory snapshot.
+        goal:
+          tokensAfterCompaction !== undefined && currentEntry.goal
+            ? rebaseSessionGoalTokenCursor(currentEntry.goal, Math.floor(tokensAfterCompaction))
+            : currentEntry.goal,
+      };
     },
     { fallbackEntry: entry },
   );

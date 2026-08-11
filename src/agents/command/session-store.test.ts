@@ -9,6 +9,7 @@ import {
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import { createSessionGoal } from "../../config/sessions/goals.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -1626,6 +1627,64 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("adopts the final fresh CLI snapshot for a goal created during the active run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: { defaults: { cliBackends: { "claude-cli": { command: "claude" } } } },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-goal-created-mid-run";
+      const sessionId = "test-cli-goal-created-mid-run-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 100,
+          totalTokensFresh: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+      await createSessionGoal({
+        sessionKey,
+        storePath,
+        objective: "Count only usage after creation",
+        tokenBudget: 30_000,
+        now: 2,
+      });
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              promptTokens: 125,
+              usage: { input: 125, output: 5 },
+              lastCallUsage: { input: 125, output: 5 },
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.goal).toMatchObject({
+        tokenStart: 125,
+        tokenStartFresh: true,
+        tokenCursor: 125,
+        tokensUsed: 0,
+      });
+    });
+  });
+
   it("persists compaction tokensAfter when provider usage is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -2976,6 +3035,66 @@ describe("recordCliCompactionInStore", () => {
         sessionId: "stale-cli-session",
       });
       expect(persisted[sessionKey]?.cliSessionIds?.codex).toBe("stale-cli-session");
+    });
+  });
+
+  it("rebases the durable goal to the fresh CLI compaction snapshot", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-goal";
+      const sessionId = "test-record-cli-compaction-goal-session";
+      const goal: NonNullable<SessionEntry["goal"]> = {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "Keep charging after compaction",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 10_000,
+        tokenStartFresh: true,
+        tokenCursor: 12_000,
+        tokensUsed: 2_000,
+        tokenBudget: 30_000,
+        continuationTurns: 0,
+      };
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+          goal,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          ...sessionStore[sessionKey]!,
+          goal: {
+            ...goal,
+            objective: "Changed while compaction was active",
+            status: "paused",
+            updatedAt: 2,
+            pausedAt: 2,
+          },
+        },
+      );
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        tokensAfter: 3_000,
+      });
+
+      expect(sessionStore[sessionKey]?.goal).toMatchObject({
+        objective: "Changed while compaction was active",
+        status: "paused",
+        tokenStart: 10_000,
+        tokenCursor: 3_000,
+        tokensUsed: 2_000,
+      });
     });
   });
 
