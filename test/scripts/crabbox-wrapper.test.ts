@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { buildSync } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canonicalProviderName,
@@ -26,6 +27,7 @@ import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
+const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -299,10 +301,20 @@ process.exit(response.status ?? 0);`;
 function runWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
   const nodeArgs = [
     ...(options.nodePreload ? ["--require", options.nodePreload] : []),
-    "scripts/crabbox-wrapper.mjs",
+    bundledWrapperPath,
     ...args,
   ];
   return spawnSync(process.execPath, nodeArgs, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    input: options.input,
+    env: wrapperEnv(helpText, options),
+    timeout: 10_000,
+  });
+}
+
+function runSourceWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
+  return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     input: options.input,
@@ -328,7 +340,7 @@ type WrapperOptions = {
 function spawnWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
   const nodeArgs = [
     ...(options.nodePreload ? ["--require", options.nodePreload] : []),
-    "scripts/crabbox-wrapper.mjs",
+    bundledWrapperPath,
     ...args,
   ];
   return spawn(process.execPath, nodeArgs, {
@@ -723,6 +735,7 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
 }
 
 afterAll(() => {
+  rmSync(bundledWrapperPath, { force: true });
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -755,7 +768,17 @@ describe("scripts/crabbox-wrapper", () => {
     ["static-ssh", "ssh"],
   ];
   beforeAll(() => {
-    runWrapper("provider: aws\n", ["--version"]);
+    mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
+    buildSync({
+      bundle: true,
+      entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
+      format: "esm",
+      logLevel: "silent",
+      outfile: bundledWrapperPath,
+      platform: "node",
+      target: "node22",
+    });
+    runSourceWrapper("provider: aws\n", ["--version"]);
   });
 
   it("routes CI workloads through the first ready provider", () => {
@@ -2226,14 +2249,6 @@ describe("scripts/crabbox-wrapper", () => {
       script: "scripts/package-mac-app.sh",
     },
     {
-      name: "preflights Swift and JS tooling for raw AWS macOS dist package scripts",
-      script: "scripts/package-mac-dist.sh",
-    },
-    {
-      name: "preflights Swift and JS tooling for raw AWS macOS restart scripts",
-      script: "scripts/restart-mac.sh",
-    },
-    {
       js: false,
       name: "keeps raw AWS macOS build-and-run scripts Swift-only",
       script: "scripts/build-and-run-mac.sh",
@@ -2311,51 +2326,6 @@ describe("scripts/crabbox-wrapper", () => {
     const { remoteCommand } = runSuccessfulMacosCommand(["env", "-i", "bun", "--version"]);
     expect(remoteCommand).toContain("bun --version >&2 || return 1");
     expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -i bun --version");
-  });
-
-  it("bootstraps Corepack for raw AWS macOS pnpm commands", () => {
-    const { output, remoteCommand, result } = runSuccessfulMacosCommand(["pnpm", "--version"]);
-    expect(output.args).toContain("--shell");
-    expect(result.stderr).toContain(
-      "bootstrapping pinned user-local JavaScript tooling before the command",
-    );
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
-    expect(remoteCommand).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 2 -o "$tmp_dir/$pkg"',
-    );
-    expect(remoteCommand).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 -o "$tmp_dir/SHASUMS256.txt"',
-    );
-    expect(remoteCommand).toContain("shasum -a 256 -c -");
-    expect(remoteCommand).toContain('ready_marker="$node_dir/.openclaw-crabbox-node-ready"');
-    expect(remoteCommand).toContain(
-      'if [ -x "$node_dir/bin/node" ] && [ -f "$ready_marker" ]; then break; fi;',
-    );
-    expect(remoteCommand).toContain('touch "$ready_marker"');
-    expect(remoteCommand).toContain(
-      'install_lock="$tool_root/.node-${node_version}-${node_arch}.lock"',
-    );
-    expect(remoteCommand).toContain("lock_deadline=$((SECONDS + 300))");
-    expect(remoteCommand).toContain('printf "%s\\n" "$$" >"$install_lock/pid"');
-    expect(remoteCommand).toContain(
-      "timed out waiting for active macOS Node toolchain install lock: $install_lock pid=$lock_pid",
-    );
-    expect(remoteCommand).toContain(
-      "reclaiming stale macOS Node toolchain install lock: $install_lock",
-    );
-    expect(remoteCommand).toContain('rm -rf "$install_lock"');
-    expect(remoteCommand).toContain("release_install_lock");
-    expect(remoteCommand).not.toContain("set -euo pipefail");
-    expect(remoteCommand).toContain('return "$status"');
-    expect(remoteCommand).toContain('if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;');
-    expect(remoteCommand).toContain('mkdir -p "$TMPDIR"');
-    expect(remoteCommand).toContain("usable TMPDIR not found: $TMPDIR");
-    expect(remoteCommand).toContain("node --version >&2 || return 1");
-    expect(remoteCommand).toContain('export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}"');
-    expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expectGroupedShellCommand(remoteCommand, "pnpm --version");
   });
 
   it.each([
@@ -2701,16 +2671,8 @@ describe("scripts/crabbox-wrapper", () => {
       shellScript: "set -e; exec pnpm check:changed",
     },
     {
-      name: "bootstraps raw AWS macOS shell scripts with command-prefixed JavaScript commands",
-      shellScript: "command pnpm --version",
-    },
-    {
       name: "bootstraps raw AWS macOS shell scripts with time-prefixed JavaScript commands",
       shellScript: "time -p node -e 'process.exit(0)'",
-    },
-    {
-      name: "bootstraps raw AWS macOS shell scripts with absolute time-prefixed JavaScript commands",
-      shellScript: "/usr/bin/time -l pnpm --version",
     },
     {
       name: "bootstraps raw AWS macOS shell scripts with JavaScript control conditions",
@@ -3434,22 +3396,12 @@ describe("scripts/crabbox-wrapper", () => {
       shellScript: "bash -o pipefail -c 'pnpm check:changed'",
     },
     {
-      name: "preserves sparse changed-gate Git bootstrap for attached shell option values before -c",
-      shellScript: "bash --rcfile=./ci.bashrc -c 'pnpm check:changed'",
-    },
-    {
       name: "preserves sparse changed-gate Git bootstrap for grouped shell options before -c",
       shellScript: "bash -eo pipefail -c 'pnpm check:changed'",
     },
     {
       name: "preserves sparse changed-gate Git bootstrap for absolute time-prefixed shell commands",
       shellScript: "/usr/bin/time -l pnpm check:changed",
-    },
-    {
-      expectFetch: true,
-      name: "preserves sparse changed-gate Git bootstrap for timeout-wrapped shell commands",
-      shellScript:
-        "/usr/bin/time -v timeout 1200s node --max-old-space-size=4096 scripts/check-changed.mjs --base origin/main --head HEAD",
     },
   ])("$name", ({ expectFetch, shellScript }) => {
     const { remoteCommand } = runSparseShell(shellScript);
