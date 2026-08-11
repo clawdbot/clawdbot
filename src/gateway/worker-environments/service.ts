@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   type WorkerAdmissionHandshake,
   type WorkerSessionsSendParams,
@@ -66,15 +65,6 @@ class WorkerEnvironmentServiceError extends Error {
 
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
-
-function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
-  return createHash("sha256").update(idempotencyKey).digest("hex");
-}
-
-export function workerEnvironmentIdForIdempotencyKey(idempotencyKey: string): string {
-  const digest = workerEnvironmentIdempotencyDigest(idempotencyKey);
-  return `worker:${digest.slice(0, 32)}`;
-}
 
 type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
@@ -313,10 +303,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
-  const create = async (profileId: string, idempotencyKey: string) => {
-    return await providerLifecycle.createWithProfile(profileId, idempotencyKey);
-  };
-
   const reconcilePass = async () => {
     const tasks = store.listForReconcile().map(
       (candidate) => () =>
@@ -391,7 +377,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     list: environmentAccess.list,
     get: environmentAccess.get,
     create: async (profileId: string, idempotencyKey: string) =>
-      environmentAccess.project(await create(profileId, idempotencyKey)),
+      environmentAccess.project(
+        await providerLifecycle.createWithProfile(profileId, idempotencyKey),
+      ),
     createFromProfileSnapshot: async (
       profile: { profileId: string; providerId: string; profileSnapshot: WorkerProfile },
       idempotencyKey: string,

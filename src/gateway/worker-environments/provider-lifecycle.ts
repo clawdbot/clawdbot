@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -21,6 +20,7 @@ import {
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import { requireWorkerLease, requireWorkerLeaseStatus } from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
@@ -91,10 +91,6 @@ function requireProviderProvisionTimeoutMs(timeoutMs: number | undefined): numbe
     );
   }
   return timeoutMs;
-}
-
-function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
-  return createHash("sha256").update(idempotencyKey).digest("hex");
 }
 
 export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOptions) {
@@ -555,8 +551,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (!normalizedProfileId || normalizedProfileId !== profileId) {
       throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
     }
-    const digest = workerEnvironmentIdempotencyDigest(idempotencyKey);
-    const environmentId = `worker:${digest.slice(0, 32)}`;
+    const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
       stopping = options.isStopping();
       if (stopping) {
@@ -616,7 +611,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         providerId,
         profileId: normalizedProfileId,
         profileSnapshot,
-        provisionOperationId: `provision:v2:${digest}`,
+        provisionOperationId,
       });
       return resumeProvision(intent, provider);
     });
