@@ -1,6 +1,7 @@
 // Covers outbound direct target resolution, heartbeat target derivation,
 // heartbeat sender context, and route-aware heartbeat refinements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -75,6 +76,31 @@ async function resolveHeartbeatDeliveryTargetWithSessionRoute(
   });
 }
 
+function createOwnerAllowlistTargetTestPlugin(params: {
+  id: ChannelPlugin["id"];
+  label: string;
+  ownerId: string;
+  inferTargetChatType?: NonNullable<ChannelPlugin["messaging"]>["inferTargetChatType"];
+}): ChannelPlugin {
+  const plugin = createTestChannelPlugin({
+    id: params.id,
+    label: params.label,
+    outbound: {
+      deliveryMode: "direct",
+      resolveTarget: ({ to }) =>
+        to
+          ? { ok: true as const, to: to.trim() }
+          : { ok: false as const, error: new Error("target required") },
+    },
+    messaging: {
+      ...(params.inferTargetChatType ? { inferTargetChatType: params.inferTargetChatType } : {}),
+      targetResolver: { looksLikeId: () => true },
+    },
+  });
+  plugin.config = { ...plugin.config, resolveAllowFrom: () => [params.ownerId] };
+  return plugin;
+}
+
 vi.mock("./channel-resolution.js", () => ({
   normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
@@ -86,7 +112,9 @@ beforeEach(() => {
   mocks.normalizeDeliverableOutboundChannel.mockReset();
   mocks.normalizeDeliverableOutboundChannel.mockImplementation((value?: string | null) => {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
-    return ["alpha", "beta", "forum", "telegram"].includes(String(normalized))
+    return ["alpha", "beta", "forum", "googlechat", "telegram", "whatsapp"].includes(
+      String(normalized),
+    )
       ? normalized
       : undefined;
   });
@@ -1310,6 +1338,58 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("delivers a Google Chat user allowlist entry to its owner route", async () => {
+    const googlechat = createOwnerAllowlistTargetTestPlugin({
+      id: "googlechat",
+      label: "Google Chat",
+      ownerId: "users/abc",
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([googlechat]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: { channels: { googlechat: { allowFrom: ["users/abc"] } } } as OpenClawConfig,
+      agentId: "main",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "googlechat", to: "users/abc" });
+  });
+
+  it("rejects a Google Chat space allowlist entry as an owner route", async () => {
+    const googlechat = createOwnerAllowlistTargetTestPlugin({
+      id: "googlechat",
+      label: "Google Chat",
+      ownerId: "spaces/xyz",
+      inferTargetChatType: ({ to }) => (to.startsWith("spaces/") ? "group" : undefined),
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([googlechat]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: { channels: { googlechat: { allowFrom: ["spaces/xyz"] } } } as OpenClawConfig,
+      agentId: "main",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("delivers an unclassified WhatsApp E.164 allowlist entry to its owner route", async () => {
+    const whatsapp = createOwnerAllowlistTargetTestPlugin({
+      id: "whatsapp",
+      label: "WhatsApp",
+      ownerId: "+15555550166",
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([whatsapp]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: { channels: { whatsapp: { allowFrom: ["+15555550166"] } } } as OpenClawConfig,
+      agentId: "main",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "whatsapp", to: "+15555550166" });
   });
 
   it("uses an activation-aware external plugin when canonicalizing heartbeat routes", async () => {

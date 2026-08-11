@@ -364,7 +364,15 @@ export function resolveHeartbeatDeliveryTarget(params: {
       lastAccountId: resolvedTarget.lastAccountId,
     });
   }
-  if (ownerMode && !ownerTurnSource && isHeartbeatGroupChatType(deliveryChatType)) {
+  if (
+    ownerMode &&
+    !ownerTurnSource &&
+    isKnownGroupShapedHeartbeatTarget({
+      plugin,
+      to: resolved.to,
+      chatType: deliveryChatType,
+    })
+  ) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-route",
       accountId: effectiveAccountId,
@@ -417,8 +425,23 @@ export function resolveHeartbeatDeliveryTarget(params: {
   };
 }
 
-function isHeartbeatGroupChatType(chatType: ChatType | undefined): boolean {
-  return chatType === "group" || chatType === "channel";
+function isKnownGroupShapedHeartbeatTarget(params: {
+  plugin?: ChannelPlugin;
+  to: string;
+  chatType?: ChatType;
+}): boolean {
+  const to = params.plugin
+    ? stripTargetProviderPrefix(
+        params.to,
+        params.plugin.id,
+        ...(params.plugin.messaging?.targetPrefixes ?? []),
+      )
+    : params.to.trim();
+  const chatType =
+    normalizeChatType(params.chatType) ?? params.plugin?.messaging?.inferTargetChatType?.({ to });
+  // Sender allowlists identify people, so unknown shapes remain eligible.
+  // Explicit group syntax and per-channel classifiers close known group routes.
+  return chatType === "group" || chatType === "channel" || /^(?:group:|channel:|#)/i.test(to);
 }
 
 function hasDeliverableHeartbeatTurnSource(turnSource: DeliveryContext | undefined): boolean {
@@ -503,7 +526,13 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       lastAccountId: delivery.lastAccountId,
     });
   }
-  if (ownerRouteMustBeDirect && routeResolvedTarget && routeResolvedTarget.kind !== "user") {
+  if (
+    ownerRouteMustBeDirect &&
+    isKnownGroupShapedHeartbeatTarget({
+      plugin,
+      to: routeResolvedTarget?.to ?? deliveryTo,
+    })
+  ) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-route",
       accountId: delivery.accountId,
@@ -542,7 +571,14 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       lastAccountId: delivery.lastAccountId,
     });
   }
-  if (ownerRouteMustBeDirect && isHeartbeatGroupChatType(normalizeChatType(route.chatType))) {
+  if (
+    ownerRouteMustBeDirect &&
+    isKnownGroupShapedHeartbeatTarget({
+      plugin,
+      to: route.to,
+      chatType: normalizeChatType(route.chatType),
+    })
+  ) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-route",
       accountId: delivery.accountId,
