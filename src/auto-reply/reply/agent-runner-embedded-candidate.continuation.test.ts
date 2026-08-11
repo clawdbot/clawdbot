@@ -69,8 +69,8 @@ vi.mock("./agent-runner-post-compaction-release.js", () => ({
   releaseQueuedCompactionTolerant: mocks.releaseQueuedCompactionTolerant,
 }));
 
-import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import { createTestPreparedRunAdmission } from "../../agents/admitted-run-context.test-support.js";
+import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 
 function createTurn(config: AgentTurnParams["followupRun"]["run"]["config"]): AgentTurnParams {
   return {

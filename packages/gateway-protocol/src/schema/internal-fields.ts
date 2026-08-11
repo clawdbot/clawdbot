@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
 
 export function internalProtocolField<T extends object>(schema: T): T {
@@ -14,10 +16,6 @@ function isInternalProtocolField(schema: unknown): boolean {
     schema !== null &&
     (schema as Record<typeof INTERNAL_PROTOCOL_FIELD, unknown>)[INTERNAL_PROTOCOL_FIELD] === true
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 type StripResult = {

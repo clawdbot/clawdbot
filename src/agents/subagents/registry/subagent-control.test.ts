@@ -2744,7 +2744,9 @@ describe("steerControlledSubagentRun", () => {
           dispatch,
         };
       });
-    const replaceSpy = vi.spyOn(registry, "replaceSubagentRunAfterSteerCore").mockReturnValue(false);
+    const replaceSpy = vi
+      .spyOn(registry, "replaceSubagentRunAfterSteerCore")
+      .mockReturnValue(false);
     const callGateway = vi.fn(async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
       if (request.method === "agent.wait") {
         return {} as T;
