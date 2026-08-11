@@ -425,6 +425,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       applyConfigMutation(staleCleanup, {
         fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
         sanitize: true,
+        emitWarnings: true,
       });
     }
   }
