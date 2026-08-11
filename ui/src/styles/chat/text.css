@@ -313,6 +313,21 @@
   margin-top: 0;
 }
 
+:is(.chat-text, .sidebar-markdown) .markdown-external-image {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35em 0.75em;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 0.75em;
+  padding: 0.5em 0.65em;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--muted);
+}
+
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
    --card on every dark palette, so chips painted with it vanished inside user
    bubbles; --bg-muted/--border-strong separate in both modes without an override. */

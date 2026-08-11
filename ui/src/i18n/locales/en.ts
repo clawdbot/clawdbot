@@ -4934,6 +4934,10 @@ export const en: TranslationMap = {
       close: "Close image preview",
       untitled: "Image",
     },
+    externalImage: {
+      notLoaded: "External image not loaded",
+      open: "Open image",
+    },
     messages: {
       activity: "Activity",
       copySelection: "Copy",

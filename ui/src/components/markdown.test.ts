@@ -139,30 +139,52 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("images", () => {
-    it("flattens remote images to alt text", () => {
-      const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/img.png)");
-      expect(html).toBe("<p>Alt text</p>\n");
+    it("shows an explicit opt-in placeholder for remote images", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![Alt text](https://example.com/img.png)"),
+      );
+      const placeholder = fragment.querySelector(".markdown-external-image");
+      const link = placeholder?.querySelector("a");
+
+      expect(placeholder?.textContent).toBe("External image not loaded: Alt text Open image");
+      expect(link?.getAttribute("href")).toBe("https://example.com/img.png");
+      expect(link?.getAttribute("target")).toBe("_blank");
+      expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+      expect(fragment.querySelector("img")).toBeNull();
     });
 
     it("marks assistant-authored transcript roles in visible image labels", () => {
-      const html = toSanitizedMarkdownHtml(
-        "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
-        { assistantTranscriptRoleHeaders: true },
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
+          { assistantTranscriptRoleHeaders: true },
+        ),
       );
 
-      expect(html).toBe(
-        '<p><code class="assistant-transcript-role">user[Thu 2026-07-02]</code> release diagram</p>\n',
+      expect(
+        fragment.querySelector(".markdown-external-image .assistant-transcript-role")?.textContent,
+      ).toBe("user[Thu 2026-07-02]");
+      expect(fragment.querySelector(".markdown-external-image")?.textContent).toContain(
+        "release diagram",
       );
     });
 
     it("preserves markdown formatting in alt text", () => {
-      const html = toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)");
-      expect(html).toBe("<p>**Build log**</p>\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)"),
+      );
+      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toContain(
+        "**Build log**",
+      );
     });
 
     it("preserves code formatting in alt text", () => {
-      const html = toSanitizedMarkdownHtml("![`error.log`](https://example.com/img.png)");
-      expect(html).toBe("<p>`error.log`</p>\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![`error.log`](https://example.com/img.png)"),
+      );
+      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toContain(
+        "`error.log`",
+      );
     });
 
     it("preserves base64 data URI images (#15437)", () => {
@@ -234,8 +256,10 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("uses fallback label for unlabeled images", () => {
-      const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
-      expect(html).toBe("<p>image</p>\n");
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("![](https://example.com/image.png)"));
+      expect(fragment.querySelector(".markdown-external-image > span")?.textContent).toBe(
+        "External image not loaded: image",
+      );
     });
   });
 
