@@ -468,6 +468,109 @@ suite.define(() => {
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
+  it("keeps long member lists compact while visibility stays pinned", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessions = sessionsList(["profile-ada", "profile-bob"]);
+    const activeSession = sessions.sessions[0];
+    if (!activeSession) {
+      throw new Error("expected active session fixture");
+    }
+    Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
+    sessions.count = 1;
+    sessions.creators = [{ id: "profile-ada", label: "Ada" }];
+    sessions.sessions = [activeSession];
+    const humanIdentities = Array.from({ length: 10 }, (_, index) => ({
+      type: "human" as const,
+      id: `profile-member-${index}`,
+      label: `Member ${index + 1}`,
+    }));
+    const channelIdentities = [
+      { type: "human" as const, id: "channel:chn_design", label: "Design" },
+      { type: "human" as const, id: "discord:channel:operations", label: "Operations" },
+    ];
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      hasMultipleSessionSharingIdentities: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "session.members.list",
+        "session.members.add",
+        "session.members.remove",
+        "session.visibility.set",
+      ],
+      operatorScopes: ["operator.read", "operator.write"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: {
+        "sessions.list": sessions,
+        "session.members.list": {
+          sessionKey: "agent:main:ada",
+          members: [],
+          identities: [...humanIdentities, ...channelIdentities],
+          role: "owner",
+          allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
+        },
+      },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    await currentPage.locator(".chat-pane__sharing-trigger").click();
+    await gateway.waitForRequest("session.members.list");
+    const dropdown = currentPage.locator(".chat-pane__sharing-menu");
+    await dropdown.locator('wa-dropdown-item[value="member:profile-member-0"]').waitFor();
+    await dropdown.evaluate(async (element) => {
+      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
+      await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
+    });
+
+    const beforeScroll = await dropdown.evaluate((element) => {
+      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const visibility = element.querySelector<HTMLElement>(".chat-pane__sharing-visibility-item");
+      const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
+      return {
+        menuHeight: menu?.getBoundingClientRect().height ?? 0,
+        scrollHeight: menu?.scrollHeight ?? 0,
+        clientHeight: menu?.clientHeight ?? 0,
+        visibilityTop: visibility?.getBoundingClientRect().top ?? 0,
+        firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
+      };
+    });
+    const afterScroll = await dropdown.evaluate(async (element) => {
+      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const visibility = element.querySelector<HTMLElement>(".chat-pane__sharing-visibility-item");
+      const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
+      const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
+      if (menu) {
+        menu.scrollTop = menu.scrollHeight;
+      }
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+      return {
+        scrollTop: menu?.scrollTop ?? 0,
+        visibilityTop: visibility?.getBoundingClientRect().top ?? 0,
+        membersTitleTop: membersTitle?.getBoundingClientRect().top ?? 0,
+        firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
+      };
+    });
+
+    expect(beforeScroll.menuHeight).toBeLessThanOrEqual(421);
+    expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
+    expect(afterScroll.scrollTop).toBeGreaterThan(0);
+    expect(Math.abs(afterScroll.visibilityTop - beforeScroll.visibilityTop)).toBeLessThan(1);
+    expect(afterScroll.membersTitleTop).toBeGreaterThan(afterScroll.visibilityTop);
+    expect(afterScroll.membersTitleTop).toBeLessThan(beforeScroll.firstMemberTop);
+    expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
+    await expectBrowser(
+      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
+    ).toHaveCount(10);
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-channel-icon")).toHaveCount(2);
+  });
+
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();

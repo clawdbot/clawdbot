@@ -505,7 +505,21 @@ openclaw-chat-pane {
 }
 
 .chat-pane__sharing-menu {
+  --sharing-title-height: 24px;
   flex: 0 0 auto;
+}
+
+.chat-pane__sharing-menu::part(menu) {
+  width: 260px;
+  min-width: min(260px, calc(100vw - 24px));
+  max-width: min(260px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.chat-pane__sharing-menu--capped::part(menu) {
+  height: min(420px, 60vh);
 }
 
 .chat-pane__sharing-title,
@@ -514,6 +528,82 @@ openclaw-chat-pane {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.chat-pane__sharing-visibility-title,
+.chat-pane__sharing-visibility-item {
+  position: sticky;
+  z-index: 2;
+  background: var(--bg-elevated);
+}
+
+.chat-pane__sharing-visibility-title {
+  top: 0;
+  box-sizing: border-box;
+  height: var(--sharing-title-height);
+  padding-block: 5px;
+}
+
+.chat-pane__sharing-visibility-item {
+  top: calc(var(--sharing-title-height) + var(--sharing-sticky-index) * var(--menu-item-height));
+}
+
+.chat-pane__sharing-visibility-item:hover:not([disabled]),
+.chat-pane__sharing-visibility-item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.chat-pane__sharing-visibility-item[disabled] {
+  opacity: 1;
+  color: var(--muted);
+}
+
+.chat-pane__sharing-members-title {
+  position: sticky;
+  z-index: 2;
+  top: calc(
+    var(--sharing-title-height) + var(--sharing-visibility-count) * var(--menu-item-height)
+  );
+  box-sizing: border-box;
+  height: var(--sharing-title-height);
+  padding-block: 5px;
+  background: var(--bg-elevated);
+  box-shadow: 0 8px 8px -10px color-mix(in srgb, var(--text) 32%, transparent);
+}
+
+.chat-pane__sharing-member {
+  gap: 0;
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+.chat-pane__sharing-member-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__sharing-channel-icon {
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--muted);
+}
+
+.chat-pane__sharing-channel-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-pane__sharing-member-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-pane__sharing-status--error {
