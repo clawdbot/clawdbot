@@ -1198,14 +1198,7 @@ async function openGoogleSseChunks(params: {
   }
 
   const retryMs = resolveGoogleGemini3FirstResponseRetryMs();
-  const retryRequest =
-    retryMs > 0
-      ? buildGoogleGemini3FirstResponseRetryParams({
-          model: params.model,
-          request: params.request,
-        })
-      : undefined;
-  if (!retryRequest) {
+  if (retryMs <= 0) {
     const response = await params.guardedFetch(params.url, {
       method: "POST",
       headers: params.headers,
@@ -1235,6 +1228,12 @@ async function openGoogleSseChunks(params: {
     return firstAttempt;
   }
 
+  // The first serialization owns video shedding. Clone only after it times out
+  // so the retry inherits those exact omissions instead of restoring stale bytes.
+  const retryRequest = buildGoogleGemini3FirstResponseRetryParams({
+    model: params.model,
+    request: params.request,
+  })!;
   const retryAttempt = await openGoogleSseAttempt({
     guardedFetch: params.guardedFetch,
     url: params.url,

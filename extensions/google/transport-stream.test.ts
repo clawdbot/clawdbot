@@ -1419,6 +1419,52 @@ describe("google transport stream", () => {
     },
   );
 
+  it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>(), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        input: ["text", "image", "video"] as never,
+      }),
+      options: withProviderContextHandoff({ reasoning: "high" }, async () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "A".repeat(20_000_000) }],
+            timestamp: 0,
+          },
+        ],
+      })),
+    });
+
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    for (const index of [0, 1]) {
+      const body = requireRequestInit(
+        requireMockCall(guardedFetchMock, index, "guarded fetch"),
+        "guarded fetch",
+      ).body as string;
+      expect(new TextEncoder().encode(body).byteLength).toBeLessThan(20_000_000);
+      expect(body).toContain("native video slot unavailable");
+    }
+  });
+
   it("does not retry a genuinely empty Gemini 3 response", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(""));
