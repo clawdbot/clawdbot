@@ -77,6 +77,50 @@ describe("system-agent TUI operations", () => {
     });
   });
 
+  it("connects to an already-running Gateway instead of forcing a local TUI", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+    const readActiveGatewayLockIdentity = vi.fn(async () => ({
+      pid: 4242,
+      createdAt: new Date().toISOString(),
+      port: 18789,
+    }));
+
+    await executeSystemAgentOperation(
+      { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
+      runtime,
+      { deps: { runTui, readActiveGatewayLockIdentity } },
+    );
+
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalled();
+    expect(runTui).toHaveBeenCalledWith({
+      local: false,
+      session: "agent:work:main",
+      deliver: false,
+      historyLimit: 200,
+      message: "Wake up, my friend!",
+    });
+  });
+
+  it("falls back to a local TUI when no Gateway owns this state directory", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+    const readActiveGatewayLockIdentity = vi.fn(async () => undefined);
+
+    await executeSystemAgentOperation(
+      { kind: "open-tui", agentId: "work" },
+      runtime,
+      { deps: { runTui, readActiveGatewayLockIdentity } },
+    );
+
+    expect(runTui).toHaveBeenCalledWith({
+      local: true,
+      session: "agent:work:main",
+      deliver: false,
+      historyLimit: 200,
+    });
+  });
+
   it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({
