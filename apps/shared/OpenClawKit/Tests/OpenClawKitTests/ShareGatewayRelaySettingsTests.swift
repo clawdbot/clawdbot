@@ -32,4 +32,41 @@ struct ShareGatewayRelaySettingsTests {
         #expect(saved)
         #expect(metadataWrites == 1)
     }
+
+    @Test func `stale extension migration cannot replace newer host route`() {
+        let newerHostConfig = ShareGatewayRelayConfig(
+            gatewayURLString: "wss://newer.example.com",
+            gatewayStableID: "manual|newer.example.com|443",
+            token: "newer-token",
+            password: nil,
+            sessionKey: "main")
+        var persisted = newerHostConfig
+        var commits = 0
+
+        ShareGatewayRelaySettings.migrateLegacyConfigIfOwner(
+            self.config,
+            isAppExtension: true,
+            commit: { staleConfig in
+                commits += 1
+                persisted = staleConfig
+                return true
+            })
+
+        #expect(commits == 0)
+        #expect(persisted == newerHostConfig)
+    }
+
+    @Test func `host app owns legacy migration`() {
+        var migrated: ShareGatewayRelayConfig?
+
+        ShareGatewayRelaySettings.migrateLegacyConfigIfOwner(
+            self.config,
+            isAppExtension: false,
+            commit: { config in
+                migrated = config
+                return true
+            })
+
+        #expect(migrated == self.config)
+    }
 }

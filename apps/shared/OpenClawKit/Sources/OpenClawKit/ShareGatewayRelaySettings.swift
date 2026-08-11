@@ -44,16 +44,25 @@ public enum ShareGatewayRelaySettings {
         UserDefaults(suiteName: self.suiteName) ?? .standard
     }
 
+    private static var isAppExtension: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "NSExtension") != nil
+    }
+
     public static func loadConfig() -> ShareGatewayRelayConfig? {
         guard let data = self.defaults.data(forKey: self.relayConfigKey) else { return nil }
         guard let config = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data) else { return nil }
         if config.token != nil || config.password != nil {
             // Legacy defaults held the full config. Commit the scrub only after
             // Keychain persistence succeeds so a transient failure remains retryable.
-            _ = self.commitConfig(
+            self.migrateLegacyConfigIfOwner(
                 config,
-                saveCredentials: self.saveCredentials,
-                saveMetadata: self.saveMetadata)
+                isAppExtension: self.isAppExtension,
+                commit: { config in
+                    self.commitConfig(
+                        config,
+                        saveCredentials: self.saveCredentials,
+                        saveMetadata: self.saveMetadata)
+                })
             return config
         }
         // Keep relay identity in the Keychain bundle with its secrets. A partial
@@ -139,6 +148,17 @@ public enum ShareGatewayRelaySettings {
         guard saveCredentials(config) else { return false }
         saveMetadata(config)
         return true
+    }
+
+    static func migrateLegacyConfigIfOwner(
+        _ config: ShareGatewayRelayConfig,
+        isAppExtension: Bool,
+        commit: (ShareGatewayRelayConfig) -> Bool)
+    {
+        // The NSExtension bundle key identifies the read-only extension process.
+        // Only the host may migrate, so a stale extension cannot replace a newer route.
+        guard !isAppExtension else { return }
+        _ = commit(config)
     }
 
     private static func loadCredentials() -> ShareGatewayRelayConfig? {
