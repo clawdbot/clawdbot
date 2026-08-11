@@ -836,6 +836,65 @@ describe("models.list OpenAI routes", () => {
       );
     });
   });
+
+  it("projects a configured Codex default missing from the prepared catalog", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-models-list-configured-codex-default-",
+          agentEnv: "main",
+        },
+        async (state) => {
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "chatgpt-access",
+                refresh: "chatgpt-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
+            },
+          });
+          const cfg = {
+            agents: {
+              defaults: { model: { primary: "openai/gpt-5.6-sol" } },
+              list: [
+                {
+                  id: "main",
+                  default: true,
+                  models: {
+                    "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+                  },
+                },
+              ],
+            },
+          } as OpenClawConfig;
+
+          await expect(
+            listModels({
+              cfg,
+              view: "configured",
+              catalog: [],
+            }),
+          ).resolves.toEqual({
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                name: "gpt-5.6-sol",
+                provider: "openai",
+                agentRuntime: { id: "codex", source: "model" },
+                available: true,
+              },
+            ],
+          });
+        },
+      );
+    });
+  });
+
   it("keeps configured provider rows visible when unavailable", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
       const cfg = {

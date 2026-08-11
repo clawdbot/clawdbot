@@ -4,6 +4,8 @@
  * auth-backed availability.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
@@ -17,6 +19,7 @@ import {
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
+import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   buildConfiguredModelCatalog,
   dedupeModelCatalogEntries,
@@ -101,6 +104,18 @@ function dedupeLogicalModelCatalogEntries(
     seen.add(key);
     return true;
   });
+}
+
+function listModelRuntimePolicyRefs(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
+  const modelMaps = [
+    params.cfg.agents?.defaults?.models,
+    params.agentId ? resolveAgentConfig(params.cfg, params.agentId)?.models : undefined,
+  ];
+  return modelMaps.flatMap((models) =>
+    Object.entries(models ?? {}).flatMap(([ref, entry]) => {
+      return entry.agentRuntime?.id?.trim() ? [ref] : [];
+    }),
+  );
 }
 
 function isPickerVisibleCatalogEntry(
@@ -278,14 +293,55 @@ export async function resolveLogicalVisibleModelCatalog(params: {
     return await projectEntries(params.catalog);
   }
 
-  const catalogKeys = new Set(
-    params.catalog.map((entry) => resolveLogicalKey(entry, params.routePolicy)),
-  );
+  const catalog = [...params.catalog];
+  const catalogKeys = new Set(catalog.map((entry) => resolveLogicalKey(entry, params.routePolicy)));
+  if (policy.allowAny) {
+    const checkedRuntimePolicyRefs = new Set<string>();
+    const acceptedRuntimePolicyKeys = new Set<string>();
+    for (const ref of listModelRuntimePolicyRefs(params)) {
+      const separator = ref.indexOf("/");
+      if (separator <= 0 || separator >= ref.length - 1) {
+        continue;
+      }
+      const entry = {
+        provider: ref.slice(0, separator),
+        id: ref.slice(separator + 1),
+        name: ref.slice(separator + 1),
+      };
+      const identity = params.routePolicy.resolveIdentity(entry);
+      const exactRef = `${entry.provider}/${entry.id}`;
+      if (
+        !identity ||
+        !configuredKeys.has(identity.key) ||
+        catalogKeys.has(identity.key) ||
+        acceptedRuntimePolicyKeys.has(identity.key) ||
+        checkedRuntimePolicyRefs.has(exactRef)
+      ) {
+        continue;
+      }
+      checkedRuntimePolicyRefs.add(exactRef);
+      const runtimeId = normalizeOptionalAgentRuntimeId(
+        resolveModelRuntimePolicy({
+          config: params.cfg,
+          provider: entry.provider,
+          modelId: entry.id,
+          agentId: params.agentId,
+        }).policy?.id,
+      );
+      if (isDefaultAgentRuntimeId(runtimeId) || !(await evaluateEntry(entry)).routeManaged) {
+        continue;
+      }
+      // Provider-managed runtime bindings remain projectable when prepared inventory has no row.
+      acceptedRuntimePolicyKeys.add(identity.key);
+      catalogKeys.add(identity.key);
+      catalog.push(entry);
+    }
+  }
   const visible = (
     await resolveVisibleModelCatalogWithPolicy(
       {
         cfg: params.cfg,
-        catalog: params.catalog,
+        catalog,
         defaultProvider: params.defaultProvider,
         defaultModel: params.defaultModel,
         agentId: params.agentId,
@@ -300,7 +356,7 @@ export async function resolveLogicalVisibleModelCatalog(params: {
     const key = resolveLogicalKey(entry, params.routePolicy);
     return catalogKeys.has(key) || configuredKeys.has(key);
   });
-  const retained = params.catalog.filter((entry) =>
+  const retained = catalog.filter((entry) =>
     retainedKeys.has(resolveLogicalKey(entry, params.routePolicy)),
   );
   const preferredKeys = new Set(
@@ -308,7 +364,7 @@ export async function resolveLogicalVisibleModelCatalog(params: {
   );
   const preferred: ModelCatalogEntry[] = [];
   const routeBacked = new Set<ModelCatalogEntry>();
-  for (const entry of params.catalog) {
+  for (const entry of catalog) {
     const key = resolveLogicalKey(entry, params.routePolicy);
     const preferredKey = preferredKeys.has(key);
     const wildcardRoute =
