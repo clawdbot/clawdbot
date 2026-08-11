@@ -5151,6 +5151,20 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("shows an empty state instead of a configured default when no usable models exist", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [],
+    });
+    const container = renderModelControls(state);
+
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(
+      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
+    ).toContain("No models available");
+  });
+
   it("applies a model selection immediately", () => {
     const { state } = createOpenAiHeaderState();
     const onModelSelect = vi.fn(async () => true);
@@ -5450,7 +5464,7 @@ describe("chat model controls", () => {
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
     const providerLabels = providerButtons.map((button) => button.textContent?.trim());
-    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode", "Moonshot AI"]);
+    expect(providerLabels).toEqual(["Google", "OpenCode", "Moonshot AI"]);
     expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
       container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,

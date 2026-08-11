@@ -31,9 +31,20 @@ export type ProviderCatalogContext = {
   };
 };
 
+export type ProviderCatalogOutcome = {
+  provider: string;
+  status: "ready" | "auth-rejected" | "unavailable";
+};
+
 export type ProviderCatalogResult =
-  | { provider: ModelProviderConfig }
-  | { providers: Record<string, ModelProviderConfig> }
+  | {
+      provider: ModelProviderConfig;
+      outcomes?: readonly ProviderCatalogOutcome[];
+    }
+  | {
+      providers: Record<string, ModelProviderConfig>;
+      outcomes?: readonly ProviderCatalogOutcome[];
+    }
   | null
   | undefined;
 

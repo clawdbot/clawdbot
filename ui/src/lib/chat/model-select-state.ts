@@ -22,7 +22,6 @@ type ChatModelSelectStateInput = {
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
-  restrictOptionsToCatalog?: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 };
@@ -179,21 +178,12 @@ function resolveAvailableChatModelValue(
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-  currentOverride: string,
-  defaultModel: string,
-  restrictOptionsToCatalog: boolean,
 ): ChatModelSelectOption[] {
   const seen = new Set<string>();
   const options: ChatModelSelectOption[] = [];
-  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
 
   const addOption = (value: string, label?: string) => {
     pushUniqueTrimmedSelectOption(options, seen, value, (trimmed) => label ?? trimmed);
-  };
-  const addAvailableOption = (value: string, label?: string) => {
-    if (!unavailableValues.has(normalizeChatModelAvailabilityKey(value))) {
-      addOption(value, label);
-    }
   };
 
   for (const entry of catalog) {
@@ -202,19 +192,6 @@ function buildChatModelOptions(
     }
     const option = buildChatModelOptionFromLookup(entry, displayLookup);
     addOption(option.value, option.label);
-  }
-
-  if (!restrictOptionsToCatalog && currentOverride) {
-    addAvailableOption(
-      currentOverride,
-      formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
-    );
-  }
-  if (!restrictOptionsToCatalog && defaultModel) {
-    addAvailableOption(
-      defaultModel,
-      formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup),
-    );
   }
   return options;
 }
@@ -237,24 +214,15 @@ export function resolveChatModelSelectState(
     displayLookup,
   );
   const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
-  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
-  const options = buildChatModelOptions(
-    catalog,
-    displayLookup,
-    currentOverride,
-    defaultModel,
-    state.restrictOptionsToCatalog === true,
+  const options = buildChatModelOptions(catalog, displayLookup);
+  const defaultSelectable = Boolean(
+    defaultModel &&
+    options.some(
+      (option) =>
+        normalizeChatModelAvailabilityKey(option.value) ===
+        normalizeChatModelAvailabilityKey(defaultModel),
+    ),
   );
-  const defaultSelectable = state.restrictOptionsToCatalog
-    ? Boolean(
-        defaultModel &&
-        options.some(
-          (option) =>
-            normalizeChatModelAvailabilityKey(option.value) ===
-            normalizeChatModelAvailabilityKey(defaultModel),
-        ),
-      )
-    : !defaultModel || !unavailableValues.has(normalizeChatModelAvailabilityKey(defaultModel));
 
   return {
     currentOverride,

@@ -42,7 +42,7 @@ export function modelCatalogBrowseRequiresFullDiscovery(params: {
   view?: ModelCatalogBrowseView;
 }): boolean {
   const view = params.view ?? "default";
-  if (view === "all") {
+  if (view === "all" || view === "configured") {
     return true;
   }
   const visibility = parseConfiguredModelVisibilityEntries({
@@ -59,7 +59,7 @@ export function modelCatalogBrowseRequiresFullDiscovery(params: {
   // wildcard entries keep the historical read-only default path and only
   // escalate the configured view, as before.
   if (visibility.configPath === LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH) {
-    return view === "configured";
+    return false;
   }
   return true;
 }

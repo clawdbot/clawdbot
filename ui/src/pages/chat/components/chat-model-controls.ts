@@ -157,7 +157,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
-    restrictOptionsToCatalog: props.modelCatalogState !== undefined,
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
@@ -251,7 +250,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ? thinking.defaultLabel
       : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
         thinking.currentOverride);
-  const managedCatalog = props.modelCatalogState;
+  const managedCatalog = props.modelCatalogState ?? {
+    hasSnapshot: !props.modelsLoading,
+    status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
+  };
   const catalogLoadingWithoutSnapshot =
     managedCatalog !== undefined &&
     !managedCatalog.hasSnapshot &&
@@ -275,11 +277,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     Boolean(props.modelMutationDisabledReason) ||
     catalogLoadingWithoutSnapshot ||
-    (managedCatalog === undefined && Boolean(props.modelsLoading) && selectOptions.length === 0);
+    (Boolean(props.modelsLoading) && selectOptions.length === 0);
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    (managedCatalog !== undefined && !managedCatalog.hasSnapshot) ||
+    !managedCatalog.hasSnapshot ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
   const showFastMode = props.showFastMode !== false;
   const effortDisabled =

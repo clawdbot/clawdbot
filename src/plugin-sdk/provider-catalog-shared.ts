@@ -22,7 +22,11 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
-export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
+export type {
+  ProviderCatalogContext,
+  ProviderCatalogOutcome,
+  ProviderCatalogResult,
+} from "../plugins/types.js";
 
 export {
   buildPairedProviderApiKeyCatalog,

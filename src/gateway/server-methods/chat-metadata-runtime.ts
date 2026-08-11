@@ -235,10 +235,13 @@ async function defaultBuildProjection(params: {
 }): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }> {
   const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
+  const snapshot = params.facts.owner.loadFullModelCatalog
+    ? await params.facts.owner.loadFullModelCatalog()
+    : params.facts.owner.modelCatalog;
   const projector = createGatewayAgentModelCatalogProjector({
     cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
-    snapshot: params.facts.owner.modelCatalog,
+    snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
@@ -258,13 +261,13 @@ async function defaultBuildProjection(params: {
       preloadedCatalog: {
         agentId: params.facts.agentId,
         config: params.facts.owner.config,
-        snapshot: params.facts.owner.modelCatalog,
+        snapshot,
       },
       preloadedOnly: true,
       catalogProjector: projector,
     }),
   ]);
-  return { modelCatalog, ...metadata };
+  return { modelCatalog, models: metadata.models };
 }
 
 export function createGatewayChatMetadataRuntime(params: {

@@ -246,8 +246,18 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
 });
 
 /** Model catalog result. */
+export const ModelCatalogProviderOutcomeSchema = closedObject({
+  provider: NonEmptyString,
+  status: Type.Union([
+    Type.Literal("ready"),
+    Type.Literal("auth-rejected"),
+    Type.Literal("unavailable"),
+  ]),
+});
+
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
@@ -1103,6 +1113,7 @@ export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
+export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutcomeSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
