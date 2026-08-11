@@ -23,7 +23,6 @@ export type WorkerSessionPlacementGate = {
     binding: WorkerPlacementTurnBinding & {
       transcriptSeq?: number;
       liveSeq?: number;
-      workspaceResultPending?: boolean;
     },
   ): void;
 };
@@ -86,9 +85,6 @@ export function createWorkerSessionPlacementGate(
         claim,
         ...(binding.transcriptSeq === undefined ? {} : { transcript: binding.transcriptSeq }),
         ...(binding.liveSeq === undefined ? {} : { liveEvent: binding.liveSeq }),
-        ...(binding.workspaceResultPending === undefined
-          ? {}
-          : { workspaceResultPending: binding.workspaceResultPending }),
       });
     },
   };

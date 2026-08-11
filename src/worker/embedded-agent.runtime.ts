@@ -317,7 +317,6 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     } catch (error) {
       finalTranscriptFailure = toWorkerAgentError(error, "Worker transcript flush failed.");
     }
-    await liveRuntime.flush();
     if (finalTranscriptFailure === undefined) {
       await liveRuntime.emitTerminal();
     }

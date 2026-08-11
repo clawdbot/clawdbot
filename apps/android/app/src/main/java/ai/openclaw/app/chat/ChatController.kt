@@ -6343,6 +6343,8 @@ class ChatController internal constructor(
           timestampMs = ts,
           idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
           entryId = obj["__openclaw"].asObjectOrNull()?.get("id").asStringOrNull(),
+          provenance = parseChatMessageProvenance(obj["provenance"]),
+          transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
         )
       }
 
@@ -6353,6 +6355,26 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
+    )
+  }
+
+  private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatMessageProvenance(
+      kind = kind,
+      sourceTool = obj["sourceTool"].asJsonStringOrNull(),
+    )
+  }
+
+  private fun parseChatTranscriptMarker(element: JsonElement?): ChatTranscriptMarker? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatTranscriptMarker(
+      kind = kind,
+      id = obj["id"].asJsonStringOrNull(),
+      tokensBefore = obj["tokensBefore"].asJsonNumberOrNull(),
+      tokensAfter = obj["tokensAfter"].asJsonNumberOrNull(),
     )
   }
 
@@ -7291,6 +7313,17 @@ private fun JsonElement?.asStringOrNull(): String? =
     is JsonPrimitive -> content
     else -> null
   }
+
+private fun JsonElement?.asJsonStringOrNull(): String? =
+  (this as? JsonPrimitive)
+    ?.takeIf(JsonPrimitive::isString)
+    ?.content
+
+private fun JsonElement?.asJsonNumberOrNull(): Double? =
+  (this as? JsonPrimitive)
+    ?.takeUnless(JsonPrimitive::isString)
+    ?.content
+    ?.toDoubleOrNull()
 
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {

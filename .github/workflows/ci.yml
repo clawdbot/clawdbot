@@ -93,6 +93,7 @@ jobs:
       frozen_target: ${{ steps.manifest.outputs.frozen_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
+      run_sqlite_session_lifecycle: ${{ steps.manifest.outputs.run_sqlite_session_lifecycle }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -681,7 +682,20 @@ jobs:
             eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
             changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
-          const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
+          const supportsSqliteSessionLifecycleProof = existsSync(
+            "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          );
+          const changedScopeHasSqliteSessionLifecycleImpact =
+            changedPaths === null ||
+            eventName === "workflow_dispatch" ||
+            typeof changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange !== "function" ||
+            changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange(changedPaths);
+          const runSqliteSessionLifecycle =
+            runNodeFull &&
+            supportsSqliteSessionLifecycleProof &&
+            changedScopeHasSqliteSessionLifecycleImpact;
+          const runBuildArtifacts =
+            runNodeFull && (changedScopeHasBuildImpact || runSqliteSessionLifecycle);
           const runQaSmokeCi =
             runNodeFull &&
             changedScopeHasQaImpact &&
@@ -752,6 +766,7 @@ jobs:
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
+            run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
@@ -1436,6 +1451,38 @@ jobs:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
+
+  sqlite-session-lifecycle:
+    permissions:
+      contents: read
+    name: check-sqlite-session-lifecycle
+    needs: [preflight, build-artifacts]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_sqlite_session_lifecycle == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Download exact-run built runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-runtime-build
+          path: .artifacts/dist-runtime-build
+
+      - name: Extract built runtime
+        run: tar --extract --file .artifacts/dist-runtime-build/dist-runtime-build.tar.zst --use-compress-program unzstd
+
+      - name: Verify SQLite session lifecycle
+        env:
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000"
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
 
   native-i18n:
     permissions:
@@ -2545,9 +2592,6 @@ jobs:
           - check_name: check-plugin-sdk-api-baseline
             group: plugin-sdk-api-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-sqlite-session-flip-proof
-            group: sqlite-session-flip-proof
-            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
             # Light-run critical-path pole: cold runs spend ~100s in nine
@@ -2773,15 +2817,6 @@ jobs:
               ;;
             plugin-sdk-api-baseline)
               run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
-              ;;
-            sqlite-session-flip-proof)
-              if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
-                echo "[skip] SQLite sessions/transcripts flip proof is not present in this checkout"
-              else
-                # This lane owns a 420-second E2E case plus cold hosted-runner setup;
-                # keep the global watchdog strict and scope compatibility headroom here.
-                run_check "sqlite sessions/transcripts flip proof" env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
-              fi
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
@@ -3751,6 +3786,7 @@ jobs:
       - security-fast
       - pnpm-store-warmup
       - build-artifacts
+      - sqlite-session-lifecycle
       - native-i18n
       - checks-ui
       - checks-ui-e2e
@@ -3784,6 +3820,7 @@ jobs:
           SELECTED_RESULTS: |
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
             build-artifacts=${{ needs.build-artifacts.result }}
+            sqlite-session-lifecycle=${{ needs.sqlite-session-lifecycle.result }}
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}

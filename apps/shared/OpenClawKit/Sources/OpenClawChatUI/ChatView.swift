@@ -64,7 +64,7 @@ func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
 
 private enum ScrollFollowTarget: Equatable {
     case latest
-    case user(UUID)
+    case turn(UUID)
 }
 
 private struct ChatTurnRecapObservation: Equatable {
@@ -118,7 +118,7 @@ public struct OpenClawChatView: View {
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
     @State private var hasPerformedInitialScroll = false
-    @State private var lastUserMessageID: UUID?
+    @State private var lastTurnStartID: UUID?
     @State private var hasNewerContentBelow = false
     @State private var followTarget: ScrollFollowTarget? = .latest
     @State private var isAtLiveEdge = true
@@ -380,7 +380,7 @@ public struct OpenClawChatView: View {
             } action: { _, isAtLiveEdge in
                 self.isAtLiveEdge = isAtLiveEdge
                 guard self.hasPerformedInitialScroll else { return }
-                if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingUserTurn {
+                if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingTurn {
                     self.followTarget = .latest
                     self.hasNewerContentBelow = false
                 }
@@ -427,7 +427,7 @@ public struct OpenClawChatView: View {
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
             self.restoreInitialScrollPosition()
             self.hasPerformedInitialScroll = true
-            self.lastUserMessageID = self.latestVisibleUserMessageID
+            self.lastTurnStartID = self.latestVisibleTurnStartID
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
             self.speech?.stop()
@@ -436,7 +436,7 @@ public struct OpenClawChatView: View {
             self.isAtLiveEdge = true
             self.isUserScrolling = false
             self.hasNewerContentBelow = false
-            self.lastUserMessageID = nil
+            self.lastTurnStartID = nil
         }
         .onChange(of: self.scenePhase) { _, newValue in
             if newValue == .background {
@@ -481,8 +481,17 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        ForEach(self.visibleMessages) { msg in
-            self.messageRow(for: msg, contextWindowTokens: contextWindowTokens)
+        ForEach(self.transcriptRows) { row in
+            switch row {
+            case let .message(message):
+                self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
+            case let .systemNotice(notice):
+                ChatSystemNoticeRow(notice: notice)
+                    .frame(maxWidth: .infinity)
+            case let .historyDivider(divider):
+                ChatHistoryDividerRow(divider: divider)
+                    .frame(maxWidth: .infinity)
+            }
         }
 
         OpenClawQuestionCards(viewModel: self.viewModel)
@@ -681,7 +690,7 @@ public struct OpenClawChatView: View {
         }
     }
 
-    private var visibleMessages: [OpenClawChatMessage] {
+    private var transcriptRows: [ChatTranscriptRow] {
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
             guard let first = viewModel.messages.first else { return [] }
@@ -690,23 +699,22 @@ public struct OpenClawChatView: View {
         } else {
             base = self.viewModel.messages
         }
-        return self.mergeToolResults(in: base).filter(self.shouldDisplayMessage(_:))
-    }
-
-    private var latestVisibleUserMessageID: UUID? {
-        self.visibleUserMessageIDs.last
-    }
-
-    private var visibleUserMessageIDs: [UUID] {
-        self.visibleMessages.compactMap { message in
-            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
-                ? message.id
-                : nil
+        return ChatTranscriptRow.build(from: self.mergeToolResults(in: base)).filter { row in
+            guard case let .message(message) = row else { return true }
+            return self.shouldDisplayMessage(message)
         }
     }
 
-    private var isFollowingUserTurn: Bool {
-        if case .user = self.followTarget {
+    private var latestVisibleTurnStartID: UUID? {
+        self.visibleTurnStartIDs.last
+    }
+
+    private var visibleTurnStartIDs: [UUID] {
+        self.transcriptRows.compactMap { $0.startsTurn ? $0.id : nil }
+    }
+
+    private var isFollowingTurn: Bool {
+        if case .turn = self.followTarget {
             return true
         }
         return false
@@ -787,7 +795,7 @@ public struct OpenClawChatView: View {
     }
 
     private var hasVisibleMessageListContent: Bool {
-        if !self.visibleMessages.isEmpty {
+        if !self.transcriptRows.isEmpty {
             return true
         }
         return self.hasVisibleTransientContent
@@ -918,13 +926,13 @@ public struct OpenClawChatView: View {
     }
 
     private func restoreInitialScrollPosition() {
-        if let latestUserMessageID = latestVisibleUserMessageID {
+        if let latestTurnStartID = latestVisibleTurnStartID {
             self.followTarget = nil
             self.hasNewerContentBelow = chatReaderHasNewerContent(
-                after: latestUserMessageID,
-                visibleIDs: self.visibleMessages.map(\.id),
+                after: latestTurnStartID,
+                visibleIDs: self.transcriptRows.map(\.id),
                 hasTransientContent: self.hasVisibleTransientContent)
-            self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+            self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
         } else {
             self.followTarget = .latest
             self.hasNewerContentBelow = false
@@ -940,33 +948,29 @@ public struct OpenClawChatView: View {
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {
-            self.lastUserMessageID = nil
+            self.lastTurnStartID = nil
             self.followTarget = .latest
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
             return
         }
-        let visibleMessages = self.visibleMessages
-        let visibleUserMessageIDs = visibleMessages.compactMap { message in
-            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
-                ? message.id
-                : nil
-        }
+        let transcriptRows = self.transcriptRows
+        let visibleTurnStartIDs = transcriptRows.compactMap { $0.startsTurn ? $0.id : nil }
         switch chatReaderUserTransition(
-            previousID: self.lastUserMessageID,
-            visibleIDs: visibleUserMessageIDs)
+            previousID: self.lastTurnStartID,
+            visibleIDs: visibleTurnStartIDs)
         {
         case let .removed(latestRemainingID):
-            self.lastUserMessageID = latestRemainingID
-            if case let .user(messageID) = followTarget,
-               !visibleUserMessageIDs.contains(messageID)
+            self.lastTurnStartID = latestRemainingID
+            if case let .turn(messageID) = followTarget,
+               !visibleTurnStartIDs.contains(messageID)
             {
                 self.followTarget = nil
                 self.hasNewerContentBelow = false
             }
             return
-        case let .added(latestUserMessageID):
-            self.lastUserMessageID = latestUserMessageID
+        case let .added(latestTurnStartID):
+            self.lastTurnStartID = latestTurnStartID
             self.hasNewerContentBelow = false
             // The anchored-question layout assumes a viewport tall enough to read the turn
             // below the anchor. With the keyboard up that space is gone and the reply streams
@@ -975,8 +979,8 @@ public struct OpenClawChatView: View {
                 self.followTarget = .latest
                 self.moveScrollPosition(to: self.scrollerBottomID)
             } else {
-                self.followTarget = .user(latestUserMessageID)
-                self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+                self.followTarget = .turn(latestTurnStartID)
+                self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
             }
             return
         case .unchanged:
@@ -987,12 +991,12 @@ public struct OpenClawChatView: View {
         case .latest:
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
-        case let .user(messageID):
+        case let .turn(messageID):
             // Reader policy stays on this turn after the one-shot scroll binding is released. Reissuing
             // that target for every streaming delta can loop SwiftUI layout and starve interaction.
             self.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: messageID,
-                visibleIDs: visibleMessages.map(\.id),
+                visibleIDs: transcriptRows.map(\.id),
                 hasTransientContent: self.hasVisibleTransientContent)
         case nil:
             self.hasNewerContentBelow = true
@@ -1082,7 +1086,9 @@ extension OpenClawChatView {
                 stopReason: last.stopReason,
                 errorMessage: last.errorMessage,
                 details: last.details,
-                isError: last.isError)
+                isError: last.isError,
+                provenance: last.provenance,
+                historyMarker: last.historyMarker)
             result[result.count - 1] = merged
         }
 

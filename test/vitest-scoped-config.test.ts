@@ -822,7 +822,6 @@ describe("scoped vitest configs", () => {
       "googlechat/**/*.test.ts",
       "nextcloud-talk/**/*.test.ts",
       "nostr/**/*.test.ts",
-      "qqbot/**/*.test.ts",
       "synology-chat/**/*.test.ts",
       "tlon/**/*.test.ts",
       "twitch/**/*.test.ts",

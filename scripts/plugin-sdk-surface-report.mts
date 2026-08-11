@@ -271,7 +271,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
       // +2: channel-neutral location and provider-update hook contracts.
-      4870,
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      4871,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -334,7 +335,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
-      2924,
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      2925,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

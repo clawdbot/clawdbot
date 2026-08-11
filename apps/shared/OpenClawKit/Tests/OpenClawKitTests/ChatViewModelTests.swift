@@ -11486,6 +11486,50 @@ struct ChatViewModelTests {
         #expect(sanitized == "Hello?")
     }
 
+    @Test func `history system facts survive sanitation and produce visible rows`() async throws {
+        let history = historyPayloadWithoutRunState(
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "[System] Gateway restarted cleanly."]],
+                    "timestamp": 1,
+                    "provenance": [
+                        "kind": "internal_system",
+                        "sourceTool": "restart-sentinel",
+                    ],
+                ]),
+                AnyCodable([
+                    "role": "system",
+                    "content": [],
+                    "timestamp": 2,
+                    "__openclaw": [
+                        "kind": "compaction",
+                        "id": "compact-history",
+                        "tokensBefore": 20000,
+                        "tokensAfter": 8000,
+                    ],
+                ]),
+            ])
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("system history loaded") { await MainActor.run { vm.messages.count == 2 } }
+
+        let rows = await MainActor.run { ChatTranscriptRow.build(from: vm.messages) }
+        #expect(rows.count == 2)
+        guard let first = rows.first, case let .systemNotice(notice) = first else {
+            Issue.record("Expected a restart notice")
+            return
+        }
+        #expect(notice.body == "Gateway restarted cleanly.")
+        guard let last = rows.last, case let .historyDivider(divider) = last else {
+            Issue.record("Expected a compaction divider")
+            return
+        }
+        #expect(divider.metric == "saved 12k tokens")
+    }
+
     @Test func `abort requests do not clear pending until aborted event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
