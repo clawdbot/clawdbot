@@ -18,7 +18,7 @@ import {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -53,7 +53,7 @@ function listProjectRecents(
   profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryEntry[],
 ): ProjectRecent[] {
-  const store = loadCombinedSessionStoreForGateway(cfg, { projection: "list" }).store;
+  const store = loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store;
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
