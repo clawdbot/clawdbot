@@ -592,10 +592,9 @@ export function buildTaskRunDetails(
 /**
  * Resolves host-local read roots for tools that accept filesystem media references.
  */
-export function resolveMediaToolLocalRoots(
+function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: MediaToolLocalRootOptions,
-  _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
@@ -636,11 +635,7 @@ export async function resolveMediaToolReferenceAccess(params: {
   };
   return {
     resolvedPath,
-    localRoots: resolveMediaToolLocalRoots(
-      params.workspaceDir,
-      rootOptions,
-      resolvedPath ? [resolvedPath] : undefined,
-    ),
+    localRoots: resolveMediaToolLocalRoots(params.workspaceDir, rootOptions),
     ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
   };
 }
