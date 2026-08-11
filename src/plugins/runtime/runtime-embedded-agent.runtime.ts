@@ -8,7 +8,9 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
 
-export const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
+export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (
+  params,
+) => {
   const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
   if (!pluginId) {
     throw new Error("Plugin embedded-agent execution requires an active plugin runtime scope.");
