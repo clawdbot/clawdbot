@@ -7,7 +7,7 @@ describe("skill experience review cancellation state", () => {
     state.register(cancelReview);
 
     const reservation = state.reserve(" agent:main:main ", ["stopped-run"]);
-    expect(state.reconcile(reservation, ["stopped-run"])).toBe(true);
+    expect(state.reconcile(reservation, ["stopped-run"], true)).toBe(true);
     expect(cancelReview).toHaveBeenCalledWith("agent:main:main");
     await expect(
       state.consumeStoppedTerminal("agent:main:main", "stopped-run", true),
@@ -24,13 +24,24 @@ describe("skill experience review cancellation state", () => {
   });
 
   it("does not suppress a later failure when the foreground abort did not succeed", async () => {
-    state.register(() => false);
+    const cancelReview = vi.fn(() => true);
+    state.register(cancelReview);
 
     const reservation = state.reserve("agent:main:no-active-run", []);
-    expect(state.reconcile(reservation, [])).toBe(false);
+    expect(state.reconcile(reservation, [], false)).toBe(false);
+    expect(cancelReview).not.toHaveBeenCalled();
     await expect(
       state.consumeStoppedTerminal("agent:main:no-active-run", "later-run", false),
     ).resolves.toBe(false);
+  });
+
+  it("cancels pending review after a successful abort with no observable run ID", () => {
+    const cancelReview = vi.fn(() => true);
+    state.register(cancelReview);
+
+    const reservation = state.reserve("agent:main:success-without-run-id", []);
+    expect(state.reconcile(reservation, [], true)).toBe(true);
+    expect(cancelReview).toHaveBeenCalledWith("agent:main:success-without-run-id");
   });
 
   it("bounds stop markers that never receive a terminal event", async () => {
@@ -42,7 +53,7 @@ describe("skill experience review cancellation state", () => {
 
     for (const sessionKey of sessionKeys) {
       const reservation = state.reserve(sessionKey, [`run-${sessionKey}`]);
-      state.reconcile(reservation, [`run-${sessionKey}`]);
+      state.reconcile(reservation, [`run-${sessionKey}`], true);
     }
 
     await expect(
@@ -62,19 +73,22 @@ describe("skill experience review cancellation state", () => {
       "run-success",
       false,
     );
-    state.reconcile(reservation, ["run-success"]);
+    state.reconcile(reservation, ["run-success"], true);
     await expect(terminal).resolves.toBe(true);
   });
 
   it("releases an exact pending terminal when abort fails", async () => {
+    const cancelReview = vi.fn(() => true);
+    state.register(cancelReview);
     const reservation = state.reserve("agent:main:reserved-failure", ["run-failure"]);
     const terminal = state.consumeStoppedTerminal(
       "agent:main:reserved-failure",
       "run-failure",
       false,
     );
-    state.reconcile(reservation, []);
+    state.reconcile(reservation, [], false);
     await expect(terminal).resolves.toBe(false);
+    expect(cancelReview).not.toHaveBeenCalled();
   });
 
   it("evicts only one membership from a multi-run token before failed reconciliation", async () => {
@@ -93,9 +107,9 @@ describe("skill experience review cancellation state", () => {
     });
     await Promise.resolve();
     expect(run1Settled).toBe(false);
-    state.reconcile(reservation, []);
+    state.reconcile(reservation, [], false);
     await expect(run1).resolves.toBe(false);
-    state.reconcile(filler, []);
+    state.reconcile(filler, [], false);
   });
 
   it("can confirm a surviving membership after another membership is evicted", async () => {
@@ -108,17 +122,17 @@ describe("skill experience review cancellation state", () => {
       Array.from({ length: 31 }, (_, index) => `fill-${index}`),
     );
     await expect(run0).resolves.toBe(false);
-    state.reconcile(reservation, ["run-1"]);
+    state.reconcile(reservation, ["run-1"], true);
     await expect(run1).resolves.toBe(true);
-    state.reconcile(filler, []);
+    state.reconcile(filler, [], false);
   });
 
   it("keeps confirmation monotonic across a later duplicate attempt failure", async () => {
     const sessionKey = "agent:main:monotonic-success";
     const first = state.reserve(sessionKey, ["run"]);
-    state.reconcile(first, ["run"]);
+    state.reconcile(first, ["run"], true);
     const duplicate = state.reserve(sessionKey, ["run"]);
-    state.reconcile(duplicate, []);
+    state.reconcile(duplicate, [], false);
     await expect(state.consumeStoppedTerminal(sessionKey, "run", false)).resolves.toBe(true);
   });
 
@@ -127,16 +141,17 @@ describe("skill experience review cancellation state", () => {
     const older = state.reserve(sessionKey, ["run"]);
     const newer = state.reserve(sessionKey, ["run"]);
     const terminal = state.consumeStoppedTerminal(sessionKey, "run", false);
-    state.reconcile(newer, ["run"]);
-    state.reconcile(older, []);
+    state.reconcile(newer, ["run"], true);
+    state.reconcile(older, [], false);
     await expect(terminal).resolves.toBe(true);
   });
 
   it("dedupes aliases within one attempt and ignores duplicate reconcile", async () => {
+    state.register(() => false);
     const sessionKey = "agent:main:alias-dedupe";
     const reservation = state.reserve(sessionKey, ["run", "run"]);
-    expect(state.reconcile(reservation, ["run"])).toBe(false);
-    expect(state.reconcile(reservation, [])).toBe(false);
+    expect(state.reconcile(reservation, ["run"], true)).toBe(false);
+    expect(state.reconcile(reservation, [], false)).toBe(false);
     await expect(state.consumeStoppedTerminal(sessionKey, "run", false)).resolves.toBe(true);
     await expect(state.consumeStoppedTerminal(sessionKey, "run", false)).resolves.toBe(false);
   });

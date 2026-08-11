@@ -57,7 +57,11 @@ const commandQueueMocks = vi.hoisted(() => ({
 
 const experienceReviewMocks = vi.hoisted(() => ({
   reconcile: vi.fn<
-    (reservation: { readonly id: number }, abortedRunIds: readonly string[]) => boolean
+    (
+      reservation: { readonly id: number },
+      abortedRunIds: readonly string[],
+      didAbort: boolean,
+    ) => boolean
   >(() => false),
   reserve: vi.fn<(sessionKey: string, runIds: readonly string[]) => { readonly id: number }>(),
   consumeStoppedTerminal:
@@ -605,6 +609,7 @@ describe("abort detection", () => {
     expect(experienceReviewMocks.reconcile).toHaveBeenCalledWith(
       expect.objectContaining({ id: expect.any(Number) }),
       ["stopped-run"],
+      true,
     );
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
@@ -629,6 +634,7 @@ describe("abort detection", () => {
     expect(experienceReviewMocks.reconcile).toHaveBeenCalledWith(
       expect.objectContaining({ id: expect.any(Number) }),
       [],
+      false,
     );
   });
 
@@ -1010,6 +1016,7 @@ describe("abort detection", () => {
     expect(experienceReviewMocks.reconcile).toHaveBeenCalledWith(
       expect.objectContaining({ id: expect.any(Number) }),
       [],
+      true,
     );
   });
 
@@ -1057,6 +1064,7 @@ describe("abort detection", () => {
     expect(experienceReviewMocks.reconcile).toHaveBeenCalledWith(
       expect.objectContaining({ id: expect.any(Number) }),
       [],
+      false,
     );
     expect(formatAbortReplyText(undefined, result.rejectionReason)).toBe(
       "Agent reply is already finalizing and can no longer be aborted.",
