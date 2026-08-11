@@ -907,6 +907,51 @@ describe("plugin-owned CLI execution host boundary", () => {
     ).not.toHaveProperty("hasOutstandingBackgroundWork");
   });
 
+  it("releases diagnostic background work after a terminal plugin result", async () => {
+    const { context } = await createExecution({ runId: "plugin-diagnostic-terminal" });
+    const backgroundObserved = createDeferred<void>();
+    const allowTerminalResult = createDeferred<void>();
+    const run = runPlugin(
+      context,
+      async function* () {
+        yield {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
+        };
+        await allowTerminalResult.promise;
+        yield {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          result: "background agent failed",
+          session_id: "sdk-session",
+        };
+      },
+      { consumeStdout: () => backgroundObserved.resolve() },
+    );
+
+    try {
+      await backgroundObserved.promise;
+      expect(
+        getDiagnosticSessionActivitySnapshot({
+          sessionId: context.params.sessionId,
+          sessionKey: context.params.sessionKey,
+        }),
+      ).toMatchObject({ hasOutstandingBackgroundWork: true });
+    } finally {
+      allowTerminalResult.resolve();
+    }
+
+    await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: context.params.sessionId,
+        sessionKey: context.params.sessionKey,
+      }),
+    ).not.toHaveProperty("hasOutstandingBackgroundWork");
+  });
+
   it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {
     vi.useFakeTimers();
     const { context } = await createExecution();

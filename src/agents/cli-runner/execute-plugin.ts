@@ -514,6 +514,14 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    // A terminal result, iterator error, cancellation, or timeout can arrive
+    // before the plugin sends an empty task list; do not leak its liveness floor.
+    markDiagnosticOutstandingBackgroundWork({
+      runId: run.runId,
+      sessionId: run.sessionId,
+      sessionKey: run.sessionKey,
+      outstanding: false,
+    });
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     if (!controller.signal.aborted) {
