@@ -1,6 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
-import { findChatChannelMeta, getChatChannelMeta } from "../channels/chat-meta.js";
+import {
+  findChatChannelMeta,
+  getChatChannelMeta as getBuiltInChatChannelMeta,
+} from "../channels/chat-meta.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
@@ -21,6 +24,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
@@ -140,7 +144,6 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
-export { getChatChannelMeta };
 export type {
   OpenClawPluginGatewayEventScope,
   OpenClawPluginGatewayEvents,
@@ -312,6 +315,12 @@ export { resolveThreadSessionKeys } from "../routing/session-key.js";
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
+
+function getChatChannelMetaForSdk(id: ChatChannelId): ChannelMeta {
+  return getBuiltInChatChannelMeta(id);
+}
+
+export { getChatChannelMetaForSdk as getChatChannelMeta };
 
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
