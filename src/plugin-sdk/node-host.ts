@@ -21,19 +21,20 @@ export function resolveNodeHostExecutable(
   },
 ): { executable: string; pathEnv?: string } | undefined {
   const env = options.env ?? process.env;
+  const includeExtensionless = options.includeExtensionless ?? process.platform !== "win32";
   if (options.strategy === "direct") {
     const resolved = resolveExecutableFromPathEnv(
       executable,
       options.pathEnv ?? env.PATH ?? env.Path ?? "",
       env,
-      { includeExtensionless: options.includeExtensionless },
+      { includeExtensionless },
     );
     return resolved ? { executable: resolved } : undefined;
   }
   return resolveExecutableFromUserShellPathInternal(executable, {
     env,
     pathEnv: options.pathEnv,
-    includeExtensionless: options.includeExtensionless,
+    includeExtensionless,
     strategy: options.strategy,
   });
 }

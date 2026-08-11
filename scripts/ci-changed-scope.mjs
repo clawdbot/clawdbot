@@ -75,6 +75,8 @@ const WINDOWS_HOME_DISPLAY_SCOPE_RE =
   /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
   /^src\/(?:agents\/provider-local-service(?:\.env-case\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
+const WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE =
+  /^(?:src\/plugin-sdk\/node-host(?:\.test)?|src\/tui\/(?:tui|tui\.resolve-codex-bin\.test))\.ts$/;
 const WINDOWS_AGENT_HOME_PATH_SCOPE_RE =
   /^src\/(?:infra\/home-dir(?:\.test)?|agents\/(?:agent-tools\.read(?:\.host-operations|\.windows)?\.test|agent-tools\.read|sessions\/tools\/path-utils(?:\.test)?))\.ts$/;
 const WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE =
@@ -192,6 +194,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
         WINDOWS_AGENT_HOME_PATH_SCOPE_RE.test(path) ||
         WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
+        WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE.test(path) ||
         WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
         WINDOWS_TEST_SCOPE_RE.test(path) ||
@@ -203,6 +206,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
         WINDOWS_AGENT_HOME_PATH_SCOPE_RE.test(path) ||
         WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
+        WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE.test(path) ||
         WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path))
     ) {
       runWindows = true;

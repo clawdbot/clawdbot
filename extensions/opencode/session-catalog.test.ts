@@ -302,9 +302,7 @@ async function installFakeOpenCode(
       },
     ],
   };
-  await fs.writeFile(
-    executable,
-    `#!/usr/bin/env node
+  const script = `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (process.env.CATALOG_UNRELATED_ENV) process.exit(3);
 if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && args.includes("json")) {
@@ -316,9 +314,19 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
 } else {
   process.exitCode = 2;
 }
-`,
-  );
-  await fs.chmod(executable, 0o755);
+`;
+  await fs.writeFile(executable, script);
+  if (process.platform === "win32") {
+    await fs.writeFile(path.join(directory, "opencode.js"), script);
+    // This exact direct-forwarder shape is parsed into a Node entrypoint;
+    // the batch wrapper itself is never executed through cmd.exe.
+    await fs.writeFile(
+      path.join(directory, "opencode.cmd"),
+      '@echo off\r\n"%~dp0\\opencode.js" %*\r\n',
+    );
+  } else {
+    await fs.chmod(executable, 0o755);
+  }
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   process.env.CATALOG_UNRELATED_ENV = "present";
   return directory;
@@ -613,34 +621,39 @@ describe("OpenCode session catalog", () => {
     expect(commandsAvailable({}, path.join(directory, "missing"))).toBe(false);
   });
 
-  itWithCli(
-    "opens validated local sessions with the upstream terminal resume contract",
-    async () => {
-      await installFakeOpenCode();
-      const { provider } = captureOpenCodeSessionRegistrations();
+  it("opens validated local sessions with the upstream terminal resume contract", async () => {
+    const directory = await installFakeOpenCode();
+    const executable = path.join(
+      directory,
+      process.platform === "win32" ? "opencode.cmd" : "opencode",
+    );
+    const { provider } = captureOpenCodeSessionRegistrations();
 
-      await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual([
-        expect.objectContaining({
-          sessions: [expect.objectContaining({ threadId: "ses_test", canOpenTerminal: true })],
-        }),
-      ]);
-      await expect(
-        provider!.openTerminal!({ hostId: "gateway", threadId: "ses_test" }),
-      ).resolves.toEqual({
-        kind: "local",
-        argv: [expect.stringMatching(/opencode$/u), "--session", "ses_test"],
-        cwd: "/workspace",
-        title: "opencode --session ses_test…",
-      });
-      await expectRejects(
-        provider!.openTerminal!({ hostId: "gateway", threadId: "missing" }),
-        "OpenCode session is unavailable",
-      );
-    },
-  );
+    await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual([
+      expect.objectContaining({
+        sessions: [expect.objectContaining({ threadId: "ses_test", canOpenTerminal: true })],
+      }),
+    ]);
+    await expect(
+      provider!.openTerminal!({ hostId: "gateway", threadId: "ses_test" }),
+    ).resolves.toEqual({
+      kind: "local",
+      argv: [executable, "--session", "ses_test"],
+      cwd: "/workspace",
+      title: "opencode --session ses_test…",
+    });
+    await expectRejects(
+      provider!.openTerminal!({ hostId: "gateway", threadId: "missing" }),
+      "OpenCode session is unavailable",
+    );
+  });
 
-  itWithCli("runs only catalog-validated OpenCode sessions through the node PTY", async () => {
-    await installFakeOpenCode();
+  it("runs only catalog-validated OpenCode sessions through the node PTY", async () => {
+    const directory = await installFakeOpenCode();
+    const executable = path.join(
+      directory,
+      process.platform === "win32" ? "opencode.cmd" : "opencode",
+    );
     const { commands, policies } = captureOpenCodeSessionRegistrations();
     const terminal = commands.find(
       (command) => command.command === OPENCODE_TERMINAL_RESUME_COMMAND,
@@ -658,7 +671,7 @@ describe("OpenCode session catalog", () => {
     ).resolves.toBe(JSON.stringify({ exitCode: 0 }));
     expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
       {
-        file: expect.stringMatching(/opencode$/u),
+        file: executable,
         args: ["--session", "ses_test"],
         cwd: "/workspace",
         cols: 100,

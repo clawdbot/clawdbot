@@ -1563,6 +1563,9 @@ describe("Codex supervision catalog", () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-node-terminal-"));
     tempDirs.push(binDir);
     const executable = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "codex"), "#!/bin/sh\n");
+    }
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
       await fs.chmod(executable, 0o755);

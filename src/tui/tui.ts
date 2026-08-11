@@ -18,11 +18,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
-import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -113,10 +113,18 @@ type RunTuiOptions = TuiOptions & {
 
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export async function resolveCodexCliBin(): Promise<string | null> {
-  const lookupCommand =
-    process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
+  if (process.platform === "win32") {
+    return (
+      resolveExecutableFromPathEnv(
+        "codex",
+        process.env.PATH ?? process.env.Path ?? "",
+        process.env,
+        { includeExtensionless: false },
+      ) ?? null
+    );
+  }
   try {
-    const result = await runCommandWithTimeout([lookupCommand, "codex"], {
+    const result = await runCommandWithTimeout(["which", "codex"], {
       killSignal: "SIGKILL",
       maxOutputBytes: 64 * 1024,
       timeoutMs: CODEX_CLI_LOOKUP_TIMEOUT_MS,
