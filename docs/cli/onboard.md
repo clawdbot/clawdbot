@@ -210,7 +210,8 @@ order, skipping blank or unsupported values:
 1. `LC_ALL`
 2. `LC_MESSAGES`
 3. `LANG`
-4. English fallback when none select a supported locale
+4. The runtime platform locale reported by `navigator` or `Intl`, when available
+5. English fallback when none select a supported locale
 
 Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels remain literal.
 

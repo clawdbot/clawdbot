@@ -386,9 +386,10 @@ Use `createSetupTranslator(...)` for fixed setup wizard copy. A nonblank
 `OPENCLAW_LOCALE` is an explicit override: a supported value selects that
 locale, while an unsupported value falls back directly to English. Without an
 explicit override, setup checks `LC_ALL`, `LC_MESSAGES`, and `LANG` in order,
-skips blank or unsupported inferred values, and falls back to English only when
-none select a supported locale. Set `OPENCLAW_LOCALE=en` for an explicit English
-override. Keep plugin-specific setup text in plugin-owned code and use shared
+then checks the runtime platform locale reported by `navigator` or `Intl` when
+available. It skips blank or unsupported inferred values and falls back to
+English only when none select a supported locale. Set `OPENCLAW_LOCALE=en` for
+an explicit English override. Keep plugin-specific setup text in plugin-owned code and use shared
 catalog keys only for common setup labels, status text, and official bundled
 plugin setup copy.
 

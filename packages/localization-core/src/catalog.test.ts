@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  LOCALIZATION_CATALOG_LIMITS,
   createCatalogSnapshot,
   createCatalogStore,
   interpolateMessage,
@@ -257,6 +258,80 @@ describe("localization catalogs", () => {
         candidate: { "core.amount": "Betrag: {amount, number}" },
       }).map((issue) => issue.code),
     ).toContain("invalid-selector");
+  });
+
+  it("rejects oversized messages before ICU parsing", () => {
+    const result = createCatalogSnapshot({
+      namespace: "core",
+      catalogRevision: "oversized-message",
+      catalogs: {
+        en: {
+          "core.message": "x".repeat(LOCALIZATION_CATALOG_LIMITS.messageLength + 1),
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "invalid-catalog",
+        catalogRevision: "oversized-message",
+        issues: [
+          {
+            code: "message-too-large",
+            key: "core.message",
+            detail: `Message must be a string no longer than ${LOCALIZATION_CATALOG_LIMITS.messageLength} characters.`,
+          },
+        ],
+      },
+    });
+  });
+
+  it("rejects oversized keys before ICU parsing", () => {
+    const key = `core.${"x".repeat(LOCALIZATION_CATALOG_LIMITS.keyLength)}`;
+    const result = createCatalogSnapshot({
+      namespace: "core",
+      catalogRevision: "oversized-key",
+      catalogs: { en: { [key]: "Value" } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.issues).toContainEqual({
+        code: "invalid-key",
+        key,
+        detail: `Key exceeds ${LOCALIZATION_CATALOG_LIMITS.keyLength} characters.`,
+      });
+    }
+  });
+
+  it("rejects excessive catalog entries before ICU parsing", () => {
+    const catalog = Object.fromEntries(
+      Array.from({ length: LOCALIZATION_CATALOG_LIMITS.entries + 1 }, (_, index) => [
+        `core.message-${index}`,
+        "Value",
+      ]),
+    );
+    const result = createCatalogSnapshot({
+      namespace: "core",
+      catalogRevision: "oversized-catalog",
+      catalogs: { en: catalog },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "invalid-catalog",
+        catalogRevision: "oversized-catalog",
+        issues: [
+          {
+            code: "catalog-too-large",
+            key: "core.*",
+            detail: `Snapshot exceeds ${LOCALIZATION_CATALOG_LIMITS.entries} catalog entries.`,
+          },
+        ],
+      },
+    });
   });
 
   it("rejects candidate-only catalog keys", () => {

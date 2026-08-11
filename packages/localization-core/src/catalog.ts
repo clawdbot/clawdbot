@@ -36,7 +36,9 @@ export type CatalogValidationIssue = {
     | "invalid-selector"
     | "forbidden-bidi-control"
     | "missing-source-catalog"
-    | "invalid-locale";
+    | "invalid-locale"
+    | "catalog-too-large"
+    | "message-too-large";
   key: string;
   detail: string;
 };
@@ -116,6 +118,13 @@ const ICU_SELECT = 5;
 const ICU_PLURAL = 6;
 const FORMATTER_CACHE_LIMIT = 512;
 const FORMATTER_CACHE = new Map<string, IntlMessageFormat>();
+export const LOCALIZATION_CATALOG_LIMITS = Object.freeze({
+  locales: SUPPORTED_LOCALES.length,
+  entries: 50_000,
+  characters: 16_000_000,
+  keyLength: 256,
+  messageLength: 16_384,
+});
 const FIRST_STRONG_ISOLATE = "\u2068";
 const POP_DIRECTIONAL_ISOLATE = "\u2069";
 
@@ -307,6 +316,10 @@ function validateSnapshotCatalogs(
   catalogs: Partial<Record<OpenClawLocale, LocalizationCatalog>>,
 ): readonly CatalogValidationIssue[] {
   const namespaces = normalizeNamespaces(namespace);
+  const boundsIssue = validateSnapshotBounds(namespaces, catalogs);
+  if (boundsIssue) {
+    return freezeIssues([boundsIssue]);
+  }
   const source = catalogs[sourceLocale];
   if (!source) {
     return freezeIssues([
@@ -334,6 +347,74 @@ function validateSnapshotCatalogs(
     }
   }
   return freezeIssues(issues);
+}
+
+function validateSnapshotBounds(
+  namespaces: readonly string[],
+  catalogs: Partial<Record<OpenClawLocale, LocalizationCatalog>>,
+): CatalogValidationIssue | undefined {
+  let locales = 0;
+  let entries = 0;
+  let characters = 0;
+  const snapshotKey = `${namespaces.join("|")}.*`;
+
+  for (const locale in catalogs) {
+    if (!Object.hasOwn(catalogs, locale)) {
+      continue;
+    }
+    locales += 1;
+    if (locales > LOCALIZATION_CATALOG_LIMITS.locales) {
+      return {
+        code: "catalog-too-large",
+        key: snapshotKey,
+        detail: `Snapshot exceeds ${LOCALIZATION_CATALOG_LIMITS.locales} locale catalogs.`,
+      };
+    }
+    const catalog = (catalogs as Readonly<Record<string, LocalizationCatalog | undefined>>)[locale];
+    if (!catalog) {
+      continue;
+    }
+    for (const key in catalog) {
+      if (!Object.hasOwn(catalog, key)) {
+        continue;
+      }
+      const message = catalog[key];
+      entries += 1;
+      if (entries > LOCALIZATION_CATALOG_LIMITS.entries) {
+        return {
+          code: "catalog-too-large",
+          key: snapshotKey,
+          detail: `Snapshot exceeds ${LOCALIZATION_CATALOG_LIMITS.entries} catalog entries.`,
+        };
+      }
+      if (key.length > LOCALIZATION_CATALOG_LIMITS.keyLength) {
+        return {
+          code: "invalid-key",
+          key,
+          detail: `Key exceeds ${LOCALIZATION_CATALOG_LIMITS.keyLength} characters.`,
+        };
+      }
+      if (
+        typeof message !== "string" ||
+        message.length > LOCALIZATION_CATALOG_LIMITS.messageLength
+      ) {
+        return {
+          code: "message-too-large",
+          key,
+          detail: `Message must be a string no longer than ${LOCALIZATION_CATALOG_LIMITS.messageLength} characters.`,
+        };
+      }
+      characters += key.length + message.length;
+      if (characters > LOCALIZATION_CATALOG_LIMITS.characters) {
+        return {
+          code: "catalog-too-large",
+          key: snapshotKey,
+          detail: `Snapshot exceeds ${LOCALIZATION_CATALOG_LIMITS.characters} catalog characters.`,
+        };
+      }
+    }
+  }
+  return undefined;
 }
 
 function validateParameters(
