@@ -2736,9 +2736,33 @@ openclaw-chat-video-player {
 }
 
 .agent-chat__capability-menu::part(menu) {
+  /* Web Awesome owns this menu's important max-height rule. Feed that rule the
+     composer viewport budget so every nested view keeps the same top gutter. */
+  --auto-size-available-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
   width: 292px;
   min-width: 292px;
   max-width: min(292px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-strong) transparent;
+}
+
+.agent-chat__capability-menu-item[value="back"] {
+  position: sticky;
+  top: calc(-1 * var(--menu-padding));
+  z-index: 1;
+  background: var(--bg-elevated);
+}
+
+.agent-chat__capability-menu::part(menu)::-webkit-scrollbar {
+  width: 6px;
+}
+
+.agent-chat__capability-menu::part(menu)::-webkit-scrollbar-thumb {
+  background: var(--muted-strong);
+  border-radius: 999px;
 }
 
 .agent-chat__capability-menu-item,
