@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import * as agentEvents from "../../../infra/agent-events.js";
-import { formatSystemTurnPrompt } from "../../../sessions/input-provenance.js";
+import { formatSystemTurnPrompt } from "../../../sessions/system-turn-prompt.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import type {
   SubagentRestartRecoveryReceipt,

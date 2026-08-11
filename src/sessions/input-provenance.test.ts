@@ -2,21 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
-  formatSystemTurnPrompt,
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
-
-describe("formatSystemTurnPrompt", () => {
-  it.each([
-    ["resume the turn", "[System] resume the turn"],
-    ["  resume the turn  ", "[System] resume the turn"],
-    ["  [System] resume the turn  ", "[System] resume the turn"],
-  ])("formats %j without duplicating the system prefix", (body, expected) => {
-    expect(formatSystemTurnPrompt(body)).toBe(expected);
-  });
-});
 
 describe("annotateInterSessionPromptText", () => {
   it("marks inter-session prompt text as non-user-authored", () => {

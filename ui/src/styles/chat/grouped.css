@@ -426,7 +426,7 @@
   font: inherit;
   line-height: inherit;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-divider__action:hover {

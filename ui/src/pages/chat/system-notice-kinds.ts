@@ -1,6 +1,6 @@
 import type { toolIcons } from "../../components/icons-tools.ts";
 
-export type SystemNoticeKind = {
+type SystemNoticeKind = {
   icon: keyof typeof toolIcons;
   labelKey: string;
   // Fixed operator summary shown instead of the raw model prompt. Omit when the

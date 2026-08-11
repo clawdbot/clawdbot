@@ -17,11 +17,9 @@ import type { AgentRunRequest } from "../../gateway/server-methods/agent-request
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
-import {
-  formatSystemTurnPrompt,
-  MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
-} from "../../sessions/input-provenance.js";
+import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
