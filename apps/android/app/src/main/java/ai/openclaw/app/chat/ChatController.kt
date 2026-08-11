@@ -5904,17 +5904,17 @@ class ChatController internal constructor(
               ?: existing?.childSessionKey,
         )
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
-      subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      if (!activity.isWorking) {
-        val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
-        val expiryDelayMs = (expiresAt - now).coerceAtLeast(0L)
+      if (activity.isWorking) {
+        subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      } else if (terminal && existing?.isWorking != false) {
+        // Local receipt starts retention; remote endedAt may be old.
+        // Duplicate terminal updates must not extend that retention window.
         subagentActivityExpiryJobs[taskId] =
           scope.launch {
-            delay(expiryDelayMs)
+            delay(SUBAGENT_ACTIVITY_RETENTION_MS)
             synchronized(subagentActivityLock) {
-              if (_subagentActivities.value[taskId] == activity) {
-                _subagentActivities.value = _subagentActivities.value - taskId
-              }
+              if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
+              _subagentActivities.value = _subagentActivities.value - taskId
               subagentActivityExpiryJobs.remove(taskId)
             }
           }
