@@ -38,15 +38,11 @@ import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
-import {
-  assertActiveAgentRuntimeAuthority,
-  ensureActiveAgentRuntimeAuthority,
-  hasActiveAgentRuntimeAuthority,
-} from "./agent-runtime-authority.js";
+import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { prepareSessionDiffBaseline } from "./session-create-diff-baseline.js";
+import { captureCreatedSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
@@ -64,10 +60,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
-    const commitGuard =
-      client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
-        ? () => assertActiveAgentRuntimeAuthority(client, context)
-        : undefined;
+    const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const catalogId = normalizeOptionalString(p.catalogId);
     if (catalogId && p.model) {
       respond(
@@ -440,7 +433,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
               // admin-only so this write-scoped path cannot execute gated repo scripts.
               runSetupScript: scopes.includes(ADMIN_SCOPE),
-              ...(commitGuard ? { commitGuard } : {}),
+              ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
             });
             provisioned = true;
           }
@@ -479,7 +472,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               : {}),
           });
         } catch (error) {
-          if (error instanceof TypeError && !hasActiveAgentRuntimeAuthority(client, context)) {
+          if (error instanceof TypeError && !authority.hasActive()) {
             throw error;
           }
           if (error instanceof WorktreeRepositoryError) {
@@ -521,30 +514,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         parseAgentSessionKey(sessionKey ?? "")?.agentId ??
         resolveDefaultAgentId(cfg),
     );
-    const captureCreatedSessionBaseline = async (created: {
-      agentId: string;
-      entry: SessionEntry;
-      key: string;
-      storePath: string;
-    }) => {
-      try {
-        Object.assign(
-          created.entry,
-          await prepareSessionDiffBaseline({
-            agentId: created.agentId,
-            cfg,
-            entry: created.entry,
-            sessionKey: created.key,
-            storePath: created.storePath,
-          }),
-        );
-      } catch (error) {
-        sessionLog.warn(
-          `session diff baseline capture failed for ${created.key}: ${formatErrorMessage(error)}`,
-        );
-      }
-    };
-    if (!ensureActiveAgentRuntimeAuthority({ client, context, respond })) {
+    if (!authority.ensureActive()) {
       return;
     }
     const created = await createGatewaySession({
@@ -591,16 +561,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
-      ...(commitGuard ? { commitGuard } : {}),
+      ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
         // Session persistence already committed under the guard. Closure after
         // that point may suppress follow-on work, but cannot roll back the session.
-        if (!hasActiveAgentRuntimeAuthority(client, context)) {
+        if (!authority.hasActive()) {
           return;
         }
-        await captureCreatedSessionBaseline({ key, agentId, entry, storePath });
+        await captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
         if (hasInitialTurn) {
-          if (!hasActiveAgentRuntimeAuthority(client, context)) {
+          if (!authority.hasActive()) {
             return;
           }
           messageSeq =
@@ -637,19 +607,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           });
         }
       },
-    }).catch((error: unknown) => {
-      const authorityClosed =
-        error instanceof TypeError && !hasActiveAgentRuntimeAuthority(client, context);
-      if (authorityClosed) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
-        );
-        return undefined;
-      }
-      throw error;
-    });
+    }).catch((error: unknown) => authority.handleClosedError(error));
     if (!created) {
       return;
     }
@@ -658,9 +616,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     if (created.resetExisting) {
-      await captureCreatedSessionBaseline({
+      await captureCreatedSessionDiffBaseline({
         key: created.key,
         agentId: created.agentId,
+        cfg,
         entry: created.entry,
         storePath: resolveGatewaySessionStoreTarget({
           cfg,

@@ -36,3 +36,26 @@ export function ensureActiveAgentRuntimeAuthority(params: {
   );
   return false;
 }
+
+export function createAgentRuntimeAuthorityGuard(
+  client: GatewayClient | null,
+  context: GatewayRequestContext,
+  respond: RespondFn,
+) {
+  const hasActive = () => hasActiveAgentRuntimeAuthority(client, context);
+  return {
+    commitGuard:
+      client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
+        ? () => assertActiveAgentRuntimeAuthority(client, context)
+        : undefined,
+    ensureActive: () => ensureActiveAgentRuntimeAuthority({ client, context, respond }),
+    handleClosedError(error: unknown): undefined {
+      if (error instanceof TypeError && !hasActive()) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return undefined;
+      }
+      throw error;
+    },
+    hasActive,
+  };
+}
