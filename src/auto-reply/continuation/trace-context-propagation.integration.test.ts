@@ -138,7 +138,7 @@ import {
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
 } from "../../infra/session-delivery-queue.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { consumePendingDelegates, resetDelegateStoreForTests } from "./delegate-store.js";
 import { enqueueContinuationReturnDeliveries } from "./targeting.js";
 
@@ -354,7 +354,7 @@ describe("continuation trace-context propagation integration", () => {
       fanoutTargets.map(() => "delivered"),
     );
 
-    await withTempDir({ prefix: "openclaw-trace-replay-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-trace-replay-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "systemEvent",

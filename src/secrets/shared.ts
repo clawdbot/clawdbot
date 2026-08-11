@@ -54,13 +54,6 @@ export function parseDotPath(pathname: string): string[] {
 }
 
 /**
- * Joins config path segments using the secrets command's dotted path format.
- */
-export function toDotPath(segments: string[]): string {
-  return segments.join(".");
-}
-
-/**
  * Atomically writes secret-adjacent text, using the private store for default 0600 files.
  */
 export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {

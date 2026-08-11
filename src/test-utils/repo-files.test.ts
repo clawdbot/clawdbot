@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "./temp-dir.js";
+import { withTestDir } from "./temp-dir.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
@@ -17,7 +17,7 @@ describe("listGitTrackedFiles", () => {
   });
 
   it("bounds Git inventory lookup and returns sorted existing files", async () => {
-    await withTempDir("openclaw-repo-files-", async (repoRoot) => {
+    await withTestDir("openclaw-repo-files-", async (repoRoot) => {
       await fs.writeFile(path.join(repoRoot, "z.ts"), "");
       await fs.writeFile(path.join(repoRoot, "a.ts"), "");
       spawnSyncMock.mockReturnValue({
@@ -39,7 +39,7 @@ describe("listGitTrackedFiles", () => {
   });
 
   it("caches a timed-out inventory lookup as unavailable", async () => {
-    await withTempDir("openclaw-repo-files-timeout-", async (repoRoot) => {
+    await withTestDir("openclaw-repo-files-timeout-", async (repoRoot) => {
       spawnSyncMock.mockReturnValue({
         error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
         signal: "SIGKILL",

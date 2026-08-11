@@ -184,7 +184,8 @@ vi.mock("./subagents/announce/subagent-announce.runtime.js", () => ({
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     resolveAgentIdFromSessionKeyMock(sessionKey),
   resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-  resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
+  resolveSessionStorePathCore: (store: unknown, options: unknown) =>
+    resolveStorePathMock(store, options),
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
@@ -198,7 +199,8 @@ vi.mock("./subagents/announce/subagent-announce-delivery.runtime.js", () =>
     resolveAgentIdFromSessionKey: (sessionKey: string) =>
       resolveAgentIdFromSessionKeyMock(sessionKey),
     resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-    resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
+    resolveSessionStorePathCore: (store: unknown, options: unknown) =>
+      resolveStorePathMock(store, options),
     isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
     queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string) => {
       const queued = queueEmbeddedAgentMessageMock(sessionId, text);

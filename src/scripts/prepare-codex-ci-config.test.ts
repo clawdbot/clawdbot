@@ -6,7 +6,7 @@ import {
   buildCiSafeCodexConfig,
   writeCiSafeCodexConfig,
 } from "../../scripts/prepare-codex-ci-config.ts";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 
 describe("prepare-codex-ci-config", () => {
   it("renders a minimal trusted non-interactive Codex config for the target repo", () => {
@@ -31,7 +31,7 @@ describe("prepare-codex-ci-config", () => {
   });
 
   it("writes the generated config to disk", async () => {
-    await withTempDir("codex-ci-config-", async (tempDir) => {
+    await withTestDir("codex-ci-config-", async (tempDir) => {
       const outputPath = path.join(tempDir, ".codex", "config.toml");
       const projectPath = path.join(tempDir, "repo");
 

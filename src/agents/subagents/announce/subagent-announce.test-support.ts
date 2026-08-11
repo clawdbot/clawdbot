@@ -15,7 +15,7 @@ type DeliveryRuntimeMockOptions = {
   loadSessionStore: (storePath: string) => unknown;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
   resolveMainSessionKey: (cfg: unknown) => string;
-  resolveStorePath: (store: unknown, options: unknown) => string;
+  resolveSessionStorePathCore: (store: unknown, options: unknown) => string;
   isEmbeddedAgentRunActive: (sessionId: string) => boolean;
   queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
@@ -80,7 +80,7 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
     loadSessionStore: options.loadSessionStore,
     resolveAgentIdFromSessionKey: options.resolveAgentIdFromSessionKey,
     resolveMainSessionKey: options.resolveMainSessionKey,
-    resolveStorePath: options.resolveStorePath,
+    resolveSessionStorePathCore: options.resolveSessionStorePathCore,
     isEmbeddedAgentRunActive: options.isEmbeddedAgentRunActive,
     queueEmbeddedAgentMessageWithOutcome: options.queueEmbeddedAgentMessageWithOutcome,
     formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>

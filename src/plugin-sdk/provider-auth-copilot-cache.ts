@@ -3,7 +3,7 @@ import path from "node:path";
 import { asDateTimestampMs } from "../../packages/normalization-core/src/number-coercion.js";
 import { COPILOT_INTEGRATION_ID } from "../agents/copilot-dynamic-headers.js";
 import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFileThroughSymlink, saveJsonFile } from "../infra/json-file.js";
+import { loadJsonFileThroughSymlink, writeJsonTarget } from "../infra/json-file.js";
 import { DEFAULT_GITHUB_COPILOT_DOMAIN } from "./github-copilot-domain.js";
 
 const COPILOT_CACHE_NAMESPACE = "github-copilot-token";
@@ -84,7 +84,7 @@ export async function resolveCopilotTokenCache(params: {
     // Normal runtime state uses the bounded SQLite namespace below.
     const cachePath = params.cachePath?.trim() || resolveLegacyCopilotTokenCachePath(params.env);
     const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFileThroughSymlink;
-    const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+    const saveJsonFileFn = params.saveJsonFileImpl ?? writeJsonTarget;
     return {
       path: cachePath,
       load: () => loadJsonFileFn(cachePath) as CachedCopilotToken | undefined,

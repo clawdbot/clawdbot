@@ -175,12 +175,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     testState = await createOpenClawTestState({ label: "sessions-spawn-lifecycle" });
     const state = testState;
     const sessions = await import("../config/sessions.js");
-    const resolveStorePath = vi
-      .spyOn(sessions, "resolveStorePath")
+    const resolveSessionStorePathCore = vi
+      .spyOn(sessions, "resolveSessionStorePathCore")
       .mockImplementation((_store, opts) =>
         path.join(state.sessionsDir(opts?.agentId), "sessions.json"),
       );
-    restoreSessionStorePath = () => resolveStorePath.mockRestore();
+    restoreSessionStorePath = () => resolveSessionStorePathCore.mockRestore();
     resetSessionsSpawnAnnounceFlowOverride();
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();

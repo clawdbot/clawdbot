@@ -6,10 +6,10 @@ import type { AcpSpawnRuntimeCloseHandle } from "../../../acp/control-plane/spaw
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -495,7 +495,7 @@ export async function spawnAcpDirect(
         via: "spawn",
         actor: { type: "agent", id: requesterInternalKey },
       });
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
         ? {
             spawnDepth: admission.childSessionPatch.spawnDepth,
@@ -506,7 +506,7 @@ export async function spawnAcpDirect(
           }
         : {};
       childCreationEntry =
-        (await upsertSessionEntry(
+        (await upsertSessionEntryCore(
           { storePath, sessionKey },
           {
             ...creationStamp,

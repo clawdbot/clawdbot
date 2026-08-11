@@ -1,7 +1,7 @@
 /** Stateless startup and post-compaction recovery for continuation delegates. */
 
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   loadPendingSessionDeliveries,
@@ -78,7 +78,8 @@ export async function recoverPendingContinuationDelegates(
   for (const sessionKey of sessionKeys) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId;
     const storePath =
-      params.storePath ?? resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
+      params.storePath ??
+      resolveSessionStorePathCore(runtimeConfigSnapshot.session?.store, { agentId });
     let recoveredEntry: ReturnType<typeof loadSessionEntry>;
     try {
       recoveredEntry = loadSessionEntry({
@@ -291,7 +292,9 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
   let recoveredSessions = 0;
   for (const [sessionKey, delegates] of delegatesBySession) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-    const storePath = resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(runtimeConfigSnapshot.session?.store, {
+      agentId,
+    });
     let entry: ReturnType<typeof loadSessionEntry>;
     try {
       entry = loadSessionEntry({

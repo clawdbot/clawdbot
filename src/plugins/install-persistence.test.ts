@@ -16,8 +16,8 @@ import {
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
-  writeConfigFile,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+  configWriteMock,
+  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
   applyPluginUninstallDirectoryRemovalMock,
 } from "../cli/plugins-cli-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -130,8 +130,8 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
     );
     expect(persistedRecords.alpha).toEqual({
       source: "npm",
@@ -139,7 +139,7 @@ describe("persistPluginInstall", () => {
       installPath: "/tmp/alpha",
       installedAt: "2026-04-25T00:00:00.000Z",
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig: enabledConfig,
       baseHash: "config-1",
@@ -909,8 +909,8 @@ describe("persistPluginInstall", () => {
       'Installed plugin "needs-config" without enabling it because it requires configuration first.',
     );
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
     );
     expect(persistedRecords["needs-config"]).toMatchObject({
       source: "npm",
@@ -965,8 +965,8 @@ describe("persistPluginInstall", () => {
     ).rejects.toThrow("has invalid configured settings");
 
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-    expect(writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("can persist an install record without enabling a plugin that needs config first", async () => {
@@ -997,8 +997,8 @@ describe("persistPluginInstall", () => {
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
     const persistedRecords = requireMockCallArg(
-      writePersistedInstalledPluginIndexInstallRecordsWithLease,
-      "writePersistedInstalledPluginIndexInstallRecordsWithLease",
+      writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+      "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
     );
     expect(persistedRecords["memory-lancedb"]).toEqual({
       source: "path",
@@ -1007,7 +1007,7 @@ describe("persistPluginInstall", () => {
       installPath: "/app/dist/extensions/memory-lancedb",
       installedAt: "2026-04-25T00:00:00.000Z",
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(baseConfig);
   });
 
   it("does not add disabled installs to restrictive allowlists", async () => {

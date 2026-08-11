@@ -6,7 +6,7 @@
 export { getRuntimeConfig } from "../../../config/config.js";
 export {
   loadSessionEntryReadOnly as loadSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 export { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 export { ensureContextEnginesInitialized } from "../../../context-engine/init.js";

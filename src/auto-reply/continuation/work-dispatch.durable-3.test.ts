@@ -140,7 +140,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: () => mockStorePath,
+  resolveSessionStorePathCore: () => mockStorePath,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
@@ -619,7 +619,7 @@ describe("durable continuation_work dispatch", () => {
       typeof import("../../config/sessions/session-accessor.js")
     >("../../config/sessions/session-accessor.js");
     try {
-      await actualAccessor.upsertSessionEntry(
+      await actualAccessor.upsertSessionEntryCore(
         { sessionKey, storePath: mockStorePath },
         {
           sessionId: "fresh-sqlite-session-id",

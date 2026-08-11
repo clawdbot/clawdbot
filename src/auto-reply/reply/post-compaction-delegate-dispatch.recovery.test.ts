@@ -25,7 +25,7 @@ import {
   enqueuePostCompactionDelegateDelivery as enqueuePostCompactionDelegateDeliveryQueue,
   loadPendingSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
   deliverQueuedPostCompactionDelegate,
@@ -255,7 +255,7 @@ function createDeliveryDeps(params: {
       ...params.runtimeConfig,
     })),
     resolveSessionAgentId: vi.fn(() => "main"),
-    resolveStorePath: vi.fn(() => params.storePath),
+    resolveSessionStorePathCore: vi.fn(() => params.storePath),
     spawnSubagentDirect,
     revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true }) as const),
     markPendingDelegateSpawnAccepted,
@@ -284,12 +284,12 @@ async function seedSessionStore(
 ): Promise<void> {
   await Promise.all(
     Object.entries(store).map(async ([sessionKey, entry]) => {
-      await sessionAccessorModule.upsertSessionEntry({ storePath, sessionKey }, entry);
+      await sessionAccessorModule.upsertSessionEntryCore({ storePath, sessionKey }, entry);
     }),
   );
 }
 
-// upsertSessionEntry canonicalizes a bare seed key ("main" -> "agent:main:main"),
+// upsertSessionEntryCore canonicalizes a bare seed key ("main" -> "agent:main:main"),
 // so read entries back through the same accessor production writes with instead
 // of indexing the raw key on a listing.
 function readSessionEntry(storePath: string, sessionKey = "main"): SessionEntry | undefined {
@@ -317,7 +317,7 @@ void splitLintUse;
 
 describe("post-compaction delegate dispatch extraction", () => {
   it("allows queued self-targeting delivery when cross-session targeting is disabled", async () => {
-    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, spawnSubagentDirect } = createDeliveryDeps({
@@ -338,7 +338,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it("allows queued fanoutMode=tree post-compaction delivery when cross-session targeting is disabled", async () => {
-    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, spawnSubagentDirect } = createDeliveryDeps({
@@ -393,7 +393,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it("records retry metadata only for the selected session during a mixed-session drain", async () => {
-    await withTempDir({ prefix: "openclaw-post-compaction-drain-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-post-compaction-drain-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, {
         main: { sessionId: "main-session", updatedAt: 1 },
@@ -449,7 +449,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it("does not re-spawn an accepted child when the post-acceptance chain persist fails", async () => {
-    await withTempDir({ prefix: "openclaw-post-compaction-persist-fail-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-post-compaction-persist-fail-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, log, markPendingDelegateSpawnAccepted, spawnSubagentDirect } =

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
 
 type ContractFixture = {
@@ -48,7 +48,7 @@ describe.skipIf(process.platform === "win32")("device identity coordinator contr
   });
 
   it("canonicalizes database and state paths through existing symlink ancestors", async () => {
-    await withTempDir("openclaw-device-identity-path-contract-", async (rawRootDir) => {
+    await withTestDir("openclaw-device-identity-path-contract-", async (rawRootDir) => {
       const rootDir = fs.realpathSync.native(rawRootDir);
       const canonicalStateDir = path.join(rootDir, "canonical-state");
       const aliasedStateDir = path.join(rootDir, "aliased-state");

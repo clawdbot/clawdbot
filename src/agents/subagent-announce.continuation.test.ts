@@ -92,7 +92,7 @@ import {
   clearRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -109,7 +109,7 @@ import * as subagentSpawn from "./subagents/spawn/subagent-spawn.js";
  * so we use the real store instead of a module mock.
  */
 async function writeSessionStore(data: Record<string, unknown>) {
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   const removals = listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey }) => ({
     sessionKey,
   }));
@@ -204,7 +204,7 @@ describe("subagent announce continuation chaining", () => {
     wakeOnReturn?: boolean;
   }) {
     // Write the child entry into the session store
-    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     await replaceSessionEntry(
       { agentId: "main", sessionKey: params.childSessionKey, storePath },
       {

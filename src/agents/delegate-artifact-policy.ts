@@ -3,7 +3,7 @@ import type {
   ContinuationRuntimeConfig,
   PendingContinuationDelegate,
 } from "../auto-reply/continuation/types.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntry,
@@ -43,7 +43,7 @@ export function formatDelegateArtifactTaskInstruction(
 
 function loadSessionId(cfg: OpenClawConfig, sessionKey: string): string | undefined {
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return loadSessionEntry({
     agentId,
     sessionKey,

@@ -9,7 +9,10 @@ import {
   recordDelegateArtifactDeliveryBinding,
 } from "../../agents/delegate-artifacts.js";
 import { replaceManagedDelegateReturnInPrompt } from "../../agents/internal-events.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
@@ -279,7 +282,7 @@ export async function prepareFormattedSystemEvents(params: {
   const currentSessionId = loadSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     readConsistency: "latest",
     hydrateSkillPromptRefs: false,
   })?.sessionId;
@@ -299,7 +302,7 @@ export async function prepareFormattedSystemEvents(params: {
             agentId,
             sessionId: currentSessionId,
             sessionKey: params.sessionKey,
-            storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
           }),
         )
       : new Set<string>();

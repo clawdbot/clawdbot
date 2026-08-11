@@ -11,7 +11,7 @@ import {
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
@@ -487,7 +487,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
+    const isolatedStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,

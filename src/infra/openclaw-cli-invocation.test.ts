@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -75,7 +75,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
   });
 
   it("uses the installed wrapper and canonical package cwd", async () => {
-    await withTempDir("openclaw-cli-invocation-", async (packageRoot) => {
+    await withTestDir("openclaw-cli-invocation-", async (packageRoot) => {
       await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
       const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "tui", "index.js")).href;
       expect(

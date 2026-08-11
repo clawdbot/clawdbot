@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { patchCodexAuthForCi, prepareCodexCiAuth } from "../../scripts/prepare-codex-ci-auth.ts";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 
 function encodeJwt(payload: Record<string, unknown>): string {
   return [
@@ -60,7 +60,7 @@ describe("prepare-codex-ci-auth", () => {
   });
 
   it("writes only the staged auth file", async () => {
-    await withTempDir("codex-ci-auth-", async (tempDir) => {
+    await withTestDir("codex-ci-auth-", async (tempDir) => {
       const authPath = path.join(tempDir, "auth.json");
       await fs.writeFile(
         authPath,

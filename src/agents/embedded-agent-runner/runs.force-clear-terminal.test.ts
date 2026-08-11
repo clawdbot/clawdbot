@@ -7,7 +7,10 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -248,7 +251,7 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-global-1";
     const startedAt = Date.now() - 60_000;
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId,
@@ -282,7 +285,7 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-1";
     const startedAt = Date.now() - 60_000;
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId,
@@ -318,7 +321,7 @@ describe("force-clear terminal state persistence", () => {
     const startedAt = Date.now() - 60_000;
     const handle = createRunHandle();
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       { sessionId, updatedAt: startedAt, startedAt, status: "running" },
     );
@@ -365,7 +368,7 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-no-key";
     const sessionKey = "agent:main:no-key";
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId,
@@ -394,7 +397,7 @@ describe("force-clear terminal state persistence", () => {
     const oldSessionId = "session-old";
     const newSessionId = "session-new";
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: oldSessionId,
@@ -405,7 +408,7 @@ describe("force-clear terminal state persistence", () => {
 
     setActiveEmbeddedRun(oldSessionId, createRunHandle(), sessionKey);
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: newSessionId,
@@ -434,7 +437,7 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-reused";
     const replacement = createRunHandle();
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId,
@@ -467,7 +470,7 @@ describe("force-clear terminal state persistence", () => {
     const newSessionId = "session-new-owner";
     const replacement = createRunHandle();
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: oldSessionId,

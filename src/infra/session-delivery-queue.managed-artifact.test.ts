@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { enqueueSessionDelivery } from "./session-delivery-queue.js";
 
 function managedArtifactDelivery() {
@@ -34,7 +34,7 @@ function managedArtifactDelivery() {
 
 describe("managed artifact session deliveries", () => {
   it("requires an expected session id for managed returns", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-managed-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-managed-" }, async (tempDir) => {
       await expect(
         enqueueSessionDelivery(
           {
@@ -50,7 +50,7 @@ describe("managed artifact session deliveries", () => {
   });
 
   it("accepts a managed return bound to the expected session id", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-managed-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-managed-" }, async (tempDir) => {
       await expect(
         enqueueSessionDelivery(
           {

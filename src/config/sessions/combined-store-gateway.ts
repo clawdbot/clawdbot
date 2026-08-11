@@ -15,7 +15,7 @@ import {
 } from "../../routing/session-key.js";
 import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   countSessionEntryRowsReadOnly,
   listSessionEntriesCore,
@@ -192,7 +192,7 @@ function resolveGatewaySessionStoreTargets(
     const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
       ownerIds.map((agentId) => ({
         agentId,
-        storePath: resolveStorePath(storeConfig, { agentId }),
+        storePath: resolveSessionStorePathCore(storeConfig, { agentId }),
       })),
       {
         defaultAgentId,
@@ -304,7 +304,7 @@ export function loadCombinedSessionStoreForGatewayCore(
         });
       }
     }
-    const durableStorePath = resolveStorePath(storeConfig, { agentId: defaultAgentId });
+    const durableStorePath = resolveSessionStorePathCore(storeConfig, { agentId: defaultAgentId });
     const incognitoStorePaths = mergeOpenIncognitoStores({
       cfg,
       combined,

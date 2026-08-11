@@ -146,7 +146,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: () => mockStorePath,
+  resolveSessionStorePathCore: () => mockStorePath,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({

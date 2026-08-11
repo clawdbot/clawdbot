@@ -4,7 +4,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -45,7 +45,7 @@ function resolveLiveSessionModelSelection(params: {
     return null;
   }
   const agentId = normalizeOptionalString(params.agentId);
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId,
   });
   const entry = loadSessionEntryReadOnly({
@@ -190,7 +190,7 @@ export function shouldSwitchToLiveModel(params: {
   if (!cfg || !sessionKey) {
     return undefined;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
   const entry = loadSessionEntry({
@@ -271,7 +271,7 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
     config: cfg,
     agentId: params.agentId,
   });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   if (!storePath) {
     return;
   }
@@ -319,7 +319,7 @@ export async function clearLiveModelSwitchPending(params: {
   if (!cfg || !sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
   if (!storePath) {

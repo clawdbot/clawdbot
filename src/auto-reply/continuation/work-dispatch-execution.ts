@@ -258,7 +258,7 @@ async function driveContinuationTurn(
 ): Promise<ContinuationTurnGrantResult> {
   const [
     { getRuntimeConfig },
-    { resolveStorePath },
+    { resolveSessionStorePathCore },
     { loadSessionEntry },
     { parseAgentSessionKey, isSubagentSessionKey },
     { resolveSessionLane },
@@ -301,7 +301,7 @@ async function driveContinuationTurn(
 
   const cfg = getRuntimeConfig();
   const agentId = parseAgentSessionKey(work.sessionKey)?.agentId;
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const agentSessionEntry = loadSessionEntry({
     clone: false,
     hydrateSkillPromptRefs: false,

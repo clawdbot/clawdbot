@@ -90,7 +90,7 @@ import {
   scheduleContinuationWork,
 } from "../auto-reply/continuation/work-dispatch.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listTaskFlowsForOwnerKey } from "../tasks/task-flow-registry.js";
@@ -128,7 +128,7 @@ function makeConfig() {
 }
 
 async function writeSessionStore(data: Record<string, unknown>) {
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   await saveSessionStore(storePath, data as Parameters<typeof saveSessionStore>[1], {
     skipMaintenance: true,
   });

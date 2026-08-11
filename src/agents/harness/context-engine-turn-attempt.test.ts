@@ -5,7 +5,7 @@ import {
   appendTranscriptMessage,
   readActiveTranscriptEntryAnchor,
   readClosedTranscriptTurn,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
@@ -113,7 +113,7 @@ async function createAcceptedTurnFixture(params: {
     sessionKey: `agent:main:${params.sessionId}`,
     storePath: path.join(tempDir, "sessions.json"),
   };
-  await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   let parentId: string | undefined;
   for (const [index, content] of params.prefix.entries()) {
     const entry = await appendTranscriptMessage(target, {
@@ -257,7 +257,7 @@ describe("accepted context-engine turn finalization", () => {
       sessionKey: "agent:main:accepted-turn",
       storePath: path.join(tempDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const prior = await appendTranscriptMessage(target, {
       message: { role: "assistant", content: "prior" },
       now: 1_000,

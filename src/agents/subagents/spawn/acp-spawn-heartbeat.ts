@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_HEARTBEAT_EVERY } from "../../../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { areHeartbeatsEnabled } from "../../../infra/heartbeat-wake.js";
@@ -90,7 +90,7 @@ export function hasSessionLocalHeartbeatRelayRoute(params: {
     return false;
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.requesterAgentId,
   });
   const parentEntry = loadSessionEntryReadOnly({

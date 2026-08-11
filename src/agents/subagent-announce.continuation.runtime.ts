@@ -16,7 +16,7 @@ import {
 import { hasCrossSessionDelegateTargeting } from "../auto-reply/continuation/targeting-pure.js";
 import { scheduleContinuationWorkBatch } from "../auto-reply/continuation/work-dispatch.js";
 import { hasLiveOrRecentlyDispatchedContinuationWork } from "../auto-reply/continuation/work-store.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveContinuationTraceparent } from "../infra/continuation-tracer.js";
@@ -110,7 +110,7 @@ async function drainChildContinuationQueue(params: {
       });
       try {
         const agentId = resolveAgentIdFromSessionKey(params.childSessionKey);
-        const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+        const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
         const persisted = await updateSessionEntry(
           { agentId, sessionKey: params.childSessionKey, storePath },
           () => ({
@@ -221,7 +221,7 @@ async function scheduleSubagentSelfContinuationWork(params: {
       ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
     });
     const agentId = resolveAgentIdFromSessionKey(params.childSessionKey);
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
     const persisted = await updateSessionEntry(
       { agentId, sessionKey: params.childSessionKey, storePath },
       () => ({

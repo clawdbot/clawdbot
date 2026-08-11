@@ -56,7 +56,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
   listSessionEntriesCore?: TaskRegistryMaintenanceRuntime["listSessionEntriesCore"];
-  resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
+  resolveSessionStorePathCore?: TaskRegistryMaintenanceRuntime["resolveSessionStorePathCore"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
@@ -100,7 +100,7 @@ function createTaskRegistryMaintenanceHarness(params: {
           sessionKey,
           entry,
         }))),
-    resolveStorePath: params.resolveStorePath ?? (() => ""),
+    resolveSessionStorePathCore: params.resolveSessionStorePathCore ?? (() => ""),
     ...(params.deriveSessionChatTypeFromKey
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
       : {}),
@@ -235,7 +235,7 @@ describe("task-registry maintenance issue #60299", () => {
     createTaskRegistryMaintenanceHarness({
       tasks,
       listSessionEntriesCore: listSessionEntriesMock,
-      resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
+      resolveSessionStorePathCore: () => "/tmp/openclaw-test-sessions-main.json",
     });
 
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });

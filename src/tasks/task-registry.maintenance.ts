@@ -12,7 +12,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagents/registry/subagent-recovery-state.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
@@ -97,7 +97,7 @@ type TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
   listSessionEntriesCore: typeof listSessionEntriesReadOnly;
-  resolveStorePath: typeof resolveStorePath;
+  resolveSessionStorePathCore: typeof resolveSessionStorePathCore;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
@@ -136,7 +136,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
   listSessionEntriesCore: listSessionEntriesReadOnly,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
@@ -286,7 +286,9 @@ function findTaskSessionEntry(
     return undefined;
   }
   const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
+  const storePath = taskRegistryMaintenanceRuntime.resolveSessionStorePathCore(undefined, {
+    agentId,
+  });
   return findSessionEntryByKey(getSessionEntryLookup(storePath, context), childSessionKey);
 }
 

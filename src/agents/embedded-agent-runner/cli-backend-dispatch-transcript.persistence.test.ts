@@ -4,7 +4,7 @@ import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 
 const tempPaths: string[] = [];
@@ -31,7 +31,7 @@ describe("CLI dispatch transcript attachment persistence", () => {
       storePath: path.join(cwd, "sessions.json"),
     };
     const sessionFile = formatSqliteSessionFileMarker(target);
-    await upsertSessionEntry(target, {
+    await upsertSessionEntryCore(target, {
       sessionFile,
       sessionId: target.sessionId,
       updatedAt: 1,

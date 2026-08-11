@@ -1,5 +1,5 @@
 import { annotateQueuedDelegatesChainTokensFold } from "../auto-reply/continuation/delegate-store.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { generateChainId } from "../infra/secure-random.js";
 import { defaultRuntime } from "../runtime.js";
@@ -97,7 +97,7 @@ export async function prepareSubagentContinuationAccounting(params: {
       const configuredSessionStore =
         typeof params.cfg.session?.store === "string" ? params.cfg.session.store : undefined;
       const parentAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
-      const parentStorePath = resolveStorePath(configuredSessionStore, {
+      const parentStorePath = resolveSessionStorePathCore(configuredSessionStore, {
         agentId: parentAgentId,
       });
       try {
@@ -127,7 +127,9 @@ export async function prepareSubagentContinuationAccounting(params: {
       }
 
       const childAgentId = resolveAgentIdFromSessionKey(params.childSessionKey);
-      const childStorePath = resolveStorePath(configuredSessionStore, { agentId: childAgentId });
+      const childStorePath = resolveSessionStorePathCore(configuredSessionStore, {
+        agentId: childAgentId,
+      });
       try {
         const persistedChild = await updateSessionEntry(
           {

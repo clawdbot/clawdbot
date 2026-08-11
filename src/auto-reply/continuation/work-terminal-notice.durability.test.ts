@@ -7,7 +7,7 @@
 // a terminal row, discard all process-local state, reload from disk, and then
 // assert through the production recovery/delivery/acknowledgement path.
 import { describe, expect, it, vi } from "vitest";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -172,7 +172,10 @@ const SESSION_ID = "session-terminal-notice-1";
 /** Create the real session entry prepareFormattedSystemEvents resolves. */
 async function seedSessionEntry(stateDir: string): Promise<void> {
   await replaceSessionEntry(
-    { storePath: resolveStorePath(stateDir, { agentId: "main" }), sessionKey: SESSION_KEY },
+    {
+      storePath: resolveSessionStorePathCore(stateDir, { agentId: "main" }),
+      sessionKey: SESSION_KEY,
+    },
     {
       sessionKey: SESSION_KEY,
       sessionId: SESSION_ID,
@@ -196,7 +199,7 @@ async function persistAdoptedTurnWithoutQueueAck(
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
-      storePath: resolveStorePath(stateDir, { agentId: "main" }),
+      storePath: resolveSessionStorePathCore(stateDir, { agentId: "main" }),
     } as never,
     {
       message: {

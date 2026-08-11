@@ -4,7 +4,7 @@ import { detectGlobalInstallManagerForRoot } from "./update-global.js";
 import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
-import { runGitUpdate } from "./update-runner-git.js";
+import { updateGitCheckout } from "./update-runner-git.js";
 import { runGlobalUpdate } from "./update-runner-global.js";
 import {
   buildStartDirs,
@@ -57,7 +57,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     };
   }
   if (gitRoot && pkgRoot && updateInstallRootsMatch(gitRoot, pkgRoot)) {
-    return await runGitUpdate({
+    return await updateGitCheckout({
       opts,
       gitRoot,
       runCommand,

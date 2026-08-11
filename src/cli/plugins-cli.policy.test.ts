@@ -11,7 +11,7 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs,
   runPluginsCommand,
-  writeConfigFile,
+  configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
@@ -44,13 +44,13 @@ describe("plugins cli policy mutations", () => {
   }
 
   function requireFirstWrittenConfig(): OpenClawConfig {
-    const call = writeConfigFile.mock.calls[0];
+    const call = configWriteMock.mock.calls[0];
     if (!call) {
-      throw new Error("expected writeConfigFile to be called");
+      throw new Error("expected configWriteMock to be called");
     }
     const [config] = call;
     if (!config) {
-      throw new Error("expected writeConfigFile to receive a config");
+      throw new Error("expected configWriteMock to receive a config");
     }
     return config;
   }
@@ -93,7 +93,7 @@ describe("plugins cli policy mutations", () => {
         explicitSetPaths: [["plugins", "entries", "alpha"]],
       },
     });
-    expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+    expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: enabledConfig,
       installRecords: {},
@@ -132,7 +132,7 @@ describe("plugins cli policy mutations", () => {
     await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
 
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(runtimeErrors).toContain(`Plugin "alpha" could not be enabled (${reason}).`);
     expect(pluginsCliRuntimeLogs).not.toContain(`Plugin "alpha" could not be enabled (${reason}).`);
@@ -154,7 +154,7 @@ describe("plugins cli policy mutations", () => {
     }
 
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("refreshes the persisted plugin registry after disabling a plugin", async () => {
@@ -218,7 +218,7 @@ describe("plugins cli policy mutations", () => {
           explicitSetPaths: [["plugins", "entries", pluginId]],
         },
       });
-      expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
+      expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     },
   );
 
@@ -263,7 +263,7 @@ describe("plugins cli policy mutations", () => {
         "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins, or `openclaw plugins search missing-plugin` to look for installable plugins.",
       );
       expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
       expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     },
   );

@@ -2,8 +2,8 @@
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.runtime.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { resetTelegramMessageCacheForTest } from "./runtime.test-support.js";
 
 const CHAT_ID = 5678;

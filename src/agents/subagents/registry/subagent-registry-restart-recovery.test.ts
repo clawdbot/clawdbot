@@ -26,7 +26,7 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/subagent-recovery.sqlite",
+  resolveSessionStorePathCore: () => "/tmp/subagent-recovery.sqlite",
 }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,

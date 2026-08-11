@@ -63,8 +63,8 @@ async function loadFreshHealthModulesForTest() {
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
-    resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
+    resolveSessionFilePathCore: vi.fn(() => "/tmp/sessions.json"),
     loadSessionStore: () => testStore,
     saveSessionStore: vi.fn().mockResolvedValue(undefined),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -72,7 +72,7 @@ async function loadFreshHealthModulesForTest() {
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
   vi.doMock("../config/sessions/paths.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
     listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {

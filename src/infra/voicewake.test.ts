@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 import {
   defaultVoiceWakeTriggers,
   loadVoiceWakeConfig,
@@ -11,7 +11,7 @@ import {
 
 describe("voicewake config", () => {
   it("returns defaults when missing", async () => {
-    await withTempDir("openclaw-voicewake-", async (baseDir) => {
+    await withTestDir("openclaw-voicewake-", async (baseDir) => {
       await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
         triggers: defaultVoiceWakeTriggers(),
         updatedAtMs: 0,
@@ -20,7 +20,7 @@ describe("voicewake config", () => {
   });
 
   it("sanitizes and persists triggers", async () => {
-    await withTempDir("openclaw-voicewake-", async (baseDir) => {
+    await withTestDir("openclaw-voicewake-", async (baseDir) => {
       const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
       expect(saved.triggers).toEqual(["hi", "there"]);
       expect(saved.updatedAtMs).toBeGreaterThan(0);
@@ -33,7 +33,7 @@ describe("voicewake config", () => {
   });
 
   it("does not read retired JSON trigger files at runtime", async () => {
-    await withTempDir("openclaw-voicewake-", async (baseDir) => {
+    await withTestDir("openclaw-voicewake-", async (baseDir) => {
       await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
       await fs.writeFile(
         path.join(baseDir, "settings", "voicewake.json"),
@@ -52,7 +52,7 @@ describe("voicewake config", () => {
   });
 
   it("does not recreate the retired JSON trigger file", async () => {
-    await withTempDir("openclaw-voicewake-", async (baseDir) => {
+    await withTestDir("openclaw-voicewake-", async (baseDir) => {
       await setVoiceWakeTriggers(["wake"], baseDir);
       await expect(fs.readFile(path.join(baseDir, "settings", "voicewake.json"))).rejects.toThrow(
         /ENOENT/u,

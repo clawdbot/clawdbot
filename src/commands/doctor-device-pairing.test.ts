@@ -15,7 +15,7 @@ import {
   rotateDeviceToken,
 } from "../infra/device-pairing.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const noteMock = vi.hoisted(() => vi.fn());
@@ -67,7 +67,7 @@ describe("noteDevicePairingHealth", () => {
       initial: Awaited<ReturnType<typeof requestDevicePairing>>;
     }) => Promise<void>,
   ): Promise<void> {
-    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+    await withTestDir("openclaw-doctor-device-pairing-", async (stateDir) => {
       await withEnvAsync(
         {
           OPENCLAW_STATE_DIR: stateDir,
@@ -152,7 +152,7 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it("warns when a legacy pairing store file has not been imported into SQLite", async () => {
-    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+    await withTestDir("openclaw-doctor-device-pairing-", async (stateDir) => {
       await withEnvAsync(
         {
           OPENCLAW_STATE_DIR: stateDir,

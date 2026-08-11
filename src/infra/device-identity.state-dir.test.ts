@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
 import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
 
@@ -41,7 +41,7 @@ describe("device identity state dir defaults", () => {
   });
 
   it("uses the supplied state environment for its coordinator", async () => {
-    await withTempDir("openclaw-identity-env-state-", async (rootDir) => {
+    await withTestDir("openclaw-identity-env-state-", async (rootDir) => {
       const stateDir = path.join(rootDir, "selected-state");
       const fakeHome = path.join(rootDir, "home");
       const legacyTmpDir = path.join(rootDir, "legacy-process-tmp");

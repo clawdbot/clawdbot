@@ -24,7 +24,7 @@ import {
 export type { HeartbeatDeps } from "./heartbeat-runner-execution.js";
 export {
   resolveHeartbeatAgents,
-  resolveHeartbeatPrompt,
+  resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatSchedulerSeed,
 } from "./heartbeat-runner-config.js";
 export type { HeartbeatRunner } from "./heartbeat-runner-scheduler.js";

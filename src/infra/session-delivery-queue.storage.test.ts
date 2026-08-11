@@ -1,7 +1,7 @@
 // Covers session delivery queue persistence state transitions.
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   completeSessionDelivery,
   enqueuePostCompactionDelegateDelivery,
@@ -113,7 +113,7 @@ describe("session-delivery queue storage", () => {
   }
 
   it("dedupes entries when an idempotency key is reused", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const firstId = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -141,7 +141,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("projects generic queue attachments to descriptor-only metadata before persistence", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const secret = "GENERIC_QUEUE_INLINE_SECRET";
       const widenedRef = {
         kind: "blob-sha256" as const,
@@ -184,7 +184,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("scrubs widened generic attachment metadata during pending recovery", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const secret = "RECOVERED_GENERIC_QUEUE_SECRET";
       const id = await enqueueSessionDelivery(
         {
@@ -232,7 +232,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("requires exact generic metadata kinds and strict generic payload shapes during recovery", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const corruptions = [
         {
           payload: {
@@ -283,7 +283,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("fails closed for untrusted trace context and malformed continuation triggers", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -311,7 +311,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("fails a managed delegate return whose durable receipt and projection disagree", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await expect(
         enqueueSessionDelivery(
           {
@@ -354,7 +354,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("grants one initial-attempt lease and releases it for recovery", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "agentTurn" as const,
         sessionKey: "agent:main:main",
@@ -379,7 +379,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("reports a dead-letter conflict instead of claiming it as pending", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "agentTurn" as const,
         sessionKey: "agent:main:main",
@@ -399,7 +399,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("lets an explicit enqueue revive a failed idempotency key", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "systemEvent" as const,
         sessionKey: "agent:main:main",
@@ -416,7 +416,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("never revives a failed permanent producer intent", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "systemEvent" as const,
         sessionKey: "agent:main:main",
@@ -434,7 +434,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("reports a completed conflict after acknowledgement", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "agentTurn" as const,
         sessionKey: "agent:main:main",
@@ -459,7 +459,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("atomically repairs unreadable pending JSON for an idempotent enqueue", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "systemEvent" as const,
         sessionKey: "agent:main:main",
@@ -484,7 +484,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("persists only canonical relative post-compaction mount hints", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(
         {
           sessionKey: "agent:main:main",
@@ -536,7 +536,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("rejects one-sided post-compaction source metadata before persistence", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const mismatchedMetadata = [
         { sourceFlowId: "flow-without-revision" },
         { sourceExpectedRevision: 7 },
@@ -562,7 +562,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters noncanonical recovered post-compaction mount hints and scrubs them", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const invalidMountPaths = [
         "/absolute",
         "handoff/../outside",
@@ -606,7 +606,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("normalizes empty post-compaction attachments to absence", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(
         {
           sessionKey: "agent:main:main",
@@ -646,7 +646,7 @@ describe("session-delivery queue storage", () => {
       },
     ];
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const [sequence, corruption] of corruptions.entries()) {
         await expect(
           enqueuePostCompactionDelegateDelivery(
@@ -681,7 +681,7 @@ describe("session-delivery queue storage", () => {
       },
     ];
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const [sequence, invalid] of invalidDelegates.entries()) {
         await expect(
           enqueuePostCompactionDelegateDelivery(
@@ -703,7 +703,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters invalid post-compaction JSON without retaining raw bytes", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(
         {
           sessionKey: "agent:main:main",
@@ -733,7 +733,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters invalid generic JSON without retaining raw bytes", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "systemEvent",
@@ -781,7 +781,7 @@ describe("session-delivery queue storage", () => {
       },
     ];
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const [sequence, corruption] of corruptions.entries()) {
         const secret = `QUEUE_ATTACHMENT_VALIDATION_SECRET_${sequence}`;
         const id = await enqueuePostCompactionDelegateDelivery(
@@ -813,7 +813,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters raw post-compaction snapshots when entry_kind is missing or stale", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const [sequence, entryKind] of [null, "agentTurn"].entries()) {
         const secret = `STALE_ENTRY_KIND_SECRET_${sequence}`;
         const id = await enqueuePostCompactionDelegateDelivery(
@@ -845,7 +845,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("accepts generic descriptor attachment refs without widening them to inline input", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const legacySha256 = "legacy-nonhex-descriptor";
       const id = await enqueueSessionDelivery(
         {
@@ -865,7 +865,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters empty or widened generic blob descriptors before returning them", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const corruptions = [
         { kind: "blob-sha256", sha256: "", mediaType: "text/plain" },
         {
@@ -909,7 +909,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters seeded generic inline attachments before they can be returned", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const kind of ["systemEvent", "agentTurn"] as const) {
         const id =
           kind === "systemEvent"
@@ -959,7 +959,7 @@ describe("session-delivery queue storage", () => {
   });
 
   it("dead-letters malformed post-compaction attachment members without retaining content", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const secret = "MALFORMED_QUEUE_ATTACHMENT_SECRET";
       const id = await enqueuePostCompactionDelegateDelivery(
         {
@@ -1027,7 +1027,7 @@ describe("session-delivery queue storage", () => {
       },
     ];
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       for (const [sequence, corruption] of corruptions.entries()) {
         const secret = `CORRUPT_QUEUE_SECRET_${sequence}`;
         const id = await enqueuePostCompactionDelegateDelivery(

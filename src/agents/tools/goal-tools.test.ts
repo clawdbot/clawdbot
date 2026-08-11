@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
-  upsertSessionEntry as upsertAccessorSessionEntry,
+  upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,7 +31,7 @@ function getSessionEntry(params: {
   return loadSessionEntry(params);
 }
 
-async function upsertSessionEntry(params: {
+async function upsertSessionEntryCore(params: {
   storePath: string;
   sessionKey: string;
   entry: SessionEntry;
@@ -47,8 +47,8 @@ describe("goal tools", () => {
     // Budget-limited status can be derived for display without mutating the
     // stored active goal record.
     const { config, template } = await createStoreConfig();
-    const storePath = resolveStorePath(template, { agentId: "research" });
-    await upsertSessionEntry({
+    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+    await upsertSessionEntryCore({
       storePath,
       sessionKey: "global",
       entry: {
@@ -94,15 +94,15 @@ describe("goal tools", () => {
       config,
     });
 
-    const researchStorePath = resolveStorePath(template, { agentId: "research" });
-    await upsertSessionEntry({
+    const researchStorePath = resolveSessionStorePathCore(template, { agentId: "research" });
+    await upsertSessionEntryCore({
       storePath: researchStorePath,
       sessionKey: "global",
       entry: { sessionId: "sess-global", updatedAt: 1 },
     });
     await tool.execute("call-1", { objective: "ship global work" });
 
-    const mainStorePath = resolveStorePath(template, { agentId: "main" });
+    const mainStorePath = resolveSessionStorePathCore(template, { agentId: "main" });
     expect(
       getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.objective,
     ).toBe("ship global work");
@@ -122,8 +122,8 @@ describe("goal tools", () => {
         config,
       });
 
-      const storePath = resolveStorePath(template, { agentId: "research" });
-      await upsertSessionEntry({
+      const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
+      await upsertSessionEntryCore({
         storePath,
         sessionKey: "global",
         entry: { sessionId: "sess-global", updatedAt: 1 },
@@ -148,15 +148,15 @@ describe("goal tools", () => {
       config,
     });
 
-    const opsStorePath = resolveStorePath(template, { agentId: "ops" });
-    await upsertSessionEntry({
+    const opsStorePath = resolveSessionStorePathCore(template, { agentId: "ops" });
+    await upsertSessionEntryCore({
       storePath: opsStorePath,
       sessionKey: "agent:ops:main",
       entry: { sessionId: "sess-ops", updatedAt: 1 },
     });
     await tool.execute("call-1", { objective: "ship ops work" });
 
-    const researchStorePath = resolveStorePath(template, { agentId: "research" });
+    const researchStorePath = resolveSessionStorePathCore(template, { agentId: "research" });
     expect(
       getSessionEntry({ storePath: opsStorePath, sessionKey: "agent:ops:main" })?.goal?.objective,
     ).toBe("ship ops work");
@@ -167,14 +167,14 @@ describe("goal tools", () => {
 
   it("tells the model to send the requested final reply after completing a goal", async () => {
     const { config, template } = await createStoreConfig();
-    const storePath = resolveStorePath(template, { agentId: "research" });
+    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
     const options = {
       agentSessionKey: "global",
       runSessionKey: "global",
       sessionAgentId: "research",
       config,
     };
-    await upsertSessionEntry({
+    await upsertSessionEntryCore({
       storePath,
       sessionKey: "global",
       entry: { sessionId: "sess-global", updatedAt: 1 },

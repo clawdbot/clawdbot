@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntryReadOnly,
@@ -70,7 +70,7 @@ export function resolveSessionStorePathForAcp(params: {
   return {
     cfg,
     agentId,
-    storePath: resolveStorePath(cfg.session?.store, { agentId, env: params.env }),
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env: params.env }),
   };
 }
 

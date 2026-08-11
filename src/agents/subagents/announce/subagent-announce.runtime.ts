@@ -5,7 +5,10 @@
  * IO without changing the announce logic itself.
  */
 export { getRuntimeConfig } from "../../../config/config.js";
-export { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
+export {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 export { resolveContinuationRuntimeConfig } from "../../../auto-reply/continuation/config.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -15,7 +18,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { splitModelRef } from "../spawn/subagent-spawn-plan.js";
 import {
   resolveGatewaySessionStoreTarget,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../spawn/subagent-spawn.runtime.js";
 export type ContinuationSpawnParams = Pick<
   SubagentRunRecord,
@@ -85,7 +88,7 @@ export async function persistInitialChildRuntimeState(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { storePath: target.storePath, sessionKey: target.canonicalKey },
       patch,
     );

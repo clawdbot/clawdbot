@@ -114,7 +114,7 @@ export async function startMinimalRealGateway(
   }
   try {
     for (const session of sessions) {
-      await sessionStore.upsertSessionEntry(
+      await sessionStore.upsertSessionEntryCore(
         {
           agentId: session.agentId,
           sessionKey: toAgentRequestSessionKey(session.key)!,

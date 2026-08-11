@@ -26,7 +26,7 @@ import {
   loadTranscriptEvents,
   patchSessionEntryCore as patchAccessorSessionEntry,
   replaceSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -41,7 +41,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   embeddedRunMock,
@@ -150,7 +150,7 @@ async function seedSessionEntry(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<void> {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionKey,
@@ -571,7 +571,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     sessionKey: "agent:main:main",
     storePath,
   };
-  await upsertSessionEntry(sessionScope, {
+  await upsertSessionEntryCore(sessionScope, {
     ...sessionStoreEntry("sess-main", {
       spawnedCwd: "/tmp/task-repo",
       thinkingLevel: "medium",
@@ -1991,7 +1991,7 @@ test("sessions.compact maxLines does not interrupt an active run when no transcr
 });
 
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
-  await withTempDir({ prefix: "openclaw-gw-sessions-nested-" }, async (dir) => {
+  await withTestDir({ prefix: "openclaw-gw-sessions-nested-" }, async (dir) => {
     const storePath = path.join(dir, "sessions.json");
     const runtimeConfig = {
       agents: {

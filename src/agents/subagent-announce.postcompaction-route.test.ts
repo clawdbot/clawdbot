@@ -79,7 +79,7 @@ vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
 
 import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { saveLegacySessionStore as saveSessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { drainSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
@@ -107,7 +107,7 @@ function makeConfig() {
 }
 
 async function writeSessionStore(data: Record<string, unknown>) {
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   await saveSessionStore(storePath, data as Parameters<typeof saveSessionStore>[1], {
     skipMaintenance: true,
   });

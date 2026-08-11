@@ -15,7 +15,7 @@ import {
   type SpawnSubagentParams,
 } from "../../agents/subagents/spawn/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -73,7 +73,10 @@ export type PostCompactionDelegateDeliveryDeps = {
   patchSessionEntryCore: typeof patchSessionEntryCore;
   resolveContinuationRuntimeConfig(cfg: OpenClawConfig): ContinuationRuntimeConfig;
   resolveSessionAgentId(params: { sessionKey?: string; config?: OpenClawConfig }): string;
-  resolveStorePath(store?: string, opts?: { agentId?: string; env?: NodeJS.ProcessEnv }): string;
+  resolveSessionStorePathCore(
+    store?: string,
+    opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
+  ): string;
   spawnSubagentDirect: PostCompactionDelegateSpawn;
   revalidatePendingDelegateForSpawn(
     delegate: { flowId?: string; expectedRevision?: number; task: string },
@@ -103,7 +106,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   patchSessionEntryCore: patchSessionEntryCore,
   resolveContinuationRuntimeConfig,
   resolveSessionAgentId,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   spawnSubagentDirect,
   revalidatePendingDelegateForSpawn,
   markPendingDelegateSpawnAccepted,
@@ -491,7 +494,7 @@ export async function deliverQueuedPostCompactionDelegate(
     agentId,
     resolveQueuedPostCompactionContinuationFlowId(params.entry),
   );
-  const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = deps.resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const artifactMode = params.entry.returnOptions?.artifacts;
   const removeRejectedArtifactPolicy = (): void => {
     if (params.entry.sourceFlowId && (artifactMode === "optional" || artifactMode === "required")) {

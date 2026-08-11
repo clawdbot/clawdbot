@@ -1,4 +1,3 @@
-// Telegram inbound buffering, media resolution, and message dispatch.
 import type { Message } from "grammy/types";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
@@ -14,19 +13,21 @@ import {
   buildTelegramInboundDebounceKey,
 } from "./bot-handlers.debounce-key.js";
 import {
-  createTelegramInboundDebounceRuntime,
+  createTelegramInboundBuffers,
   type TelegramDebounceEntry,
-} from "./bot-handlers.inbound-debounce.runtime.js";
-import { createTelegramInboundMediaGroupRuntime } from "./bot-handlers.inbound-media-group.runtime.js";
-import { createTelegramInboundTextRuntime } from "./bot-handlers.inbound-text.runtime.js";
+} from "./bot-handlers.inbound-buffer.js";
+import { createTelegramInboundMedia } from "./bot-handlers.inbound-media.js";
 import {
   isDurablyRetryableInboundMediaError,
   isMediaSizeLimitError,
   TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
-import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
+import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  RegisterTelegramHandlerParams,
+  TelegramInboundDisposition,
+} from "./bot-handlers.types.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -42,8 +43,35 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
-export function createTelegramHandlerInboundRuntime(
-  {
+export interface TelegramInboundProcessing {
+  processInboundMessage: (params: TelegramInboundMessage) => Promise<TelegramInboundDisposition>;
+}
+
+type TelegramInboundMessage = {
+  authorizationCfg: OpenClawConfig;
+  ctx: TelegramContext;
+  msg: Message;
+  chatId: number;
+  isGroup: boolean;
+  isForum: boolean;
+  resolvedThreadId?: number;
+  dmThreadId?: number;
+  dmPolicy: DmPolicy;
+  storeAllowFrom: string[];
+  senderId: string;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  effectiveDmAllow: NormalizedAllowFrom;
+  groupConfig?: TelegramGroupConfig;
+  topicConfig?: TelegramTopicConfig;
+  sendOversizeWarning: boolean;
+  oversizeLogMessage: string;
+  promptContextMinTimestampMs?: number;
+  promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
+  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
+};
+
+export function createTelegramInboundProcessing({
+  params: {
     cfg,
     accountId,
     bot,
@@ -53,64 +81,43 @@ export function createTelegramHandlerInboundRuntime(
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
-  }: RegisterTelegramHandlerParams,
-  messageRuntime: TelegramHandlerMessageRuntime,
-) {
+  },
+  message,
+}: {
+  params: RegisterTelegramHandlerParams;
+  message: TelegramMessagePipeline;
+}): TelegramInboundProcessing {
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     releaseDispatchDedupeClaims,
     createSpooledReplayParticipantForBufferedWork,
-  } = messageRuntime;
+  } = message;
   const {
     inboundDebouncer,
     resolveTelegramDebounceEntryMs,
     shouldDebounceTelegramEntry,
     resolveTelegramDebounceLane,
-  } = createTelegramInboundDebounceRuntime({ cfg, bot, runtime }, messageRuntime);
+    handleTextFragment,
+  } = createTelegramInboundBuffers({ params: { cfg, bot, runtime, opts }, message });
 
-  const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } =
-    createTelegramInboundMediaGroupRuntime(
-      {
-        accountId,
-        bot,
-        opts,
-        runtime,
-        mediaMaxBytes,
-        logger,
-        resolveGroupActivation,
-        resolveGroupRequireMention,
-      },
-      messageRuntime,
-    );
-
-  const { handleTextFragment } = createTelegramInboundTextRuntime(
-    { opts, runtime },
-    messageRuntime,
-  );
-  const processInboundMessage = async (params: {
-    authorizationCfg: OpenClawConfig;
-    ctx: TelegramContext;
-    msg: Message;
-    chatId: number;
-    isGroup: boolean;
-    isForum: boolean;
-    resolvedThreadId?: number;
-    dmThreadId?: number;
-    dmPolicy: DmPolicy;
-    storeAllowFrom: string[];
-    senderId: string;
-    effectiveGroupAllow: NormalizedAllowFrom;
-    effectiveDmAllow: NormalizedAllowFrom;
-    groupConfig?: TelegramGroupConfig;
-    topicConfig?: TelegramTopicConfig;
-    sendOversizeWarning: boolean;
-    oversizeLogMessage: string;
-    promptContextMinTimestampMs?: number;
-    promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-    dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
-  }) => {
+  const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
+    params: {
+      accountId,
+      bot,
+      opts,
+      runtime,
+      mediaMaxBytes,
+      logger,
+      resolveGroupActivation,
+      resolveGroupRequireMention,
+    },
+    message,
+  });
+  const processInboundMessage = async (
+    params: TelegramInboundMessage,
+  ): Promise<TelegramInboundDisposition> => {
     const {
       authorizationCfg,
       ctx,
@@ -177,10 +184,9 @@ export function createTelegramHandlerInboundRuntime(
         dispatchDedupeClaims,
       })
     ) {
-      return;
+      return { kind: "buffered", buffer: "text-fragment" };
     }
 
-    // Media group handling - buffer multi-image messages
     if (
       handleMediaGroup({
         authorizationCfg,
@@ -202,7 +208,7 @@ export function createTelegramHandlerInboundRuntime(
         dispatchDedupeClaims,
       })
     ) {
-      return;
+      return { kind: "buffered", buffer: "media-group" };
     }
 
     const mediaDisposition = await resolveUnaddressedGroupMediaDisposition({
@@ -222,7 +228,7 @@ export function createTelegramHandlerInboundRuntime(
     });
     if (mediaDisposition === "skip") {
       releaseDispatchDedupeClaims(dispatchDedupeClaims);
-      return;
+      return { kind: "ignored" };
     }
 
     const nativeMedia = resolveTelegramPrimaryMedia(msg);
@@ -248,7 +254,7 @@ export function createTelegramHandlerInboundRuntime(
         // drop the message during shutdown or deadline cancellation.
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
         releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
-        return;
+        return { kind: "ignored" };
       }
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
@@ -276,7 +282,7 @@ export function createTelegramHandlerInboundRuntime(
         if (retryable && replayingSpooledUpdate) {
           recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
           releaseDispatchDedupeClaims(dispatchDedupeClaims, mediaErr);
-          return;
+          return { kind: "ignored" };
         }
         if (mediaDisposition !== "silent-ingest") {
           await withTelegramApiErrorLogging({
@@ -344,19 +350,19 @@ export function createTelegramHandlerInboundRuntime(
       ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
       dispatchDedupeClaims,
     };
-    if (
+    const shouldBufferDebounce = Boolean(
       debounceEntry.debounceKey &&
       resolveTelegramDebounceEntryMs(debounceEntry) > 0 &&
-      shouldDebounceTelegramEntry(debounceEntry)
-    ) {
+      shouldDebounceTelegramEntry(debounceEntry),
+    );
+    if (shouldBufferDebounce) {
       debounceEntry.spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
         `inbound-debounce:${debounceEntry.debounceKey}`,
       );
     }
     await inboundDebouncer.enqueue(debounceEntry);
+    return shouldBufferDebounce ? { kind: "buffered", buffer: "debounce" } : { kind: "processed" };
   };
 
   return { processInboundMessage };
 }
-
-export type TelegramHandlerInboundRuntime = ReturnType<typeof createTelegramHandlerInboundRuntime>;

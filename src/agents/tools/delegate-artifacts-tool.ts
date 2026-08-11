@@ -4,7 +4,10 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { Type } from "typebox";
 import { resolveContinuationRuntimeConfig } from "../../auto-reply/continuation/config.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile, readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
@@ -216,7 +219,7 @@ export function createDelegateArtifactTools(options: {
       return loadSessionEntry({
         agentId,
         sessionKey,
-        storePath: resolveStorePath(config.session?.store, { agentId }),
+        storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
         readConsistency: "latest",
         hydrateSkillPromptRefs: false,
       })?.sessionId;

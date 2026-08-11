@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
     sessionId: "session-1",
     updatedAt: 1,
   })),
-  resolveStorePath: vi.fn(
+  resolveSessionStorePathCore: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
 }));
@@ -42,14 +42,14 @@ function firstMockArg(
 }
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
   updateSessionLastRoute: mocks.updateSessionLastRoute,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
     mocks.updateSessionLastRoute.mockClear();
-    mocks.resolveStorePath.mockClear();
+    mocks.resolveSessionStorePathCore.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
 
@@ -552,7 +552,7 @@ describe("resolveOutboundSessionRoute", () => {
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
     mocks.updateSessionLastRoute.mockClear();
-    mocks.resolveStorePath.mockClear();
+    mocks.resolveSessionStorePathCore.mockClear();
   });
 
   it("persists metadata in the owning session store for the route session key", async () => {
@@ -573,7 +573,7 @@ describe("ensureOutboundSessionEntry", () => {
       },
     });
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
+    expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
     expect(mocks.updateSessionLastRoute).toHaveBeenCalledOnce();

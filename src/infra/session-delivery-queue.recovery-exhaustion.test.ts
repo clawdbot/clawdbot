@@ -1,7 +1,7 @@
 // Covers terminal session delivery queue recovery and retry exhaustion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
@@ -42,7 +42,7 @@ describe("session-delivery queue recovery", () => {
   }
 
   it("settles entries moved to failed after startup retry exhaustion", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -74,7 +74,7 @@ describe("session-delivery queue recovery", () => {
   it.each(["runtime", "startup"] as const)(
     "scrubs post-compaction snapshots after %s retry exhaustion",
     async (mode) => {
-      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         const secret = `POST_COMPACTION_EXHAUSTED_${mode}`;
         const payload = buildPostCompactionDelegateDeliveryPayload({
           sessionKey: "agent:main:main",
@@ -128,7 +128,7 @@ describe("session-delivery queue recovery", () => {
         vi.useFakeTimers();
       }
       try {
-        await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+        await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
           const id = await enqueueSessionDelivery(
             {
               kind: "agentTurn",
@@ -183,7 +183,7 @@ describe("session-delivery queue recovery", () => {
   );
 
   it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -230,7 +230,7 @@ describe("session-delivery queue recovery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "systemEvent",

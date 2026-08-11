@@ -13,7 +13,7 @@ import {
   findCallByDockerArg,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
-  withTempDir,
+  withTestDir,
 } from "./fs-bridge.test-helpers.js";
 
 describe("sandbox fs bridge boundary validation", () => {
@@ -43,7 +43,7 @@ describe("sandbox fs bridge boundary validation", () => {
   });
 
   it("rejects mkdirp when target exists as a file", async () => {
-    await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const filePath = path.join(workspaceDir, "memory", "kemik");
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -66,7 +66,7 @@ describe("sandbox fs bridge boundary validation", () => {
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
     // Host-visible symlink escapes are rejected locally so Docker never follows
     // them inside a privileged bridge command.
-    await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-", async (stateDir) => {
       const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
       if (process.platform === "win32") {
         return;
@@ -91,7 +91,7 @@ describe("sandbox fs bridge boundary validation", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir("openclaw-fs-bridge-hardlink-", async (stateDir) => {
+    await withTestDir("openclaw-fs-bridge-hardlink-", async (stateDir) => {
       const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
       const hardlinkPath = path.join(workspaceDir, "link.txt");
       try {
@@ -124,7 +124,7 @@ describe("sandbox fs bridge boundary validation", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a regular file replaced by a FIFO at descriptor open",
     async () => {
-      await withTempDir("openclaw-fs-bridge-fifo-swap-", async (stateDir) => {
+      await withTestDir("openclaw-fs-bridge-fifo-swap-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
         const filePath = path.join(workspaceDir, "live.pipe");
         await fs.mkdir(workspaceDir, { recursive: true });

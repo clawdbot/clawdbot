@@ -19,7 +19,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../reply/session-system-events.js";
 import {
   enqueueContinuationReturnDeliveries,
@@ -424,7 +424,7 @@ describe("continuation cross-session targeting", () => {
   // PERSISTS in the flat `<state-dir>/session-delivery-queue/<id>.json`
   // location until the recovery loop drains it post-restart.
   it("persists the durable queue file for non-attached recipients (no immediate ack)", async () => {
-    await withTempDir({ prefix: "openclaw-targeting-durable-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-targeting-durable-" }, async (stateDir) => {
       const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
       const requestHeartbeatNow = vi.fn();
 
@@ -461,7 +461,7 @@ describe("continuation cross-session targeting", () => {
   });
 
   it("acks the durable queue file after the live in-memory return is consumed", async () => {
-    await withTempDir({ prefix: "openclaw-targeting-live-ack-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-targeting-live-ack-" }, async (stateDir) => {
       const sessionKey = "agent:main:attached";
       await enqueueContinuationReturnDeliveries(
         {
@@ -493,7 +493,7 @@ describe("continuation cross-session targeting", () => {
   });
 
   it("persists one durable queue file per recipient on multi-target fanout", async () => {
-    await withTempDir({ prefix: "openclaw-targeting-fanout-durable-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-targeting-fanout-durable-" }, async (stateDir) => {
       await enqueueContinuationReturnDeliveries(
         {
           targetSessionKeys: ["agent:main:root", "agent:main:sibling"],

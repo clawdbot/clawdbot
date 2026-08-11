@@ -1,39 +1,66 @@
-// Telegram callback-query routing across approvals, plugin actions, selects, commands, and models.
+import { randomUUID } from "node:crypto";
+import type { Context } from "grammy";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
+import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveDefaultModelForAgent,
+} from "./bot-handlers.agent.runtime.js";
+import {
+  createTelegramCallbackMessageActions,
+  handleTelegramQuestionCallback,
+  type TelegramCallbackMessageActions,
+} from "./bot-handlers.callback-actions.js";
+import {
+  createTelegramCallbackApprovalRuntime,
+  handleTelegramInteractiveCallback,
+  isPermanentTelegramCallbackEditError,
+  type TelegramCallbackMessageRuntime,
+  TelegramRetryableCallbackError,
+} from "./bot-handlers.callback-router-controls.js";
 import type {
   TelegramEventAuthorizationMode,
-  TelegramHandlerAuthorizationRuntime,
-} from "./bot-handlers.authorization.runtime.js";
-import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.runtime.js";
-import { createTelegramCallbackApprovalRuntime } from "./bot-handlers.callback-approvals.runtime.js";
-import {
-  isPermanentTelegramCallbackEditError,
-  TelegramRetryableCallbackError,
-} from "./bot-handlers.callback-errors.runtime.js";
-import { handleTelegramInteractiveCallback } from "./bot-handlers.callback-interactions.runtime.js";
-import { handleTelegramModelCallback } from "./bot-handlers.callback-model.runtime.js";
-import { handleTelegramQuestionCallback } from "./bot-handlers.callback-questions.runtime.js";
-import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
+  TelegramHandlerAuthorization,
+} from "./bot-handlers.inbound-authorization.js";
+import type {
+  RegisterTelegramHandlerParams,
+  TelegramCallbackRouter,
+} from "./bot-handlers.types.js";
 import { parseTelegramNativeCommandCallbackData } from "./bot-native-commands.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import {
   resolveTelegramForumFlag,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageThreadSpec,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
-import type { TelegramGetChat } from "./bot/types.js";
+import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import {
+  buildModelsKeyboard,
+  calculateTotalPages,
+  getModelsPageSize,
+  parseModelCallbackData,
+  resolveModelSelection,
+  type ProviderInfo,
+} from "./model-buttons.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
   parseTelegramOpaqueCallbackData,
@@ -43,19 +70,24 @@ import {
   hasTelegramQuestionCallbackPrefix,
   parseTelegramQuestionCallbackData,
 } from "./question-callback-data.js";
+import { buildInlineKeyboard } from "./send.js";
 
-export function registerTelegramCallbackQueryHandler(
-  {
+export function createTelegramCallbackRouter({
+  params: {
     accountId,
     bot,
     runtime,
     telegramDeps,
     shouldSkipUpdate,
     nativeCommandCallbackDispatcher,
-  }: RegisterTelegramHandlerParams,
-  messageRuntime: TelegramHandlerMessageRuntime,
-  authorizationRuntime: TelegramHandlerAuthorizationRuntime,
-) {
+  },
+  message: messageRuntime,
+  authorization: authorizationRuntime,
+}: {
+  params: RegisterTelegramHandlerParams;
+  message: TelegramCallbackMessageRuntime;
+  authorization: TelegramHandlerAuthorization;
+}): TelegramCallbackRouter {
   const { buildSyntheticTextMessage, buildSyntheticContext, processMessageWithReplyChain } =
     messageRuntime;
   const {
@@ -65,14 +97,13 @@ export function registerTelegramCallbackQueryHandler(
   } = authorizationRuntime;
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
 
-  bot.on("callback_query", async (ctx) => {
+  const handleCallback = async (ctx: Context) => {
     const callback = ctx.callbackQuery;
     if (!callback) {
       return;
     }
     let callbackAnswered = false;
     const answerCallbackQuery = async (text?: string) => {
-      // Callback answers prevent Telegram retries while the routed action runs.
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
@@ -371,5 +402,292 @@ export function registerTelegramCallbackQueryHandler(
         await answerCallbackQuery();
       }
     }
+  };
+
+  return {
+    route: async (ctx) => {
+      if (!ctx.callbackQuery) {
+        return { kind: "ignored" };
+      }
+      await handleCallback(ctx);
+      return { kind: "handled" };
+    },
+  };
+}
+
+async function handleTelegramModelCallback(params: {
+  data: string;
+  ctx: Pick<TelegramContext, "me">;
+  chatId: number;
+  isGroup: boolean;
+  isForum: boolean;
+  messageThreadId?: number;
+  resolvedThreadId?: number;
+  senderId: string;
+  runtimeCfg: OpenClawConfig;
+  telegramDeps: RegisterTelegramHandlerParams["telegramDeps"];
+  actions: TelegramCallbackMessageActions;
+  messageRuntime: TelegramCallbackMessageRuntime;
+  authorizeCallback: () => Promise<boolean>;
+}): Promise<boolean> {
+  const {
+    data,
+    ctx,
+    chatId,
+    isGroup,
+    isForum,
+    messageThreadId,
+    resolvedThreadId,
+    senderId,
+    runtimeCfg,
+    telegramDeps,
+    actions,
+    messageRuntime,
+    authorizeCallback,
+  } = params;
+  const { editCallbackMessage, editCallbackMessageWithButtons: editMessageWithButtons } = actions;
+  const retryModelAction = async <T>(action: () => Promise<T>): Promise<T> => {
+    try {
+      return await action();
+    } catch (error) {
+      throw new TelegramRetryableCallbackError(error);
+    }
+  };
+
+  const paginationMatch = data.match(/^commands_page_(\d+|noop)(?::(.+))?$/);
+  if (paginationMatch) {
+    const pageValue = paginationMatch[1];
+    if (pageValue === "noop") {
+      return true;
+    }
+    const page = parseStrictPositiveInteger(pageValue);
+    if (page === undefined) {
+      return true;
+    }
+    const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(runtimeCfg);
+    const result = await retryModelAction(async () => {
+      const skillCommands = telegramDeps.listSkillCommandsForAgents({
+        cfg: runtimeCfg,
+        agentIds: [agentId],
+      });
+      return buildCommandsMessagePaginated(runtimeCfg, skillCommands, {
+        page,
+        forcePaginatedList: true,
+        surface: "telegram",
+      });
+    });
+    const keyboard =
+      result.totalPages > 1
+        ? buildInlineKeyboard(
+            buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
+          )
+        : undefined;
+    try {
+      await editCallbackMessage(result.text, keyboard ? { reply_markup: keyboard } : undefined);
+    } catch (editErr) {
+      if (!String(editErr).includes("message is not modified")) {
+        throw new TelegramRetryableCallbackError(editErr);
+      }
+    }
+    return true;
+  }
+
+  const modelCallback = parseModelCallbackData(data);
+  if (!modelCallback) {
+    return false;
+  }
+  if (!(await authorizeCallback())) {
+    logVerbose(
+      `Blocked telegram model callback from ${senderId || "unknown"} (not authorized for /models)`,
+    );
+    return true;
+  }
+
+  const { sessionState, modelData } = await retryModelAction(async () => {
+    const session = messageRuntime.resolveTelegramSessionState({
+      chatId,
+      isGroup,
+      isForum,
+      messageThreadId,
+      resolvedThreadId,
+      botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+      senderId,
+      runtimeCfg,
+    });
+    const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId);
+    return { sessionState: session, modelData: providerData };
   });
+  const { byProvider, providers, modelNames, resolvedDefault: activeResolvedDefault } = modelData;
+  const providerInfos: ProviderInfo[] = providers.map((provider) => ({
+    id: provider,
+    count: byProvider.get(provider)?.size ?? 0,
+  }));
+
+  if (modelCallback.type === "providers" || modelCallback.type === "back") {
+    if (providers.length === 0) {
+      await retryModelAction(() => editMessageWithButtons("No providers available.", []));
+      return true;
+    }
+    await retryModelAction(() =>
+      editMessageWithButtons(
+        "Select a provider:",
+        buildTelegramModelsMenuButtons({ providers: providerInfos }),
+      ),
+    );
+    return true;
+  }
+
+  if (modelCallback.type === "list") {
+    const { provider, page } = modelCallback;
+    const modelSet = byProvider.get(provider);
+    if (!modelSet || modelSet.size === 0) {
+      await retryModelAction(() =>
+        editMessageWithButtons(
+          `Unknown provider: ${provider}\n\nSelect a provider:`,
+          buildTelegramModelsMenuButtons({ providers: providerInfos }),
+        ),
+      );
+      return true;
+    }
+    const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
+    const pageSize = getModelsPageSize();
+    const totalPages = calculateTotalPages(models.length, pageSize);
+    const safePage = Math.max(1, Math.min(page, totalPages));
+    const currentModel =
+      sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+    const buttons = buildModelsKeyboard({
+      provider,
+      models,
+      currentModel,
+      currentPage: safePage,
+      totalPages,
+      pageSize,
+      modelNames,
+    });
+    const text = formatModelsAvailableHeader({
+      provider,
+      total: models.length,
+      cfg: runtimeCfg,
+      agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
+      sessionEntry: sessionState.sessionEntry,
+    });
+    await retryModelAction(() => editMessageWithButtons(text, buttons));
+    return true;
+  }
+
+  if (modelCallback.type !== "select") {
+    return true;
+  }
+  const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
+  if (selection.kind !== "resolved") {
+    await retryModelAction(() =>
+      editMessageWithButtons(
+        `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
+        buildTelegramModelsMenuButtons({ providers: providerInfos }),
+      ),
+    );
+    return true;
+  }
+  if (!byProvider.get(selection.provider)?.has(selection.model)) {
+    await retryModelAction(() =>
+      editMessageWithButtons(
+        `❌ Model "${selection.provider}/${selection.model}" is not allowed.`,
+        [],
+      ),
+    );
+    return true;
+  }
+
+  try {
+    const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
+      agentId: sessionState.agentId,
+    });
+    const resolvedDefault = resolveDefaultModelForAgent({
+      cfg: runtimeCfg,
+      agentId: sessionState.agentId,
+    });
+    const isDefaultSelection =
+      selection.provider === resolvedDefault.provider && selection.model === resolvedDefault.model;
+    const persistedSessionEntry =
+      sessionState.sessionEntry ??
+      telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
+      getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
+    const sessionEntryMissing = persistedSessionEntry === undefined;
+    const sessionEntry = persistedSessionEntry ?? {
+      sessionId: randomUUID(),
+      updatedAt: Date.now(),
+    };
+    const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
+    const sessionStore = { [sessionState.sessionKey]: sessionEntry };
+    const modelCatalog = [...byProvider.entries()].flatMap(([provider, models]) =>
+      [...models].map((model) => ({ provider, id: model, name: model })),
+    );
+    const currentModelRef = sessionState.model?.trim();
+    const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
+    const currentProvider =
+      currentModelRef && currentModelSeparator > 0
+        ? currentModelRef.slice(0, currentModelSeparator)
+        : resolvedDefault.provider;
+    const currentModel =
+      currentModelRef && currentModelSeparator > 0
+        ? currentModelRef.slice(currentModelSeparator + 1)
+        : resolvedDefault.model;
+    const applied = await retryModelAction(() =>
+      applySessionModelSelection({
+        cfg: runtimeCfg,
+        agentId: sessionState.agentId,
+        sessionKey: sessionState.sessionKey,
+        storePath,
+        sessionEntry,
+        sessionStore,
+        allowCreate: sessionEntryMissing,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+        currentProvider,
+        currentModel,
+        allowedModelKeys: new Set(modelCatalog.map((entry) => `${entry.provider}/${entry.id}`)),
+        modelCatalog,
+        canPersistStickyModelSelection: false,
+        request: {
+          provider: selection.provider,
+          model: selection.model,
+          isDefault: isDefaultSelection,
+          runtime: { kind: "unchanged" },
+        },
+        markLiveSwitchPending: true,
+      }),
+    );
+    if (applied.status !== "applied") {
+      await editMessageWithButtons(`❌ ${applied.message}`, []);
+      return true;
+    }
+    const defaultAuthProfileNotice =
+      isDefaultSelection && previousAuthProfileId
+        ? sessionStore[sessionState.sessionKey]?.authProfileOverride?.trim() ===
+          previousAuthProfileId
+          ? "Compatible auth profile retained."
+          : "Incompatible auth profile cleared."
+        : undefined;
+    const escapeHtml = (text: string) =>
+      text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const actionText = isDefaultSelection
+      ? "reset to default"
+      : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
+    const runtimeText =
+      applied.runtimeChange?.kind === "clear"
+        ? "Runtime reset to configured policy."
+        : "Runtime unchanged.";
+    const scopeText = isDefaultSelection
+      ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
+      : `Session-only model selection. ${runtimeText} Use /model ${escapeHtml(selection.provider)}/${escapeHtml(selection.model)} --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
+    await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
+      parse_mode: "HTML",
+    });
+  } catch (err) {
+    if (err instanceof TelegramRetryableCallbackError) {
+      throw err;
+    }
+    await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
+  }
+  return true;
 }

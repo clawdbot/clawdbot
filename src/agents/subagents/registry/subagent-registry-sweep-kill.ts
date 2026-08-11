@@ -1,5 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
 import type { callGateway } from "../../../gateway/call.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
@@ -168,7 +171,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
     getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
       params.entry;
   const cfg = getRuntimeConfig();
-  const storePath = resolveStorePath(cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: resolveAgentIdFromSessionKey(params.entry.childSessionKey),
   });
   const ownsSessionIncarnation = () => {

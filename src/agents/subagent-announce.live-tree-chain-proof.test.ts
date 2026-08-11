@@ -67,8 +67,8 @@ import {
   getRuntimeConfig,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
@@ -112,11 +112,11 @@ function makeConfig(): OpenClawConfig {
 }
 
 async function upsertMainSessionEntry(sessionKey: string, sessionId: string, updatedAt: number) {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       sessionKey,
       agentId: "main",
-      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
     },
     { sessionId, updatedAt },
   );

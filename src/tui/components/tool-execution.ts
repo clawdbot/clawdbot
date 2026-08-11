@@ -3,7 +3,7 @@ import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/p
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { resolveRedactedToolArgumentSummary } from "../../chat/tool-argument-redaction.js";
-import { markdownTheme, theme } from "../theme/theme.js";
+import { markdownTheme, tuiTheme as theme } from "../theme/theme.js";
 import * as tuiFormatters from "../tui-formatters.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 

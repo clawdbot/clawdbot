@@ -11,7 +11,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../reply/session-system-events.js";
 import {
   hasCrossSessionDelegateTargeting,
@@ -268,7 +268,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
   });
 
   it("persists a durable queue file for a nonexistent target (real I/O)", async () => {
-    await withTempDir({ prefix: "openclaw-nonexistent-target-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-nonexistent-target-" }, async (stateDir) => {
       const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
       const requestHeartbeatNow = vi.fn();
 

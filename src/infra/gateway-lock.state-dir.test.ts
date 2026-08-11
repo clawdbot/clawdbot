@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe("gateway lock state directory", () => {
   it("keeps lock, coordinator, and reclaim paths inside the selected state", async () => {
-    await withTempDir("openclaw-gateway-lock-state-", async (root) => {
+    await withTestDir("openclaw-gateway-lock-state-", async (root) => {
       const canonicalRoot = await fs.realpath(root);
       const stateDir = path.join(canonicalRoot, "selected-state");
       const fakeHome = path.join(canonicalRoot, "home");

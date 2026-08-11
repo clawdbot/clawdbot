@@ -7,7 +7,7 @@ import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
   updateSessionEntry,
@@ -461,7 +461,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
     });
 
     if (attempt.sessionKey && !isSettledTurnFinalization) {
-      const storePath = resolveStorePath(attempt.config?.session?.store, {
+      const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });
       const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance({

@@ -1,7 +1,7 @@
 /**
  * Runtime helpers for reconciling compaction counts after subscribe events.
  */
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CompactionCounterAttribution } from "./compaction-attribution.js";
 import { log } from "./embedded-agent-runner/logger.js";
@@ -26,7 +26,7 @@ export default async function reconcileSessionStoreCompactionCountAfterSuccess(p
   if (!sessionKey || observedCompactionCount <= 0) {
     return undefined;
   }
-  const storePath = resolveStorePath(configStore, { agentId });
+  const storePath = resolveSessionStorePathCore(configStore, { agentId });
   let previousCompactionCount: number | undefined;
   let nextCompactionCount: number | undefined;
   const nextEntry = await updateSessionEntry({ sessionKey, storePath }, async (entry) => {

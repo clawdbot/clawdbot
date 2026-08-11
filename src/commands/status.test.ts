@@ -223,7 +223,7 @@ function createSessionStatusRows() {
     id: string;
   }>;
   const byAgent = agents.map((agent: { id: string }) => {
-    const path = mocks.resolveStorePath("sessions", { agentId: agent.id });
+    const path = mocks.resolveSessionStorePathCore("sessions", { agentId: agent.id });
     const store = mocks.loadSessionStore(path) as Record<
       string,
       ReturnType<typeof createDefaultSessionStoreEntry>
@@ -432,7 +432,7 @@ const mocks = vi.hoisted(() => ({
     "+1000": createDefaultSessionStoreEntry(),
   }),
   resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/sessions.json"),
   loadNodeHostConfig: vi.fn().mockResolvedValue(null),
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
@@ -566,7 +566,7 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntriesCore: (opts?: { storePath?: string }) =>
@@ -934,8 +934,8 @@ describe("statusCommand", () => {
     });
     mocks.resolveMainSessionKey.mockReset();
     mocks.resolveMainSessionKey.mockReturnValue("agent:main:main");
-    mocks.resolveStorePath.mockReset();
-    mocks.resolveStorePath.mockReturnValue("/tmp/sessions.json");
+    mocks.resolveSessionStorePathCore.mockReset();
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/sessions.json");
     mocks.loadNodeHostConfig.mockReset();
     mocks.loadNodeHostConfig.mockResolvedValue(null);
     mocks.probeGateway.mockReset();
@@ -1544,7 +1544,7 @@ describe("statusCommand", () => {
 
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listGatewayAgentsBasic.getMockImplementation();
-    const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
+    const originalResolveStorePath = mocks.resolveSessionStorePathCore.getMockImplementation();
     const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
 
     mocks.listGatewayAgentsBasic.mockReturnValue({
@@ -1556,7 +1556,7 @@ describe("statusCommand", () => {
         { id: "ops", name: "Ops" },
       ],
     });
-    mocks.resolveStorePath.mockImplementation((_store, opts) =>
+    mocks.resolveSessionStorePathCore.mockImplementation((_store, opts) =>
       opts?.agentId === "ops" ? "/tmp/ops.json" : "/tmp/main.json",
     );
     mocks.loadSessionStore.mockImplementation((storePath) => {
@@ -1589,7 +1589,7 @@ describe("statusCommand", () => {
       mocks.listGatewayAgentsBasic.mockImplementation(originalAgents);
     }
     if (originalResolveStorePath) {
-      mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
+      mocks.resolveSessionStorePathCore.mockImplementation(originalResolveStorePath);
     }
     if (originalLoadSessionStore) {
       mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);

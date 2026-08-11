@@ -11,7 +11,7 @@ import {
   enqueuePostCompactionDelegateDelivery as enqueuePostCompactionDelegateDeliveryQueue,
   loadPendingSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { ChainState, ContinuationRuntimeConfig } from "../continuation/types.js";
 import {
   deliverQueuedPostCompactionDelegate,
@@ -244,7 +244,7 @@ function createDeliveryDeps(params: {
       ...params.runtimeConfig,
     })),
     resolveSessionAgentId: vi.fn(() => "main"),
-    resolveStorePath: vi.fn(() => params.storePath),
+    resolveSessionStorePathCore: vi.fn(() => params.storePath),
     spawnSubagentDirect,
     revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true }) as const),
     markPendingDelegateSpawnAccepted,
@@ -273,7 +273,7 @@ async function seedSessionStore(
 ): Promise<void> {
   await Promise.all(
     Object.entries(store).map(async ([sessionKey, entry]) => {
-      await sessionAccessorModule.upsertSessionEntry({ storePath, sessionKey }, entry);
+      await sessionAccessorModule.upsertSessionEntryCore({ storePath, sessionKey }, entry);
     }),
   );
 }
@@ -440,7 +440,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it("surfaces persisted post-compaction delegate load failures without clearing local pending delegates", async () => {
-    await withTempDir({ prefix: "openclaw-post-compaction-dispatch-fail-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-post-compaction-dispatch-fail-" }, async (tempDir) => {
       const blockerPath = path.join(tempDir, "not-a-directory");
       await fs.writeFile(blockerPath, "blocks sqlite parent directory", "utf-8");
       const storePath = path.join(blockerPath, "sessions.json");
@@ -842,7 +842,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it("charges chain count only after queued delivery spawns successfully", async () => {
-    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
       const { deps, enqueueSystemEvent, spawnSubagentDirect } = createDeliveryDeps({ storePath });

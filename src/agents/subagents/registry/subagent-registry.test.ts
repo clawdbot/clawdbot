@@ -167,7 +167,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
-  resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/test-session-store.json"),
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
   clearSubagentRunsReadCacheForTest: vi.fn(),
@@ -238,7 +238,7 @@ vi.mock("../../../config/config.js", () => {
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
   updateSessionStore: mocks.updateSessionStore,
 }));
 
@@ -490,7 +490,7 @@ describe("subagent registry seam flow", () => {
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
-    mocks.resolveStorePath.mockReturnValue("/tmp/test-session-store.json");
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/test-session-store.json");
     mocks.loadSessionStore.mockReturnValue(
       createSessionStore({ lifecycleRevision: "revision-child" }),
     );

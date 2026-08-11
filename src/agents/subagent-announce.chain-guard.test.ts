@@ -92,7 +92,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -137,7 +137,7 @@ function makeConfig(
  * instead of a module mock.
  */
 async function writeSessionStore(data: Record<string, unknown>) {
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   const removals = listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey }) => ({
     sessionKey,
   }));
