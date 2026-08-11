@@ -868,7 +868,7 @@ describe("verified OpenClaw inference binding", () => {
     const fingerprint = () =>
       fingerprintAwsSdkRuntimeOwner({
         provider: route.provider,
-        backendId: route.agentHarnessRuntimeOverride,
+        backendId: route.agentHarnessRuntimeOverride ?? "openclaw",
         auth,
       });
     try {

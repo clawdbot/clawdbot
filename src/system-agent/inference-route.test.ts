@@ -20,7 +20,17 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           ...(agentRuntime ? { agentRuntime: { id: agentRuntime } } : {}),
-          models: [{ id: "gpt-5.5" }],
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 8_192,
+            },
+          ],
         },
       },
     },

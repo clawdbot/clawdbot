@@ -72,7 +72,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
     ...actual,
     createSubsystemLogger: (subsystem: string) =>
       subsystem === "system-agent/chat-engine"
-        ? ({ warn: mocks.chatWarn } as ReturnType<typeof actual.createSubsystemLogger>)
+        ? ({ warn: mocks.chatWarn } as unknown as ReturnType<typeof actual.createSubsystemLogger>)
         : actual.createSubsystemLogger(subsystem),
   };
 });
