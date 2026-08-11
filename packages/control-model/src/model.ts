@@ -1,4 +1,13 @@
 import type { SessionRow } from "@openclaw/gateway-protocol";
+import { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
+
+export type DeepReadonly<T> = T extends (...args: infer _Args) => infer _Result
+  ? T
+  : T extends readonly (infer Item)[]
+    ? readonly DeepReadonly<Item>[]
+    : T extends object
+      ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+      : T;
 
 export type ControlModelConnectionStatus =
   | "disconnected"
@@ -18,11 +27,6 @@ export type ControlModelConnectionSnapshot = Readonly<{
   error?: ControlModelError;
 }>;
 
-export type ControlModelGatewayEvent = Readonly<{
-  event: string;
-  payload?: unknown;
-}>;
-
 export type ControlModelRequestOptions = Readonly<{
   signal?: AbortSignal;
 }>;
@@ -30,7 +34,7 @@ export type ControlModelRequestOptions = Readonly<{
 export type ControlModelGatewayBinding = Readonly<{
   getConnectionSnapshot(): ControlModelConnectionSnapshot;
   subscribeConnection(listener: () => void): () => void;
-  subscribeEvents(listener: (event: ControlModelGatewayEvent) => void): () => void;
+  subscribeSessionCatalogInvalidations(listener: () => void): () => void;
   request<T>(
     method: string,
     params: Record<string, unknown>,
@@ -40,7 +44,7 @@ export type ControlModelGatewayBinding = Readonly<{
 
 export type ControlModelSessionCatalogSnapshot = Readonly<{
   status: "idle" | "loading" | "ready" | "error";
-  sessions: readonly Readonly<SessionRow>[];
+  sessions: readonly DeepReadonly<SessionRow>[];
   totalCount: number;
   hasMore: boolean;
   refreshedAt: number | null;
@@ -180,13 +184,12 @@ class ControlModelImpl implements ControlModel {
   readonly #subscribers = new Set<ControlModelSubscriber>();
   #snapshot: ControlModelSnapshot;
   #unsubscribeConnection: (() => void) | null = null;
-  #unsubscribeEvents: (() => void) | null = null;
+  #unsubscribeSessionCatalogInvalidations: (() => void) | null = null;
   #refreshLoop: Promise<void> | null = null;
   #refreshRequested = false;
   #refreshOptions: ControlModelRequestOptions | undefined;
   #notificationScheduled = false;
-  #backgroundRefreshScheduled = false;
-  #backgroundRefreshForced = false;
+  readonly #eventRefreshCoordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
 
   constructor(options: ControlModelOptions) {
     this.#gateway = options.gateway;
@@ -196,6 +199,19 @@ class ControlModelImpl implements ControlModel {
     this.#onSubscriberError = options.onSubscriberError;
     this.#onBackgroundError = options.onBackgroundError;
     this.#snapshot = initialSnapshot(this.#gateway.getConnectionSnapshot());
+    this.#eventRefreshCoordinator = createSessionEventRefreshCoordinator({
+      canRefresh: () =>
+        this.#snapshot.lifecycle === "running" &&
+        this.#gateway.getConnectionSnapshot().status === "connected",
+      refresh: async () => {
+        try {
+          await this.refreshSessions();
+        } catch (error) {
+          this.#reportBackgroundError(error);
+          throw error;
+        }
+      },
+    });
   }
 
   getSnapshot(): ControlModelSnapshot {
@@ -221,29 +237,36 @@ class ControlModelImpl implements ControlModel {
     this.#unsubscribeConnection = this.#gateway.subscribeConnection(() => {
       this.#readConnection();
     });
-    this.#unsubscribeEvents = this.#gateway.subscribeEvents((event) => {
-      if (event.event === "sessions.changed") {
-        this.#scheduleBackgroundRefresh(true);
-      }
-    });
+    this.#unsubscribeSessionCatalogInvalidations =
+      this.#gateway.subscribeSessionCatalogInvalidations(() => {
+        this.#eventRefreshCoordinator.schedule();
+      });
     this.#publish({
       ...this.#snapshot,
       lifecycle: "running",
       connection: freezeConnection(this.#gateway.getConnectionSnapshot()),
     });
     if (this.#snapshot.connection.status === "connected") {
-      this.#scheduleBackgroundRefresh();
+      this.#eventRefreshCoordinator.schedule();
+      this.#eventRefreshCoordinator.flush();
     }
   }
 
   refreshSessions(options?: ControlModelRequestOptions): Promise<void> {
     this.#assertActive();
     this.#refreshRequested = true;
-    this.#refreshOptions = options;
+    if (options !== undefined || this.#refreshOptions === undefined) {
+      this.#refreshOptions = options;
+    }
     if (!this.#refreshLoop) {
       const loop = this.#drainRefreshes().finally(() => {
         if (this.#refreshLoop === loop) {
           this.#refreshLoop = null;
+          if (this.#refreshRequested && this.#snapshot.lifecycle !== "disposed") {
+            void this.refreshSessions(this.#refreshOptions).catch((error: unknown) => {
+              this.#reportBackgroundError(error);
+            });
+          }
         }
       });
       this.#refreshLoop = loop;
@@ -256,10 +279,11 @@ class ControlModelImpl implements ControlModel {
       return;
     }
     this.#unsubscribeConnection?.();
-    this.#unsubscribeEvents?.();
+    this.#unsubscribeSessionCatalogInvalidations?.();
     this.#unsubscribeConnection = null;
-    this.#unsubscribeEvents = null;
+    this.#unsubscribeSessionCatalogInvalidations = null;
     this.#refreshRequested = false;
+    this.#eventRefreshCoordinator.dispose();
     this.#publish({
       ...this.#snapshot,
       lifecycle: "disposed",
@@ -268,11 +292,19 @@ class ControlModelImpl implements ControlModel {
   }
 
   async #drainRefreshes(): Promise<void> {
+    let firstError: unknown;
     while (this.#refreshRequested && this.#snapshot.lifecycle !== "disposed") {
       this.#refreshRequested = false;
       const options = this.#refreshOptions;
       this.#refreshOptions = undefined;
-      await this.#refreshOnce(options);
+      try {
+        await this.#refreshOnce(options);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (firstError !== undefined) {
+      throw firstError;
     }
   }
 
@@ -301,6 +333,7 @@ class ControlModelImpl implements ControlModel {
       if (!this.#isCurrentEpoch(epoch)) {
         return;
       }
+      const locallyTruncated = response.sessions.length > this.#maxSessions;
       const sessions = cloneAndFreeze(response.sessions.slice(0, this.#maxSessions));
       const totalCount = Math.max(
         sessions.length,
@@ -315,7 +348,7 @@ class ControlModelImpl implements ControlModel {
           status: "ready",
           sessions,
           totalCount,
-          hasMore: response.hasMore === true || totalCount > sessions.length,
+          hasMore: response.hasMore === true || locallyTruncated || totalCount > sessions.length,
           refreshedAt: this.#now(),
           error: null,
         }),
@@ -342,6 +375,9 @@ class ControlModelImpl implements ControlModel {
     }
     const connection = freezeConnection(this.#gateway.getConnectionSnapshot());
     const epochChanged = connection.epoch !== this.#snapshot.connection.epoch;
+    if (epochChanged || connection.status !== "connected") {
+      this.#eventRefreshCoordinator.reset();
+    }
     this.#publish({
       ...this.#snapshot,
       connection,
@@ -366,33 +402,9 @@ class ControlModelImpl implements ControlModel {
       connection.status === "connected" &&
       (epochChanged || this.#snapshot.sessionCatalog.status === "idle")
     ) {
-      this.#scheduleBackgroundRefresh(epochChanged);
+      this.#eventRefreshCoordinator.schedule();
+      this.#eventRefreshCoordinator.flush();
     }
-  }
-
-  #scheduleBackgroundRefresh(forceAfterActiveRefresh = false): void {
-    if (this.#snapshot.lifecycle === "disposed") {
-      return;
-    }
-    this.#backgroundRefreshForced ||= forceAfterActiveRefresh;
-    if (this.#backgroundRefreshScheduled) {
-      return;
-    }
-    this.#backgroundRefreshScheduled = true;
-    queueMicrotask(() => {
-      this.#backgroundRefreshScheduled = false;
-      const forced = this.#backgroundRefreshForced;
-      this.#backgroundRefreshForced = false;
-      if (this.#snapshot.lifecycle === "disposed") {
-        return;
-      }
-      if (!forced && this.#refreshLoop) {
-        return;
-      }
-      void this.refreshSessions().catch((error: unknown) => {
-        this.#reportBackgroundError(error);
-      });
-    });
   }
 
   #isCurrentEpoch(epoch: number): boolean {
@@ -424,6 +436,9 @@ class ControlModelImpl implements ControlModel {
         return;
       }
       for (const subscriber of [...this.#subscribers]) {
+        if (this.#snapshot.lifecycle === "disposed") {
+          break;
+        }
         try {
           const result = subscriber();
           if (result && typeof result.then === "function") {

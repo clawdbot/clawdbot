@@ -1,15 +1,24 @@
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
+const DEFAULT_DEBOUNCE_MS = 200;
+const DEFAULT_MAX_WAIT_MS = 1_000;
 
-type SessionEventRefreshCoordinatorOptions = {
+export type SessionEventRefreshCoordinatorOptions = Readonly<{
   canRefresh: () => boolean;
   refresh: () => Promise<void>;
-};
+  debounceMs?: number;
+  maxWaitMs?: number;
+  now?: () => number;
+}>;
 
-/** Canonical bounded event refresh policy shared by session-list owners. */
+/**
+ * Canonical bounded event-refresh policy shared by Control Model and Control UI.
+ * One in-flight refresh may acquire one trailing run, including after failure.
+ */
 export function createSessionEventRefreshCoordinator(
   options: SessionEventRefreshCoordinatorOptions,
 ) {
+  const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
+  const now = options.now ?? Date.now;
   let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let deadline: number | null = null;
   let inFlight: Promise<void> | null = null;
@@ -53,12 +62,12 @@ export function createSessionEventRefreshCoordinator(
       if (disposed || !options.canRefresh()) {
         return;
       }
-      const now = Date.now();
-      deadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
+      const currentTime = now();
+      deadline ??= currentTime + maxWaitMs;
       if (timer !== null) {
         globalThis.clearTimeout(timer);
       }
-      const delay = Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, Math.max(0, deadline - now));
+      const delay = Math.min(debounceMs, Math.max(0, deadline - currentTime));
       timer = globalThis.setTimeout(() => {
         timer = null;
         deadline = null;

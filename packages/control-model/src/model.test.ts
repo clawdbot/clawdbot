@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ControlModelDisposedError,
   ControlModelSubscriberLimitError,
   createControlModel,
   type ControlModelConnectionSnapshot,
   type ControlModelGatewayBinding,
-  type ControlModelGatewayEvent,
+  type ControlModelRequestOptions,
 } from "./index.js";
 
 type SessionListResult = {
@@ -29,38 +29,54 @@ function createGatewayHarness(
 ) {
   let connection = initial;
   const connectionListeners = new Set<() => void>();
-  const eventListeners = new Set<(event: ControlModelGatewayEvent) => void>();
-  const requests: Array<ReturnType<typeof deferred<SessionListResult>>> = [];
-  const request = vi.fn(() => {
-    const pending = deferred<SessionListResult>();
-    requests.push(pending);
-    return pending.promise;
+  const invalidationListeners = new Set<() => void>();
+  const unsubscribeInvalidations = vi.fn();
+  const subscribeInvalidations = vi.fn((listener: () => void) => {
+    invalidationListeners.add(listener);
+    return () => {
+      invalidationListeners.delete(listener);
+      unsubscribeInvalidations();
+    };
   });
+  const requests: Array<ReturnType<typeof deferred<SessionListResult>>> = [];
+  const requestCalls: Array<{
+    method: string;
+    params: Record<string, unknown>;
+    options: ControlModelRequestOptions | undefined;
+  }> = [];
+  const request = vi.fn(
+    (method: string, params: Record<string, unknown>, options?: ControlModelRequestOptions) => {
+      requestCalls.push({ method, params, options });
+      const pending = deferred<SessionListResult>();
+      requests.push(pending);
+      return pending.promise;
+    },
+  );
   const gateway: ControlModelGatewayBinding = {
     getConnectionSnapshot: () => connection,
     subscribeConnection(listener) {
       connectionListeners.add(listener);
       return () => connectionListeners.delete(listener);
     },
-    subscribeEvents(listener) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribeSessionCatalogInvalidations: subscribeInvalidations,
     request,
   };
   return {
     gateway,
     request,
     requests,
+    requestCalls,
+    subscribeInvalidations,
+    unsubscribeInvalidations,
     setConnection(next: ControlModelConnectionSnapshot) {
       connection = next;
       for (const listener of connectionListeners) {
         listener();
       }
     },
-    emit(event: ControlModelGatewayEvent) {
-      for (const listener of eventListeners) {
-        listener(event);
+    emitInvalidation() {
+      for (const listener of invalidationListeners) {
+        listener();
       }
     },
   };
@@ -71,7 +87,21 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("Control Model session catalog", () => {
+  it("activates and disposes the host-owned invalidation subscription", () => {
+    const harness = createGatewayHarness({ status: "disconnected", epoch: 0 });
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    model.start();
+    expect(harness.subscribeInvalidations).toHaveBeenCalledTimes(1);
+    model.dispose();
+    expect(harness.unsubscribeInvalidations).toHaveBeenCalledTimes(1);
+  });
+
   it("publishes deeply immutable bounded session snapshots", async () => {
     const harness = createGatewayHarness();
     const model = createControlModel({
@@ -80,7 +110,6 @@ describe("Control Model session catalog", () => {
       now: () => 42,
     });
     model.start();
-    const refresh = model.refreshSessions();
     harness.requests[0]?.resolve({
       sessions: [
         {
@@ -93,7 +122,9 @@ describe("Control Model session catalog", () => {
       totalCount: 2,
       hasMore: true,
     });
-    await refresh;
+    await vi.waitFor(() => {
+      expect(model.getSnapshot().sessionCatalog.status).toBe("ready");
+    });
 
     const snapshot = model.getSnapshot();
     expect(harness.request).toHaveBeenCalledWith("sessions.list", { limit: 1 }, undefined);
@@ -109,21 +140,24 @@ describe("Control Model session catalog", () => {
     expect(Object.isFrozen(snapshot.sessionCatalog.sessions[0]?.worktree)).toBe(true);
   });
 
-  it("coalesces live invalidations and rejects retired-epoch results", async () => {
+  it("coalesces invalidations and never publishes a retired-epoch result", async () => {
+    vi.useFakeTimers();
     const harness = createGatewayHarness();
     const model = createControlModel({ gateway: harness.gateway });
     model.start();
     await flushMicrotasks();
     expect(harness.requests).toHaveLength(1);
 
-    harness.emit({ event: "sessions.changed" });
-    harness.emit({ event: "sessions.changed" });
+    harness.emitInvalidation();
+    harness.emitInvalidation();
+    await vi.advanceTimersByTimeAsync(200);
     harness.setConnection({ status: "reconnecting", epoch: 2 });
     harness.setConnection({ status: "connected", epoch: 2 });
     harness.requests[0]?.resolve({
       sessions: [{ key: "agent:main:stale", kind: "direct" }],
     });
     await flushMicrotasks();
+    expect(model.getSnapshot().sessionCatalog.sessions).toEqual([]);
     expect(harness.requests).toHaveLength(2);
 
     harness.requests[1]?.resolve({
@@ -137,12 +171,31 @@ describe("Control Model session catalog", () => {
     ]);
   });
 
+  it("retires stale request failures without publishing them", async () => {
+    const harness = createGatewayHarness();
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    await flushMicrotasks();
+    harness.setConnection({ status: "reconnecting", epoch: 2 });
+    harness.setConnection({ status: "connected", epoch: 2 });
+    harness.requests[0]?.reject(new Error("retired failure"));
+    await flushMicrotasks();
+    expect(harness.requests).toHaveLength(2);
+    expect(model.getSnapshot().sessionCatalog.error).toBeNull();
+    harness.requests[1]?.resolve({
+      sessions: [{ key: "agent:main:current", kind: "direct" }],
+    });
+    await vi.waitFor(() => {
+      expect(model.getSnapshot().sessionCatalog.status).toBe("ready");
+    });
+  });
+
   it("reconciles create, update, and delete through canonical refreshes", async () => {
+    vi.useFakeTimers();
     const harness = createGatewayHarness({ status: "disconnected", epoch: 0 });
     const model = createControlModel({ gateway: harness.gateway });
     model.start();
     harness.setConnection({ status: "connected", epoch: 1 });
-    await flushMicrotasks();
     harness.requests[0]?.resolve({
       sessions: [{ key: "agent:main:one", kind: "direct", label: "First" }],
     });
@@ -150,8 +203,8 @@ describe("Control Model session catalog", () => {
       expect(model.getSnapshot().sessionCatalog.status).toBe("ready");
     });
 
-    harness.emit({ event: "sessions.changed" });
-    await flushMicrotasks();
+    harness.emitInvalidation();
+    await vi.advanceTimersByTimeAsync(200);
     harness.requests[1]?.resolve({
       sessions: [
         { key: "agent:main:one", kind: "direct", label: "Updated" },
@@ -162,8 +215,8 @@ describe("Control Model session catalog", () => {
       expect(model.getSnapshot().sessionCatalog.sessions).toHaveLength(2);
     });
 
-    harness.emit({ event: "sessions.changed" });
-    await flushMicrotasks();
+    harness.emitInvalidation();
+    await vi.advanceTimersByTimeAsync(200);
     harness.requests[2]?.resolve({
       sessions: [{ key: "agent:main:two", kind: "direct" }],
     });
@@ -173,12 +226,56 @@ describe("Control Model session catalog", () => {
     expect(model.getSnapshot().sessionCatalog.sessions[0]?.key).toBe("agent:main:two");
   });
 
-  it("publishes structured request failures and preserves rejection", async () => {
+  it("runs a trailing invalidation refresh after an active refresh fails", async () => {
+    vi.useFakeTimers();
+    const backgroundErrors: unknown[] = [];
+    const harness = createGatewayHarness();
+    const model = createControlModel({
+      gateway: harness.gateway,
+      onBackgroundError: (error) => backgroundErrors.push(error),
+    });
+    model.start();
+    await flushMicrotasks();
+    harness.emitInvalidation();
+    await vi.advanceTimersByTimeAsync(200);
+    harness.requests[0]?.reject(new Error("first refresh failed"));
+    await vi.waitFor(() => {
+      expect(harness.requests).toHaveLength(2);
+    });
+    harness.requests[1]?.resolve({
+      sessions: [{ key: "agent:main:recovered", kind: "direct" }],
+    });
+    await vi.waitFor(() => {
+      expect(model.getSnapshot().sessionCatalog.status).toBe("ready");
+    });
+    expect(backgroundErrors).toHaveLength(1);
+  });
+
+  it("preserves explicit request options across background invalidations", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const model = createControlModel({ gateway: harness.gateway });
+    const controller = new AbortController();
+    model.start();
+    await flushMicrotasks();
+    const refresh = model.refreshSessions({ signal: controller.signal });
+    harness.emitInvalidation();
+    await vi.advanceTimersByTimeAsync(200);
+    harness.requests[0]?.resolve({ sessions: [] });
+    await flushMicrotasks();
+    expect(harness.requests).toHaveLength(2);
+    expect(harness.requestCalls[1]?.options?.signal).toBe(controller.signal);
+    harness.requests[1]?.resolve({ sessions: [] });
+    await refresh;
+    await flushMicrotasks();
+    harness.requests[2]?.resolve({ sessions: [] });
+  });
+
+  it("publishes structured request failures", async () => {
     const harness = createGatewayHarness({ status: "disconnected", epoch: 0 });
     const model = createControlModel({ gateway: harness.gateway });
     model.start();
     harness.setConnection({ status: "connected", epoch: 1 });
-    await flushMicrotasks();
     const error = Object.assign(new Error("temporarily unavailable"), {
       code: "UNAVAILABLE",
       retryable: true,
@@ -221,6 +318,37 @@ describe("Control Model session catalog", () => {
     slow.reject(new Error("slow subscriber failed"));
     await flushMicrotasks();
     expect(subscriberErrors).toHaveLength(2);
+  });
+
+  it("stops notifying copied subscribers when one disposes the model", async () => {
+    const harness = createGatewayHarness({ status: "disconnected", epoch: 0 });
+    const model = createControlModel({ gateway: harness.gateway });
+    const laterSubscriber = vi.fn();
+    model.subscribe(() => model.dispose());
+    model.subscribe(laterSubscriber);
+    model.start();
+    await flushMicrotasks();
+    expect(laterSubscriber).not.toHaveBeenCalled();
+  });
+
+  it("reports more rows when the response exceeds the local bound", async () => {
+    const harness = createGatewayHarness();
+    const model = createControlModel({
+      gateway: harness.gateway,
+      bounds: { maxSessions: 1 },
+    });
+    model.start();
+    harness.requests[0]?.resolve({
+      sessions: [
+        { key: "agent:main:one", kind: "direct" },
+        { key: "agent:main:two", kind: "direct" },
+      ],
+      hasMore: false,
+    });
+    await vi.waitFor(() => {
+      expect(model.getSnapshot().sessionCatalog.status).toBe("ready");
+    });
+    expect(model.getSnapshot().sessionCatalog.hasMore).toBe(true);
   });
 
   it("enforces subscriber bounds and disposal", () => {

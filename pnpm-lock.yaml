@@ -2413,6 +2413,9 @@ importers:
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0
+      '@openclaw/control-model':
+        specifier: workspace:*
+        version: link:../packages/control-model
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../packages/gateway-client

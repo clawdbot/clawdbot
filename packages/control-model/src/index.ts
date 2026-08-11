@@ -10,10 +10,12 @@ export type {
   ControlModelConnectionStatus,
   ControlModelError,
   ControlModelGatewayBinding,
-  ControlModelGatewayEvent,
   ControlModelOptions,
   ControlModelRequestOptions,
   ControlModelSessionCatalogSnapshot,
   ControlModelSnapshot,
   ControlModelSubscriber,
+  DeepReadonly,
 } from "./model.js";
+export { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
+export type { SessionEventRefreshCoordinatorOptions } from "./session-event-refresh.js";
