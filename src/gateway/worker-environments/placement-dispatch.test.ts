@@ -47,6 +47,22 @@ describe("worker placement dispatch", () => {
     expect(states).toEqual(["requested", "provisioning", "syncing", "starting", "active"]);
   });
 
+  it("provisions an inherited dispatch from the exact durable profile snapshot", async () => {
+    const harness = createHarness(placementStore);
+    const inheritedProfile = {
+      providerId: "fake",
+      profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
+    };
+
+    await harness.service.dispatch({ ...REQUEST, inheritedProfile });
+
+    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
+      { profileId: REQUEST.profileId, ...inheritedProfile },
+      expect.stringMatching(/^session-dispatch:/u),
+    );
+  });
+
   it("reports the final durable placement after startup failure teardown", async () => {
     const harness = createHarness(placementStore, { failAt: "sync" });
     const states: string[] = [];
@@ -902,7 +918,7 @@ describe("worker placement dispatch", () => {
       sessionId: REQUEST.sessionId,
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
-    placementStore.claimTurn({
+    const claim = placementStore.claimTurn({
       ...REQUEST,
       claimId: "claim-1",
       runId: "run-1",
@@ -912,10 +928,44 @@ describe("worker placement dispatch", () => {
         ownerEpoch: harness.attached.ownerEpoch,
       },
     });
+    const binding = {
+      sessionId: claim.sessionId,
+      environmentId: harness.attached.environmentId,
+      ownerEpoch: harness.attached.ownerEpoch,
+      runId: claim.runId,
+    };
+    placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      placementStore.beginWorkerSessionToolOperation({
+        binding,
+        toolName: "sessions_send",
+        toolCallId: "call-owner-mismatch",
+        requestDigest: "digest-owner-mismatch",
+      }),
+    ).toMatchObject({ kind: "execute" });
     harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch + 1);
     harness.log.length = 0;
 
-    await harness.service.reconcileActive();
+    const reconciliation = harness.service.reconcileActive();
+
+    await vi.waitFor(() => {
+      expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({
+      state: "draining",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(
+      placementStore.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "call-owner-mismatch",
+        requestDigest: "digest-owner-mismatch",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    await reconciliation;
 
     expect(harness.placements.current()).toMatchObject({
       state: "failed",

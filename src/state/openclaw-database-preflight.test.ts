@@ -230,6 +230,26 @@ describe("OpenClaw database schema preflight", () => {
     }
   });
 
+  it("classifies the same-version worker operation seed as startup-repairable", async () => {
+    const databasePath = createExplicitStateDatabase(
+      OPENCLAW_STATE_SCHEMA_SQL.replace("  operation_seed TEXT NOT NULL,\n", ""),
+    );
+
+    const result = await preflightOpenClawStateDatabasePath(databasePath);
+
+    expect(result).toMatchObject({
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      status: "startup-repairable",
+      requiresWrite: true,
+      issues: [
+        {
+          code: "missing-column",
+          objectName: "worker_session_tool_operations.operation_seed",
+        },
+      ],
+    });
+  });
+
   it("rejects an explicit preflight path with sidecars without touching it", async () => {
     const databasePath = createExplicitStateDatabase();
     const sqlite = requireNodeSqlite();

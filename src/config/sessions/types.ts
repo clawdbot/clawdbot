@@ -375,6 +375,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     worktree?: { id: string; branch: string; repoRoot: string };
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
+    /** Exact parent incarnation captured when this child was created. */
+    parentSessionId?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */

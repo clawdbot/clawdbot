@@ -10,17 +10,22 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerSessionsSendResponseFrameSchema,
+  WorkerSessionsSpawnResponseFrameSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
+  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
+  validateWorkerSessionsSendParams,
+  validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
 import {
@@ -263,6 +268,41 @@ describe("worker protocol schemas", () => {
     };
     expect(Value.Check(WorkerHeartbeatRequestFrameSchema, request)).toBe(true);
     expect(Value.Check(WorkerHeartbeatResponseFrameSchema, response)).toBe(true);
+  });
+
+  it("keeps worker session tools closed and payload-bounded", () => {
+    const spawn = { toolCallId: "call-spawn", task: "run the child" };
+    const send = {
+      toolCallId: "call-send",
+      sessionKey: "agent:main:dashboard:child",
+      message: "report status",
+    };
+    expect(validateWorkerSessionsSpawnParams(spawn)).toBe(true);
+    expect(validateWorkerSessionsSendParams(send)).toBe(true);
+    expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
+    expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
+    expect(
+      validateWorkerSessionsSpawnParams({
+        ...spawn,
+        runTimeoutSeconds: 86_401,
+      }),
+    ).toBe(false);
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE);
+
+    const response = {
+      type: "res" as const,
+      id: "session-tool-1",
+      ok: true as const,
+      payload: { resultJson: JSON.stringify({ content: [] }) },
+    };
+    expect(Value.Check(WorkerSessionsSpawnResponseFrameSchema, response)).toBe(true);
+    expect(Value.Check(WorkerSessionsSendResponseFrameSchema, response)).toBe(true);
+    expect(
+      Value.Check(WorkerSessionsSendResponseFrameSchema, {
+        ...response,
+        payload: { ...response.payload, extra: true },
+      }),
+    ).toBe(false);
   });
 
   it("accepts semantic transcript commits and generated-id responses", () => {

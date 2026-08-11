@@ -17,6 +17,8 @@ export const validateConnectParams = compile(S.ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = compile(S.WorkerAdmissionHandshakeSchema);
 export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestFrameSchema);
 export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSchema);
+export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
+export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];

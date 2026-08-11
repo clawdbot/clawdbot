@@ -149,6 +149,11 @@ export async function prepareGatewayRuntimeState(params: {
           });
         })
       : undefined;
+  if (workerPlacementRuntime) {
+    workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
+      workerPlacementRuntime.dispatchService.dispatch,
+    );
+  }
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles

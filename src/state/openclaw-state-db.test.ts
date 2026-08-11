@@ -2108,6 +2108,64 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
+  it("backfills durable operation seeds in same-version worker session state", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      insertPlacementConstraintProbe(shippedSchema, {
+        sessionId: "session-operation-seed",
+        state: "local",
+        environmentId: null,
+        activeOwnerEpoch: null,
+        workerBundleHash: null,
+        recoveryError: null,
+      });
+      shippedSchema
+        .prepare(
+          `INSERT INTO worker_session_tool_operations (
+            source_session_id,
+            source_claim_id,
+            tool_call_id,
+            tool_name,
+            request_digest,
+            operation_seed,
+            status,
+            gateway_instance_id,
+            created_at_ms,
+            updated_at_ms
+          ) VALUES (?, ?, ?, 'sessions_send', ?, ?, 'running', ?, 1, 1)`,
+        )
+        .run(
+          "session-operation-seed",
+          "claim-operation-seed",
+          "call-operation-seed",
+          "digest-operation-seed",
+          "legacy-seed",
+          "gateway-operation-seed",
+        );
+      shippedSchema.exec("ALTER TABLE worker_session_tool_operations DROP COLUMN operation_seed;");
+    } finally {
+      shippedSchema.close();
+    }
+
+    const reopened = openOpenClawStateDatabase({ env });
+    const operation = reopened.db
+      .prepare(
+        `SELECT operation_seed
+         FROM worker_session_tool_operations
+         WHERE tool_call_id = 'call-operation-seed'`,
+      )
+      .get() as { operation_seed: string };
+    expect(operation.operation_seed).toMatch(/^[0-9a-f]{64}$/);
+    expect(() =>
+      assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
+    ).not.toThrow();
+  });
+
   it("does not add Claw bootstrap columns before rejecting unrelated index corruption", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

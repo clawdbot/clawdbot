@@ -1627,6 +1627,7 @@ export async function performGatewaySessionReset(params: {
               ? undefined
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
+            parentSessionId: currentEntry?.parentSessionId,
             ...creationStamp,
             forkSource: currentEntry?.forkSource,
             forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,

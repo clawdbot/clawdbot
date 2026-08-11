@@ -398,6 +398,7 @@ function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionE
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     spawnedCwd: entry.spawnedCwd,
     parentSessionKey: entry.parentSessionKey,
+    parentSessionId: entry.parentSessionId,
     forkedFromParent: entry.forkedFromParent,
     forkSource: entry.forkSource,
     createdVia: entry.createdVia,

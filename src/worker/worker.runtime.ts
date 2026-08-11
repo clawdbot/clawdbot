@@ -161,6 +161,7 @@ export async function runWorkerDescriptor(
             }
           },
         },
+        sessions: connection,
         signal: abortController.signal,
       });
       if (options.signal?.aborted) {

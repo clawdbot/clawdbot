@@ -1087,6 +1087,9 @@ export async function createGatewaySession(params: {
           ...initializedEntry,
           ...inheritedSelection,
           parentSessionKey: storedParentSessionKey,
+          ...(canonicalParentSessionKey && currentParentSessionEntry?.sessionId
+            ? { parentSessionId: currentParentSessionEntry.sessionId }
+            : {}),
         };
         if (params.fork !== true) {
           return { ...initialized, entry };
