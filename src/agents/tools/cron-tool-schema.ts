@@ -45,7 +45,7 @@ const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as con
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
-export type CronToolSchemaOptions = {
+type CronToolSchemaOptions = {
   /**
    * Whether cron.triggers.enabled is on for this deployment. When false, the
    * trigger-gated surfaces (job trigger, script payloads, stream
