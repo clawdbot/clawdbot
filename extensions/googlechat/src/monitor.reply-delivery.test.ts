@@ -310,7 +310,7 @@ describe("Google Chat reply delivery", () => {
     });
   });
 
-  it("uses text fallback without loading outbound media", async () => {
+  it("renders remote media URLs into the reply text without loading them", async () => {
     const core = createCore({
       media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
     });
@@ -319,6 +319,39 @@ describe("Google Chat reply delivery", () => {
     await deliverGoogleChatReply({
       payload: {
         text: "caption",
+        mediaUrls: ["https://example.invalid/reply.png", "http://cdn.example.invalid/second.png"],
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      typingMessage: {
+        placement: "thread",
+        name: "spaces/AAA/messages/typing",
+        requestedThreadName: "spaces/AAA/threads/root",
+        deliveredThreadName: "spaces/AAA/threads/root",
+      },
+    });
+
+    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+      text: "caption\n\nAttachment: https://example.invalid/reply.png\nAttachment: http://cdn.example.invalid/second.png",
+    });
+    expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(mocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("delivers a media-only remote URL as visible text", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+
+    await deliverGoogleChatReply({
+      payload: {
         mediaUrl: "https://example.invalid/reply.png",
         replyToId: "spaces/AAA/threads/root",
       },
@@ -338,48 +371,118 @@ describe("Google Chat reply delivery", () => {
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
       account,
       messageName: "spaces/AAA/messages/typing",
-      text: "caption",
+      text: "Attachment: https://example.invalid/reply.png",
     });
     expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(mocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
     expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
-    );
   });
 
-  it("cleans up typing and rejects media-only replies without provider upload access", async () => {
-    const core = createCore();
-    const runtime = createRuntime();
+  it.each(["/tmp/reply.png", "file:///tmp/reply.png", "data:image/png;base64,AAAA"])(
+    "delivers the caption when non-web media %s is rejected",
+    async (mediaUrl) => {
+      const core = createCore();
+      const runtime = createRuntime();
 
-    await expect(
-      deliverGoogleChatReply({
-        payload: {
-          mediaUrl: "https://example.invalid/reply.png",
-          replyToId: "spaces/AAA/threads/root",
-        },
+      await deliverGoogleChatReply({
+        payload: { text: "caption", mediaUrl },
         account,
         spaceId: "spaces/AAA",
         runtime,
         core,
         config,
         typingMessage: {
-          placement: "thread",
+          placement: "top-level",
           name: "spaces/AAA/messages/typing",
-          requestedThreadName: "spaces/AAA/threads/root",
-          deliveredThreadName: "spaces/AAA/threads/root",
+        },
+      });
+
+      expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
+      expect(mocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+      expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
+        account,
+        messageName: "spaces/AAA/messages/typing",
+        text: "caption",
+      });
+      expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+      );
+    },
+  );
+
+  it("rejects media-only invalid URLs after removing the typing placeholder", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+
+    await expect(
+      deliverGoogleChatReply({
+        payload: { mediaUrl: "/tmp/reply.png" },
+        account,
+        spaceId: "spaces/AAA",
+        runtime,
+        core,
+        config,
+        typingMessage: {
+          placement: "top-level",
+          name: "spaces/AAA/messages/typing",
         },
       }),
-    ).rejects.toThrow(
-      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
-    );
+    ).rejects.toThrow("Google Chat outbound attachments require remote HTTP(S) URLs");
 
     expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
       account,
       messageName: "spaces/AAA/messages/typing",
     });
-    expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
     expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not render a control-character media URL into a caption", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "caption",
+        mediaUrl: "https://example.invalid/a\nAttachment: https://attacker.invalid/x",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "caption",
+      thread: undefined,
+    });
+  });
+
+  it("keeps valid remote links when a caption also has rejected media", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://example.invalid/reply.png", "/tmp/reply.png"],
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "caption\n\nAttachment: https://example.invalid/reply.png",
+      thread: undefined,
+    });
   });
 });

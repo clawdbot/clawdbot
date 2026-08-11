@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { deleteGoogleChatMessage, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
+import {
+  filterGoogleChatRemoteMediaUrls,
+  formatGoogleChatTextWithMediaLinks,
+} from "./outbound-media-links.js";
 
 export type GoogleChatTypingMessage =
   | {
@@ -56,7 +60,6 @@ export async function deliverGoogleChatReply(params: {
   let typingMessage = params.typingMessage;
   const replyThreadName = payload.replyToId?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
-  const text = reply.text;
   let firstTextChunk = true;
   let deliveryThreadName = replyThreadName;
 
@@ -81,23 +84,30 @@ export async function deliverGoogleChatReply(params: {
     deliveryThreadName = typingMessage.deliveredThreadName;
   }
 
+  let text = reply.text;
   if (reply.hasMedia) {
-    runtime.error?.(
-      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
-    );
-  }
-
-  if (reply.hasMedia && !reply.hasText) {
     try {
-      if (typingMessage) {
-        await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
-      }
+      text = formatGoogleChatTextWithMediaLinks({ text, mediaUrls: reply.mediaUrls });
     } catch (err) {
-      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+      if (reply.hasText) {
+        runtime.error?.(
+          "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+        );
+        text = formatGoogleChatTextWithMediaLinks({
+          text,
+          mediaUrls: filterGoogleChatRemoteMediaUrls(reply.mediaUrls),
+        });
+      } else {
+        try {
+          if (typingMessage) {
+            await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
+          }
+        } catch (cleanupErr) {
+          runtime.error?.(`Google Chat typing cleanup failed: ${String(cleanupErr)}`);
+        }
+        throw err;
+      }
     }
-    throw new Error(
-      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
-    );
   }
 
   const chunkLimit = account.config.textChunkLimit ?? 4000;

@@ -161,25 +161,107 @@ describe("googlechat message actions", () => {
   });
 
   it.each([
+    {
+      params: {
+        to: "spaces/AAA",
+        message: "media alias",
+        media: "https://example.invalid/one.png",
+      },
+      expected: "media alias\n\nAttachment: https://example.invalid/one.png",
+    },
+    {
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        mediaUrl: "https://example.invalid/one.png",
+      },
+      expected: "caption\n\nAttachment: https://example.invalid/one.png",
+    },
+    {
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        mediaUrls: ["https://example.invalid/one.png", "http://cdn.example.invalid/two.png"],
+      },
+      expected:
+        "caption\n\nAttachment: https://example.invalid/one.png\nAttachment: http://cdn.example.invalid/two.png",
+    },
+    {
+      params: {
+        to: "spaces/AAA",
+        message: "file URL alias",
+        fileUrl: "https://example.invalid/one.png",
+      },
+      expected: "file URL alias\n\nAttachment: https://example.invalid/one.png",
+    },
+    {
+      params: {
+        to: "spaces/AAA",
+        attachments: [{ url: "https://example.invalid/one.png" }],
+      },
+      expected: "Attachment: https://example.invalid/one.png",
+    },
+    {
+      params: {
+        to: "spaces/AAA",
+        message: "image alias",
+        image: "https://example.invalid/one.png",
+      },
+      expected: "image alias\n\nAttachment: https://example.invalid/one.png",
+    },
+  ])("sends remote media as visible text links", async ({ params, expected }) => {
+    const account = buildAccount();
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "send",
+      params,
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: expected,
+      thread: undefined,
+    });
+  });
+
+  it.each([
     { action: "send", params: { to: "spaces/AAA", message: "caption", media: "remote.png" } },
     {
       action: "send",
-      params: { to: "spaces/AAA", message: "caption", mediaUrl: "remote.png" },
-    },
-    {
-      action: "send",
-      params: { to: "spaces/AAA", message: "caption", mediaUrls: ["remote.png"] },
-    },
-    {
-      action: "send",
-      params: { to: "spaces/AAA", message: "caption", fileUrl: "remote.png" },
+      params: { to: "spaces/AAA", message: "caption", mediaUrl: "file:///tmp/remote.png" },
     },
     {
       action: "send",
       params: {
         to: "spaces/AAA",
         message: "caption",
-        attachments: [{ url: "remote.png" }],
+        mediaUrls: ["https://example.invalid/ok.png", "/tmp/local.png"],
+      },
+    },
+    {
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        mediaUrl: "https://example.invalid/a\nAttachment: https://attacker.invalid/x",
+      },
+    },
+    { action: "send", params: { to: "spaces/AAA", message: "caption", path: "/tmp/a.png" } },
+    {
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        attachments: [{ filePath: "/tmp/a.png" }],
       },
     },
     {
@@ -199,9 +281,7 @@ describe("googlechat message actions", () => {
           cfg: {},
           accountId: "default",
         } as never),
-      ).rejects.toThrow(
-        "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
-      );
+      ).rejects.toThrow("Google Chat outbound attachments require");
 
       expect(resolveGoogleChatAccount).not.toHaveBeenCalled();
       expect(resolveGoogleChatOutboundSpace).not.toHaveBeenCalled();
