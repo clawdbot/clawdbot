@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { generateChainId } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
@@ -77,7 +77,7 @@ export function createReplyContinuationController(context: {
     let persistedEntry: SessionEntry | undefined;
     if (storePath) {
       try {
-        const persisted = await patchSessionEntry(
+        const persisted = await patchSessionEntryCore(
           { storePath, sessionKey },
           (entry) => (params.update ? params.update(entry, patch) : patch),
           { preserveActivity: true },

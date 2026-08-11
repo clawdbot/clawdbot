@@ -116,7 +116,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
       const implementation = loadSessionEntryMock.getMockImplementation();
       return implementation ? loadSessionEntryMock(...args) : actual.loadSessionEntry(...args);
     },
-    patchSessionEntry: (...args: unknown[]) => patchSessionEntryMock(...args),
+    patchSessionEntryCore: (...args: unknown[]) => patchSessionEntryMock(...args),
     // Final-delivery persistence now verifies the row it wrote, so this seam has
     // to behave like a real store instead of falling through to the unmocked one.
     updateSessionEntry: (...args: unknown[]) => updateSessionEntryMock(...args),

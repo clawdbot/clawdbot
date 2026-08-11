@@ -272,7 +272,7 @@ function createDeliveryDeps(params: {
     loadSessionEntry,
     log,
     now: vi.fn(() => DELIVERY_NOW_MS),
-    patchSessionEntry: sessionAccessorModule.patchSessionEntry,
+    patchSessionEntryCore: sessionAccessorModule.patchSessionEntryCore,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
       ...params.runtimeConfig,
@@ -317,7 +317,7 @@ async function seedSessionStore(
 function readSessionStore(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
     sessionAccessorModule
-      .listSessionEntries({ storePath })
+      .listSessionEntriesCore({ storePath })
       .map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }

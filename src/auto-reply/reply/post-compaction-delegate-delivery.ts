@@ -18,7 +18,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
   resolveSessionEntryFromStore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
@@ -70,7 +70,7 @@ export type PostCompactionDelegateDeliveryDeps = {
   loadSessionEntry(params: { storePath: string; sessionKey: string }): SessionEntry | undefined;
   log(message: string): void;
   now(): number;
-  patchSessionEntry: typeof patchSessionEntry;
+  patchSessionEntryCore: typeof patchSessionEntryCore;
   resolveContinuationRuntimeConfig(cfg: OpenClawConfig): ContinuationRuntimeConfig;
   resolveSessionAgentId(params: { sessionKey?: string; config?: OpenClawConfig }): string;
   resolveStorePath(store?: string, opts?: { agentId?: string; env?: NodeJS.ProcessEnv }): string;
@@ -100,7 +100,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   loadSessionEntry,
   log: (message) => defaultRuntime.log(message),
   now: () => Date.now(),
-  patchSessionEntry,
+  patchSessionEntryCore: patchSessionEntryCore,
   resolveContinuationRuntimeConfig,
   resolveSessionAgentId,
   resolveStorePath,
@@ -229,7 +229,7 @@ export async function persistPendingPostCompactionDelegates(params: {
       }).existing
     : undefined;
   const fallbackEntry = localStoredEntry ?? params.sessionEntry;
-  const persistedEntry = await patchSessionEntry(
+  const persistedEntry = await patchSessionEntryCore(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (current) => ({
       pendingPostCompactionDelegates: [
@@ -277,7 +277,7 @@ export async function takePendingPostCompactionDelegates(params: {
   }
 
   let persisted: SessionPostCompactionDelegate[] = [];
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (current) => {
       persisted = (current.pendingPostCompactionDelegates ?? []).map(
@@ -371,7 +371,7 @@ async function commitAcceptedPostCompactionChainCharge(params: {
   const { chainState } = reserved;
   let persistedEntry: SessionEntry | null;
   try {
-    persistedEntry = await deps.patchSessionEntry(
+    persistedEntry = await deps.patchSessionEntryCore(
       { storePath, sessionKey: entry.sessionKey },
       () => ({
         continuationChainCount: chainState.currentChainCount,

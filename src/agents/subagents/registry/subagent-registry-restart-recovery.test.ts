@@ -996,7 +996,7 @@ describe("subagent registry restart recovery", () => {
       lastAttemptAt: Date.now(),
       lastRunId: "prior-run",
     };
-    mocks.patchSessionEntry.mockRejectedValueOnce(new Error("store unavailable"));
+    mocks.patchSessionEntryCore.mockRejectedValueOnce(new Error("store unavailable"));
 
     await expect(recover(run())).resolves.toEqual({
       status: "terminal",
@@ -1021,7 +1021,7 @@ describe("subagent registry restart recovery", () => {
       lastAttemptAt: Date.now(),
       lastRunId: "prior-run",
     };
-    mocks.patchSessionEntry.mockResolvedValueOnce(null);
+    mocks.patchSessionEntryCore.mockResolvedValueOnce(null);
 
     await expect(recover(run())).resolves.toEqual({
       status: "terminal",

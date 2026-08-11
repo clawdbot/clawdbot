@@ -1,6 +1,9 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   extractMessageRole,

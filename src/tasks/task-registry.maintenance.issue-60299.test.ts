@@ -55,7 +55,7 @@ afterEach(() => {
 function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
-  listSessionEntries?: TaskRegistryMaintenanceRuntime["listSessionEntries"];
+  listSessionEntriesCore?: TaskRegistryMaintenanceRuntime["listSessionEntriesCore"];
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
@@ -93,8 +93,8 @@ function createTaskRegistryMaintenanceHarness(params: {
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
-    listSessionEntries:
-      params.listSessionEntries ??
+    listSessionEntriesCore:
+      params.listSessionEntriesCore ??
       (() =>
         Object.entries(sessionStore).map(([sessionKey, entry]) => ({
           sessionKey,
@@ -234,7 +234,7 @@ describe("task-registry maintenance issue #60299", () => {
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      listSessionEntries: listSessionEntriesMock,
+      listSessionEntriesCore: listSessionEntriesMock,
       resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
     });
 

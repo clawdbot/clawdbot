@@ -27,7 +27,7 @@ import {
 } from "../../src/gateway/test-helpers.e2e.js";
 import {
   getSessionEntry as getSdkSessionEntry,
-  listSessionEntries as listSdkSessionEntries,
+  listSessionEntriesCore as listSdkSessionEntries,
   loadTranscriptEventsSync as loadSdkTranscriptEventsSync,
 } from "../../src/plugin-sdk/session-store-runtime.js";
 import {

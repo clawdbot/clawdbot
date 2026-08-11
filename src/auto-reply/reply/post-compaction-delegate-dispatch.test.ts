@@ -239,7 +239,7 @@ function createDeliveryDeps(params: {
     ),
     log,
     now: vi.fn(() => DELIVERY_NOW_MS),
-    patchSessionEntry: sessionAccessorModule.patchSessionEntry,
+    patchSessionEntryCore: sessionAccessorModule.patchSessionEntryCore,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
       ...params.runtimeConfig,

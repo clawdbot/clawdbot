@@ -1,5 +1,25 @@
 [
   {
+    "name": "discoverAllSessions",
+    "wrapped": "src/infra/session-cost-usage-reporting.ts",
+    "wrapper": "src/infra/session-cost-usage.ts"
+  },
+  {
+    "name": "enqueueSystemEventEntry",
+    "wrapped": "src/infra/system-events.ts",
+    "wrapper": "src/plugin-sdk/infra-runtime.ts"
+  },
+  {
+    "name": "enqueueSystemEvent",
+    "wrapped": "src/infra/system-events.ts",
+    "wrapper": "src/plugin-sdk/infra-runtime.ts"
+  },
+  {
+    "name": "enqueueSystemEvent",
+    "wrapped": "src/infra/system-events.ts",
+    "wrapper": "src/plugin-sdk/system-event-runtime.ts"
+  },
+  {
     "name": "loadPluginManifestRegistry",
     "wrapped": "src/plugins/manifest-registry.ts",
     "wrapper": "src/config/doc-baseline.runtime.ts"
@@ -23,6 +43,16 @@
     "name": "readBooleanParam",
     "wrapped": "src/plugin-sdk/boolean-param.ts",
     "wrapper": "src/infra/outbound/message-action-params.ts"
+  },
+  {
+    "name": "requestHeartbeat",
+    "wrapped": "src/infra/heartbeat-wake.ts",
+    "wrapper": "src/plugin-sdk/heartbeat-runtime.ts"
+  },
+  {
+    "name": "requeueAwaitingNextCompactionDelegates",
+    "wrapped": "src/auto-reply/continuation/delegate-store-post-compaction.ts",
+    "wrapper": "src/auto-reply/continuation/delegate-dispatch-recovery.ts"
   },
   {
     "name": "resolveAllowedModelRef",
@@ -81,6 +111,11 @@
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
   },
   {
+    "name": "runHeartbeatOnce",
+    "wrapped": "src/infra/heartbeat-runner-run.ts",
+    "wrapper": "src/infra/heartbeat-runner.ts"
+  },
+  {
     "name": "runProviderModelSelectedHook",
     "wrapped": "src/plugins/provider-wizard.ts",
     "wrapper": "src/plugins/provider-auth-choice.runtime.ts"
@@ -99,6 +134,11 @@
     "name": "shouldSuppressBuiltInModel",
     "wrapped": "src/agents/model-suppression.ts",
     "wrapper": "src/agents/model-suppression.runtime.ts"
+  },
+  {
+    "name": "startHeartbeatRunner",
+    "wrapped": "src/infra/heartbeat-runner-scheduler.ts",
+    "wrapper": "src/infra/heartbeat-runner.ts"
   },
   {
     "name": "textToSpeech",

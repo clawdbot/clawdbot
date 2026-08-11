@@ -249,7 +249,7 @@ function createDeliveryDeps(params: {
     ),
     log,
     now: vi.fn(() => DELIVERY_NOW_MS),
-    patchSessionEntry: sessionAccessorModule.patchSessionEntry,
+    patchSessionEntryCore: sessionAccessorModule.patchSessionEntryCore,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
       ...params.runtimeConfig,
@@ -462,9 +462,9 @@ describe("post-compaction delegate dispatch extraction", () => {
       // The chain is charged only after the child is accepted, so a persist
       // failure now happens with a live child. The delivery must reject (entry
       // stays pending) without committing acceptance.
-      const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntry>();
+      const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntryCore>();
       persist.mockRejectedValueOnce(new Error("persist failed"));
-      deps.patchSessionEntry = persist;
+      deps.patchSessionEntryCore = persist;
       await expect(deliverQueuedPostCompactionDelegate({ entry }, deps)).rejects.toBeDefined();
       expect(persist).toHaveBeenCalledWith(
         { storePath, sessionKey: "main" },
@@ -483,7 +483,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       mockRegistryState.acceptedChildSessionKeys.add(
         deriveTestContinuationChildSessionKey("main", "pc-flow-source"),
       );
-      deps.patchSessionEntry = sessionAccessorModule.patchSessionEntry;
+      deps.patchSessionEntryCore = sessionAccessorModule.patchSessionEntryCore;
       await deliverQueuedPostCompactionDelegate({ entry }, deps);
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
       expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledTimes(1);
@@ -536,7 +536,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     const { deps } = createDispatchDeps({ staged, rejectEnqueueAt: 0 });
 
     const persistSpy = vi
-      .spyOn(sessionAccessorModule, "patchSessionEntry")
+      .spyOn(sessionAccessorModule, "patchSessionEntryCore")
       .mockRejectedValue(new Error("store write failed"));
     try {
       await dispatchPostCompactionDelegates(

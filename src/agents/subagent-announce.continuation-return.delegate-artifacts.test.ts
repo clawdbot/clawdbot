@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   enqueueContinuationReturnDeliveries: vi.fn(
     async (_params: EnqueueContinuationReturnParams) => undefined,
   ),
-  listSessionEntries: vi.fn(() => {
+  listSessionEntriesCore: vi.fn(() => {
     throw new Error("managed return must not enumerate live sessions");
   }),
   resolveAllAgentSessionStoreTargetsSync: vi.fn(() => {
@@ -28,7 +28,7 @@ vi.mock("../auto-reply/continuation/targeting.js", async (importOriginal) => {
   };
 });
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: mocks.listSessionEntries,
+  listSessionEntriesCore: mocks.listSessionEntriesCore,
 }));
 vi.mock("../config/sessions/targets.js", () => ({
   resolveAllAgentSessionStoreTargetsSync: mocks.resolveAllAgentSessionStoreTargetsSync,
@@ -106,7 +106,7 @@ describe("managed delegate artifact return routing", () => {
     ).resolves.toEqual({ handled: true });
 
     expect(mocks.resolveAllAgentSessionStoreTargetsSync).not.toHaveBeenCalled();
-    expect(mocks.listSessionEntries).not.toHaveBeenCalled();
+    expect(mocks.listSessionEntriesCore).not.toHaveBeenCalled();
     expect(mocks.enqueueContinuationReturnDeliveries).toHaveBeenCalledTimes(1);
     const call = mocks.enqueueContinuationReturnDeliveries.mock.calls[0]?.[0];
     expect(call).toBeDefined();

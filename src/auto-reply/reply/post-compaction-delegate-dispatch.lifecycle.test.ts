@@ -135,7 +135,7 @@ function createDeliveryDeps(params: {
     loadSessionEntry,
     log,
     now: vi.fn(() => DELIVERY_NOW_MS),
-    patchSessionEntry: sessionAccessorModule.patchSessionEntry,
+    patchSessionEntryCore: sessionAccessorModule.patchSessionEntryCore,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
       ...params.runtimeConfig,
@@ -181,7 +181,7 @@ function readSessionEntry(storePath: string, sessionKey = "main"): SessionEntry 
 function readSessionStore(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
     sessionAccessorModule
-      .listSessionEntries({ storePath })
+      .listSessionEntriesCore({ storePath })
       .map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
@@ -394,9 +394,9 @@ describe("post-compaction delivery: continuation depth follows accepted children
       // `normalizePostCompactionDelegate`, so their queue entries are source-less.
       const entry = createQueuedEntry({ id: "queue-sourceless" });
 
-      const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntry>();
+      const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntryCore>();
       persist.mockRejectedValueOnce(new Error("persist failed"));
-      deps.patchSessionEntry = persist;
+      deps.patchSessionEntryCore = persist;
       await expect(deliverQueuedPostCompactionDelegate({ entry }, deps)).rejects.toThrow(
         "persist failed",
       );
@@ -409,7 +409,7 @@ describe("post-compaction delivery: continuation depth follows accepted children
       mockRegistryState.acceptedChildSessionKeys.add(
         deriveTestContinuationChildSessionKey("main", "queue-sourceless"),
       );
-      deps.patchSessionEntry = sessionAccessorModule.patchSessionEntry;
+      deps.patchSessionEntryCore = sessionAccessorModule.patchSessionEntryCore;
       await deliverQueuedPostCompactionDelegate({ entry }, deps);
       expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
       // No durable marker exists for a source-less row, so the replay reclaims

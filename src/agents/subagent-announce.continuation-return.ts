@@ -3,7 +3,7 @@ import {
   resolveContinuationReturnTargetSessionKeys,
 } from "../auto-reply/continuation/targeting.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -28,7 +28,7 @@ type RegistryReturnRuntime = {
 async function listKnownSessionKeysOnHost(cfg: OpenClawConfig): Promise<string[]> {
   const keys = new Set<string>();
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const { sessionKey } of listSessionEntries({
+    for (const { sessionKey } of listSessionEntriesCore({
       agentId: target.agentId,
       storePath: target.storePath,
     })) {

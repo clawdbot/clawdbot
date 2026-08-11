@@ -1516,7 +1516,7 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     { resolveLiveContinuationRuntimeConfig },
     { loadContinuationChainState, persistContinuationChainState },
     { scheduleContinuationWorkBatch },
-    { patchSessionEntry, resolveSessionEntryFromStore },
+    { patchSessionEntryCore, resolveSessionEntryFromStore },
   ] = await Promise.all([
     import("../../auto-reply/continuation/config.js"),
     import("../../auto-reply/continuation/state.js"),
@@ -1575,7 +1575,7 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
   });
   if (params.storePath) {
-    const updated = await patchSessionEntry(
+    const updated = await patchSessionEntryCore(
       { storePath: params.storePath, sessionKey: params.sessionKey },
       () => ({
         continuationChainCount: result.chainState.currentChainCount,

@@ -47,7 +47,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
     ...actual,
-    listSessionEntries: () =>
+    listSessionEntriesCore: () =>
       allSessionKeysMock().map((sessionKey: string) => ({ sessionKey, entry: {} })),
   };
 });

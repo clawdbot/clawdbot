@@ -1,7 +1,11 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import { loadSessionEntry, patchSessionEntry, replaceSessionEntry } from "./session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "./session-accessor.js";
 import { clearSessionStoreCacheForTest } from "./store-writer-state.js";
 import type { SessionEntry } from "./types.js";
 
@@ -11,7 +15,7 @@ import type { SessionEntry } from "./types.js";
  *
  * The production path lives in `src/auto-reply/reply/agent-runner.ts`
  * (`persistContinuationChainState`). It writes continuation-chain fields via
- * `patchSessionEntry(...)` using a partial patch:
+ * `patchSessionEntryCore(...)` using a partial patch:
  *
  *   {
  *     continuationChainCount,
@@ -55,7 +59,7 @@ async function persistChainSpread(
   sessionKey: string,
   patch: ContinuationChainPatch,
 ): Promise<void> {
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     () => ({
       continuationChainCount: patch.continuationChainCount,

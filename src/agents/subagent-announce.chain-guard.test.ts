@@ -95,7 +95,7 @@ import {
 import { resolveStorePath } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -138,7 +138,7 @@ function makeConfig(
  */
 async function writeSessionStore(data: Record<string, unknown>) {
   const storePath = resolveStorePath(undefined, { agentId: "main" });
-  const removals = listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey }) => ({
+  const removals = listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey }) => ({
     sessionKey,
   }));
   if (removals.length > 0) {

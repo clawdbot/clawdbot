@@ -111,7 +111,7 @@ const hoisted = vi.hoisted(() => {
       return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     };
     return {
-      listSessionEntries: listMockEntries,
+      listSessionEntriesCore: listMockEntries,
       listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
       loadSessionEntryReadOnly: loadMockEntry,

@@ -107,7 +107,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
       const implementation = loadSessionEntryMock.getMockImplementation();
       return implementation ? loadSessionEntryMock(...args) : actual.loadSessionEntry(...args);
     },
-    patchSessionEntry: (...args: unknown[]) => patchSessionEntryMock(...args),
+    patchSessionEntryCore: (...args: unknown[]) => patchSessionEntryMock(...args),
   };
 });
 

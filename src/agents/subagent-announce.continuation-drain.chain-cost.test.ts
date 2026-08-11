@@ -289,7 +289,7 @@ vi.mock("../config/sessions/targets.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
-  listSessionEntries: (scope: { agentId?: string; storePath?: string }) =>
+  listSessionEntriesCore: (scope: { agentId?: string; storePath?: string }) =>
     listSessionEntriesMock(scope),
   updateSessionEntry: (
     scope: { sessionKey: string; storePath?: string },

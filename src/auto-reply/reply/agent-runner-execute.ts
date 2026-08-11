@@ -5,7 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -327,7 +327,7 @@ export async function executePreparedReplyAgentRun(
     });
     if (pressureResult.fired && storePath) {
       try {
-        await patchSessionEntry(
+        await patchSessionEntryCore(
           { storePath, sessionKey },
           () => ({ lastContextPressureBand: pressureResult.band }),
           // Band bookkeeping must not count as activity; keep updatedAt stable.
