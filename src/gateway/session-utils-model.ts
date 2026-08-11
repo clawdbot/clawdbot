@@ -76,7 +76,7 @@ function resolveGatewaySessionThinkingLevel(params: {
   });
 }
 
-export function resolveGatewaySessionThinkingDefault(params: {
+function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;

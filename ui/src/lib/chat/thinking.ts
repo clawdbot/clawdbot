@@ -16,7 +16,7 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
-export type ChatThinkingSelection =
+type ChatThinkingSelection =
   | {
       kind: "anchored";
       source: "override" | "default";
