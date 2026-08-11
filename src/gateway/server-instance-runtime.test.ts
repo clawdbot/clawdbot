@@ -3,7 +3,11 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-clien
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { waitForActiveGatewayRootWork } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -152,7 +156,12 @@ describe("createGatewayInstanceRuntime", () => {
           sendText,
         },
       };
-      setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", source: "test", plugin }]));
+      const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+      stageActivePluginRegistry(
+        createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
+        null,
+        "default",
+      );
       const context = {
         ...createContext(),
         getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
@@ -185,7 +194,7 @@ describe("createGatewayInstanceRuntime", () => {
         expect(handleAction).not.toHaveBeenCalled();
       } finally {
         runtime.close();
-        setActivePluginRegistry(createTestRegistry([]));
+        restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
       }
     });
   });
