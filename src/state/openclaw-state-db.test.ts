@@ -1340,6 +1340,17 @@ describe("openclaw state database", () => {
           changes: ["Retired shared state commitments table and indexes"],
           warnings: [],
         });
+        const repaired = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          expect(readSqliteNumberPragma(repaired, "user_version")).toBe(7);
+          expect(
+            repaired
+              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+              .get(),
+          ).toEqual({ schema_version: 7 });
+        } finally {
+          repaired.close();
+        }
       }
       const migrated = openOpenClawStateDatabase(options);
 
