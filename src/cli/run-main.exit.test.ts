@@ -3114,7 +3114,7 @@ describe("runCli exit behavior", () => {
       program,
       undefined,
       undefined,
-      { mode: "lazy", primary: "auth" },
+      { mode: "lazy", primary: "auth", skipPluginValidation: false },
     );
     expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, "auth", [
       "node",
@@ -3143,7 +3143,7 @@ describe("runCli exit behavior", () => {
       program,
       undefined,
       undefined,
-      { mode: "lazy", primary: "auth" },
+      { mode: "lazy", primary: "auth", skipPluginValidation: false },
     );
     expect(registerSubCliByNameMock).not.toHaveBeenCalledWith(program, "auth", [
       "node",

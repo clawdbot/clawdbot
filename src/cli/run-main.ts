@@ -1588,13 +1588,11 @@ async function runCliWithPreparedOutputMode(
         pluginCliRegistrationPromise ??= startupTrace.measure(
           "register-plugin-commands",
           async () => {
-            const [
-              { registerPluginCliCommandsFromValidatedConfig },
-              { resolveCliStartupPolicy },
-            ] = await Promise.all([
-              import("../plugins/cli.js"),
-              import("./command-startup-policy.js"),
-            ]);
+            const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
+              await Promise.all([
+                import("../plugins/cli.js"),
+                import("./command-startup-policy.js"),
+              ]);
             const startupPolicy = resolveCliStartupPolicy({
               argv: parseArgv,
               commandPath: invocation.commandPath,
