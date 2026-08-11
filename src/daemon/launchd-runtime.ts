@@ -315,7 +315,7 @@ function isLaunchctlBootstrapPendingTeardown(res: {
   const normalized = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return normalized.includes("bootstrap failed: 5") || normalized.includes("input/output error");
 }
-export type LaunchAgentProbeResult =
+type LaunchAgentProbeResult =
   | { state: "running" }
   | { state: "stopped" }
   | { state: "not-loaded" }
