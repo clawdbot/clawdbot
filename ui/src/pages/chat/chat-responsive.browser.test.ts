@@ -643,6 +643,38 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     sharedBrowser = null;
   });
 
+  it("keeps transcript search icons compact", async () => {
+    const page = await openBrowserPage(1024, 768);
+    try {
+      await page.setContent(`<!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <section class="chat">
+              <div class="agent-chat__search-bar">
+                ${iconSvg()}
+                <input type="text" placeholder="Search messages" />
+                <button class="btn btn--ghost" type="button">${iconSvg()}</button>
+              </div>
+            </section>
+          </body>
+        </html>`);
+
+      const searchBar = await getBoundingBox(page, ".agent-chat__search-bar");
+      const icons = await page.locator(".agent-chat__search-bar svg").all();
+
+      expect(searchBar.height).toBeLessThan(64);
+      expect(icons).toHaveLength(2);
+      for (const icon of icons) {
+        const box = await icon.boundingBox();
+        expect(box?.width).toBe(16);
+        expect(box?.height).toBe(16);
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it(
     "does not replay a consumed session rail open generation after round trips or remounts",
     FULL_APP_TEST_OPTIONS,
