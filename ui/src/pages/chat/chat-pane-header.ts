@@ -178,7 +178,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           session: row,
         })
       : {};
-    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot, row);
     const openDesktopPanel = () =>
       window.dispatchEvent(
         new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {

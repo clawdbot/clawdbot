@@ -3,6 +3,7 @@
 import { render as renderLit, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
@@ -12,6 +13,7 @@ import type { ApplicationContext } from "./context.ts";
 
 type ShellRenderState = {
   runtime: ApplicationRuntime;
+  activeSessionKey: string;
   routeState: { routeId: RouteId };
   render: () => TemplateResult;
 };
@@ -21,7 +23,7 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell dock suppression", () => {
-  it("keeps Ask OpenClaw on settings pages and suppresses it only on its full page", () => {
+  it("applies route and session ownership to shell panels", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal(
       "matchMedia",
@@ -38,7 +40,14 @@ describe("OpenClaw shell dock suppression", () => {
           assistantAgentId: "main",
           hello: {
             auth: { role: "operator", scopes: ["operator.admin"] },
-            features: { methods: ["terminal.open", "browser.request", "openclaw.chat"] },
+            features: {
+              methods: [
+                "terminal.open",
+                "browser.request",
+                "openclaw.chat",
+                "worker.desktop.observe",
+              ],
+            },
           },
           lastError: null,
           offlineStable: false,
@@ -55,7 +64,20 @@ describe("OpenClaw shell dock suppression", () => {
       runtimeConfig: {
         state: { configSchema: null, configForm: null, configSnapshot: null, configUiHints: null },
       },
-      sessions: { state: { result: null } },
+      sessions: {
+        state: {
+          agentId: "main",
+          result: {
+            count: 1,
+            defaults: {},
+            path: "",
+            sessions: [
+              { key: "agent:main:main", kind: "direct", updatedAt: 0 } satisfies GatewaySessionRow,
+            ],
+            ts: 0,
+          },
+        },
+      },
       navigation: {
         snapshot: {
           navCollapsed: false,
@@ -90,7 +112,14 @@ describe("OpenClaw shell dock suppression", () => {
     } as unknown as ApplicationContext;
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellRenderState;
     shell.runtime = { context, router: {} } as unknown as ApplicationRuntime;
+    shell.activeSessionKey = "agent:main:main";
     const container = document.createElement("div");
+    const desktopAvailable = () =>
+      (
+        container.querySelector("openclaw-desktop-panel") as HTMLElement & {
+          available: boolean;
+        }
+      ).available;
 
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
@@ -128,5 +157,27 @@ describe("OpenClaw shell dock suppression", () => {
         }
       ).suppressed,
     ).toBe(false);
+    expect(desktopAvailable()).toBe(false);
+
+    context.sessions.state.result!.sessions = [
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        placement: { state: "active" } as GatewaySessionRow["placement"],
+        updatedAt: 0,
+      },
+    ];
+    renderLit(shell.render(), container);
+    expect(desktopAvailable()).toBe(true);
+
+    context.sessions.state.result!.sessions = [
+      { key: "agent:main:main", kind: "direct", updatedAt: 0 },
+    ];
+    renderLit(shell.render(), container);
+    expect(desktopAvailable()).toBe(false);
+
+    context.sessions.state.result = null;
+    renderLit(shell.render(), container);
+    expect(desktopAvailable()).toBe(false);
   });
 });
