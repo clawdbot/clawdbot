@@ -55,7 +55,7 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
-  it("round-trips private runtime authority and drops malformed envelopes", () => {
+  it("keeps private runtime authority out of job_json", () => {
     const runtimeAuthority = {
       version: 1 as const,
       runtimeId: "codex",
@@ -67,8 +67,8 @@ describe("schedule column codec round-trip", () => {
       runtimeAuthority,
       runtimeAuthorityRecoveryRequired: true,
     });
-    expect(job.runtimeAuthority).toEqual(runtimeAuthority);
-    expect(job.runtimeAuthorityRecoveryRequired).toBe(true);
+    expect(job.runtimeAuthority).toBeUndefined();
+    expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
 
     const malformed = projectCronJobThroughStorageCodec({
       ...makeCronJob({}),

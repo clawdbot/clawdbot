@@ -7,7 +7,6 @@ import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
-import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type {
@@ -95,9 +94,15 @@ function bindScheduleColumns(
 }
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
-  const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+  const {
+    runtimeAuthority: _runtimeAuthority,
+    runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
+    state: _state,
+    updatedAtMs: _updatedAtMs,
+    ...rest
+  } = job;
   // job_json stores config shape only; runtime state lives in split columns and
-  // state_json so state-only writes never rewrite public job config.
+  // state_json. Runtime authority has its own downgrade-stable companion row.
   return { ...rest, state: {} };
 }
 
@@ -292,7 +297,6 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     jobJson.toolsAllowProvenance.source === "final-executable-surface"
       ? ({ version: 1, source: "final-executable-surface" } as const)
       : undefined;
-  const runtimeAuthority = normalizeCronRuntimeAuthority(jobJson.runtimeAuthority);
   if (!schedule || !payload) {
     return null;
   }
@@ -312,10 +316,6 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
       : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(toolsAllowProvenance ? { toolsAllowProvenance } : {}),
-    ...(runtimeAuthority ? { runtimeAuthority } : {}),
-    ...(jobJson.runtimeAuthorityRecoveryRequired === true
-      ? { runtimeAuthorityRecoveryRequired: true as const }
-      : {}),
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
     enabled: row.enabled !== 0,

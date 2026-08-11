@@ -222,6 +222,11 @@ describe("scheduled tool policy provenance", () => {
     });
     expect(explicit.runtimeAuthority).toBeUndefined();
     expect(explicit.runtimeAuthorityRecoveryRequired).toBe(true);
+    const persistedExplicit = (await loadCronStore(storePath)).jobs.find(
+      (entry) => entry.id === job.id,
+    );
+    expect(persistedExplicit?.runtimeAuthority).toBeUndefined();
+    expect(persistedExplicit?.runtimeAuthorityRecoveryRequired).toBe(true);
 
     const replacement = { ...baseAuthority, payload: { apps: [{ id: "mail" }] } };
     const replaced = await update(
@@ -232,6 +237,11 @@ describe("scheduled tool policy provenance", () => {
     );
     expect(replaced.runtimeAuthority).toEqual(replacement);
     expect(replaced.runtimeAuthorityRecoveryRequired).toBeUndefined();
+    const persistedReplacement = (await loadCronStore(storePath)).jobs.find(
+      (entry) => entry.id === job.id,
+    );
+    expect(persistedReplacement?.runtimeAuthority).toEqual(replacement);
+    expect(persistedReplacement?.runtimeAuthorityRecoveryRequired).toBeUndefined();
 
     const triggeredTransport = await add(
       state,
@@ -249,6 +259,18 @@ describe("scheduled tool policy provenance", () => {
     expect(triggeredTransport.runtimeAuthority).toEqual(baseAuthority);
     const nonToolRuntime = await update(state, triggeredTransport.id, { trigger: null });
     expect(nonToolRuntime.runtimeAuthority).toBeUndefined();
+    expect(nonToolRuntime.runtimeAuthorityRecoveryRequired).toBeUndefined();
+    const persistedNonToolRuntime = (await loadCronStore(storePath)).jobs.find(
+      (entry) => entry.id === triggeredTransport.id,
+    );
+    expect(persistedNonToolRuntime?.runtimeAuthority).toBeUndefined();
+    expect(persistedNonToolRuntime?.runtimeAuthorityRecoveryRequired).toBeUndefined();
+    const persistedAuthorityRow = runOpenClawStateWriteTransaction(({ db }) =>
+      db
+        .prepare("SELECT job_id FROM cron_job_runtime_authorities WHERE job_id = ?")
+        .get(triggeredTransport.id),
+    );
+    expect(persistedAuthorityRow).toBeUndefined();
     if (state.timer) {
       clearTimeout(state.timer);
     }
