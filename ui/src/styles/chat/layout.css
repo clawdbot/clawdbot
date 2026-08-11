@@ -1441,8 +1441,7 @@ openclaw-chat-video-player {
   height: 16px;
 }
 
-.chat-assistant-attachment-badge,
-.chat-reply-pill {
+.chat-assistant-attachment-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1457,25 +1456,6 @@ openclaw-chat-video-player {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-.chat-reply-pill {
-  margin-bottom: 8px;
-  padding: 5px 10px;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
-.chat-reply-pill__icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-}
-
-.chat-reply-pill__icon svg {
-  width: 14px;
-  height: 14px;
 }
 
 /* Reply preview bar above composer */
@@ -1543,6 +1523,48 @@ openclaw-chat-video-player {
   stroke: currentColor;
   fill: none;
   stroke-width: 2px;
+}
+
+.chat-reply-preview--message {
+  width: 100%;
+  margin: 0 0 8px;
+  font: inherit;
+  text-align: left;
+}
+
+button.chat-reply-preview--message {
+  cursor: var(--cursor-action);
+}
+
+button.chat-reply-preview--message:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+button.chat-reply-preview--message:disabled {
+  cursor: var(--cursor-default);
+  opacity: 0.8;
+}
+
+.chat-reply-preview--unavailable {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.chat-bubble--reply-target {
+  animation: chat-reply-target-highlight 1.4s ease-out;
+}
+
+@keyframes chat-reply-target-highlight {
+  0%,
+  35% {
+    outline: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
+    outline-offset: 3px;
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 6px;
+  }
 }
 
 /* Right-click reply context menu */

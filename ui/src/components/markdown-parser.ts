@@ -3,6 +3,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import type Token from "markdown-it/lib/token.mjs";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
+import { formatGitHubItemReference, parseGitHubItemPath } from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -473,13 +474,17 @@ export function createMarkdownParser(): MarkdownIt {
         if (!url) {
           continue;
         }
-        if (open.markup === "linkify" || open.markup === "autolink") {
+        const generatedUrlLabel = open.markup === "linkify" || open.markup === "autolink";
+        const host = url.hostname.toLowerCase();
+        const githubLink = host === "github.com" || host === "www.github.com";
+        const itemTarget = githubLink ? parseGitHubItemPath(url) : null;
+        if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
-        const host = url.hostname.toLowerCase();
-        if (host !== "github.com" && host !== "www.github.com") {
+        if (!githubLink) {
           continue;
         }
+        let labelToken: Token | null = null;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
           const token = children[cursor];
           if (!token || token.type === "link_close") {
@@ -490,8 +495,12 @@ export function createMarkdownParser(): MarkdownIt {
             token.content.trim() !== ""
           ) {
             open.attrJoin("class", GITHUB_LINK_CLASS);
+            labelToken = token;
             break;
           }
+        }
+        if (generatedUrlLabel && itemTarget && labelToken) {
+          labelToken.content = formatGitHubItemReference(itemTarget);
         }
       }
     }

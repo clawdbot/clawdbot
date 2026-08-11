@@ -55,6 +55,8 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
+type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
+
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -94,6 +96,10 @@ type RenderMessageGroupOptions = {
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
+  resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+  onResolveReply?: (replyToId: string) => void;
+  onOpenReply?: (replyToId: string) => void;
+  replyNavigationId?: string | null;
   onRewind?: () => void;
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
@@ -158,6 +164,10 @@ function buildGroupedMessageRenderOptions(
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+    resolveReplyPreview: opts.resolveReplyPreview,
+    onResolveReply: opts.onResolveReply,
+    onOpenReply: opts.onOpenReply,
+    replyNavigationId: opts.replyNavigationId,
   };
 }
 
@@ -326,11 +336,11 @@ export function renderActivityGroup(
   `;
 }
 
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+export function resolveMessageGroupSenderLabel(
+  group: MessageGroup,
+  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
+): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const isWorkspaceConflict = group.messages.every((item) =>
-    Boolean(workspaceResultConflictFromTranscript(item.message)),
-  );
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -339,20 +349,29 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const userLabel = group.senderLabel?.trim();
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
   const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
-  const who =
-    normalizedRole === "user"
-      ? isCurrentUser
-        ? resolvedUserName
-        : (userLabel ?? resolvedUserName)
-      : normalizedRole === "assistant"
-        ? (userLabel ?? assistantName)
-        : normalizedRole === "tool"
-          ? "Tool"
-          : isWorkspaceConflict
-            ? t("chat.workspaceConflict.eventSender")
-            : normalizedRole;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
+  return normalizedRole === "user"
+    ? isCurrentUser
+      ? resolvedUserName
+      : (userLabel ?? resolvedUserName)
+    : normalizedRole === "assistant"
+      ? (userLabel ?? assistantName)
+      : normalizedRole === "tool"
+        ? "Tool"
+        : group.messages.every((item) =>
+              Boolean(workspaceResultConflictFromTranscript(item.message)),
+            )
+          ? t("chat.workspaceConflict.eventSender")
+          : normalizedRole;
+}
+
+export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const isWorkspaceConflict = group.messages.every((item) =>
+    Boolean(workspaceResultConflictFromTranscript(item.message)),
+  );
+  const assistantName = opts.assistantName ?? "Assistant";
+  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
+  const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -363,6 +382,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : isWorkspaceConflict
             ? "workspace-conflict"
             : "other";
+  const showAvatarGutter = opts.showAvatarGutter !== false;
+  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);

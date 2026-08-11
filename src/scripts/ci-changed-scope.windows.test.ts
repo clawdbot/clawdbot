@@ -74,6 +74,19 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes LAN advertisement and its native PowerShell proof to Windows", () => {
+    for (const lanPath of [
+      "src/infra/advertised-lan-host.ts",
+      "src/infra/advertised-lan-host.test.ts",
+      "src/infra/advertised-lan-host.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([lanPath]), lanPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes MXC runtime changes and Windows-only suites to Windows", () => {
     for (const mxcPath of [
       "extensions/mxc/src/mxc-backend.ts",

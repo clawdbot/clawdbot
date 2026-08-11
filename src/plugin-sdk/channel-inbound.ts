@@ -41,6 +41,11 @@ import type {
 } from "../channels/turn/types.js";
 
 export {
+  readAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../channels/turn/agent-run-terminal-outcome.js";
+
+export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";

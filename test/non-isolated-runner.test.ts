@@ -119,6 +119,86 @@ it("applies vi.mock factories after a sibling file fails during collection", asy
   }
 });
 
+it("restores gateway helper env stubs between files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-env-runner-"));
+  try {
+    const write = (name: string, content: string) =>
+      fs.writeFile(path.join(root, name), content, "utf-8");
+    const gatewayMocksPath = JSON.stringify(
+      path.join(repoRoot, "src", "gateway", "test-helpers.mocks.ts"),
+    );
+    const sharedVitestConfigPath = JSON.stringify(
+      path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"),
+    );
+    await fs.symlink(
+      path.join(repoRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    await write(
+      "a-import.test.ts",
+      [
+        `import ${gatewayMocksPath};`,
+        'import { expect, it } from "vitest";',
+        'it("applies the gateway test defaults", () => {',
+        '  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("1");',
+        '  expect(process.env.OPENCLAW_SKIP_CRON).toBe("1");',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    await write(
+      "b-observe.test.ts",
+      [
+        'import { expect, it } from "vitest";',
+        'it("starts without gateway test env from the previous file", () => {',
+        "  expect(process.env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();",
+        "  expect(process.env.OPENCLAW_SKIP_CRON).toBeUndefined();",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    await write(
+      "vitest.config.ts",
+      [
+        `import { sharedVitestConfig } from ${sharedVitestConfigPath};`,
+        'import { defineConfig } from "vitest/config";',
+        'import { BaseSequencer } from "vitest/node";',
+        "class AlphabeticalSequencer extends BaseSequencer {",
+        '  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {',
+        "    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));",
+        "  }",
+        "}",
+        "export default defineConfig({",
+        `  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},`,
+        "  resolve: sharedVitestConfig.resolve,",
+        "  test: {",
+        "    isolate: false,",
+        "    fileParallelism: false,",
+        "    maxWorkers: 1,",
+        "    sequence: { sequencer: AlphabeticalSequencer },",
+        `    runner: ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))},`,
+        "  },",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const env = childEnv();
+    delete env.OPENCLAW_SKIP_CHANNELS;
+    delete env.OPENCLAW_SKIP_CRON;
+    const vitestEntry = path.join(repoRoot, "node_modules", "vitest", "vitest.mjs");
+    const result = await execFileAsync(
+      process.execPath,
+      [vitestEntry, "run", "--root", root, "--config", path.join(root, "vitest.config.ts")],
+      { cwd: repoRoot, env, maxBuffer: 16 * 1024 * 1024 },
+    );
+    expect(`${result.stdout}\n${result.stderr}`).toContain("2 passed");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 it("clears named plugin runtime slots between files", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-store-runner-"));
   try {

@@ -5,6 +5,7 @@ import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-con
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { parseGitHubItemPath, type GitHubItemTarget } from "./github-link-target.ts";
 
 const GITHUB_HOST = "github.com";
 const OPEN_DELAY_MS = 250;
@@ -14,14 +15,8 @@ const CACHE_LIMIT = 100;
 const VIEWPORT_PADDING = 12;
 const CARD_GAP = 10;
 
-type GitHubLinkKind = "issue" | "pull";
-
-type GitHubLinkTarget = {
+type GitHubLinkTarget = GitHubItemTarget & {
   href: string;
-  kind: GitHubLinkKind;
-  number: number;
-  owner: string;
-  repo: string;
 };
 
 type GitHubPreview = GitHubLinkTarget & ControlUiGitHubPreview;
@@ -59,15 +54,6 @@ function optionalNumber(record: Record<string, unknown>, key: string): number | 
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function decodePathSegment(value: string): string | null {
-  try {
-    const decoded = decodeURIComponent(value).trim();
-    return decoded && decoded !== "." && decoded !== ".." ? decoded : null;
-  } catch {
-    return null;
-  }
-}
-
 function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
   let url: URL;
   try {
@@ -81,19 +67,8 @@ function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | nul
   if (url.username || url.password || (url.port && url.port !== "443")) {
     return null;
   }
-  const segments = url.pathname.split("/").filter(Boolean);
-  const owner = decodePathSegment(segments[0] ?? "");
-  const repo = decodePathSegment(segments[1] ?? "");
-  const surface = segments[2];
-  const numberText = segments[3] ?? "";
-  if (!owner || !repo || !/^[1-9]\d{0,9}$/.test(numberText)) {
-    return null;
-  }
-  const kind = surface === "issues" ? "issue" : surface === "pull" ? "pull" : null;
-  if (!kind) {
-    return null;
-  }
-  return { href: url.href, kind, number: Number(numberText), owner, repo };
+  const target = parseGitHubItemPath(url);
+  return target ? { ...target, href: url.href } : null;
 }
 
 export function isGitHubPullRequestLink(href: string): boolean {

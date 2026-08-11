@@ -20,8 +20,10 @@ import {
 } from "./chat-message-media.ts";
 import {
   renderChatThread,
+  renderChatSearchBar,
   resetChatThreadPresentationState,
   resetChatThreadSessionPresentationState,
+  toggleChatThreadSearch,
 } from "./chat-thread.ts";
 
 const observedElements = new Set<Element>();
@@ -171,6 +173,156 @@ describe("chat transcript row measurement", () => {
     for (const row of chatRows) {
       expect(observedElements.has(row)).toBe(false);
     }
+  });
+
+  it("resolves persisted replies to their source and highlights it on click", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = threadProps("pane-reply-preview", "agent:main:main", [
+      {
+        role: "assistant",
+        content: "The original answer",
+        __openclaw: { id: "source-message" },
+        timestamp: 1_000,
+      },
+      {
+        role: "user",
+        content: "Follow up",
+        __openclaw: { id: "reply-message", replyToId: "source-message" },
+        timestamp: 2_000,
+      },
+    ]);
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Molty");
+    expect(preview?.textContent).toContain("The original answer");
+    expect(preview?.textContent).not.toContain("source-message");
+
+    preview?.click();
+    await Promise.resolve();
+
+    const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
+      (bubble) => bubble.dataset.entryId === "source-message",
+    );
+    expect(sourceBubble?.classList.contains("chat-bubble--reply-target")).toBe(true);
+    transcript.hostDisconnected();
+  });
+
+  it("hydrates an unloaded reply preview without inserting its source row", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    let resolvedMessage: unknown = undefined;
+    const request = vi.fn();
+    const open = vi.fn();
+    const props = {
+      ...threadProps("pane-reply-hydration", "agent:main:main", [
+        {
+          role: "user",
+          content: "Follow up",
+          __openclaw: { id: "reply-message", replyToId: "source-message" },
+          timestamp: 2_000,
+        },
+      ]),
+      replyMessageAccess: {
+        revision: 0,
+        navigationId: null,
+        read: () => resolvedMessage,
+        request,
+        open,
+      },
+    };
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+
+    expect(request).toHaveBeenCalledWith("source-message");
+    expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
+
+    resolvedMessage = {
+      role: "assistant",
+      content: "The original answer",
+      __openclaw: { id: "source-message" },
+      timestamp: 1_000,
+    };
+    props.replyMessageAccess.revision += 1;
+    rerender();
+
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    expect(preview?.textContent).toContain("Replying to Molty");
+    expect(preview?.textContent).toContain("The original answer");
+    preview?.click();
+    expect(open).toHaveBeenCalledWith("source-message");
+    transcript.hostDisconnected();
+  });
+
+  it("clears search before navigating to a filtered reply target", async () => {
+    const transcript = createTestTranscript();
+    const searchContainer = document.body.appendChild(document.createElement("div"));
+    const threadContainer = document.body.appendChild(document.createElement("div"));
+    const open = vi.fn();
+    const paneId = "pane-filtered-reply-navigation";
+    const props = {
+      ...threadProps(paneId, "agent:main:main", [
+        {
+          role: "assistant",
+          content: "The original answer",
+          __openclaw: { id: "source-message" },
+          timestamp: 1_000,
+        },
+        {
+          role: "user",
+          content: "Follow up",
+          __openclaw: {
+            id: "reply-message",
+            replyToId: "source-message",
+            replyToPreview: { text: "The original answer", senderLabel: "Molty" },
+          },
+          timestamp: 2_000,
+        },
+      ]),
+      replyMessageAccess: {
+        revision: 0,
+        navigationId: null,
+        read: () => undefined,
+        request: vi.fn(),
+        open,
+      },
+    };
+    const rerender = () => {
+      render(renderChatSearchBar(paneId, rerender), searchContainer);
+      render(
+        renderChatThread({ ...props, onRequestUpdate: rerender }, transcript),
+        threadContainer,
+      );
+      transcript.hostUpdated();
+    };
+    toggleChatThreadSearch(paneId, rerender);
+    rerender();
+    transcript.hostConnected();
+    const input = searchContainer.querySelector<HTMLInputElement>("input");
+    expect(input).not.toBeNull();
+    input!.value = "Follow up";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushDeferredRowPrune();
+
+    expect(threadContainer.querySelector("[data-entry-id='source-message']")).toBeNull();
+    const preview = threadContainer.querySelector<HTMLButtonElement>(
+      ".chat-reply-preview--message",
+    );
+    expect(preview).not.toBeNull();
+    preview!.click();
+
+    expect(open).toHaveBeenCalledWith("source-message");
+    expect(searchContainer.querySelector("input")).toBeNull();
+    transcript.hostDisconnected();
   });
 
   it("loads a truncated assistant message once and keeps the full text visible", async () => {
