@@ -9,7 +9,7 @@ import {
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
-import { createSessionGoal } from "../../config/sessions/goals.js";
+import { clearSessionGoal, createSessionGoal } from "../../config/sessions/goals.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -1677,6 +1677,82 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.goal).toMatchObject({
+        tokenStart: 125,
+        tokenStartFresh: true,
+        tokenCursor: 125,
+        tokensUsed: 0,
+      });
+    });
+  });
+
+  it("rebases a replacement goal created during the active CLI run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: { defaults: { cliBackends: { "claude-cli": { command: "claude" } } } },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-goal-replaced-mid-run";
+      const sessionId = "test-cli-goal-replaced-mid-run-session";
+      const initialGoal: NonNullable<SessionEntry["goal"]> = {
+        schemaVersion: 1,
+        id: "goal-before-run",
+        objective: "Original objective",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 100,
+        tokenStartFresh: true,
+        tokenCursor: 100,
+        tokensUsed: 0,
+        tokenBudget: 30_000,
+        continuationTurns: 0,
+      };
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 100,
+          totalTokensFresh: true,
+          goal: initialGoal,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+      await clearSessionGoal({ sessionKey, storePath });
+      const replacementGoal = await createSessionGoal({
+        sessionKey,
+        storePath,
+        objective: "Replacement objective",
+        tokenBudget: 30_000,
+        now: 2,
+      });
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              promptTokens: 125,
+              usage: { input: 125, output: 5 },
+              lastCallUsage: { input: 125, output: 5 },
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.goal).toMatchObject({
+        id: replacementGoal.id,
+        objective: "Replacement objective",
         tokenStart: 125,
         tokenStartFresh: true,
         tokenCursor: 125,
