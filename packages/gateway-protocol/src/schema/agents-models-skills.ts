@@ -413,6 +413,8 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
+      ownerHandle: Type.Optional(NonEmptyString),
+      installRef: Type.Optional(NonEmptyString),
       displayName: NonEmptyString,
       summary: Type.Optional(Type.String()),
       version: Type.Optional(NonEmptyString),
