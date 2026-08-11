@@ -10,7 +10,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
+
+type RunMessageAction = typeof import("./message-action-runner.js").runMessageAction;
+
+const runFixtureMessageAction: RunMessageAction = async (...args) =>
+  (await import("./message-action-runner.js")).runMessageAction(...args);
 
 /** Workspace-style config fixture used by message action runner tests. */
 export const workspaceConfig = {
@@ -45,7 +49,7 @@ export const runDryAction = (params: {
   sandboxRoot?: string;
   agentId?: string;
 }) =>
-  runMessageAction({
+  runFixtureMessageAction({
     cfg: params.cfg,
     action: params.action,
     params: params.actionParams as never,
@@ -249,7 +253,7 @@ export async function runReplyAction(params: {
     currentChannelId: "direct:user-1",
     ...(params.currentMessageId !== undefined ? { currentMessageId: params.currentMessageId } : {}),
   };
-  return await runMessageAction({
+  return await runFixtureMessageAction({
     cfg: testchatConfig,
     action: "reply",
     params: { channel: "testchat", ...params.actionParams },
@@ -271,7 +275,7 @@ export async function runCurrentConversationPollAction(params: { to: string }) {
     currentChannelId: "direct:user-1",
     currentMessageId: "1783",
   };
-  return await runMessageAction({
+  return await runFixtureMessageAction({
     cfg: testchatConfig,
     action: "poll",
     params: {
