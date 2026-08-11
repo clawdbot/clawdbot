@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -178,11 +179,25 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
   if (content.blob.length > maxEncodedBytes) {
     throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
   }
-  const decoded = Buffer.from(content.blob, "base64");
+  // Node's lenient decoders would render garbled HTML with no error; validate
+  // strictly before the view is cached. Empty blobs stay valid (zero bytes),
+  // matching the lenient decode and the empty-text path.
+  if (content.blob.trim() === "") {
+    return "";
+  }
+  const normalizedBlob = canonicalizeBase64(content.blob);
+  if (normalizedBlob === undefined) {
+    throw new Error("MCP App resource blob is not valid base64");
+  }
+  const decoded = Buffer.from(normalizedBlob, "base64");
   if (decoded.byteLength > MCP_APP_RESOURCE_MAX_BYTES) {
     throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
   }
-  return decoded.toString("utf8");
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(decoded);
+  } catch {
+    throw new Error("MCP App resource blob is not valid UTF-8");
+  }
 }
 
 async function resolveListingUiMeta(

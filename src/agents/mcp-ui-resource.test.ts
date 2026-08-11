@@ -147,6 +147,83 @@ describe("MCP App UI resources", () => {
     }
   });
 
+  it("rejects blob content that is not valid base64", async () => {
+    for (const blob of ["<p>hello mcp app</p>", "!!!!", "SGVsbG==", "SGVsb"]) {
+      const result = await fetchMcpAppView({
+        runtime: runtime(async () => ({
+          contents: [{ uri: "ui://demo/app", mimeType: MCP_APP_RESOURCE_MIME_TYPE, blob }],
+        })),
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolInput: {},
+        toolResult: { content: [] },
+      });
+      expect(result).toBeUndefined();
+    }
+  });
+
+  it("preserves valid empty base64 blobs", async () => {
+    const sessionRuntime = runtime(async () => ({
+      contents: [{ uri: "ui://demo/app", mimeType: MCP_APP_RESOURCE_MIME_TYPE, blob: "" }],
+    }));
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+    expect(result?.viewId).toMatch(/^mcp-app-/u);
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.html).toBe("");
+  });
+
+  it("rejects blob content that is not valid UTF-8", async () => {
+    const result = await fetchMcpAppView({
+      runtime: runtime(async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            blob: Buffer.from([0xff, 0xfe, 0xfd, 0x80]).toString("base64"),
+          },
+        ],
+      })),
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("decodes valid base64 blob content, including unpadded input", async () => {
+    const html = "<html>blob demo</html>";
+    const blobs = [
+      Buffer.from(html, "utf8").toString("base64"),
+      // Same payload in unpadded form (padding stripped), which the shared
+      // canonicalizer accepts.
+      Buffer.from(html, "utf8").toString("base64").replace(/=+$/, ""),
+    ];
+    for (const blob of blobs) {
+      const sessionRuntime = runtime(async () => ({
+        contents: [{ uri: "ui://demo/app", mimeType: MCP_APP_RESOURCE_MIME_TYPE, blob }],
+      }));
+      const result = await fetchMcpAppView({
+        runtime: sessionRuntime,
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app",
+        toolInput: {},
+        toolResult: { content: [] },
+      });
+      expect(result?.viewId).toMatch(/^mcp-app-/u);
+      expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.html).toBe(html);
+    }
+  });
+
   it("bounds concurrent app bridge requests", () => {
     const view = {
       requestWindowStartedAtMs: 0,
