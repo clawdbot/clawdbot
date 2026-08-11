@@ -135,7 +135,7 @@ const loadSubagentRegistryRuntimeForTest = async () =>
     countActiveDescendantRuns: mod.countActiveDescendantRuns,
     countPendingDescendantRuns: mod.countPendingDescendantRuns,
     countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-    hasDescendantRunAwaitingSettle: hasDescendantRunAwaitingSettle,
+    hasDescendantRunAwaitingSettle,
     getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
     getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
     isSubagentSessionRunActive: mod.isSubagentSessionRunActive,

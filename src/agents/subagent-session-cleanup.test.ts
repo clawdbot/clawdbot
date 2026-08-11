@@ -35,9 +35,7 @@ vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
 
 vi.mock("./subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  ...{
-    countActiveDescendantRuns: countActiveDescendantRunsMock,
-  },
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,

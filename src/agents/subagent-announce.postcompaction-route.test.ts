@@ -33,16 +33,14 @@ vi.mock("./embedded-agent.js", () => ({
 
 vi.mock("./subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  ...{
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => 0,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    isSubagentSessionRunActive: () => true,
-    listSubagentRunsForRequester: () => [],
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => null,
-    shouldIgnorePostCompletionAnnounceForSession: () => false,
-  },
+  countActiveDescendantRuns: () => 0,
+  countPendingDescendantRuns: () => 0,
+  countPendingDescendantRunsExcludingRun: () => 0,
+  isSubagentSessionRunActive: () => true,
+  listSubagentRunsForRequester: () => [],
+  replaceSubagentRunAfterSteer: () => true,
+  resolveRequesterForChildSession: () => null,
+  shouldIgnorePostCompletionAnnounceForSession: () => false,
 }));
 vi.mock("./subagents/registry/subagent-registry-runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
