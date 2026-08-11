@@ -27,8 +27,8 @@ function errorMessage(message: string): AssistantMessage {
 
 describe("isRetryableAssistantError", () => {
   it("freezes one retry decision for every failover corpus row", () => {
-    expect(Object.keys(failoverRetryExpectations).sort()).toEqual(
-      failoverClassificationCorpus.map((row) => row.id).sort(),
+    expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
+      failoverClassificationCorpus.map((row) => row.id).toSorted(),
     );
   });
 
