@@ -2512,8 +2512,8 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
 }
 
 .sidebar-customize-menu__group-title {
-  margin: 6px 4px 2px;
-  padding: 7px 6px 4px;
+  margin: 6px 0 2px;
+  padding: 7px 8px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   color: var(--muted);
   font-size: calc(10px * var(--control-ui-text-scale));
@@ -2567,20 +2567,6 @@ wa-dropdown-item.sidebar-customize-menu__item {
   width: 100%;
   color: inherit;
   text-decoration: none;
-}
-
-/* Pin-editor rows: wa-dropdown flags every row [checkbox-adjacent] when the menu
-   holds checkbox items and tucks the shadow checkmark into a 2em start inset via
-   a -1.5em margin. Our compact `padding: 0 8px` above removes that inset, so
-   rebuild the check column here or the checkmark lands outside the row edge. */
-.sidebar-pin-editor-menu .sidebar-customize-menu__item[checkbox-adjacent] {
-  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px gutter */
-}
-
-.sidebar-pin-editor-menu .sidebar-customize-menu__item::part(checkmark) {
-  width: 14px;
-  min-width: 14px;
-  margin-inline: -22px 8px; /* pull back into the padding; the end margin spaces the icon */
 }
 
 /* The agent switcher marks its selection in the trailing details rail

@@ -398,7 +398,6 @@ export function renderPlaceSelect(params: {
                 ?disabled=${params.submitting || params.pendingCloud || !params.browseAvailable}
                 @click=${() => params.onBrowse(browseTarget)}
               >
-                <span class="session-menu__check" aria-hidden="true"></span>
                 <span class="session-menu__text">${t("newSession.browse")}</span>
                 <span class="new-session-page__menu-chevron" aria-hidden="true"
                   >${icons.chevronRight}</span
