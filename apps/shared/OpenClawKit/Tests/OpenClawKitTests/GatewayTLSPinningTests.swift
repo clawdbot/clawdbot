@@ -153,8 +153,8 @@ struct GatewayTLSPinningTests {
     @Test func `TLS authority includes normalized host and effective port`() throws {
         let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
         let route = try #require(GatewayTLSAuthority(url: url))
-        let explicitPort = try #require(GatewayTLSAuthority(
-            url: #require(URL(string: "wss://gateway.example.com:8443/path"))))
+        let explicitPortURL = try #require(URL(string: "wss://gateway.example.com:8443/path"))
+        let explicitPort = try #require(GatewayTLSAuthority(url: explicitPortURL))
 
         #expect(route.host == "gateway.example.com")
         #expect(route.port == 443)
