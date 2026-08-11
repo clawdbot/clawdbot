@@ -67,7 +67,6 @@ import {
   normalizeTemplateId,
   normalizeTimestamp,
   normalizeTitle,
-  syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 
@@ -558,9 +557,7 @@ export class WorkboardCoreStore {
         : normalizeOptionalString(effectivePatch.sessionKey);
     const execution =
       effectivePatch.execution === undefined
-        ? effectivePatch.sessionKey === undefined
-          ? existing.execution
-          : syncExecutionSessionKey(existing.execution, sessionKey)
+        ? existing.execution
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
@@ -685,7 +682,7 @@ export class WorkboardCoreStore {
         throw new Error(`card not found: ${id}`);
       }
       assertCanMutateClaimedCard(existing, scope);
-      const currentSessionKey = cardSessionKey(existing);
+      const currentSessionKey = existing.sessionKey;
       const requestedSessionKey = normalizeOptionalString(input.sessionKey);
       const action =
         normalizeOptionalString(input.action) ?? (currentSessionKey ? "rebind" : "bind");

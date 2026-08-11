@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
 import {
   addWorkboardCardComment,
   getWorkboardState,
@@ -111,7 +110,7 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftPriority = card.priority;
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
-  state.draftSessionKey = workboardCardSessionKey(card) ?? "";
+  state.draftSessionKey = card.sessionKey ?? "";
   state.draftTemplateId = card.metadata?.templateId ?? "";
   state.draftCommentBody = "";
 }

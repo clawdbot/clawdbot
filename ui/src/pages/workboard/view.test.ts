@@ -2461,13 +2461,15 @@ describe("renderWorkboard", () => {
       scenario: "an execution-owned linked session",
       sessionKey: "agent:main:execution-linked-session",
       topLevelSessionKey: undefined,
+      editableSessionKey: "",
     },
     {
       scenario: "the authoritative top-level session",
       sessionKey: "agent:main:top-level-linked-session",
       topLevelSessionKey: "agent:main:top-level-linked-session",
+      editableSessionKey: "agent:main:top-level-linked-session",
     },
-  ])("preserves $scenario when editing a Workboard card", async (testCase) => {
+  ])("keeps $scenario separate when editing a Workboard card", async (testCase) => {
     const card = createWorkboardCard({
       title: "Keep my linked session",
       ...(testCase.topLevelSessionKey ? { sessionKey: testCase.topLevelSessionKey } : {}),
@@ -2500,10 +2502,10 @@ describe("renderWorkboard", () => {
     editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
 
-    expect(state.draftSessionKey).toBe(testCase.sessionKey);
+    expect(state.draftSessionKey).toBe(testCase.editableSessionKey);
     expect(
       [...container.querySelectorAll(".workboard-draft wa-select")].some(
-        (select) => select.getAttribute("value") === testCase.sessionKey,
+        (select) => select.getAttribute("value") === testCase.editableSessionKey,
       ),
     ).toBe(true);
 
@@ -2521,7 +2523,7 @@ describe("renderWorkboard", () => {
       id: card.id,
       patch: expect.objectContaining({
         title: "Renamed without unlinking",
-        sessionKey: testCase.sessionKey,
+        sessionKey: testCase.editableSessionKey,
       }),
     });
     expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");

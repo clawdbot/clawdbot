@@ -846,7 +846,7 @@ describe("WorkboardStore", () => {
     expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
   });
 
-  it("keeps execution session links aligned with edited card links", async () => {
+  it("keeps primary session binding edits separate from execution state", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Relink me",
@@ -866,7 +866,8 @@ describe("WorkboardStore", () => {
 
     const relinked = await store.update(card.id, { sessionKey: "agent:main:dashboard:2" });
     expect(relinked.sessionKey).toBe("agent:main:dashboard:2");
-    expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:2");
+    expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:1");
+    expect(relinked.execution?.updatedAt).toBe(10);
     expect(relinked.events?.at(-1)).toMatchObject({
       kind: "linked",
       sessionKey: "agent:main:dashboard:2",
@@ -874,7 +875,8 @@ describe("WorkboardStore", () => {
 
     const unlinked = await store.update(card.id, { sessionKey: "" });
     expect(unlinked.sessionKey).toBeUndefined();
-    expect(unlinked.execution?.sessionKey).toBeUndefined();
+    expect(unlinked.execution?.sessionKey).toBe("agent:main:dashboard:1");
+    expect(unlinked.execution?.updatedAt).toBe(10);
 
     const cleared = await store.update(card.id, { execution: null });
     expect(cleared.execution).toBeUndefined();
@@ -917,6 +919,30 @@ describe("WorkboardStore", () => {
 
     const detached = await store.bindSession(card.id, { action: "detach" });
     expect(detached.sessionKey).toBeUndefined();
+  });
+
+  it("does not detach a running execution-only session", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const executionOnly = await store.create({
+      title: "Execution-owned card",
+      status: "running",
+      execution: {
+        id: "exec-worker",
+        kind: "agent-session",
+        mode: "autonomous",
+        status: "running",
+        sessionKey: "agent:worker:execution-only",
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    });
+    const executionDetached = await store.bindSession(executionOnly.id, { action: "detach" });
+    expect(executionDetached.sessionKey).toBeUndefined();
+    expect(executionDetached.execution).toMatchObject({
+      sessionKey: "agent:worker:execution-only",
+      status: "running",
+      updatedAt: 10,
+    });
   });
 
   it("binds an unbound card to the claiming session and rejects a mismatched claim", async () => {
