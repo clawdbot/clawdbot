@@ -19,6 +19,9 @@ describe("browser CLI cold imports", () => {
       expect(source, `${file} must use the narrow SDK and browser owners`).not.toMatch(
         /\bfrom\s+["'](?:\.\.\/|\.\/)(?:core-api|sdk-(?:config|node-runtime|setup-tools))\.js["']/,
       );
+      expect(source, `${file} must not pull the CDP runtime graph for URL redaction`).not.toMatch(
+        /\bfrom\s+["']\.\.\/browser\/cdp\.helpers\.js["']/,
+      );
     }
   });
 });

@@ -3,6 +3,7 @@
  * checks.
  */
 import type { Command } from "commander";
+import { redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { danger, defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
@@ -18,7 +19,6 @@ import type {
   ProfileStatus,
   SystemProfileInfo,
 } from "../browser-runtime.js";
-import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
