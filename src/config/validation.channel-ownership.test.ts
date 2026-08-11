@@ -185,6 +185,7 @@ describe("landed ownership gates on the validated config", () => {
           origin: "global",
           enabledByDefault: true,
           channels: ["acmech"],
+          contracts: { speechProviders: ["acme-speech"] },
           channelConfigs: {
             acmech: { schema: strictSchema("repOpt"), preferOver: ["acme-inc"] },
           },
@@ -225,5 +226,93 @@ describe("landed ownership gates on the validated config", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  // #120332 round 50 (P1): the landed-owner gate compares the probe-less candidate list, not
+  // just the hashed surface. A candidate differing only in a section that creates capability
+  // candidates (tts here) is a prospective mutation and must validate on its own plan.
+  it("goes predictive when a non-surface section changes claimant planning", () => {
+    setupClaimants();
+    const runningConfig: OpenClawConfig = { channels: { acmech: { incOpt: "x" } } };
+    setRuntimeConfigSnapshot(runningConfig, runningConfig);
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { acmech: { incOpt: "x" } },
+      tts: { enabled: true, provider: "acme-speech" },
+    });
+
+    // The speech selection adds a capability candidate for the replacement: the prospective
+    // plan supersedes the incumbent, whose key the replacement's schema rejects.
+    expect(result.ok).toBe(false);
+  });
+});
+
+// #120332 round 50 (P1): default hydration and ownership planning iterate to STABILITY. One
+// channel's default configures it and flips a second channel's owner; the second channel's own
+// default then configures IT and flips a third channel's owner — a single rebuild froze the
+// third channel on its pre-cascade schema.
+describe("default-ownership iteration reaches a fixpoint", () => {
+  it("ranks a third channel by the owner the cascaded defaults produce", () => {
+    const schemaOf = (property: string, extra?: Record<string, unknown>) => ({
+      type: "object",
+      properties: { [property]: { type: "string", ...extra } },
+      additionalProperties: false,
+    });
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "acme-m1",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["cha", "chb"],
+          channelConfigs: { cha: { schema: schemaOf("aOpt") }, chb: { schema: schemaOf("m1Opt") } },
+        }),
+        createPluginManifestRecord({
+          id: "acme-r1",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["cha"],
+          channelConfigs: {
+            cha: { schema: schemaOf("aOpt", { default: "x" }), preferOver: ["acme-m1"] },
+          },
+        }),
+        createPluginManifestRecord({
+          id: "acme-alt2",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["chb"],
+          channelConfigs: {
+            chb: { schema: schemaOf("bOpt", { default: "y" }), preferOver: ["acme-m3"] },
+          },
+        }),
+        createPluginManifestRecord({
+          id: "acme-m3",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["chc"],
+          channelConfigs: { chc: { schema: schemaOf("m3Opt") } },
+        }),
+        createPluginManifestRecord({
+          id: "acme-alt3",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["chc"],
+          channelConfigs: { chc: { schema: schemaOf("alt3Opt") } },
+        }),
+      ],
+    });
+
+    const result = validateConfigObjectWithPlugins({
+      channels: { cha: {}, chb: {}, chc: { m3Opt: "x" } },
+    });
+
+    // Pass 1 defaults cha (replacement owner) → replan kills m1 → chb's owner becomes alt2;
+    // pass 2 defaults chb from alt2's schema → replan kills m3 → chc's runtime owner is alt3,
+    // whose schema rejects the m3-only key.
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.path.startsWith("channels.chc"))).toBe(true);
+    }
   });
 });

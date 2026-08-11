@@ -29,6 +29,7 @@ import {
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
   getRuntimeAmbientEnvTriggers,
   getRuntimeConfigSourceSnapshot,
@@ -328,7 +329,26 @@ function validateConfigObjectWithPluginsBase(
     if (!sourceSnapshot || !isRecord(raw)) {
       return false;
     }
-    return activationSurfaceHash(raw as OpenClawConfig) === activationSurfaceHash(sourceSnapshot);
+    const rawConfig = raw as OpenClawConfig;
+    if (activationSurfaceHash(rawConfig) !== activationSurfaceHash(sourceSnapshot)) {
+      return false;
+    }
+    // Capability candidates arise from sections OUTSIDE the hashed surface too (tts,
+    // cloudWorkers, agent-harness settings, …): compare the probe-less candidate list the
+    // claimant resolver actually consumes, so any config section that changes claimant planning
+    // sends the prospective config to its own plan instead of the landed owners.
+    const ambientEnvTriggers = getRuntimeAmbientEnvTriggers();
+    const candidateFingerprint = (cfg: OpenClawConfig): string =>
+      JSON.stringify(
+        detectPluginAutoEnableCandidates({
+          config: cfg,
+          env: opts.env,
+          manifestRegistry: ensureRegistry().registry,
+          setupProbes: "skip",
+          ...(ambientEnvTriggers ? { ambientEnvTriggers } : {}),
+        }),
+      );
+    return candidateFingerprint(rawConfig) === candidateFingerprint(sourceSnapshot);
   };
 
   const buildChannelSchemas = (
@@ -384,36 +404,44 @@ function validateConfigObjectWithPluginsBase(
       const planBaseConfig = ensureCompatConfig();
       let schemas = buildChannelSchemas(planBaseConfig);
       // Schema defaults can make an authored `{}` channel meaningfully configured, and gateway
-      // auto-enable consumes the DEFAULTED config: replan ownership from it, or a claimant the
-      // defaults activate supersedes another channel's owner only at runtime while validation
-      // ranked that channel by a plan the runtime never runs. One reconciliation pass — a
-      // default that exists only under the post-default owner's schema is a second-order
-      // fixpoint the runtime's single auto-enable pass never reaches either.
+      // auto-enable consumes the DEFAULTED config: iterate default hydration and ownership
+      // planning to STABILITY — one channel's default can flip a second channel's owner, whose
+      // own default then configures that channel and flips a third. Each pass applies defaults
+      // with the current owners and replans; each productive pass settles at least one channel,
+      // so the authored channel count bounds convergence, and the loop stops as soon as the
+      // hydrated record repeats.
       const channelsRecord = isRecord(config.channels) ? config.channels : undefined;
       if (channelsRecord) {
         const compatChannels = isRecord(planBaseConfig.channels) ? planBaseConfig.channels : {};
-        const defaultedChannels: Record<string, unknown> = { ...compatChannels };
-        let defaultsChanged = false;
-        for (const [key, value] of Object.entries(channelsRecord)) {
-          const trimmed = key.trim();
-          const schema = trimmed
-            ? schemas.get(normalizeManifestChannelId(trimmed))?.schema
-            : undefined;
-          if (!schema) {
-            continue;
+        const maxPasses = Object.keys(channelsRecord).length + 1;
+        let previousHydrated = "";
+        for (let pass = 0; pass < maxPasses; pass += 1) {
+          const defaultedChannels: Record<string, unknown> = { ...compatChannels };
+          let defaultsChanged = false;
+          for (const [key, value] of Object.entries(channelsRecord)) {
+            const trimmed = key.trim();
+            const schema = trimmed
+              ? schemas.get(normalizeManifestChannelId(trimmed))?.schema
+              : undefined;
+            if (!schema) {
+              continue;
+            }
+            const result = validateJsonSchemaValue({
+              schema,
+              cacheKey: `channel:${trimmed}`,
+              value,
+              applyDefaults: true,
+            });
+            if (result.ok && JSON.stringify(result.value) !== JSON.stringify(value)) {
+              defaultedChannels[key] = result.value;
+              defaultsChanged = true;
+            }
           }
-          const result = validateJsonSchemaValue({
-            schema,
-            cacheKey: `channel:${trimmed}`,
-            value,
-            applyDefaults: true,
-          });
-          if (result.ok && JSON.stringify(result.value) !== JSON.stringify(value)) {
-            defaultedChannels[key] = result.value;
-            defaultsChanged = true;
+          const hydrated = JSON.stringify(defaultedChannels);
+          if (!defaultsChanged || hydrated === previousHydrated) {
+            break;
           }
-        }
-        if (defaultsChanged) {
+          previousHydrated = hydrated;
           schemas = buildChannelSchemas({
             ...planBaseConfig,
             channels: defaultedChannels,
