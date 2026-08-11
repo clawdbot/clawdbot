@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   USER_PREFS_ENTRY_LIMIT,
+  USER_PREFS_PROFILE_KEY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -26,10 +27,14 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 ) STRICT;
 `;
 
-type UserPreferenceError = {
-  code: "invalid-entry-count" | "invalid-key" | "invalid-value" | "value-too-large";
-  key?: string;
-};
+export type UserPreferenceError =
+  | { code: "invalid-entry-count" }
+  | { code: "invalid-key" | "invalid-value" | "value-too-large"; key: string }
+  | {
+      code: "profile-key-limit";
+      limit: number;
+      currentCount: number;
+    };
 
 function ensureUserPreferencesSchema(options: OpenClawStateDatabaseOptions = {}): void {
   const database = openOpenClawStateDatabase(options);
@@ -53,6 +58,16 @@ function openUserPreferencesDatabase(options: OpenClawStateDatabaseOptions = {})
   return { sqlite: state.db, kysely: getNodeSqliteKysely<UserPreferencesDatabase>(state.db) };
 }
 
+function readPreferenceKeys(database: DatabaseSync, profileId: string): Set<string> {
+  const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  return new Set(
+    executeSqliteQuerySync(
+      database,
+      db.selectFrom("user_preferences").select("pref_key").where("profile_id", "=", profileId),
+    ).rows.map((row) => row.pref_key),
+  );
+}
+
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
 export function mergeUserPreferences(
   database: DatabaseSync,
@@ -63,11 +78,22 @@ export function mergeUserPreferences(
     return;
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  const targetKeys = readPreferenceKeys(database, targetProfileId);
   const rows = executeSqliteQuerySync(
     database,
-    db.selectFrom("user_preferences").selectAll().where("profile_id", "=", sourceProfileId),
+    db
+      .selectFrom("user_preferences")
+      .selectAll()
+      .where("profile_id", "=", sourceProfileId)
+      .orderBy("pref_key", "asc"),
   ).rows;
   for (const row of rows) {
+    if (targetKeys.has(row.pref_key)) {
+      continue;
+    }
+    if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
+      break;
+    }
     executeSqliteQuerySync(
       database,
       db
@@ -75,6 +101,7 @@ export function mergeUserPreferences(
         .values({ ...row, profile_id: targetProfileId })
         .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doNothing()),
     );
+    targetKeys.add(row.pref_key);
   }
   executeSqliteQuerySync(
     database,
@@ -117,9 +144,15 @@ export function setUserPreferences(
     return err({ code: "invalid-entry-count" });
   }
   const serialized: Array<{ prefKey: string; valueJson: string }> = [];
+  const deletionKeys: string[] = [];
   for (const [prefKey, value] of rawEntries) {
     if (!prefKey || prefKey.length > 256) {
       return err({ code: "invalid-key", key: prefKey });
+    }
+    // JSON null is the additive removal form for this record-shaped RPC.
+    if (value === null) {
+      deletionKeys.push(prefKey);
+      continue;
     }
     let valueJson: string | undefined;
     try {
@@ -135,13 +168,33 @@ export function setUserPreferences(
     }
     serialized.push({ prefKey, valueJson });
   }
-  if (serialized.length === 0) {
+  if (serialized.length === 0 && deletionKeys.length === 0) {
     return ok(undefined);
   }
   ensureUserPreferencesSchema(options);
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
+      const currentKeys = readPreferenceKeys(sqlite, profileId);
+      const nextKeys = new Set(currentKeys);
+      deletionKeys.forEach((key) => nextKeys.delete(key));
+      serialized.forEach((entry) => nextKeys.add(entry.prefKey));
+      if (serialized.length > 0 && nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+        return err({
+          code: "profile-key-limit",
+          limit: USER_PREFS_PROFILE_KEY_LIMIT,
+          currentCount: currentKeys.size,
+        });
+      }
+      if (deletionKeys.length > 0) {
+        executeSqliteQuerySync(
+          sqlite,
+          db
+            .deleteFrom("user_preferences")
+            .where("profile_id", "=", profileId)
+            .where("pref_key", "in", deletionKeys),
+        );
+      }
       const updatedAtMs = Date.now();
       for (const entry of serialized) {
         executeSqliteQuerySync(
@@ -162,9 +215,9 @@ export function setUserPreferences(
             ),
         );
       }
+      return ok(undefined);
     },
     options,
     { operationLabel: "users.preferences.set" },
   );
-  return ok(undefined);
 }

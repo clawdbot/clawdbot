@@ -21,6 +21,7 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  UserPrefsLimitExceededErrorDetails,
   WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
@@ -72,6 +73,7 @@ export {
   ErrorShapeSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  UserPrefsLimitExceededErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,

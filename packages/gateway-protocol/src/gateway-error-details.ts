@@ -25,6 +25,7 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 export const GatewayErrorDetailCodes = {
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
@@ -39,6 +40,13 @@ export type MissingScopeErrorDetails = {
 
 export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
+};
+
+/** Per-profile preference quota details returned by users.prefs.set. */
+export type UserPrefsLimitExceededErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED;
+  limit: number;
+  currentCount: number;
 };
 
 /** Unknown agent details carried by agent-scoped method validation failures. */
@@ -56,6 +64,7 @@ export type WizardNotFoundErrorDetails = {
 export type GatewayErrorDetails =
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
+  | UserPrefsLimitExceededErrorDetails
   | UnknownAgentIdErrorDetails
   | WizardNotFoundErrorDetails;
 

@@ -1803,6 +1803,28 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
     }
 }
 
+public struct UserPrefsLimitExceededErrorDetails: Codable, Sendable {
+    public let code: String
+    public let limit: Int
+    public let currentcount: Int
+
+    public init(
+        code: String,
+        limit: Int,
+        currentcount: Int)
+    {
+        self.code = code
+        self.limit = limit
+        self.currentcount = currentcount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case limit
+        case currentcount = "currentCount"
+    }
+}
+
 public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let providerid: String
     public let leaseid: String?
@@ -18741,6 +18763,7 @@ public enum BoardCommand: Codable, Sendable {
 public enum GatewayErrorDetails: Codable, Sendable {
     case missingScope(MissingScopeErrorDetails)
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
+    case userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails)
     case unknownAgentId(UnknownAgentIdErrorDetails)
     case wizardNotFound(WizardNotFoundErrorDetails)
 
@@ -18758,6 +18781,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
+        case .userPrefsLimitExceeded(let value): value.code
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
         }
@@ -18783,6 +18807,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch discriminator {
         case "MISSING_SCOPE": self = try .missingScope(MissingScopeErrorDetails(from: decoder))
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
+        case "USER_PREFS_LIMIT_EXCEEDED": self = try .userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails(from: decoder))
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
         case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
         default:
@@ -18798,6 +18823,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): try value.encode(to: encoder)
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
+        case .userPrefsLimitExceeded(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
         }

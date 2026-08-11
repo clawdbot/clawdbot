@@ -1,6 +1,9 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  GatewayErrorDetailCodes,
+  GatewayErrorDetailsSchema,
+  UserPrefsLimitExceededErrorDetailsSchema,
   UsersPrefsGetResultSchema,
   UsersPrefsSetResultSchema,
   validateUsersPrefsGetParams,
@@ -15,11 +18,29 @@ describe("user preference protocol schemas", () => {
     expect(validateUsersPrefsGetParams({})).toBe(true);
     expect(validateUsersPrefsGetParams({ keys: Object.keys(entries) })).toBe(true);
     expect(validateUsersPrefsSetParams({ entries })).toBe(true);
+    expect(validateUsersPrefsSetParams({ entries: { deleted: null } })).toBe(true);
     expect(validateUsersPrefsGetParams({ keys: [...Object.keys(entries), "overflow"] })).toBe(
       false,
     );
     expect(validateUsersPrefsGetParams({ keys: ["same", "same"] })).toBe(false);
     expect(validateUsersPrefsSetParams({ entries: { ...entries, overflow: true } })).toBe(false);
+  });
+
+  it("exposes typed per-profile quota details", () => {
+    expect(
+      Value.Check(GatewayErrorDetailsSchema, {
+        code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+        limit: 128,
+        currentCount: 128,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(UserPrefsLimitExceededErrorDetailsSchema, {
+        code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+        limit: 128,
+        currentCount: 128,
+      }),
+    ).toBe(true);
   });
 
   it("keeps no-identity results distinct from successful values", () => {

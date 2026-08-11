@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "vitest";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -77,4 +78,41 @@ test("users.prefs returns a typed result without a durable identity", async () =
     ok: true,
     payload: { status: "no_durable_identity" },
   });
+});
+
+test("users.prefs.set returns typed profile quota details", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "users-prefs-quota-",
+  });
+  try {
+    const profile = ensureProfileForEmail("quota@example.test");
+    for (let start = 0; start < 128; start += 32) {
+      const entries = Object.fromEntries(
+        Array.from({ length: 32 }, (_, index) => [`key-${start + index}`, true]),
+      );
+      expect(
+        await invokePreferenceMethod("users.prefs.set", { entries }, profile.id),
+      ).toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+    }
+
+    expect(
+      await invokePreferenceMethod("users.prefs.set", { entries: { "key-128": true } }, profile.id),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        details: {
+          code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+          limit: 128,
+          currentCount: 128,
+        },
+      },
+    });
+  } finally {
+    await state.cleanup();
+  }
 });

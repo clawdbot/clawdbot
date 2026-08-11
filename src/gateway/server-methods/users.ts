@@ -1,6 +1,7 @@
 // Gateway methods for durable user profile administration.
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   formatValidationErrors,
   validateUsersLinkEmailParams,
@@ -210,7 +211,25 @@ export const usersHandlers: GatewayRequestHandlers = {
       }
       const result = setUserPreferences(canonicalProfileId, params.entries);
       if (!result.ok) {
-        const key = result.error.key ? ` for ${result.error.key}` : "";
+        if (result.error.code === "profile-key-limit") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+              {
+                details: {
+                  code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+                  limit: result.error.limit,
+                  currentCount: result.error.currentCount,
+                },
+              },
+            ),
+          );
+          return;
+        }
+        const key = "key" in result.error ? ` for ${result.error.key}` : "";
         respond(
           false,
           undefined,

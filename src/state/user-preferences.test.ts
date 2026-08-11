@@ -6,7 +6,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import {
+  getUserPreferences,
+  mergeUserPreferences,
+  setUserPreferences,
+} from "./user-preferences.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -57,5 +61,66 @@ describe("user preferences", () => {
       setUserPreferences("profile-a", { valid: true, oversized: "🦞".repeat(1_025) }, options),
     ).toMatchObject({ ok: false, error: { code: "value-too-large", key: "oversized" } });
     expect(getUserPreferences("profile-a", undefined, options)).toEqual({});
+  });
+
+  it("caps each profile at 128 keys while allowing deletions to free capacity", () => {
+    const options = stateOptions();
+    for (let start = 0; start < 127; start += 32) {
+      const count = Math.min(32, 127 - start);
+      const entries = Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [`key-${start + index}`, true]),
+      );
+      expect(setUserPreferences("profile-a", entries, options)).toEqual({
+        ok: true,
+        value: undefined,
+      });
+    }
+
+    expect(setUserPreferences("profile-a", { "key-127": true }, options)).toEqual({
+      ok: true,
+      value: undefined,
+    });
+    expect(setUserPreferences("profile-a", { "key-128": true }, options)).toEqual({
+      ok: false,
+      error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
+    });
+    expect(setUserPreferences("profile-a", { "key-0": null }, options)).toEqual({
+      ok: true,
+      value: undefined,
+    });
+    expect(setUserPreferences("profile-a", { "key-128": true }, options)).toEqual({
+      ok: true,
+      value: undefined,
+    });
+    expect(getUserPreferences("profile-a", ["key-0", "key-128"], options)).toEqual({
+      "key-128": true,
+    });
+  });
+
+  it("keeps merged profiles within the same preference cap", () => {
+    const options = stateOptions();
+    for (let start = 0; start < 127; start += 32) {
+      const count = Math.min(32, 127 - start);
+      expect(
+        setUserPreferences(
+          "target",
+          Object.fromEntries(
+            Array.from({ length: count }, (_, index) => [`target-${start + index}`, true]),
+          ),
+          options,
+        ),
+      ).toMatchObject({ ok: true });
+    }
+    expect(
+      setUserPreferences("source", { "source-a": true, "source-b": true }, options),
+    ).toMatchObject({ ok: true });
+
+    mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
+
+    expect(Object.keys(getUserPreferences("target", undefined, options))).toHaveLength(128);
+    expect(getUserPreferences("target", ["source-a", "source-b"], options)).toEqual({
+      "source-a": true,
+    });
+    expect(getUserPreferences("source", undefined, options)).toEqual({});
   });
 });

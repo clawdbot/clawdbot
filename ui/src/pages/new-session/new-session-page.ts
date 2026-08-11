@@ -236,8 +236,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     onComplete: (result) => {
       const projects = result.projects ?? [];
       this.projects = projects;
-      this.projectRecents =
-        result.recents ?? (this.context?.gateway.snapshot.selfUser ? [] : undefined);
+      this.projectRecents = result.recents;
       if (this.projectId && !projects.some((project) => project.id === this.projectId)) {
         this.projectId = "";
         this.maybeLoadBranches();
@@ -245,7 +244,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     },
     onError: () => {
       this.projects = [];
-      this.projectRecents = this.context?.gateway.snapshot.selfUser ? [] : undefined;
+      this.projectRecents = undefined;
       this.projectId = "";
     },
   });

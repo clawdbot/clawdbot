@@ -5,6 +5,7 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 export const USER_PREFS_ENTRY_LIMIT = 32;
+export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
 
 const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });

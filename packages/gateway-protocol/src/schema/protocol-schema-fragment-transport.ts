@@ -33,4 +33,5 @@ export const TransportProtocolSchemas = {
   GatewaySuspendStatusResult: gatewaySuspend.GatewaySuspendStatusResultSchema,
   GatewaySuspendResumeParams: gatewaySuspend.GatewaySuspendResumeParamsSchema,
   GatewaySuspendResumeResult: gatewaySuspend.GatewaySuspendResumeResultSchema,
+  UserPrefsLimitExceededErrorDetails: errorCodes.UserPrefsLimitExceededErrorDetailsSchema,
 } as const;
