@@ -1,4 +1,4 @@
-export type AgentEndCancellationReservation = { readonly id: number };
+type AgentEndCancellationReservation = { readonly id: number };
 
 type ReservationState = AgentEndCancellationReservation & {
   sessionKey: string;
