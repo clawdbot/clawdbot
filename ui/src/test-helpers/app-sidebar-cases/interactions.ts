@@ -344,10 +344,6 @@ describe("AppSidebar catalog session rows", () => {
       );
       const navigated: Array<[string, unknown]> = [];
       sidebar.onNavigate = (routeId, options) => navigated.push([routeId, options]);
-      let navDrawerCloses = 0;
-      sidebar.onCloseNavDrawer = () => {
-        navDrawerCloses += 1;
-      };
       const header = sidebar.querySelector<HTMLElement>(
         '[data-session-section="catalog:codex"] .sidebar-recent-sessions__head',
       );
@@ -373,10 +369,6 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
       expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-
-      // On a phone this menu lives inside the modal navigation drawer, which occludes
-      // and inerts the toast; the outcome only reaches the operator once it closes.
-      expect(navDrawerCloses).toBe(1);
 
       // Hiding must announce its own outcome: the section name, undo, and a recovery
       // path that opens the settings block instead of only naming it.

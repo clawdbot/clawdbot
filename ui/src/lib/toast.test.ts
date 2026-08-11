@@ -36,7 +36,7 @@ describe("shared toast", () => {
   it("uses the active modal's toast layer before the app layer", async () => {
     const appHost = await mountHost();
     const modal = document.createElement("openclaw-modal-dialog");
-    modal.setAttribute("open", "");
+    modal.open = true;
     const modalHost = document.createElement("openclaw-toast-host");
     modal.append(modalHost);
     document.body.append(modal);

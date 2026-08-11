@@ -17,6 +17,39 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
+const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
+  featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+  methodResponses: {
+    "sessions.list": chatSessionListResponse(),
+    "sessions.catalog.list": {
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { archive: true, continueSession: true },
+          hosts: [
+            {
+              connected: true,
+              hostId: "gateway:local",
+              kind: "gateway",
+              label: "Local Codex",
+              sessions: [
+                {
+                  archived: false,
+                  canArchive: true,
+                  canContinue: true,
+                  name: "Toast routing proof",
+                  status: "idle",
+                  threadId: "toast-routing-proof",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
 
 let context: BrowserContext | undefined;
 
@@ -404,25 +437,29 @@ suite.define(() => {
   it.each(["dark", "light"] as const)(
     "keeps the toast above the mobile drawer in %s mode",
     async (colorScheme) => {
-      const page = await openPage({ colorScheme, height: 844, nativeNav: false, width: 390 });
+      const page = await openPage({
+        colorScheme,
+        height: 844,
+        nativeNav: false,
+        scenario: TOAST_SCENARIO,
+        width: 390,
+      });
       const drawer = page.locator("openclaw-modal-dialog.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
       await page.locator(".chat-pane__nav-toggle").first().click();
       await expect.poll(() => dialog.isVisible()).toBe(true);
 
+      const catalog = drawer.locator('[data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      await catalog.locator(".sidebar-recent-sessions__head").hover();
+      await catalog.locator('[data-session-catalog-view-menu="codex"]').click();
+      await page
+        .locator('wa-dropdown-item[value="hide-catalog"]')
+        .evaluate((element) => (element as HTMLElement).click());
       const host = drawer.locator("openclaw-toast-host");
-      await host.evaluate((element) => {
-        (
-          element as HTMLElement & {
-            show(options: { durationMs: number; message: string }): void;
-          }
-        ).show({
-          durationMs: 60_000,
-          message: "Mock sync complete — drawer remains open.",
-        });
-      });
       const toast = host.locator(".app-toast");
       await toast.waitFor();
+      await expect.poll(() => toast.textContent()).toContain("Codex hidden");
       const dismiss = toast.getByRole("button", { name: "Dismiss" });
       await dismiss.click({ trial: true });
 

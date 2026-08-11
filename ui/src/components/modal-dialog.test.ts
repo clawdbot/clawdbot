@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { showToast } from "../lib/toast.ts";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,
@@ -101,6 +102,24 @@ describe("openclaw-modal-dialog", () => {
     expect(webAwesomeDialog.lightDismiss).toBe(true);
     expect(webAwesomeDialog.withoutHeader).toBe(true);
     expect(dialog.open).toBe(true);
+  });
+
+  it("hands an active toast back to the app layer when it closes", async () => {
+    const appHost = document.createElement("openclaw-toast-host");
+    document.body.append(appHost);
+    try {
+      const { modal } = await renderModal();
+
+      showToast({ message: "Saved" });
+      modal.hide();
+      await modal.updateComplete;
+      await appHost.updateComplete;
+
+      expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
+      expect(modal.querySelector(".app-toast")).toBeNull();
+    } finally {
+      appHost.remove();
+    }
   });
 
   it("keeps the navigation drawer sidebar in a full-height, shrinkable flex column", () => {

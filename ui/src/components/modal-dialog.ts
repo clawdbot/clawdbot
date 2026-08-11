@@ -119,6 +119,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   }
 
   override disconnectedCallback() {
+    this.querySelector("openclaw-toast-host")?.handoff();
     this.syncGeneration += 1;
     const webAwesomeDialog = this.webAwesomeDialog;
     const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
@@ -155,6 +156,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   }
 
   protected override updated() {
+    if (!this.open) {
+      // Keep an active outcome visible when its top-layer owner closes or is replaced.
+      this.querySelector("openclaw-toast-host")?.handoff();
+    }
     void this.syncAccessibility();
     void this.syncDialogOpen();
   }
