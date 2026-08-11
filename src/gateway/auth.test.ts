@@ -535,6 +535,47 @@ describe("gateway auth", () => {
     expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
   });
 
+  it("keeps managed Serve shared-secret auth independent of WhoIs availability", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+    });
+    const tailscaleWhois = vi.fn(async () => null);
+    const params = {
+      auth: { mode: "token" as const, token: "secret", allowTailscale: true },
+      tailscaleWhois,
+      req: createTailscaleForwardedReq(),
+      rateLimiter: limiter,
+    };
+
+    try {
+      await expect(
+        authorizeWsControlUiGatewayConnect({
+          ...params,
+          connectAuth: { token: "secret" },
+        }),
+      ).resolves.toMatchObject({ ok: true, method: "token" });
+      expect(tailscaleWhois).not.toHaveBeenCalled();
+
+      await expect(
+        authorizeWsControlUiGatewayConnect({
+          ...params,
+          connectAuth: { token: "wrong" },
+        }),
+      ).resolves.toMatchObject({ ok: false, reason: "token_mismatch" });
+      await expect(
+        authorizeWsControlUiGatewayConnect({
+          ...params,
+          connectAuth: { token: "secret" },
+        }),
+      ).resolves.toMatchObject({ ok: false, reason: "rate_limited" });
+    } finally {
+      limiter.dispose();
+    }
+  });
+
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {
     const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();

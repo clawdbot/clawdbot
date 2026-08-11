@@ -19,3 +19,13 @@ export function readGatewayTailscaleIngressMode(
 ): GatewayTailscaleIngressMode | undefined {
   return port === undefined ? undefined : effectiveModesByPort.get(port);
 }
+
+/** Resolve the non-exempt limiter identity owned by a managed Serve route. */
+export function resolveGatewayTailscaleServeRateLimitKey(
+  port: number | undefined,
+): string | undefined {
+  return readGatewayTailscaleIngressMode(port) === "serve"
+    ? buildRateLimitIdentityKey("managed-tailscale-route", String(port))
+    : undefined;
+}
+import { buildRateLimitIdentityKey } from "./auth-rate-limit.js";

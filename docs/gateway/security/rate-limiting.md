@@ -104,6 +104,12 @@ validated per-client attribution and rate-limit buckets. See [Trusted Proxy
 Auth](/gateway/trusted-proxy-auth) and the [Gateway security
 guide](/gateway/security#reverse-proxy-configuration).
 
+Managed Tailscale Serve is different: the Gateway records the process-owned
+route that targets its listener. Explicit token/password attempts on that
+route use one non-exempt route bucket, so strong-auth access does not depend on
+`tailscale whois`. A successful credential does not reset this shared route
+bucket. Tokenless Serve identity auth still requires a matching WhoIs result.
+
 ### Webhooks
 
 The HTTP `/hooks` ingress has its own failure limiter: 20 failed

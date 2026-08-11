@@ -26,7 +26,10 @@ import {
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
-import { readGatewayTailscaleIngressMode } from "./tailscale-ingress-state.js";
+import {
+  readGatewayTailscaleIngressMode,
+  resolveGatewayTailscaleServeRateLimitKey,
+} from "./tailscale-ingress-state.js";
 export {
   resolveEffectiveSharedGatewayAuth,
   resolveGatewayAuth,
@@ -114,6 +117,7 @@ type GatewayAuthRequestContext = {
   rateLimitScope: string;
   localDirect: boolean;
   unattributableProxy: boolean;
+  managedTailscaleServe: boolean;
 };
 
 function resolveGatewayAuthRequestContext(
@@ -132,19 +136,25 @@ function resolveGatewayAuthRequestContext(
     trustedProxies,
     params.allowRealIpFallback === true,
   );
-  const ip = resolveAuthRateLimitClientIp({
-    clientIp: resolvedIp,
-    hasProxyHeaders: hasForwardedRequestHeaders(req),
-    isLocalClient: localDirect,
-  });
+  const hasProxyHeaders = hasForwardedRequestHeaders(req);
+  const managedTailscaleServe =
+    hasProxyHeaders && readGatewayTailscaleIngressMode(req?.socket?.localPort) === "serve";
   // A header-bearing loopback proxy is not attributable until its socket is
   // trusted and its forwarded chain resolves a non-loopback client. Reject it
   // before credentials or fallbacks can share one cross-client limiter bucket.
   const unattributableProxy = Boolean(
-    hasForwardedRequestHeaders(req) &&
+    hasProxyHeaders &&
     !localDirect &&
     isLoopbackAddress(requestClientIp ?? req?.socket?.remoteAddress),
   );
+  const ip =
+    unattributableProxy && managedTailscaleServe
+      ? resolveGatewayTailscaleServeRateLimitKey(req?.socket?.localPort)
+      : resolveAuthRateLimitClientIp({
+          clientIp: resolvedIp,
+          hasProxyHeaders,
+          isLocalClient: localDirect,
+        });
 
   return {
     authSurface,
@@ -153,6 +163,7 @@ function resolveGatewayAuthRequestContext(
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
     localDirect,
     unattributableProxy,
+    managedTailscaleServe,
   };
 }
 
@@ -415,6 +426,7 @@ async function authorizeTokenAuth(params: {
   ip?: string;
   rateLimitScope: string;
   deferRateLimitFailure?: boolean;
+  resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
@@ -431,7 +443,9 @@ async function authorizeTokenAuth(params: {
     }
     return { ok: false, reason: "token_mismatch" };
   }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
+  if (params.resetOnSuccess !== false) {
+    params.limiter?.reset(params.ip, params.rateLimitScope);
+  }
   return { ok: true, method: "token" };
 }
 
@@ -442,6 +456,7 @@ async function authorizePasswordAuth(params: {
   ip?: string;
   rateLimitScope: string;
   deferRateLimitFailure?: boolean;
+  resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
@@ -456,7 +471,9 @@ async function authorizePasswordAuth(params: {
     }
     return { ok: false, reason: "password_mismatch" };
   }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
+  if (params.resetOnSuccess !== false) {
+    params.limiter?.reset(params.ip, params.rateLimitScope);
+  }
   return { ok: true, method: "password" };
 }
 
@@ -511,10 +528,19 @@ async function authorizeGatewayConnectCore(
 ): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const { authSurface, limiter, ip, rateLimitScope, localDirect, unattributableProxy } =
-    resolveGatewayAuthRequestContext(params);
+  const {
+    authSurface,
+    limiter,
+    ip,
+    rateLimitScope,
+    localDirect,
+    unattributableProxy,
+    managedTailscaleServe,
+  } = resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
-  const managedTailscaleServe = readGatewayTailscaleIngressMode(req?.socket?.localPort) === "serve";
+  const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
+  const managedTailscaleRoute =
+    unattributableProxy && managedTailscaleServe && hasTailscaleProxyHeaders(req);
   let effectiveIp = ip;
   let verifiedTailscaleUser: TailscaleUser | undefined;
 
@@ -522,7 +548,7 @@ async function authorizeGatewayConnectCore(
     authSurface === "http-user-profile-avatar" &&
     auth.allowTailscale &&
     !localDirect &&
-    !hasExplicitSharedSecretAuth(connectAuth)
+    !explicitSharedSecretAuth
   ) {
     // Reject cross-origin ambient avatar requests before the Tailscale WhoIs
     // lookup. Explicit shared-secret auth is not subject to this browser gate.
@@ -542,12 +568,7 @@ async function authorizeGatewayConnectCore(
   // OpenClaw-managed Tailscale ingress is attributable even though its local
   // proxy socket is loopback. Verify that identity before deciding whether the
   // forwarded request needs ordinary trusted-proxy configuration.
-  if (
-    unattributableProxy &&
-    managedTailscaleServe &&
-    auth.allowTailscale &&
-    hasTailscaleProxyHeaders(req)
-  ) {
+  if (managedTailscaleRoute && !explicitSharedSecretAuth && auth.allowTailscale) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -557,7 +578,10 @@ async function authorizeGatewayConnectCore(
       effectiveIp = resolveTailscaleClientIp(req) ?? ip;
     }
   }
-  const proxyAttributionRequired = unattributableProxy && !verifiedTailscaleUser;
+  const proxyAttributionRequired =
+    unattributableProxy &&
+    !verifiedTailscaleUser &&
+    !(managedTailscaleRoute && explicitSharedSecretAuth);
 
   if (proxyAttributionRequired && auth.mode === "none") {
     return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
@@ -625,7 +649,7 @@ async function authorizeGatewayConnectCore(
     auth.allowTailscale &&
     !localDirect &&
     (!unattributableProxy || managedTailscaleServe) &&
-    !hasExplicitSharedSecretAuth(connectAuth);
+    !explicitSharedSecretAuth;
 
   if (canAttemptTailscaleHeaderAuth) {
     const tailscaleCheck = verifiedTailscaleUser
@@ -662,6 +686,7 @@ async function authorizeGatewayConnectCore(
       ip: effectiveIp,
       rateLimitScope,
       deferRateLimitFailure: params.deferRateLimitFailure,
+      resetOnSuccess: !managedTailscaleRoute,
     });
   }
 
@@ -673,6 +698,7 @@ async function authorizeGatewayConnectCore(
       ip: effectiveIp,
       rateLimitScope,
       deferRateLimitFailure: params.deferRateLimitFailure,
+      resetOnSuccess: !managedTailscaleRoute,
     });
   }
 

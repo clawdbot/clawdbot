@@ -96,9 +96,15 @@ import {
   setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { hasForwardedRequestHeaders, isLocalDirectRequest, resolveRequestClientIp } from "./net.js";
+import {
+  hasForwardedRequestHeaders,
+  isLocalDirectRequest,
+  isLoopbackAddress,
+  resolveRequestClientIp,
+} from "./net.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { resolveGatewayTailscaleServeRateLimitKey } from "./tailscale-ingress-state.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
@@ -317,15 +323,21 @@ async function authorizeControlUiReadRequest(
   const resolvedClientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
-  const clientIp = resolveAuthRateLimitClientIp({
-    clientIp: resolvedClientIp,
-    hasProxyHeaders: hasForwardedRequestHeaders(req),
-    isLocalClient: isLocalDirectRequest(
-      req,
-      opts.trustedProxies,
-      opts.allowRealIpFallback === true,
-    ),
-  });
+  const hasProxyHeaders = hasForwardedRequestHeaders(req);
+  const isLocalClient = isLocalDirectRequest(
+    req,
+    opts.trustedProxies,
+    opts.allowRealIpFallback === true,
+  );
+  const managedServeRateLimitKey =
+    hasProxyHeaders &&
+    !isLocalClient &&
+    isLoopbackAddress(resolvedClientIp ?? req.socket?.remoteAddress)
+      ? resolveGatewayTailscaleServeRateLimitKey(req.socket?.localPort)
+      : undefined;
+  const clientIp =
+    managedServeRateLimitKey ??
+    resolveAuthRateLimitClientIp({ clientIp: resolvedClientIp, hasProxyHeaders, isLocalClient });
   const canUseDeviceTokenFallback =
     Boolean(token) && authOpts.auth.mode !== "trusted-proxy" && authOpts.auth.mode !== "none";
   const run = async () =>

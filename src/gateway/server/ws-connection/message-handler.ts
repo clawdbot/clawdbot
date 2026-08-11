@@ -41,6 +41,7 @@ import {
 } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import { resolveGatewayTailscaleServeRateLimitKey } from "../../tailscale-ingress-state.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
@@ -165,7 +166,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   });
   const browserSecurity = resolveHandshakeBrowserSecurityContext({
     requestOrigin,
-    clientIp,
+    clientIp:
+      hasUntrustedProxyHeaders && isLoopbackAddress(remoteAddr)
+        ? (resolveGatewayTailscaleServeRateLimitKey(upgradeReq.socket.localPort) ?? clientIp)
+        : clientIp,
     fallbackClientIp: remoteAddr,
     hasProxyHeaders,
     isLocalClient,

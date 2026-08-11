@@ -23,6 +23,10 @@ import {
   testTailscaleWhois,
   installGatewayTestHooks,
 } from "./server.auth.test-helpers.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  setGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -352,6 +356,60 @@ describe("gateway auth compatibility baseline", () => {
         );
       } finally {
         ws.close();
+      }
+    });
+
+    test("keeps managed Serve shared-secret auth available without WhoIs", async () => {
+      testTailscaleWhois.value = null;
+      setGatewayTailscaleIngressMode(port, "serve");
+      const headers = {
+        "x-forwarded-for": "100.64.0.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.tailnet.ts.net",
+      };
+
+      try {
+        const valid = await openWs(port, headers);
+        try {
+          const response = await connectReq(valid, { token: "secret", device: null });
+          expect(response.ok, JSON.stringify(response)).toBe(true);
+        } finally {
+          valid.close();
+        }
+
+        const wrong = await openWs(port, headers);
+        try {
+          const nonce = await readConnectChallengeNonce(wrong);
+          const signed = await createSignedDevice({
+            token: "wrong",
+            scopes: ["operator.admin"],
+            clientId: GATEWAY_CLIENT_NAMES.TEST,
+            clientMode: GATEWAY_CLIENT_MODES.TEST,
+            nonce,
+          });
+          const response = await connectReq(wrong, {
+            token: "wrong",
+            device: { ...signed.device, signature: `${signed.device.signature}invalid` },
+          });
+          expect(response.ok).toBe(false);
+          expect(response.error?.message ?? "").toContain("signature");
+        } finally {
+          wrong.close();
+        }
+
+        const locked = await openWs(port, headers);
+        try {
+          const response = await connectReq(locked, { token: "secret", device: null });
+          expect(response.ok, JSON.stringify(response)).toBe(false);
+          expectAuthErrorDetails({
+            details: response.error?.details,
+            expectedCode: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+          });
+        } finally {
+          locked.close();
+        }
+      } finally {
+        clearGatewayTailscaleIngressMode(port);
       }
     });
   });
