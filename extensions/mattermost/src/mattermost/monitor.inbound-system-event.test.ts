@@ -3376,6 +3376,84 @@ describe("mattermost inbound user posts", () => {
     expect(retainTerminalText).toHaveBeenCalledExactlyOnceWith("Working\n\nFailed.");
   });
 
+  it("clears separate progress after a provider-accepted partial final", async () => {
+    const progressConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: {
+            mode: "progress",
+            progress: { finalDelivery: "separate" },
+          },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    const clear = vi.fn(async () => {});
+    const retainTerminalText = vi.fn(async () => true);
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      forceNewMessage: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => "progress-post-1"),
+      clear,
+      discardPending: vi.fn(async () => {}),
+      retainTerminalText,
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
+    });
+    const finalReceipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId: "accepted-final-1", channelId: "chan-1" }],
+      kind: "text",
+    });
+    mockState.sendMessageMattermost.mockRejectedValueOnce(
+      createChannelPartialDeliveryError(new Error("post-send bookkeeping failed"), {
+        messageIds: ["accepted-final-1"],
+        receipt: finalReceipt,
+        visibleReplySent: true,
+        content: "Accepted final answer",
+      }),
+    );
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
+      try {
+        const dispatcherOptions =
+          mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+        await dispatcherOptions?.deliver({ text: "Accepted final answer" }, { kind: "final" });
+      } finally {
+        abortController.abort();
+      }
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: progressConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-provider-accepted-partial-final",
+      message: "run this",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(clear).toHaveBeenCalledOnce();
+    expect(retainTerminalText).not.toHaveBeenCalled();
+  });
+
   it("retries terminal progress after a visible error final", async () => {
     const progressConfig: OpenClawConfig = {
       channels: {

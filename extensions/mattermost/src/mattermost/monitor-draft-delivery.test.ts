@@ -427,6 +427,48 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 
+  it("latches provider-accepted partial finals before progress cleanup", async () => {
+    const draftStream = createDraftStreamMock("progress-post-1");
+    const finalReceipt = createMattermostReceipt("accepted-final-1", "text");
+    const deliverFinal = vi.fn(async () => {
+      throw createChannelPartialDeliveryError(new Error("post-send bookkeeping failed"), {
+        messageIds: ["accepted-final-1"],
+        receipt: finalReceipt,
+        visibleReplySent: true,
+        content: "Accepted final answer",
+      });
+    });
+    const recordSuccessfulFinal = vi.fn();
+
+    let caught: unknown;
+    try {
+      await deliverDraftPreview({
+        payload: { text: "Accepted final answer" } as never,
+        draftStream,
+        separateProgressFinalDelivery: true,
+        recordSuccessfulFinal,
+        deliverPayload: deliverFinal,
+      });
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial Mattermost final delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["accepted-final-1"],
+      visibleReplySent: true,
+      content: "Accepted final answer",
+    });
+    expect(recordSuccessfulFinal).toHaveBeenCalledOnce();
+    expect(draftStream.clear).toHaveBeenCalledOnce();
+    expect(recordSuccessfulFinal.mock.invocationCallOrder[0]).toBeLessThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
   it("retains sanitized separate progress after delivering a terminal error", async () => {
     const draftStream = createDraftStreamMock("progress-post-1");
     const deliverFinal = createDeliverFinalMock();

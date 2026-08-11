@@ -161,6 +161,21 @@ async function deliverMattermostSeparateProgressFinal(
       ? normalDeliveryResult
       : emptyMattermostDeliveryResult();
   } catch (error: unknown) {
+    if (
+      normalDeliveryResult === undefined &&
+      params.payload.isError !== true &&
+      isChannelPartialDeliveryError(error)
+    ) {
+      // Mattermost accepted the final before provider bookkeeping failed. Latch
+      // that durable fact before cleanup so turn failure settlement cannot
+      // recreate typed Failed progress beside the visible reply.
+      params.recordSuccessfulFinal?.();
+      try {
+        await params.draftStream.clear();
+      } catch (cleanupError: unknown) {
+        throw createChannelPartialDeliveryError(cleanupError, error.deliveryResult);
+      }
+    }
     throw wrapMattermostCompletedDeliveryError({
       error,
       completedResults: [normalDeliveryResult],
