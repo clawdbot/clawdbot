@@ -102,6 +102,50 @@ describe("mergeQaMergePatchDocuments", () => {
     });
   });
 
+  it("composes id-keyed entries two scenarios each own part of", () => {
+    // Collecting patches must not let the later document drop fields the
+    // earlier one set on the same entry: the application step sees only the
+    // collected result and cannot reconstruct what was discarded.
+    const collected = mergeQaMergePatchDocuments(
+      {
+        agents: {
+          list: [
+            { id: "qa", identity: { name: "小蝶🦋" } },
+            { id: "other", tools: {} },
+          ],
+        },
+      },
+      { agents: { list: [{ id: "qa", model: { primary: "mock-openai/gpt-5.6-luna" } }] } },
+    );
+
+    expect(collected).toEqual({
+      agents: {
+        list: [
+          {
+            id: "qa",
+            identity: { name: "小蝶🦋" },
+            model: { primary: "mock-openai/gpt-5.6-luna" },
+          },
+          { id: "other", tools: {} },
+        ],
+      },
+    });
+  });
+
+  it("keeps a deletion inside an id-keyed entry for the application step", () => {
+    const collected = mergeQaMergePatchDocuments(
+      { agents: { list: [{ id: "qa", identity: { name: "C-3PO QA", emoji: "🤖" } }] } },
+      { agents: { list: [{ id: "qa", identity: { emoji: null } }] } },
+    );
+
+    expect(collected).toEqual({
+      agents: { list: [{ id: "qa", identity: { name: "C-3PO QA", emoji: null } }] },
+    });
+    expect(
+      applyQaMergePatch({ agents: { list: [{ id: "qa", identity: { emoji: "🤖" } }] } }, collected),
+    ).toEqual({ agents: { list: [{ id: "qa", identity: { name: "C-3PO QA" } }] } });
+  });
+
   it("ignores prototype-mutating object keys", () => {
     const patch = JSON.parse(
       `{"messages":{"groupChat":{}},"__proto__":{"polluted":true}}`,

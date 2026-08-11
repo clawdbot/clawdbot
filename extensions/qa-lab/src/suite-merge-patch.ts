@@ -11,7 +11,14 @@ function isObjectWithStringId(value: unknown): value is { id: string } & Record<
   return isQaMergePatchObject(value) && typeof value.id === "string" && value.id.length > 0;
 }
 
-function mergeObjectArraysById(target: unknown[], patch: unknown[]): unknown[] | undefined {
+// Entry composition differs between applying a patch and merging two patch
+// documents, so the caller supplies it; the id-keyed array contract itself is
+// stated once here.
+function mergeObjectArraysById(
+  target: unknown[],
+  patch: unknown[],
+  mergeEntry: (target: unknown, patch: unknown) => unknown,
+): unknown[] | undefined {
   if (!target.every(isObjectWithStringId)) {
     return undefined;
   }
@@ -34,7 +41,7 @@ function mergeObjectArraysById(target: unknown[], patch: unknown[]): unknown[] |
       indexById.set(patchEntry.id, merged.length - 1);
       continue;
     }
-    merged[existingIndex] = applyQaMergePatch(merged[existingIndex], patchEntry);
+    merged[existingIndex] = mergeEntry(merged[existingIndex], patchEntry);
   }
   return merged;
 }
@@ -43,6 +50,14 @@ function mergeObjectArraysById(target: unknown[], patch: unknown[]): unknown[] |
 // `null` here is the deletion a scenario still intends, so it survives to the
 // application step instead of deleting a key the empty accumulator never had.
 export function mergeQaMergePatchDocuments(target: unknown, patch: unknown): unknown {
+  if (Array.isArray(target) && Array.isArray(patch)) {
+    // Two scenarios patching the same id-keyed entry each own part of it, so
+    // the accumulator composes them the way the application step would rather
+    // than letting the later document drop the earlier one's fields.
+    return (
+      mergeObjectArraysById(target, patch, mergeQaMergePatchDocuments) ?? structuredClone(patch)
+    );
+  }
   if (!isQaMergePatchObject(patch) || !isQaMergePatchObject(target)) {
     return structuredClone(patch);
   }
@@ -58,7 +73,7 @@ export function mergeQaMergePatchDocuments(target: unknown, patch: unknown): unk
 
 export function applyQaMergePatch(target: unknown, patch: unknown): unknown {
   if (Array.isArray(target) && Array.isArray(patch)) {
-    return mergeObjectArraysById(target, patch) ?? structuredClone(patch);
+    return mergeObjectArraysById(target, patch, applyQaMergePatch) ?? structuredClone(patch);
   }
   if (!isQaMergePatchObject(patch)) {
     return structuredClone(patch);

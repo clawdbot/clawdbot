@@ -352,6 +352,7 @@ describe("derived mention matching with decorated identity names", () => {
     ["joined sequence", "👩‍👧"],
     ["skin tone modifier", "👍🏽"],
     ["regional indicator pair", "🇹🇼"],
+    ["subdivision tag sequence", "🏴󠁧󠁢󠁳󠁣󠁴󠁿"],
   ])("handles trailing decoration built from a %s", (_label, decoration) => {
     const cfg = configForName(`小蝶${decoration}`);
     const regexes = buildMentionRegexes(cfg, "decorated-agent");
@@ -363,6 +364,32 @@ describe("derived mention matching with decorated identity names", () => {
     expect(
       stripMentions(`小蝶${decoration} 查天氣`, {} as MsgContext, cfg, "decorated-agent"),
     ).toBe("查天氣");
+  });
+
+  it("treats a subdivision flag's tag characters as decoration", () => {
+    // 🏴 plus U+E0020-U+E007F tags spells a subdivision flag. The tags are
+    // invisible on their own, so leaving them required would keep the name
+    // waiting for characters nobody types.
+    const scotland = "🏴󠁧󠁢󠁳󠁣󠁴󠁿";
+    const cfg = configForName(`小蝶${scotland}`);
+    const regexes = buildMentionRegexes(cfg, "decorated-agent");
+
+    expect(matchesMentionPatterns(`小蝶${scotland} 幫我查一下`, regexes)).toBe(true);
+    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns(`小蝶${scotland}後續`, regexes)).toBe(false);
+    expect(stripMentions("小蝶 /status", {} as MsgContext, cfg, "decorated-agent")).toBe("/status");
+    expect(stripMentions(`小蝶${scotland} /status`, {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "/status",
+    );
+  });
+
+  it("keeps one subdivision flag from matching another", () => {
+    // The tags carry the region, so two flags share only their base. A
+    // decoration-only identity still has to match itself and nothing else.
+    const regexes = buildMentionRegexes(configForName("🏴󠁧󠁢󠁳󠁣󠁴󠁿"), "decorated-agent");
+
+    expect(matchesMentionPatterns("🏴󠁧󠁢󠁳󠁣󠁴󠁿 status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("🏴󠁧󠁢󠁷󠁬󠁳󠁿 status", regexes)).toBe(false);
   });
 
   it("takes the identity's decoration once, leaving a member's repeat in place", () => {

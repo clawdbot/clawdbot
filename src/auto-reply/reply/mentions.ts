@@ -47,13 +47,17 @@ const JOINER_RUN = new RegExp(`[${JOINER_CHARS}]+`, "u");
 // types and match every unrelated emoji carrying the same mark.
 const NAME_TOKEN_SPLIT = new RegExp(`([${NAME_IDENTITY_CHARS}][${NAME_TOKEN_CHARS}]*)`, "gu");
 // Decoration is what a member may leave out when typing the name: symbol and
-// mark code points (emoji, flags, dingbats), the skin-tone modifiers, and the
-// invisible format characters normalization strips. Everything else a name
-// spells stays literal -- punctuation such as "-", "/", or "." separates, it
-// does not decorate, and making it omittable would hand every existing name
-// like "foo-bar" a new bare spelling and with it a new implicit trigger.
+// mark code points (emoji, flags, dingbats), the skin-tone modifiers, the tag
+// characters a subdivision flag spells its region with, and the invisible
+// format characters normalization strips. Everything else a name spells stays
+// literal -- punctuation such as "-", "/", or "." separates, it does not
+// decorate, and making it omittable would hand every existing name like
+// "foo-bar" a new bare spelling and with it a new implicit trigger.
+// The tag range is the one an emoji sequence uses (see POLL_ECHO_EMOJI_SEQUENCE):
+// on their own the tags are invisible, so a flag whose base is decoration but
+// whose tags are not would leave the name requiring characters nobody types.
 const DECORATION_CHAR = new RegExp(
-  String.raw`[\p{So}\p{M}\u{1F3FB}-\u{1F3FF}\u200B-\u200F\u202A-\u202E\u2060-\u206F]`,
+  String.raw`[\p{So}\p{M}\u{1F3FB}-\u{1F3FF}\u200B-\u200F\u202A-\u202E\u2060-\u206F\u{E0020}-\u{E007F}]`,
   "u",
 );
 // U+FE0F requests emoji presentation and U+20E3 encloses a keycap: a character
