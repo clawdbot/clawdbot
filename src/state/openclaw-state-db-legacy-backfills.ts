@@ -295,6 +295,20 @@ export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
   `);
 }
 
+/** Canonicalize the shipped suspension reason before runtime hydrates subagent state. */
+export function repairLegacySubagentSuspensionReasons(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs")) {
+    return;
+  }
+  // v2026.6.34 persisted retry-limit; remove this backfill after its 7-day retention window.
+  db.exec(`
+    UPDATE subagent_runs
+    SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'permanent_failure')
+    WHERE json_valid(payload_json)
+      AND json_extract(payload_json, '$.delivery.suspendedReason') = 'retry-limit';
+  `);
+}
+
 export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   if (
     !tableExists(db, "acp_replay_events") ||

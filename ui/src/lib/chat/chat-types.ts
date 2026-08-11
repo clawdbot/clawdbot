@@ -49,6 +49,8 @@ export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  /** Operator-owned queue position; absent means "wherever arrival put it". */
+  orderKey?: number;
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;

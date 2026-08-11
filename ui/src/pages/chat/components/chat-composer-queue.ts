@@ -1,7 +1,9 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { chatQueueMovableSegments } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { isInflightSteer, isSteeredQueueItem } from "../steered-chip.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -11,8 +13,12 @@ type ChatQueueProps = {
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onQueueMove?: (id: string, toIndex: number) => void;
   onQueueRemove: (id: string) => void;
 };
+
+const DRAG_MIME = "application/x-openclaw-queued-message";
+const DRAG_OVER_CLASS = "chat-queue__item--drop-target";
 
 function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
@@ -39,14 +45,37 @@ export function renderChatQueue(props: ChatQueueProps) {
   if (!visibleQueue.length) {
     return nothing;
   }
+  // Move positions address one movable segment, matching what the reorder owner
+  // permutes. A row attached to a run keeps its place and ends the segment, so
+  // the handle never offers a move across it.
+  const movableSegments = chatQueueMovableSegments(visibleQueue).map((rows) =>
+    rows.map((row) => row.id),
+  );
+  // Keyed rows so a reorder moves the existing DOM node instead of rewriting
+  // it in place; that is what keeps focus on the handle the operator is using.
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      ${visibleQueue.map((item) => renderChatQueueItem(item, props))}
+      ${repeat(
+        visibleQueue,
+        (item) => item.id,
+        (item) => renderChatQueueItem(item, props, movableSegments),
+      )}
     </div>
   `;
 }
 
-function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
+function setDropTarget(event: DragEvent, active: boolean): void {
+  const row = event.currentTarget;
+  if (row instanceof HTMLElement) {
+    row.classList.toggle(DRAG_OVER_CLASS, active);
+  }
+}
+
+function renderChatQueueItem(
+  item: ChatQueueItem,
+  props: ChatQueueProps,
+  movableSegments: readonly (readonly string[])[],
+) {
   const stateLabel = sendStateLabel(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
   const steered = isSteeredQueueItem(item) && !failed;
@@ -57,6 +86,10 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
     !steered &&
     (item.sendState === undefined || item.sendState === "waiting-idle") &&
     !item.localCommandName;
+  const segment = movableSegments.find((ids) => ids.includes(item.id)) ?? [];
+  const moveIndex = segment.indexOf(item.id);
+  const move = props.onQueueMove;
+  const canMove = Boolean(move) && moveIndex >= 0 && segment.length > 1;
   const text =
     item.text ||
     (item.attachments?.length
@@ -68,7 +101,62 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   // Row order keeps the actions on the first flex line; the error wraps below
   // them via flex-basis so failed rows grow by one line instead of a card.
   return html`
-    <div class=${itemClass}>
+    <div
+      class=${itemClass}
+      draggable=${canMove ? "true" : "false"}
+      @dragstart=${canMove
+        ? (event: DragEvent) => {
+            event.dataTransfer?.setData(DRAG_MIME, item.id);
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = "move";
+            }
+          }
+        : undefined}
+      @dragover=${canMove
+        ? (event: DragEvent) => {
+            if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
+              return;
+            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDropTarget(event, true);
+          }
+        : undefined}
+      @dragleave=${canMove ? (event: DragEvent) => setDropTarget(event, false) : undefined}
+      @drop=${canMove
+        ? (event: DragEvent) => {
+            const draggedId = event.dataTransfer?.getData(DRAG_MIME);
+            setDropTarget(event, false);
+            // Index space is per segment, so a drop from another one would land
+            // the row at an unrelated position; refuse it instead of guessing.
+            if (!draggedId || draggedId === item.id || !segment.includes(draggedId)) {
+              return;
+            }
+            event.preventDefault();
+            move?.(draggedId, moveIndex);
+          }
+        : undefined}
+    >
+      ${canMove
+        ? html`<button
+            class="chat-queue__grip"
+            type="button"
+            aria-label=${t("chat.queue.reorderQueuedMessage")}
+            aria-keyshortcuts="ArrowUp ArrowDown"
+            @keydown=${(event: KeyboardEvent) => {
+              const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+              if (delta === 0) {
+                return;
+              }
+              // The handle owns reordering for pointer and keyboard alike, so
+              // arrow keys here must not also scroll the transcript.
+              event.preventDefault();
+              move?.(item.id, moveIndex + delta);
+            }}
+          >
+            ${icons.gripVertical}
+          </button>`
+        : nothing}
       ${reconnecting
         ? html`<span class="chat-queue__dot" aria-hidden="true"></span>`
         : html`<span class="chat-queue__icon" aria-hidden="true">

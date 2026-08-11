@@ -292,17 +292,18 @@ export async function createAgentSession(
   return await createAgentSessionImpl(options);
 }
 
-/** Internal embedded-runner seam; keep recovery ownership out of the public session SDK. */
+/** Internal factory for temporary embedded sessions that do not own durable provider resources. */
 export async function createAgentSessionForEmbeddedRunner(
   options: CreateAgentSessionOptions,
   internalOptions: CreateAgentSessionInternalOptions,
 ): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options, internalOptions);
+  return await createAgentSessionImpl(options, internalOptions, false);
 }
 
 async function createAgentSessionImpl(
   options: CreateAgentSessionOptions,
   internalOptions: CreateAgentSessionInternalOptions = {},
+  cleanupProviderSessionResourcesOnDispose = true,
 ): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
   const agentDir = options.agentDir ?? getDefaultAgentDir();
@@ -572,8 +573,7 @@ async function createAgentSessionImpl(
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
-    cleanupProviderSessionResourcesOnDispose:
-      internalOptions.cleanupProviderSessionResourcesOnDispose,
+    cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

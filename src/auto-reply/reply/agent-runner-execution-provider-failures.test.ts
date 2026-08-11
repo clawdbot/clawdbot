@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
+import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
@@ -432,6 +433,8 @@ describe("executeAgentTurn: provider failures", () => {
       const result = await resultPromise;
 
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
+      const wholeTurnReruns = state.runEmbeddedAgentMock.mock.calls.length - 1;
+      expect(wholeTurnReruns * resolveMaxRunRetryIterations(17)).toBe(1_600);
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);

@@ -76,6 +76,26 @@ function stubMatchMedia() {
   );
 }
 
+async function showSession(page: ChatPage, sessionKey: string): Promise<void> {
+  page.data = { sessionKey };
+  await page.updateComplete;
+  await page.updateComplete;
+}
+
+async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[]) {
+  const page = new ChatPage();
+  const navigation = setNavigationContext(page);
+  page.data = { sessionKey };
+  document.body.append(page);
+  await page.updateComplete;
+  for (const key of warmSessionKeys) {
+    await showSession(page, key);
+  }
+  const panes = () => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+  const paneFor = (key: string) => panes().find((pane) => pane.sessionKey === key);
+  return { navigation, page, paneFor, panes };
+}
+
 describe("chat page retained sessions", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -91,24 +111,11 @@ describe("chat page retained sessions", () => {
   });
 
   it("retains three session panes and reactivates them without remounting", async () => {
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "agent:main:a" };
-    document.body.append(page);
-    await page.updateComplete;
-
-    const navigate = async (sessionKey: string) => {
-      page.data = { sessionKey };
-      await page.updateComplete;
-      await page.updateComplete;
-    };
-    const panes = () => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-    const paneFor = (sessionKey: string) =>
-      panes().find((candidate) => candidate.sessionKey === sessionKey);
+    const { page, paneFor, panes } = await mountRetainedPage("agent:main:a");
     const paneA = paneFor("agent:main:a");
     expect(paneA).toBeDefined();
 
-    await navigate("agent:main:b");
+    await showSession(page, "agent:main:b");
     const paneB = paneFor("agent:main:b");
     expect(paneB).toBeDefined();
     expect(paneB?.presentationId).not.toBe(paneA?.presentationId);
@@ -120,12 +127,12 @@ describe("chat page retained sessions", () => {
     expect(paneB?.presented).toBe(true);
     expect(paneB?.hasAttribute("inert")).toBe(false);
 
-    await navigate("agent:main:a");
+    await showSession(page, "agent:main:a");
     expect(paneFor("agent:main:a")).toBe(paneA);
     expect(paneFor("agent:main:b")).toBe(paneB);
 
-    await navigate("agent:main:c");
-    await navigate("agent:main:d");
+    await showSession(page, "agent:main:c");
+    await showSession(page, "agent:main:d");
     expect(
       panes()
         .map((pane) => pane.sessionKey)
@@ -194,16 +201,8 @@ describe("chat page retained sessions", () => {
   });
 
   it("rejects navigation and face changes from a hidden retained session", async () => {
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    page.data = { sessionKey: "agent:main:a" };
-    document.body.append(page);
-    await page.updateComplete;
-    const paneA = page.querySelector<RenderedPane>("openclaw-chat-pane");
-
-    page.data = { sessionKey: "agent:main:b" };
-    await page.updateComplete;
-    await page.updateComplete;
+    const { navigation, page, paneFor } = await mountRetainedPage("agent:main:a", "agent:main:b");
+    const paneA = paneFor("agent:main:a");
     navigation.navigate.mockClear();
     navigation.patch.mockClear();
 
@@ -219,11 +218,7 @@ describe("chat page retained sessions", () => {
   });
 
   it("rejects a pane callback while a newer browser route is loading", async () => {
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    await page.updateComplete;
+    const { navigation, page } = await mountRetainedPage("main");
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
     const previousHref = window.location.href;
 
@@ -238,21 +233,13 @@ describe("chat page retained sessions", () => {
   });
 
   it("presents a retained sidebar destination before route data resolves", async () => {
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "agent:main:a" };
-    document.body.append(page);
-    await page.updateComplete;
-
-    page.data = { sessionKey: "agent:main:b" };
-    await page.updateComplete;
-    await page.updateComplete;
-    const panes = () => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-    const paneA = panes().find((pane) => pane.sessionKey === "agent:main:a");
-    const paneB = panes().find((pane) => pane.sessionKey === "agent:main:b");
-    page.data = { sessionKey: "agent:main:a" };
-    await page.updateComplete;
-    await page.updateComplete;
+    const { page, paneFor, panes } = await mountRetainedPage(
+      "agent:main:a",
+      "agent:main:b",
+      "agent:main:a",
+    );
+    const paneA = paneFor("agent:main:a");
+    const paneB = paneFor("agent:main:b");
 
     const intent = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
       cancelable: true,
@@ -315,27 +302,17 @@ describe("chat page retained sessions", () => {
   });
 
   it("evicts a deleted inactive retained session without redirecting the active pane", async () => {
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    page.data = { sessionKey: "agent:main:a" };
-    document.body.append(page);
-    await page.updateComplete;
-    page.data = { sessionKey: "agent:main:b" };
-    await page.updateComplete;
-    await page.updateComplete;
-    const paneA = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-      (pane) => pane.sessionKey === "agent:main:a",
+    const { navigation, page, paneFor, panes } = await mountRetainedPage(
+      "agent:main:a",
+      "agent:main:b",
     );
+    const paneA = paneFor("agent:main:a");
     navigation.navigate.mockClear();
 
     paneA?.onSessionDeleted?.("p1", "agent:main:a", "agent:main:main");
     await page.updateComplete;
 
-    expect(
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].some(
-        (pane) => pane.sessionKey === "agent:main:a",
-      ),
-    ).toBe(false);
+    expect(panes().some((pane) => pane.sessionKey === "agent:main:a")).toBe(false);
     expect(navigation.navigate).not.toHaveBeenCalled();
     expect(page.data.sessionKey).toBe("agent:main:b");
   });
@@ -343,20 +320,9 @@ describe("chat page retained sessions", () => {
   it("rolls a retained preview back when authoritative navigation never commits", async () => {
     vi.useFakeTimers();
     try {
-      const page = new ChatPage();
-      setNavigationContext(page);
-      page.data = { sessionKey: "agent:main:a" };
-      document.body.append(page);
-      await page.updateComplete;
-      page.data = { sessionKey: "agent:main:b" };
-      await page.updateComplete;
-      await page.updateComplete;
-      page.data = { sessionKey: "agent:main:a" };
-      await page.updateComplete;
-      await page.updateComplete;
-      const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-      const paneA = panes.find((pane) => pane.sessionKey === "agent:main:a");
-      const paneB = panes.find((pane) => pane.sessionKey === "agent:main:b");
+      const { paneFor } = await mountRetainedPage("agent:main:a", "agent:main:b", "agent:main:a");
+      const paneA = paneFor("agent:main:a");
+      const paneB = paneFor("agent:main:b");
 
       window.dispatchEvent(
         new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
@@ -389,16 +355,12 @@ describe("chat page retained sessions", () => {
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frame) => {
       frames.delete(frame);
     });
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "agent:main:a" };
-    document.body.append(page);
-    await page.updateComplete;
-    for (const sessionKey of ["agent:main:b", "agent:main:c", "agent:main:a"]) {
-      page.data = { sessionKey };
-      await page.updateComplete;
-      await page.updateComplete;
-    }
+    const { page } = await mountRetainedPage(
+      "agent:main:a",
+      "agent:main:b",
+      "agent:main:c",
+      "agent:main:a",
+    );
     const commitB = vi.fn(() => true);
     const commitC = vi.fn(() => true);
 

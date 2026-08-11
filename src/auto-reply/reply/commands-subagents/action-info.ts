@@ -11,13 +11,10 @@ import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
-import {
-  resolveSubagentEntryForToken,
-  stopWithText,
-  type SubagentsCommandContext,
-} from "./shared.js";
+import { resolveSubagentEntryForToken, type SubagentsCommandContext } from "./shared.js";
 
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -48,7 +45,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const { params, requesterKey, runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
-    return stopWithText("ℹ️ Usage: /subagents info <id|#>");
+    return commandReply("ℹ️ Usage: /subagents info <id|#>");
   }
 
   const targetResolution = resolveSubagentEntryForToken(runs, target);
@@ -108,5 +105,5 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `Delivery: ${linkedTask.deliveryStatus}` : undefined,
   ].filter(Boolean);
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

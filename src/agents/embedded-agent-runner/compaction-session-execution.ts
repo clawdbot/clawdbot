@@ -234,10 +234,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               settingsManager,
               resourceLoader,
             },
-            {
-              // Compaction disposal must not close the durable provider session used by later turns.
-              cleanupProviderSessionResourcesOnDispose: false,
-            },
+            {},
           );
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);

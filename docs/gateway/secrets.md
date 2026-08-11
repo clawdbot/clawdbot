@@ -276,7 +276,9 @@ The shared secret store is a Gateway-wide, team-scoped place for secrets and env
 Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
 
 - `secret` values are write-only through the CLI. List and get output never reveal them.
-- `env` values can be returned by `store list` and `store get`.
+- `env` values can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to agent exec environments, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning.
+
+`secret` entries are never injected into subprocess environments. They remain available only through `store` SecretRefs because plaintext env injection would bypass the store disclosure boundary; safe secret injection requires a future egress-substitution mechanism.
 
 Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
 

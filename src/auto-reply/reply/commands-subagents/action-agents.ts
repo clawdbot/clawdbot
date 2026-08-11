@@ -6,9 +6,10 @@ import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/regist
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
-import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext, stopWithText } from "./shared.js";
+import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext } from "./shared.js";
 
 function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;
@@ -124,5 +125,5 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     }
   }
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

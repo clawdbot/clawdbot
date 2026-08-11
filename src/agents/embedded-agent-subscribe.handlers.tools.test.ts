@@ -1610,7 +1610,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   });
 
   it("snapshots hook-adjusted args before result middleware can mutate them", async () => {
-    const { ctx } = createTestContext();
+    const { ctx, onAgentEvent } = createTestContext();
     const toolCallId = "tool-cron-mutable-adjusted-args";
     const executedArgs = {
       action: "add",
@@ -1636,6 +1636,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       hadPotentialSideEffects: true,
     });
     expect(ctx.state.successfulCronAdds).toBe(1);
+    const resultEvent = onAgentEvent.mock.calls.find(
+      ([event]) => event.stream === "tool" && event.data.phase === "result",
+    )?.[0];
+    expect(resultEvent?.data).not.toHaveProperty("args");
   });
 
   it("uses hook-adjusted message arguments for delivery telemetry", async () => {

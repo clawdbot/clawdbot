@@ -13,7 +13,7 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import {
@@ -160,7 +160,7 @@ describe("Gateway hosted web surfaces", () => {
         async () => {
           clearConfigCache();
           clearRuntimeConfigSnapshot();
-          const port = await getFreeGatewayPort();
+          const port = await getGatewayE2ePortBlock();
           const server = await startGatewayServer(port, {
             auth: { mode: "token", token: TOKEN },
             bind: "loopback",

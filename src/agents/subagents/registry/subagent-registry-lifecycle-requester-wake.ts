@@ -103,7 +103,7 @@ export function createSubagentRegistryLifecycleRequesterWake(
     for (const [runId, entry] of entries) {
       const retryTimer = scheduledRequesterSettleWakeTimers.get(runId);
       if (retryTimer) {
-        clearTimeout(retryTimer);
+        clearTimeout(retryTimer.timer);
         scheduledRequesterSettleWakeTimers.delete(runId);
       }
       if (entry.requesterSettleWake === undefined || !params.runs.has(runId)) {
@@ -183,17 +183,40 @@ export function createSubagentRegistryLifecycleRequesterWake(
   // cleanup parent reserves the root synchronously, so restart or suspend
   // cannot reach quiescence between scheduling and the wake's gateway turn.
   // Failures are logged only.
+  function retainScheduledRequesterSettleWakeTimer(
+    runId: string,
+    deadline: number,
+    rearmGeneration?: number,
+  ): boolean {
+    const scheduled = scheduledRequesterSettleWakeTimers.get(runId);
+    if (!scheduled) {
+      return false;
+    }
+    const hasNewerGeneration =
+      rearmGeneration !== undefined &&
+      (scheduled.rearmGeneration === undefined || rearmGeneration > scheduled.rearmGeneration);
+    if (!hasNewerGeneration && deadline >= scheduled.deadline) {
+      return true;
+    }
+    clearTimeout(scheduled.timer);
+    scheduledRequesterSettleWakeTimers.delete(runId);
+    return false;
+  }
+
   function scheduleRequesterSettleWakeRetry(runId: string, entry: SubagentRunRecord): void {
     const nextAttemptAt = entry.requesterSettleWake?.nextAttemptAt;
-    if (
-      nextAttemptAt === undefined ||
-      nextAttemptAt <= Date.now() ||
-      scheduledRequesterSettleWakeTimers.has(runId)
-    ) {
+    if (nextAttemptAt === undefined || nextAttemptAt <= Date.now()) {
+      return;
+    }
+    const rearmGeneration = entry.requesterSettleWake?.rearmGeneration;
+    if (retainScheduledRequesterSettleWakeTimer(runId, nextAttemptAt, rearmGeneration)) {
       return;
     }
     const timer = setTimeout(
       () => {
+        if (scheduledRequesterSettleWakeTimers.get(runId)?.timer !== timer) {
+          return;
+        }
         scheduledRequesterSettleWakeTimers.delete(runId);
         const current = params.runs.get(runId);
         if (current === entry && current.requesterSettleWake) {
@@ -203,7 +226,11 @@ export function createSubagentRegistryLifecycleRequesterWake(
       Math.max(0, nextAttemptAt - Date.now()),
     );
     timer.unref?.();
-    scheduledRequesterSettleWakeTimers.set(runId, timer);
+    scheduledRequesterSettleWakeTimers.set(runId, {
+      timer,
+      deadline: nextAttemptAt,
+      rearmGeneration,
+    });
   }
 
   function scheduleRequesterSettleWake(runId: string, entry: SubagentRunRecord): void {
@@ -216,12 +243,23 @@ export function createSubagentRegistryLifecycleRequesterWake(
       !hasSubagentRunEnded(entry) ||
       !requesterSessionKey ||
       (entry.requesterTurnRunId && entry.requesterTurnYielded === true) ||
-      scheduledRequesterSettleWakeRuns.has(runId) ||
-      scheduledRequesterSettleWakeTimers.has(runId)
+      scheduledRequesterSettleWakeRuns.has(runId)
     ) {
       return;
     }
-    if ((entry.requesterSettleWake?.nextAttemptAt ?? 0) > Date.now()) {
+    const now = Date.now();
+    const nextAttemptAt = entry.requesterSettleWake?.nextAttemptAt;
+    const deadline = nextAttemptAt !== undefined && nextAttemptAt > now ? nextAttemptAt : now;
+    if (
+      retainScheduledRequesterSettleWakeTimer(
+        runId,
+        deadline,
+        entry.requesterSettleWake?.rearmGeneration,
+      )
+    ) {
+      return;
+    }
+    if (nextAttemptAt !== undefined && nextAttemptAt > now) {
       scheduleRequesterSettleWakeRetry(runId, entry);
       return;
     }

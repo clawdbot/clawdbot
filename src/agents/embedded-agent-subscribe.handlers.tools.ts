@@ -52,7 +52,6 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { resolveLiveEditToolKind } from "./embedded-agent-live-edit-diff.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -100,6 +99,7 @@ import {
   summarizeToolValidationError,
   type ProcessTerminalDiagnostic,
 } from "./tool-error-summary.js";
+import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -1269,7 +1269,7 @@ export function handleToolExecutionStart(
         toolCallId,
         startedAt,
       });
-    } else if (resolveLiveEditToolKind(toolName) === "patch") {
+    } else if (resolveFileMutationToolName(toolName) === "apply_patch") {
       emitTrackedItemEvent(ctx, {
         itemId: buildPatchItemId(toolCallId),
         phase: "start",
@@ -1942,7 +1942,7 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  if (resolveLiveEditToolKind(toolName) === "patch") {
+  if (resolveFileMutationToolName(toolName) === "apply_patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;

@@ -29,14 +29,14 @@ async function loadServerImpl() {
 
 /** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
-  ...args: Parameters<typeof import("./server.impl.js").startGatewayServer>
-): ReturnType<typeof import("./server.impl.js").startGatewayServer> {
+  ...args: Parameters<typeof import("./server.impl.js").startGatewayServerCore>
+): ReturnType<typeof import("./server.impl.js").startGatewayServerCore> {
   const mod = await loadServerImpl();
-  return await mod.startGatewayServer(...args);
+  return await mod.startGatewayServerCore(...args);
 }
 
 /** Clears prepared model-catalog generations between tests. */
 export async function resetPreparedModelCatalogForTest(): Promise<void> {
   const mod = await loadServerImpl();
-  await mod.resetPreparedModelCatalogForTest();
+  await mod.resetPreparedModelCatalogForTestCore();
 }

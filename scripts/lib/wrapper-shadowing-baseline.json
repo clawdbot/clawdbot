@@ -254,25 +254,10 @@
     "wrapper": "src/infra/outbound/message-action-params.ts"
   },
   {
-    "name": "readLatestSessionUsageFromTranscriptAsync",
-    "wrapped": "src/gateway/session-utils.fs.ts",
-    "wrapper": "src/gateway/session-transcript-readers.ts"
-  },
-  {
     "name": "readSessionTranscriptVisibleMessageDelta",
     "wrapped": "src/config/sessions/session-accessor.sqlite-active-events.ts",
     "wrapper": "src/plugin-sdk/session-transcript-runtime.ts",
     "via": "src/config/sessions/session-accessor.ts"
-  },
-  {
-    "name": "registerSubCliByName",
-    "wrapped": "src/cli/program/register.subclis-core.ts",
-    "wrapper": "src/cli/program/register.subclis.ts"
-  },
-  {
-    "name": "registerSubCliCommands",
-    "wrapped": "src/cli/program/register.subclis-core.ts",
-    "wrapper": "src/cli/program/register.subclis.ts"
   },
   {
     "name": "replaceRuntimeAuthProfileStoreSnapshots",
@@ -304,11 +289,6 @@
     "name": "resolveHeartbeatPrompt",
     "wrapped": "src/auto-reply/heartbeat.ts",
     "wrapper": "src/infra/heartbeat-runner-config.ts"
-  },
-  {
-    "name": "resolveMissingPluginCommandMessage",
-    "wrapped": "src/cli/run-main-policy.ts",
-    "wrapper": "src/cli/run-main.ts"
   },
   {
     "name": "resolvePluginProviders",
@@ -349,11 +329,6 @@
     "name": "resolveStorePath",
     "wrapped": "src/config/sessions/paths.ts",
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
-  },
-  {
-    "name": "resolveThinkingDefaultForModel",
-    "wrapped": "src/auto-reply/thinking.shared.ts",
-    "wrapper": "src/auto-reply/thinking.ts"
   },
   {
     "name": "runProviderModelSelectedHook",

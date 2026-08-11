@@ -30,20 +30,12 @@ import {
   shouldPersistRestartRecoveryCleanup,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
-import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
-import {
-  emitIngressModelUsageDiagnostic,
-  ingressDiagnosticChannel,
-} from "./command/ingress-diagnostics.js";
-import { resolveAgentRunLifecycleEndLogLevel } from "./command/lifecycle.js";
+import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
-import {
-  prepareAgentCommandExecution,
-  resolveExplicitAgentCommandSessionKey,
-} from "./command/prepare.js";
+import { prepareAgentCommandExecution } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
@@ -62,6 +54,7 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
+import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 type AgentCommandAdmissionIngress = Parameters<typeof executionIdentity.record>[0]["ingress"];
@@ -651,13 +644,18 @@ async function agentCommandFromIngressInternal(
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
       run: async (prepared) =>
-        await agentCommandInternal(
-          prepared,
-          prepared.opts,
-          { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-          runtime,
-          deps,
-        ),
+        await withAgentPluginRegistry({
+          config: prepared.cfg,
+          workspaceDir: prepared.workspaceDir,
+          run: async () =>
+            await agentCommandInternal(
+              prepared,
+              prepared.opts,
+              { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+              runtime,
+              deps,
+            ),
+        }),
     });
 
     if (result) {
@@ -694,12 +692,3 @@ export async function agentCommandFromGatewayIngress(
 ) {
   return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
 }
-
-export const testing = {
-  resolveAgentRuntimeConfig,
-  prepareAgentCommandExecution,
-  resolveExplicitAgentCommandSessionKey,
-  resolveAgentRunLifecycleEndLogLevel,
-  ingressDiagnosticChannel,
-  emitIngressModelUsageDiagnostic,
-};

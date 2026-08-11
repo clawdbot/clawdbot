@@ -1,7 +1,7 @@
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
+  resolveThinkingDefaultForModelCore,
   type ThinkingCatalogEntry,
 } from "../../../../src/auto-reply/thinking.shared.js";
 // Control UI module implements thinking behavior.
@@ -104,7 +104,7 @@ export function resolveCurrentThinkingLevel(
   if (!provider || !model) {
     return "off";
   }
-  return resolveThinkingDefaultForModel({
+  return resolveThinkingDefaultForModelCore({
     provider,
     model,
     catalog: models,
@@ -230,7 +230,7 @@ export function resolveChatThinkingSelectState(params: {
     session?.thinkingDefault ??
     defaultFromSessionDefaults ??
     (provider && model
-      ? resolveThinkingDefaultForModel({
+      ? resolveThinkingDefaultForModelCore({
           provider,
           model,
           catalog: [...params.catalog],

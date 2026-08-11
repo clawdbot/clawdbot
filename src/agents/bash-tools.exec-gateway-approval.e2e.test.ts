@@ -15,7 +15,7 @@ import { startGatewayServer } from "../gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../gateway/test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -68,7 +68,7 @@ describe("gateway-hosted exec approvals", () => {
       const workspaceDir = path.join(tempHome, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const token = "exec-approval-e2e-token";
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });

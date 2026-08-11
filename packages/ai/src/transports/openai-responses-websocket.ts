@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import type {
   ResponseInput,
+  ResponseOutputItem,
   ResponsesClientEvent,
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
@@ -27,7 +28,7 @@ type ResponsesWebSocketRequest = Record<string, unknown> & {
 type CachedWebSocketContinuation = {
   lastRequest: ResponsesWebSocketRequest;
   lastResponseId: string;
-  lastResponseItems: ResponseInput;
+  lastResponseItems: ResponseOutputItem[];
 };
 
 type CachedWebSocketConnection = {
@@ -298,7 +299,7 @@ function sanitizeWebSocketRequest(request: Record<string, unknown>): ResponsesWe
   return websocketRequest as ResponsesWebSocketRequest;
 }
 
-function normalizeAssistantReplayInput(input: ResponseInput): unknown[] {
+function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
   return input.map((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return item;
@@ -424,7 +425,6 @@ export function createOpenAIResponsesWebSocketStream(params: {
   signal?: AbortSignal;
   callerSignal?: AbortSignal;
   degradeCooldownMs?: number;
-  resolveContinuationItems?: () => ResponseInput;
 }): OpenAIResponsesWebSocketStream {
   const connection = prepareWebSocketConnection(params.client, params.headers);
   const fullRequest = sanitizeWebSocketRequest(params.request);
@@ -469,7 +469,9 @@ export function createOpenAIResponsesWebSocketStream(params: {
   }
 
   let streamStarted = false;
-  let terminalResponseId: string | undefined;
+  let terminalResponse:
+    | Extract<ResponsesServerEvent, { type: "response.completed" }>["response"]
+    | undefined;
   let terminalReceived = false;
   let released = false;
   const finish = ({ keep = true }: { keep?: boolean } = {}) => {
@@ -477,20 +479,12 @@ export function createOpenAIResponsesWebSocketStream(params: {
       return;
     }
     released = true;
-    try {
-      if (keep && lease.entry && terminalResponseId && params.resolveContinuationItems) {
-        lease.entry.continuation = {
-          lastRequest: fullRequest,
-          lastResponseId: terminalResponseId,
-          lastResponseItems: params.resolveContinuationItems(),
-        };
-      }
-    } catch (error) {
-      if (lease.entry) {
-        lease.entry.continuation = undefined;
-      }
-      lease.release({ keep: false });
-      throw error;
+    if (keep && lease.entry && terminalResponse) {
+      lease.entry.continuation = {
+        lastRequest: fullRequest,
+        lastResponseId: terminalResponse.id,
+        lastResponseItems: terminalResponse.output,
+      };
     }
     lease.release({ keep });
   };
@@ -530,8 +524,8 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (event.type === "response.failed") {
             throw new OpenAIResponsesWebSocketResponseFailedError(event.response.output.length > 0);
           }
-          if (event.type === "response.completed" && typeof event.response.id === "string") {
-            terminalResponseId = event.response.id;
+          if (event.type === "response.completed") {
+            terminalResponse = event.response;
           }
           terminalReceived =
             event.type === "response.completed" || event.type === "response.incomplete";

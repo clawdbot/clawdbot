@@ -408,7 +408,7 @@ async function finalizeAcpTurnOutput(params: {
   return queuedFinal;
 }
 
-export async function tryDispatchAcpReply(params: {
+export async function tryDispatchAcpReplyCore(params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;

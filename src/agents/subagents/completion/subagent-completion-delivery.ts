@@ -156,6 +156,11 @@ export function resolveCorrelatedSubagentDelivery(
   if (queued.kind !== "agentTurn" || queued.owner?.kind !== "subagent_completion") {
     return queued;
   }
+  if (Date.now() >= queued.owner.deadlineAt) {
+    throw new SessionDeliveryDeadLetteredError(
+      "correlated subagent completion delivery deadline expired",
+    );
+  }
   const entry = subagentRuns.get(queued.owner.runId);
   if (
     !entry ||
@@ -164,11 +169,6 @@ export function resolveCorrelatedSubagentDelivery(
     entry.delivery.deadlineAt !== queued.owner.deadlineAt
   ) {
     throw new SessionDeliveryDeferredError("correlated subagent delivery owner mismatch");
-  }
-  if (Date.now() >= queued.owner.deadlineAt) {
-    throw new SessionDeliveryDeadLetteredError(
-      "correlated subagent completion delivery deadline expired",
-    );
   }
   return { ...queued, message: canonicalResultMessage(entry) };
 }

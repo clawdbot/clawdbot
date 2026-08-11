@@ -1488,6 +1488,104 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.completion?.resultText).toBeUndefined();
   });
 
+  it("refreshes only the newest pending completion generation for a shared session", async () => {
+    const childSessionKey = "agent:main:subagent:shared-refresh";
+    const older = createRunEntry({
+      runId: "run-shared-refresh-old",
+      childSessionKey,
+      generation: 1,
+      createdAt: 1_000,
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      completion: {
+        required: true,
+        resultText: "older generation result",
+        capturedAt: 4_000,
+      },
+    });
+    const newer = createRunEntry({
+      runId: "run-shared-refresh-new",
+      childSessionKey,
+      generation: 2,
+      createdAt: 2_000,
+      expectsCompletionMessage: true,
+      endedAt: 5_000,
+      outcome: { status: "ok" },
+      completion: {
+        required: true,
+        resultText: "newer generation placeholder",
+        capturedAt: 5_000,
+      },
+    });
+    const olderBefore = structuredClone(older);
+    const persist = vi.fn();
+    const controller = createLifecycleController({
+      entry: newer,
+      runs: new Map([
+        [older.runId, older],
+        [newer.runId, newer],
+      ]),
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => "latest session reply"),
+    });
+
+    expect(await controller.refreshFrozenResultFromSession(childSessionKey)).toBe(true);
+
+    expect(older).toEqual(olderBefore);
+    expect(newer.completion).toMatchObject({
+      resultText: "latest session reply",
+      capturedAt: expect.any(Number),
+    });
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith(newer.runId);
+  });
+
+  it("rejects a frozen-result refresh when a newer generation registers during capture", async () => {
+    const childSessionKey = "agent:main:subagent:refresh-race";
+    const entry = createRunEntry({
+      runId: "run-refresh-race-old",
+      childSessionKey,
+      generation: 1,
+      expectsCompletionMessage: true,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    let finishCapture: ((value: string) => void) | undefined;
+    const captureSubagentCompletionReply = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finishCapture = resolve;
+        }),
+    );
+    const persist = vi.fn();
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    const refresh = controller.refreshFrozenResultFromSession(childSessionKey);
+    await waitForLifecycleState(() =>
+      expect(captureSubagentCompletionReply).toHaveBeenCalledOnce(),
+    );
+    const successor = createRunEntry({
+      runId: "run-refresh-race-new",
+      childSessionKey,
+      generation: 2,
+      createdAt: 2_000,
+    });
+    runs.set(successor.runId, successor);
+    finishCapture?.("reply owned by the successor");
+
+    expect(await refresh).toBe(false);
+    expect(entry.completion?.resultText).toBeUndefined();
+    expect(successor.completion?.resultText).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("keeps success canonical while a killed callback waits behind reply capture", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     let releaseCapture: ((value: string) => void) | undefined;
@@ -4462,12 +4560,70 @@ describe("requester settle wake trigger", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(settleWake).toHaveBeenCalledTimes(1);
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      expect(vi.getTimerCount()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(29_999);
       expect(settleWake).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(settleWake).toHaveBeenCalledTimes(2);
       expect(entry.requesterSettleWake).toBeUndefined();
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a fresh yield wake preempt a stale retry timer", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "delivered" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 1,
+        nextAttemptAt: 120_000,
+        rearmGeneration: 1,
+      },
+    });
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration);
+        return true;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      expect(vi.getTimerCount()).toBe(1);
+
+      entry.requesterTurnRunId = "run-requester";
+      entry.requesterTurnYielded = true;
+      expect(
+        controller.settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: entry.requesterSessionKey,
+          requesterTurnRunId: "run-requester",
+          requesterYielded: true,
+          acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settleWake).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(settleWake).toHaveBeenCalledOnce();
     } finally {
       controller.clearScheduledResumeTimers();
       vi.useRealTimers();

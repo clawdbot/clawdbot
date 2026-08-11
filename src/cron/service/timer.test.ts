@@ -323,7 +323,7 @@ describe("cron service timer seam coverage", () => {
     let terminalStatePersisted = false;
     let finalizedAfterPersist = false;
     const save = cronStoreModule.saveCronJobsStore;
-    const finalize = taskExecutor.finalizeTaskRunByRunId;
+    const finalize = taskExecutor.finalizeTaskRunByRunIdCore;
     const saveSpy = vi
       .spyOn(cronStoreModule, "saveCronJobsStore")
       .mockImplementation(async (...args) => {
@@ -337,7 +337,7 @@ describe("cron service timer seam coverage", () => {
         }
       });
     const finalizeSpy = vi
-      .spyOn(taskExecutor, "finalizeTaskRunByRunId")
+      .spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
       .mockImplementation((params) => {
         finalizedAfterPersist = terminalStatePersisted;
         return finalize(params);
@@ -800,7 +800,7 @@ describe("cron service timer seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(taskExecutor, "createRunningTaskRun")
+      .spyOn(taskExecutor, "createRunningTaskRunCore")
       .mockImplementation(() => {
         throw ledgerError;
       });

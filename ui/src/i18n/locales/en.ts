@@ -696,6 +696,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     places: "Places",
+    projects: "Projects",
+    projectsAdminHint: "Admins can register projects from Browse folders",
+    registerProject: "Register as project",
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
@@ -4857,6 +4860,7 @@ export const en: TranslationMap = {
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
+      reorderQueuedMessage: "Reorder queued message with the arrow keys",
       states: {
         steering: "Steering",
         applyingSettings: "Applying chat settings",

@@ -25,7 +25,7 @@ import {
   resolvePreauthHandshakeTimeoutMs,
   rpcReq,
   sendRawConnectReq,
-  startGatewayServer,
+  startTestGatewayServer,
   TEST_OPERATOR_CLIENT,
   waitForWsClose,
   withGatewayServer,
@@ -34,12 +34,12 @@ import {
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let port: number;
 
     beforeAll(async () => {
       port = await getFreePort();
-      server = await startGatewayServer(port);
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {

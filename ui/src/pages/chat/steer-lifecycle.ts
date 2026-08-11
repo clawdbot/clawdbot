@@ -1,6 +1,7 @@
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
@@ -457,7 +458,7 @@ export async function sendQueuedChatMessageWithQueueMode(
       host,
       itemSessionKey,
       [...host.chatQueue.filter((entry) => entry.id !== id), steeredIndicator].toSorted(
-        (left, right) => left.createdAt - right.createdAt,
+        compareChatQueueOrder,
       ),
       item.agentId,
     );

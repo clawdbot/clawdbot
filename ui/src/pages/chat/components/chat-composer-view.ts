@@ -140,6 +140,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       canAbort: showAbortableUi,
       onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+      // Reordering is local bookkeeping, so it stays available while offline —
+      // exactly when a queue is long enough to need it.
+      onQueueMove: props.onQueueMove,
       onQueueRemove: props.onQueueRemove,
     })}
     ${props.runError

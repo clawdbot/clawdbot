@@ -809,9 +809,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         "createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0] test invariant",
       ),
     );
-    expect(createAgentSessionMock.mock.calls[0]?.[1]).toEqual({
-      cleanupProviderSessionResourcesOnDispose: false,
-    });
   });
 
   it("routes compaction through shared stream resolution and extra params", async () => {

@@ -319,6 +319,11 @@ export function resolveAiTransportHeaderSentinels(
   const host = getAiTransportHost();
   let resolvedHeaders: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(headers)) {
+    if (value === null) {
+      // applyLocalNoAuthHeaderOverride marks no-auth local providers with a
+      // runtime null marker outside the public string-only Model contract.
+      continue;
+    }
     const resolved = host.resolveSecretSentinel(value);
     if (resolved !== value) {
       resolvedHeaders ??= { ...headers };

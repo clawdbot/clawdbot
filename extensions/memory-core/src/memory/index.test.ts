@@ -913,7 +913,7 @@ describe("memory index", () => {
     }
   });
 
-  it("re-chunks unchanged curated files when the chunking version advances", async () => {
+  it("re-chunks unchanged files and removes stale rows when the chunking version advances", async () => {
     const curatedContent = [
       "- Alpha entry. <!-- trigger: alpha entry --> <!-- project: alpha-key -->",
       "- Beta entry. <!-- trigger: beta entry --> <!-- project: beta-key -->",
@@ -953,6 +953,23 @@ describe("memory index", () => {
            chunk_id, origin_class, session_kind, observed_at
          ) VALUES ('legacy-curated-chunk', 'agent', 'unknown', ?)`,
       ).run(Date.now());
+      db.prepare(
+        `INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+         VALUES ('memory/default-diagram.png', 'memory', 'stale-default-media', ?, 3)`,
+      ).run(Date.now());
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (
+           'stale-default-media', 'memory/default-diagram.png', 'memory', 1, 1,
+           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', '[]', ?
+         )`,
+      ).run(Date.now());
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at
+         ) VALUES ('stale-default-media', 'agent', 'unknown', ?)`,
+      ).run(Date.now());
       db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
         JSON.stringify(legacyMeta),
       );
@@ -975,6 +992,20 @@ describe("memory index", () => {
         { triggers: "global entry", projectKey: null },
       ]);
       expect(rows).toHaveLength(3);
+      expect(
+        db
+          .prepare(
+            "SELECT 1 FROM memory_index_sources WHERE path = 'memory/default-diagram.png' AND source = 'memory'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(
+        db
+          .prepare(
+            "SELECT 1 FROM memory_index_chunks WHERE path = 'memory/default-diagram.png' AND source = 'memory'",
+          )
+          .get(),
+      ).toBeUndefined();
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
       const upgradedMeta = db
         .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
@@ -2848,11 +2879,12 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(2);
   });
 
-  it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
+  it("indexes multimodal files only from extra paths", async () => {
     const mediaDir = path.join(workspaceDir, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
     await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
+    await fs.writeFile(path.join(memoryDir, "default-diagram.png"), Buffer.from("png"));
 
     const cfg = createCfg({
       provider: "gemini",
@@ -2864,6 +2896,17 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
 
     expect(embedBatchInputCalls).toBeGreaterThan(0);
+
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const indexedMediaPaths = () =>
+      (
+        db
+          .prepare(
+            "SELECT path FROM memory_index_chunks WHERE source = 'memory' AND path LIKE '%.png' ORDER BY path",
+          )
+          .all() as Array<{ path: string }>
+      ).map((row) => row.path);
+    expect(indexedMediaPaths()).toEqual(["media-memory/diagram.png"]);
 
     const imageResults = await manager.search("image");
     expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);

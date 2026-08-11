@@ -239,7 +239,7 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result).toBe(model);
   });
 
-  it("aliases a provider-owned stream when its wire-format api is already registered", async () => {
+  it("aliases a provider-owned stream while preserving its null auth-header marker", async () => {
     const builtInStream = vi.fn(() => createAssistantMessageEventStream());
     apiRegistry.registerApiProvider(
       {
@@ -260,6 +260,7 @@ describe("prepareModelForSimpleCompletion", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 32768,
       maxTokens: 2048,
+      headers: { Authorization: null } as never,
     };
 
     const result = prepareModelForSimpleCompletion({ model });

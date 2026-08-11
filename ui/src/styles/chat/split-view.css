@@ -171,13 +171,15 @@ openclaw-chat-pane {
   overflow: hidden;
   color: var(--text);
   font-size: 12px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .chat-pane__session-title-button {
   display: block;
+  /* Hover padding is drawn outside the text box: the plain-span title (catalog
+     and rename-disabled panes) has none, and without the pull-back the same
+     title would start 5px further right the moment renaming is allowed. */
   padding: 3px 5px;
+  margin-inline: -5px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -189,6 +191,15 @@ openclaw-chat-pane {
 .chat-pane__session-title-button:focus-visible {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   outline: none;
+}
+
+.chat-pane__session-title-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Inter's visible ink sits 0.8px above its line-box center at this size. */
+  transform: translateY(1px);
 }
 
 .chat-pane__session-title-input {
@@ -269,7 +280,7 @@ openclaw-chat-pane {
 .chat-pane__gateway-chip {
   display: inline-flex;
   max-width: 170px;
-  height: 26px;
+  height: 28px;
   align-items: center;
   gap: 6px;
   padding: 0 8px;
@@ -347,7 +358,8 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
-.chat-pane__branches-trigger svg,
+/* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
+   row, so it keeps the shared 18px action glyph from .btn--icon svg. */
 .chat-pane__branch-active svg {
   width: 14px;
   height: 14px;
@@ -384,7 +396,9 @@ openclaw-chat-pane {
 .chat-pane__workspace-chip {
   display: inline-flex;
   max-width: 180px;
-  height: 26px;
+  /* Same 28px control height as .chat-icon-btn, so every hit/hover surface in
+     the row starts and ends on the same two lines. */
+  height: 28px;
   align-items: center;
   gap: 5px;
   padding: 0 8px;
@@ -425,6 +439,23 @@ openclaw-chat-pane {
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
   margin-left: auto;
+}
+
+/* One box model for every action, whatever wraps it. A custom element defaults
+   to display:inline, so as a flex child it blockifies but keeps a text line
+   box, and the descender space under its button drags the glyph off the row
+   centerline: the session menu measured 29.8px tall and 0.9px low against the
+   28px buttons beside it. Keep this selector at single-class specificity so the
+   container queries below can still hide individual actions. */
+.chat-pane__actions > * {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The tooltip wrapper stays out of the box tree so the button it wraps remains
+   the flex item that the rule above measures. */
+.chat-pane__actions > openclaw-tooltip {
+  display: contents;
 }
 
 .chat-pane__sharing-menu {

@@ -2801,6 +2801,44 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
+/* Drop target reads as an insertion edge rather than a selected row, so the
+   dragged message clearly lands at this position. */
+.chat-queue__item--drop-target {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+/* The handle owns reordering for both input methods: drag it, or focus it and
+   press the arrow keys. It stays a real button so keyboards can reach it. */
+.chat-queue__grip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 12px;
+  height: 16px;
+  margin-left: -5px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  cursor: grab;
+}
+
+.chat-queue__item:hover .chat-queue__grip,
+.chat-queue__grip:focus-visible {
+  color: var(--muted);
+}
+
+.chat-queue__grip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.chat-queue__grip svg {
+  width: 12px;
+  height: 14px;
+}
+
 .chat-queue__item--failed {
   background: color-mix(in srgb, var(--danger) 8%, transparent);
 }

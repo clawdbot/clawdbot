@@ -12,6 +12,7 @@ import { executionIdentity } from "../agents/agent-command-execution-identity.js
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
+import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -46,7 +47,7 @@ import {
   normalizeSessionDeliveryState,
 } from "../utils/delivery-context.shared.js";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
-import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
+import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -881,6 +882,113 @@ describe("agentCommand", () => {
     });
   });
 
+  it("runs direct ingress with a configured plugin-owned harness", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const workspaceDir = path.join(home, "openclaw");
+      const pluginDir = path.join(home, "plugins", "ingress-proof");
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "ingress-proof",
+          name: "Ingress proof harness",
+          activation: { onStartup: false, onAgentHarnesses: ["ingress-proof"] },
+          configSchema: { type: "object", additionalProperties: false },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "ingress-proof",
+          version: "1.0.0",
+          type: "module",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "index.js"),
+        `export default {
+          id: "ingress-proof",
+          register(api) {
+            api.registerAgentHarness({
+              id: "ingress-proof",
+              label: "Ingress proof harness",
+              supports: () => ({ supported: true }),
+              async runAttempt() { throw new Error("unused"); },
+            });
+          },
+        };\n`,
+      );
+      const cfg = {
+        meta: { migrations: { modelPolicyAllowlist: true } },
+        plugins: {
+          allow: ["ingress-proof"],
+          entries: { "ingress-proof": { enabled: true } },
+          load: { paths: [pluginDir] },
+        },
+        models: {
+          providers: {
+            "ingress-proof": {
+              api: "openai-responses",
+              baseUrl: "https://example.invalid/v1",
+              models: [
+                {
+                  id: "proof-model",
+                  name: "Proof model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                  agentRuntime: { id: "ingress-proof" },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "ingress-proof/proof-model" },
+            workspace: workspaceDir,
+          },
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig;
+      configIoMocks.loadConfig.mockReturnValue(cfg);
+      const actualRuntimePlugins = await vi.importActual<
+        typeof import("../agents/runtime-plugins.js")
+      >("../agents/runtime-plugins.js");
+      const runtimePlugins = await import("../agents/runtime-plugins.js");
+      vi.spyOn(runtimePlugins, "withAgentPluginRegistry").mockImplementationOnce(
+        actualRuntimePlugins.withAgentPluginRegistry,
+      );
+      await agentCommandFromIngress(
+        {
+          message: "ping",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledTimes(2);
+      const harnessSelectionCalls = agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin.mock
+        .calls as unknown as Array<
+        [
+          Parameters<
+            typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin
+          >[0],
+        ]
+      >;
+      for (const [{ pluginRegistry }] of harnessSelectionCalls) {
+        expect(
+          pluginRegistry?.agentHarnesses.some((entry) => entry.harness.id === "ingress-proof"),
+        ).toBe(true);
+      }
+    });
+  });
+
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1163,7 +1271,7 @@ describe("agentCommand", () => {
       });
       mockConfig(home, store, { models: {} });
 
-      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+      const prepared = await prepareAgentCommandExecution(
         {
           message: "prepare only",
           sessionKey,
@@ -1210,7 +1318,7 @@ describe("agentCommand", () => {
       });
       cfg.messages = { visibleReplies: "automatic" };
 
-      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+      const prepared = await prepareAgentCommandExecution(
         {
           message: "child completed",
           sessionKey,

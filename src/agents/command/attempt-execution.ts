@@ -477,44 +477,29 @@ export async function persistCliTurnTranscript(params: {
   skipUserTurn?: boolean;
   skipAssistantTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
-  const replyText = resolveCliTranscriptReplyText(params.result);
-  const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
-  const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+  const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
+  const replyText = resolveCliTranscriptReplyText(result);
+  const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";
+  const model = result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
-  const skipUserTurn = gapFill || params.skipUserTurn === true;
+  const skipUserTurn = gapFill || requestedSkipUserTurn === true;
 
-  const persist = async () =>
-    await persistTextTurnTranscript({
-      body: skipUserTurn ? "" : params.body,
-      transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
-      ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
-      finalText: replyText,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
-      sessionAgentId: params.sessionAgentId,
-      threadId: params.threadId,
-      sessionCwd: params.sessionCwd,
-      config: params.config,
-      embeddedAssistantGapFill: gapFill,
-      assistant: {
-        api: "cli",
-        provider,
-        model,
-        // The marker is terminal for fallback scans: without it, readers could
-        // skip this turn and revive an older cumulative usage record as fresh.
-        usage: resolveCliTranscriptUsage(params.result.meta.agentMeta?.lastCallUsage),
-      },
-      skipAssistantTurn: params.skipAssistantTurn,
-    });
-  if (!gapFill) {
-    return await persist();
-  }
-
-  return await persist();
+  return await persistTextTurnTranscript({
+    ...transcript,
+    body: skipUserTurn ? "" : transcript.body,
+    transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
+    userMessage: skipUserTurn ? undefined : transcript.userMessage,
+    finalText: replyText,
+    embeddedAssistantGapFill: gapFill,
+    assistant: {
+      api: "cli",
+      provider,
+      model,
+      // The marker is terminal for fallback scans: without it, readers could
+      // skip this turn and revive an older cumulative usage record as fresh.
+      usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
+    },
+  });
 }
 
 export function runAgentAttempt(params: {

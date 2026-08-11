@@ -119,6 +119,14 @@ describe("bundled plugin assets", () => {
     expect(isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(true);
   });
 
+  it.each(["packages/ai/src/host.ts", "packages/llm-core/src/types.ts"])(
+    "rebuilds the root runtime for %s",
+    (source) => {
+      expect(isBuildRelevantRunNodePath(source)).toBe(true);
+      expect(isRestartRelevantRunNodePath(source)).toBe(true);
+    },
+  );
+
   it("refreshes generated output metadata without recreating the watcher", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       const packagePath = path.join(rootDir, "extensions", "canvas", "package.json");
