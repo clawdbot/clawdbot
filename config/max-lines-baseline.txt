@@ -635,7 +635,6 @@ src/cron/service/ops.test.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts
 src/daemon/launchd.test.ts
-src/daemon/launchd.ts
 src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
