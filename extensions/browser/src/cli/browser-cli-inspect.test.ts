@@ -1,6 +1,6 @@
 // Browser tests cover browser cli inspect plugin behavior.
 import { Command } from "commander";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
@@ -58,15 +58,6 @@ const sharedMocks = vi.hoisted(() => ({
     },
   ),
 }));
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
-  sharedMocks.callBrowserRequest,
-);
-vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.loadConfig);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
-
 let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
 
 type SnapshotDefaultsCase = {
@@ -75,11 +66,22 @@ type SnapshotDefaultsCase = {
   expectMode: "efficient" | undefined;
 };
 
+function installInspectSpies() {
+  vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
+    sharedMocks.callBrowserRequest,
+  );
+  vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.loadConfig);
+  vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+  vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
+  vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error);
+  vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+}
+
 describe("browser cli snapshot defaults", () => {
   const runBrowserInspect = async (args: string[], withJson = false) => {
     const program = new Command();
     const browser = program.command("browser").option("--json", "JSON output", false);
-    registerBrowserInspectCommands(browser, () => ({}));
+    registerBrowserInspectCommands(browser, (cmd) => cmd.parent?.opts() ?? {});
     await program.parseAsync(withJson ? ["browser", "--json", ...args] : ["browser", ...args], {
       from: "user",
     });
@@ -91,11 +93,17 @@ describe("browser cli snapshot defaults", () => {
   const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
 
   beforeAll(async () => {
+    installInspectSpies();
     ({ registerBrowserInspectCommands } = await import("./browser-cli-inspect.js"));
+  });
+
+  beforeEach(() => {
+    installInspectSpies();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     resetRuntimeCapture();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
   });

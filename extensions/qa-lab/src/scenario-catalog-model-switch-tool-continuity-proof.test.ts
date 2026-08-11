@@ -23,6 +23,7 @@ function normalizeModelRef(raw: string) {
 async function runToolContinuity(
   alternateTools: string[],
   params?: {
+    alternateWireToolName?: "read" | "exec";
     primaryOutboundText?: string;
     primaryDelivery?: { status: string; resultCount: number } | null;
     alternateReplyText?: string;
@@ -34,8 +35,14 @@ async function runToolContinuity(
 ) {
   const state = createQaBusState();
   let call = 0;
+  const requests: Array<{
+    cursor: number;
+    allInputText: string;
+    plannedToolName: string;
+    plannedWireToolName: string;
+  }> = [];
   const runAgentPrompt = vi.fn(
-    async (_env: unknown, prompt: { provider?: string; model?: string }) => {
+    async (_env: unknown, prompt: { provider?: string; model?: string; message: string }) => {
       call += 1;
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
@@ -68,6 +75,13 @@ async function runToolContinuity(
         });
       }
       const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
+      const wireToolName = call === 1 ? "read" : (params?.alternateWireToolName ?? "read");
+      requests.push({
+        cursor: call,
+        allInputText: prompt.message,
+        plannedToolName: "read",
+        plannedWireToolName: wireToolName,
+      });
       return {
         started: { runId },
         waited: {
@@ -84,7 +98,7 @@ async function runToolContinuity(
             turnId: `turn-${call}`,
             requested: { provider, model },
             effective: { provider, model, responseModel: model },
-            successfulToolNames: call === 1 ? ["read"] : alternateTools,
+            successfulToolNames: call === 1 ? [wireToolName] : alternateTools,
             rerouted: false,
             terminalDisposition: "visible",
           },
@@ -99,8 +113,15 @@ async function runToolContinuity(
         providerMode: "mock-openai",
         primaryModel: "openai/primary-model",
         alternateModel: "OPENAI/alternate-alias",
+        mock: { baseUrl: "http://mock.test" },
         gateway: {},
       },
+      fetchJson: async (url: string) =>
+        url.includes("request-cursor")
+          ? { cursor: call }
+          : requests.filter(
+              (request) => request.cursor > Number(url.match(/after=(\d+)/)?.[1] ?? -1),
+            ),
       splitModelRef,
       normalizeModelRef,
       normalizeLowercaseStringOrEmpty: (value: unknown) =>
@@ -135,10 +156,24 @@ describe("model-switch tool continuity terminal evidence", () => {
         text: "the **model handoff** preserved the QA mission after rereading the scenario pack",
       },
       terminalDelivery: { status: "sent", resultCount: 1 },
+      alternateTool: { logical: "read", wire: "read" },
     });
     expect(result.steps[0]?.details).toBe(
       "the **model handoff** preserved the QA mission after rereading the scenario pack",
     );
+  });
+
+  it("accepts Code Mode exec receipts for logically planned reads", async () => {
+    const { result } = await runToolContinuity(["exec"], {
+      alternateWireToolName: "exec",
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      primary: { successfulToolNames: ["read"] },
+      alternate: { successfulToolNames: ["exec"] },
+      alternateTool: { logical: "read", wire: "exec" },
+    });
   });
 
   it("does not let a successful prior-run read satisfy the alternate run", async () => {

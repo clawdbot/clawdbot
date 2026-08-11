@@ -53,11 +53,14 @@ flow:
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
         - assert:
-            expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible'; })()"
-            message: default-model run did not return owned successful read evidence
+            expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.terminalDisposition === 'visible'; })()"
+            message: default-model run did not return exact owned terminal evidence
         - assert:
             expr: "primaryRun?.waited?.terminalDelivery?.status === 'sent' && typeof primaryRun.waited.terminalDelivery.resultCount === 'number' && primaryRun.waited.terminalDelivery.resultCount > 0"
             message: default-model run did not return owned sent delivery evidence
+        - set: alternateRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : null"
         - call: runAgentPrompt
           saveAs: alternateRun
           args:
@@ -71,8 +74,27 @@ flow:
                 expr: expectedAlternate.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
+        - set: alternateToolRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${alternateRequestCursor}`)).filter((request) => String(request.allInputText ?? '').includes(config.followupPrompt) && request.plannedToolName === 'read') : []"
         - assert:
-            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
+            expr: "!env.mock || alternateToolRequests.length > 0"
+            message: alternate-model debug evidence did not plan the logical read tool
+        - set: alternateToolRequest
+          value:
+            expr: "env.mock ? alternateToolRequests.find((request) => alternateRun?.waited?.terminalReceipt?.successfulToolNames?.includes(request.plannedWireToolName ?? request.plannedToolName)) : null"
+        - assert:
+            expr: "!env.mock || Boolean(alternateToolRequest)"
+            message:
+              expr: "`alternate-model run did not return exact owned successful read evidence: planned=${JSON.stringify(alternateToolRequests.map((request) => ({ logical: request.plannedToolName ?? null, wire: request.plannedWireToolName ?? request.plannedToolName ?? null })))} receipt=${JSON.stringify(alternateRun?.waited?.terminalReceipt ?? null)}`"
+        - set: alternateWireToolName
+          value:
+            expr: "alternateToolRequest?.plannedWireToolName ?? alternateToolRequest?.plannedToolName ?? (alternateRun?.waited?.terminalReceipt?.successfulToolNames?.includes('read') ? 'read' : 'exec')"
+        - assert:
+            expr: "alternateWireToolName === 'read' || alternateWireToolName === 'exec'"
+            message: alternate-model read did not resolve to a supported direct or Code Mode wire tool
+        - assert:
+            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.successfulToolNames?.includes(alternateWireToolName) && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
             message: alternate-model run did not return exact owned successful read evidence
         - assert:
             expr: "alternateRun?.waited?.terminalReply?.disposition === 'visible' && hasModelSwitchContinuitySignal(alternateRun.waited.terminalReply.text)"
@@ -86,6 +108,11 @@ flow:
               ref: primaryRun.waited.terminalReceipt
             alternate:
               ref: alternateRun.waited.terminalReceipt
+            alternateTool:
+              logical:
+                ref: alternateToolRequest.plannedToolName
+              wire:
+                ref: alternateWireToolName
             terminalReply:
               ref: alternateRun.waited.terminalReply
             terminalDelivery:

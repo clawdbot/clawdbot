@@ -268,7 +268,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       ...metadataSnapshot,
       index: {
         installRecords: {
-          demo: { source: "registry", version: "1.0.0" },
+          demo: { source: "npm", version: "1.0.0" },
         },
         plugins: [],
         policyHash: "policy",
@@ -282,10 +282,10 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
 
     expect(context.installRecords).toEqual({
-      demo: { source: "registry", version: "1.0.0" },
+      demo: { source: "npm", version: "1.0.0" },
     });
     expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
-      demo: { source: "registry", version: "1.0.0" },
+      demo: { source: "npm", version: "1.0.0" },
     });
   });
 
