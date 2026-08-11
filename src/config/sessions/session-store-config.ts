@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
 import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 
 const MAX_SYMLINK_HOPS = 64;
 
@@ -84,8 +84,8 @@ export function isSameFixedSessionStoreConfig(
   if (isPerAgentSessionStoreConfig(source) || isPerAgentSessionStoreConfig(target)) {
     return false;
   }
-  const sourcePath = path.resolve(resolveStorePath(source, { env }));
-  const targetPath = path.resolve(resolveStorePath(target, { env }));
+  const sourcePath = path.resolve(resolveSessionStorePathCore(source, { env }));
+  const targetPath = path.resolve(resolveSessionStorePathCore(target, { env }));
   if (sourcePath === targetPath) {
     return true;
   }
