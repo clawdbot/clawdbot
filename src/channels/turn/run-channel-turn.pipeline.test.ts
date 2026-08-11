@@ -69,7 +69,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
   return {
     ...actual,
-    sendDurableMessageBatch,
+    sendDurableMessageBatchCore: sendDurableMessageBatch,
   };
 });
 

@@ -16,7 +16,7 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   openSessionEntryReadView,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
@@ -154,7 +154,7 @@ function createSessionScope(label: string) {
 describe("SQLite session entry cache", () => {
   it("keeps sqlite-entry-cache list projections shallow, lazy, and memoized per key", async () => {
     const scope = createSessionScope("lazy-list-projection");
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projected",
       sessionId: "lazy-list-projection",
       updatedAt: 1,
@@ -201,8 +201,8 @@ describe("SQLite session entry cache", () => {
 
   it("reuses parsed entries on the second list", async () => {
     const scope = createSessionScope("second-list");
-    await upsertSessionEntry(scope, { label: "first", sessionId: "first", updatedAt: 1 });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(scope, { label: "first", sessionId: "first", updatedAt: 1 });
+    await upsertSessionEntryCore(
       { ...scope, sessionKey: "agent:main:second-list-2" },
       { label: "second", sessionId: "second", updatedAt: 2 },
     );
@@ -219,7 +219,7 @@ describe("SQLite session entry cache", () => {
 
   it("keeps same-path caches isolated by live connection", async () => {
     const scope = createSessionScope("connection-identity");
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "connection-identity",
       sessionId: "connection-identity",
       updatedAt: 1,
@@ -261,12 +261,12 @@ describe("SQLite session entry cache", () => {
   it("does not revalidate session nodes after a same-connection transcript write", async () => {
     const scope = createSessionScope("same-connection-non-entry");
     const siblingScope = { ...scope, sessionKey: "agent:main:same-connection-non-entry-2" };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projection-probe-first",
       sessionId: "same-connection-non-entry",
       updatedAt: 1,
     });
-    await upsertSessionEntry(siblingScope, {
+    await upsertSessionEntryCore(siblingScope, {
       label: "projection-probe-second",
       sessionId: "same-connection-non-entry-2",
       updatedAt: 1,
@@ -293,12 +293,12 @@ describe("SQLite session entry cache", () => {
   it("fully reloads after another connection commits", async () => {
     const scope = createSessionScope("external-write");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-write-sibling" };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projection-probe-before",
       sessionId: "external",
       updatedAt: 1,
     });
-    await upsertSessionEntry(siblingScope, {
+    await upsertSessionEntryCore(siblingScope, {
       label: "projection-probe-sibling",
       sessionId: "external-sibling",
       updatedAt: 1,
@@ -341,12 +341,12 @@ describe("SQLite session entry cache", () => {
   it("fully reloads a cross-connection same-millisecond entry rewrite", async () => {
     const scope = createSessionScope("external-same-ms");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-same-ms-sibling" };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projection-probe-before",
       sessionId: "external-same-ms",
       updatedAt: 1_000,
     });
-    await upsertSessionEntry(siblingScope, {
+    await upsertSessionEntryCore(siblingScope, {
       label: "projection-probe-sibling",
       sessionId: "external-same-ms-sibling",
       updatedAt: 1_000,
@@ -387,12 +387,12 @@ describe("SQLite session entry cache", () => {
   it("fully reloads when an external commit races incremental row reads", async () => {
     const scope = createSessionScope("external-race");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-race-sibling" };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "local-before",
       sessionId: "external-race-local",
       updatedAt: 1,
     });
-    await upsertSessionEntry(siblingScope, {
+    await upsertSessionEntryCore(siblingScope, {
       label: "external-before",
       sessionId: "external-race-sibling",
       updatedAt: 1,
@@ -444,12 +444,12 @@ describe("SQLite session entry cache", () => {
   it("incrementally handles added and removed keys on the cached connection", async () => {
     const scope = createSessionScope("same-connection-keys");
     const removedScope = { ...scope, sessionKey: "agent:main:same-connection-removed" };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projection-probe-kept",
       sessionId: "same-connection-kept",
       updatedAt: 1,
     });
-    await upsertSessionEntry(removedScope, {
+    await upsertSessionEntryCore(removedScope, {
       label: "projection-probe-removed",
       sessionId: "same-connection-removed",
       updatedAt: 1,
@@ -497,7 +497,7 @@ describe("SQLite session entry cache", () => {
     const scope = createSessionScope("changed-key-scaling");
     const rowCount = 24;
     for (let index = 0; index < rowCount; index++) {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { ...scope, sessionKey: `agent:main:changed-key-scaling-${index}` },
         {
           label: `projection-probe-${index}`,
@@ -535,12 +535,12 @@ describe("SQLite session entry cache", () => {
   it("patches only the tracked row after a same-process upsert", async () => {
     const scope = createSessionScope("write-through");
     const siblingScope = { ...scope, sessionKey: "agent:main:write-through-sibling" };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projection-probe-before",
       sessionId: "write-through",
       updatedAt: 1,
     });
-    await upsertSessionEntry(siblingScope, {
+    await upsertSessionEntryCore(siblingScope, {
       label: "projection-probe-sibling",
       sessionId: "write-through-sibling",
       updatedAt: 1,
@@ -550,7 +550,7 @@ describe("SQLite session entry cache", () => {
 
     parseSessionEntryCalls.mockClear();
     listProjectionCalls.mockClear();
-    await upsertSessionEntry(scope, { label: "projection-probe-after", updatedAt: 2 });
+    await upsertSessionEntryCore(scope, { label: "projection-probe-after", updatedAt: 2 });
     parseSessionEntryCalls.mockClear();
     listProjectionCalls.mockClear();
     const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
@@ -568,7 +568,7 @@ describe("SQLite session entry cache", () => {
 
   it("adds a tracked upsert to a warm snapshot without reparsing siblings", async () => {
     const scope = createSessionScope("write-through-insert");
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: "projection-probe-existing",
       sessionId: "write-through-existing",
       updatedAt: 1,
@@ -579,7 +579,7 @@ describe("SQLite session entry cache", () => {
 
     parseSessionEntryCalls.mockClear();
     listProjectionCalls.mockClear();
-    await upsertSessionEntry(insertedScope, {
+    await upsertSessionEntryCore(insertedScope, {
       label: "projection-probe-inserted",
       sessionId: "write-through-inserted",
       updatedAt: 2,
@@ -599,8 +599,8 @@ describe("SQLite session entry cache", () => {
   it("does not let a tracked write mask an earlier raw connection write", async () => {
     const scope = createSessionScope("raw-before-tracked");
     const trackedScope = { ...scope, sessionKey: "agent:main:tracked-after-raw" };
-    await upsertSessionEntry(scope, { label: "raw-before", sessionId: "raw", updatedAt: 1 });
-    await upsertSessionEntry(trackedScope, {
+    await upsertSessionEntryCore(scope, { label: "raw-before", sessionId: "raw", updatedAt: 1 });
+    await upsertSessionEntryCore(trackedScope, {
       label: "tracked-before",
       sessionId: "tracked",
       updatedAt: 1,
@@ -612,7 +612,7 @@ describe("SQLite session entry cache", () => {
     database.db
       .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
       .run(JSON.stringify(rawEntry), rawEntry.updatedAt, scope.sessionKey);
-    await upsertSessionEntry(trackedScope, { label: "tracked-after", updatedAt: 2 });
+    await upsertSessionEntryCore(trackedScope, { label: "tracked-after", updatedAt: 2 });
 
     parseSessionEntryCalls.mockClear();
     const entries = listSessionEntriesCore(scope);
@@ -629,7 +629,7 @@ describe("SQLite session entry cache", () => {
 
   it("invalidates cached keys when transcript creation inserts a placeholder node", async () => {
     const scope = createSessionScope("placeholder-key");
-    await upsertSessionEntry(scope, { sessionId: "entry", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId: "entry", updatedAt: 1 });
     const database = openOpenClawAgentDatabase(scope);
     const before = readSessionEntryCache(database, { cache: true });
     expect(before.keys).toEqual([scope.sessionKey]);
@@ -655,7 +655,7 @@ describe("SQLite session entry cache", () => {
 
   it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
     const scope = createSessionScope("transaction-rollback");
-    await upsertSessionEntry(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });
     const borrowedBefore = openSessionEntryReadView(scope).get(scope.sessionKey);
     expect(borrowedBefore?.label).toBe("before");
     if (!borrowedBefore) {
@@ -682,7 +682,7 @@ describe("SQLite session entry cache", () => {
 
   it("isolates cloned results while borrowed views retain stable references", async () => {
     const scope = createSessionScope("clone-borrow");
-    await upsertSessionEntry(scope, { label: "original", sessionId: "clone", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { label: "original", sessionId: "clone", updatedAt: 1 });
 
     const cloned = listSessionEntriesCore(scope)[0]?.entry;
     expect(cloned).toBeDefined();
@@ -699,7 +699,7 @@ describe("SQLite session entry cache", () => {
 
   it("honors latest reads after an untracked own-connection write", async () => {
     const scope = createSessionScope("latest");
-    await upsertSessionEntry(scope, { label: "cached", sessionId: "latest", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { label: "cached", sessionId: "latest", updatedAt: 1 });
     expect(listSessionEntriesCore(scope)[0]?.entry.label).toBe("cached");
 
     const database = openOpenClawAgentDatabase(scope);

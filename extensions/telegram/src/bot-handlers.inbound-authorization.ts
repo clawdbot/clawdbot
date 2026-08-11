@@ -1,9 +1,11 @@
-// Telegram sender authorization shared by message, reaction, and callback handlers.
 import type { Message } from "grammy/types";
 import type {
   DmPolicy,
   OpenClawConfig,
   TelegramAccountConfig,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
@@ -13,9 +15,8 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
-import { shouldSkipTelegramGroupMessage } from "./bot-handlers.authorization-groups.runtime.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
-import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   isTelegramCommandsAllowFromConfigured,
   resolveTelegramCommandAuthorization,
@@ -24,6 +25,10 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
+import {
+  evaluateTelegramGroupBaseAccess,
+  evaluateTelegramGroupPolicyAccess,
+} from "./group-access.js";
 import {
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramEventIngressAuthorization,
@@ -35,7 +40,43 @@ export type TelegramEventAuthorizationMode =
   | "callback-allowlist"
   | "callback-runtime-allowlist";
 
-export function createTelegramHandlerAuthorizationRuntime({
+export interface TelegramHandlerAuthorization {
+  resolveTelegramEventAuthorizationContext: (params: {
+    cfg: OpenClawConfig;
+    chatId: number;
+    isGroup: boolean;
+    senderId?: string;
+    threadSpec: TelegramThreadSpec;
+  }) => Promise<TelegramEventAuthorizationContext>;
+  authorizeTelegramEventSender: (params: {
+    chatId: number;
+    chatTitle?: string;
+    isGroup: boolean;
+    senderId: string;
+    senderUsername: string;
+    mode: TelegramEventAuthorizationMode;
+    context: TelegramEventAuthorizationContext;
+  }) => Promise<boolean>;
+  isTelegramModelCallbackAuthorized: (params: {
+    chatId: number;
+    isGroup: boolean;
+    senderId: string;
+    senderUsername: string;
+    context: TelegramEventAuthorizationContext;
+  }) => Promise<boolean>;
+  authorizeInboundMessage: (params: {
+    msg: Message;
+    chatId: number;
+    isGroup: boolean;
+    isForum: boolean;
+    senderId: string;
+    senderUsername: string;
+    requireConfiguredGroup: boolean;
+    dmAccess: "challenge" | "silent";
+  }) => Promise<TelegramInboundGate>;
+}
+
+export function createTelegramHandlerAuthorization({
   accountId,
   bot,
   opts,
@@ -43,17 +84,11 @@ export function createTelegramHandlerAuthorizationRuntime({
   telegramDeps,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
-}: RegisterTelegramHandlerParams) {
+}: RegisterTelegramHandlerParams): TelegramHandlerAuthorization {
   const shouldSkipGroupMessage = (params: Parameters<typeof shouldSkipTelegramGroupMessage>[0]) =>
     shouldSkipTelegramGroupMessage(params, { logger, resolveGroupPolicy });
 
-  type TelegramGroupAllowContext = Awaited<ReturnType<typeof resolveTelegramGroupAllowFromContext>>;
-  type TelegramEventAuthorizationContextValue = TelegramGroupAllowContext & {
-    cfg: OpenClawConfig;
-    telegramCfg: TelegramAccountConfig;
-    allowFrom: ReturnType<typeof resolveTelegramMessageTurnSettings>["allowFrom"];
-    dmPolicy: DmPolicy;
-  };
+  type TelegramEventAuthorizationContextValue = TelegramEventAuthorizationContext;
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
     {
@@ -294,14 +329,6 @@ export function createTelegramHandlerAuthorizationRuntime({
       })
     ).authorized;
   };
-  type TelegramInboundGate =
-    | { allowed: false }
-    | {
-        allowed: true;
-        context: TelegramEventAuthorizationContextValue;
-        effectiveDmAllow: NormalizedAllowFrom;
-      };
-
   // Single authorization gate for every message-like update that can reach the
   // reply-chain cache or dispatch: fresh messages, edits, channel posts. Must run
   // before any cache/dedupe side effect so blocked content is never recorded.
@@ -418,6 +445,130 @@ export function createTelegramHandlerAuthorizationRuntime({
   };
 }
 
-export type TelegramHandlerAuthorizationRuntime = ReturnType<
-  typeof createTelegramHandlerAuthorizationRuntime
->;
+type TelegramEventAuthorizationContext = {
+  cfg: OpenClawConfig;
+  telegramCfg: TelegramAccountConfig;
+  allowFrom?: Array<string | number>;
+  dmPolicy: DmPolicy;
+  threadSpec: TelegramThreadSpec;
+  resolvedThreadId?: number;
+  dmThreadId?: number;
+  storeAllowFrom: string[];
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+  groupAllowOverride?: Array<string | number>;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  hasGroupAllowOverride: boolean;
+};
+
+type TelegramInboundGate =
+  | { allowed: false }
+  | {
+      allowed: true;
+      context: TelegramEventAuthorizationContext;
+      effectiveDmAllow: NormalizedAllowFrom;
+    };
+
+function shouldSkipTelegramGroupMessage(
+  params: {
+    isGroup: boolean;
+    chatId: string | number;
+    chatTitle?: string;
+    resolvedThreadId?: number;
+    senderId: string;
+    senderUsername: string;
+    effectiveGroupAllow: NormalizedAllowFrom;
+    hasGroupAllowOverride: boolean;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+    cfg: OpenClawConfig;
+    telegramCfg: TelegramAccountConfig;
+  },
+  runtime: Pick<RegisterTelegramHandlerParams, "logger" | "resolveGroupPolicy">,
+): boolean {
+  const {
+    isGroup,
+    chatId,
+    chatTitle,
+    resolvedThreadId,
+    senderId,
+    senderUsername,
+    effectiveGroupAllow,
+    hasGroupAllowOverride,
+    groupConfig,
+    topicConfig,
+    cfg,
+    telegramCfg,
+  } = params;
+  const baseAccess = evaluateTelegramGroupBaseAccess({
+    isGroup,
+    groupConfig,
+    topicConfig,
+    hasGroupAllowOverride,
+    effectiveGroupAllow,
+    senderId,
+    senderUsername,
+    enforceAllowOverride: true,
+    requireSenderForAllowOverride: true,
+  });
+  if (!baseAccess.allowed) {
+    if (baseAccess.reason === "group-disabled") {
+      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+      return true;
+    }
+    if (baseAccess.reason === "topic-disabled") {
+      logVerbose(
+        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+      );
+      return true;
+    }
+    logVerbose(`Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`);
+    return true;
+  }
+  if (!isGroup) {
+    return false;
+  }
+  const policyAccess = evaluateTelegramGroupPolicyAccess({
+    isGroup,
+    chatId,
+    cfg,
+    telegramCfg,
+    topicConfig,
+    groupConfig,
+    effectiveGroupAllow,
+    senderId,
+    senderUsername,
+    resolveGroupPolicy: runtime.resolveGroupPolicy,
+    enforcePolicy: true,
+    enforceAllowlistAuthorization: true,
+    allowEmptyAllowlistEntries: false,
+    requireSenderForAllowlistAuthorization: true,
+    checkChatAllowlist: true,
+  });
+  if (policyAccess.allowed) {
+    return false;
+  }
+  if (policyAccess.reason === "group-policy-disabled") {
+    logVerbose("Blocked telegram group message (groupPolicy: disabled)");
+    return true;
+  }
+  if (policyAccess.reason === "group-policy-allowlist-no-sender") {
+    logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
+    return true;
+  }
+  if (policyAccess.reason === "group-policy-allowlist-empty") {
+    logVerbose(
+      "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
+    );
+    return true;
+  }
+  if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
+    logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
+    return true;
+  }
+  runtime.logger.info(
+    { chatId, title: chatTitle, reason: "not-allowed" },
+    "skipping group message",
+  );
+  return true;
+}

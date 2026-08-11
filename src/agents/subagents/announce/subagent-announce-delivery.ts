@@ -75,7 +75,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   sendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import {
@@ -575,7 +575,7 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey, resolveDefaultAgentId(cfg));
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const entry = subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
     sessionKey: canonicalKey,
@@ -587,7 +587,7 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
 export function loadSessionEntryByKey(sessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   return subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,
     sessionKey,

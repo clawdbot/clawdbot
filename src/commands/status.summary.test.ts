@@ -134,7 +134,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
@@ -196,7 +196,7 @@ vi.mock("../status/link-channel.js", () => ({
 }));
 
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
-const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { resolveSessionStorePathCore } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
 let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
@@ -267,7 +267,7 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
-    vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
+    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
       mainKey: "main",
@@ -844,7 +844,7 @@ describe("getStatusSummary", () => {
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],
     });
-    vi.mocked(resolveStorePath).mockImplementation((_store, opts) => {
+    vi.mocked(resolveSessionStorePathCore).mockImplementation((_store, opts) => {
       return `/tmp/${opts?.agentId ?? "main"}/sessions.json`;
     });
     statusSummaryMocks.listSessionEntriesCore.mockImplementation((scope) =>
@@ -881,7 +881,7 @@ describe("getStatusSummary", () => {
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],
     });
-    vi.mocked(resolveStorePath).mockReturnValue("/tmp/shared-sessions.json");
+    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/shared-sessions.json");
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         main: { sessionId: "shared-session", updatedAt: 1 },

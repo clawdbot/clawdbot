@@ -4,7 +4,7 @@ import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
   listHistoryScanCandidates,
@@ -128,7 +128,7 @@ async function runSkillHistoryScanCore(
   params: SkillHistoryScanScope,
 ): Promise<SkillHistoryScanResult> {
   const store = historyScanStore(params.env);
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });
@@ -373,7 +373,7 @@ async function runSkillHistoryScanCore(
 export function runSkillHistoryScan(
   params: SkillHistoryScanScope,
 ): Promise<SkillHistoryScanResult> {
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });

@@ -8,7 +8,7 @@ import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
 import { isBillingErrorMessage } from "../src/agents/failover/classify.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../src/agents/model-auth.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
@@ -259,7 +259,7 @@ describeLive("image generation live (provider sweep)", () => {
         });
         let authLabel;
         try {
-          const auth = await resolveApiKeyForProvider({
+          const auth = await resolveApiKeyForProviderCore({
             provider: providerCase.providerId,
             cfg,
             agentDir,

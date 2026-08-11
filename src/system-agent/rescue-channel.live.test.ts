@@ -6,7 +6,7 @@ import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { runSystemAgentRescueMessage } from "./rescue-message.js";
@@ -70,7 +70,7 @@ describeLive("OpenClaw live rescue channel smoke", () => {
   });
 
   it("handles /openclaw status and a persistent approval roundtrip", async () => {
-    await withTempDir({ prefix: "openclaw-live-rescue-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-live-rescue-" }, async (tempDir) => {
       const configPath = path.join(tempDir, "openclaw.json");
       setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);

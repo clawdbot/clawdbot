@@ -17,7 +17,7 @@ import {
   isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
@@ -162,7 +162,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         restrictIncognito && configured && scopedSessionKeys === undefined
           ? listSessionEntriesReadOnly({
               agentId,
-              storePath: resolveStorePath(cfg.session?.store, { agentId }),
+              storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
             })
               .map((entry) => entry.sessionKey)
               .filter(canSearchSessionKey)

@@ -30,7 +30,7 @@ function resolveJsonSaveTarget(pathname: string): string {
   return target;
 }
 
-export function saveJsonFile(pathname: string, data: unknown): void {
+export function writeJsonTarget(pathname: string, data: unknown): void {
   writeJsonSync(resolveJsonSaveTarget(pathname), data);
 }
 

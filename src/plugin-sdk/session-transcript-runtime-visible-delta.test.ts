@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendTranscriptEvent, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptEvent,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -34,7 +37,7 @@ describe("session transcript visible cursor SDK", () => {
       sessionKey: "agent:main:visible-delta",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const root = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: { role: "user", content: "root" },
@@ -195,7 +198,7 @@ describe("session transcript visible cursor SDK", () => {
       storePath,
     };
     const content = "x".repeat(200);
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: { role: "user", content },
@@ -265,7 +268,7 @@ describe("session transcript visible cursor SDK", () => {
       sessionKey: "agent:main:visible-delta-fence",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const prior = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: { role: "user", content: "same prompt" },

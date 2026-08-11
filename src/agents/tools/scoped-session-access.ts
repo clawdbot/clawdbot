@@ -1,4 +1,4 @@
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -17,7 +17,7 @@ export async function runWithScopedSessionAccess<T>(params: {
     return await params.run();
   }
   const agentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   const assertExpectedIncarnation = () => {
     const current = getSessionEntry({ storePath, sessionKey: params.targetSessionKey });
     if (current?.sessionId !== expectedSessionId || current.archivedAt !== undefined) {

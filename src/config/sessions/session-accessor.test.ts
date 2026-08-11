@@ -69,7 +69,7 @@ import {
   trimSessionTranscriptForManualCompact,
   updateSessionEntry,
   updateSessionLastRoute,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   readSessionEntryCount,
@@ -192,7 +192,7 @@ describe("session accessor seam", () => {
       },
     });
 
-    await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 1 });
     expect(appendTranscriptEventSync(scope, event)).toEqual({
       ok: false,
       error: {
@@ -203,7 +203,7 @@ describe("session accessor seam", () => {
       },
     });
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
     expect(appendTranscriptEventSync(scope, event)).toEqual({ ok: true, value: true });
     expect(appendTranscriptEventSync(scope, event)).toEqual({ ok: true, value: false });
   });
@@ -214,7 +214,7 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       model: "gpt-5.5",
       sessionId: "session-1",
       updatedAt: 10,
@@ -237,7 +237,7 @@ describe("session accessor seam", () => {
       },
     ]);
 
-    await upsertSessionEntry(scope, { model: "sonnet-4.6", updatedAt: 20 });
+    await upsertSessionEntryCore(scope, { model: "sonnet-4.6", updatedAt: 20 });
 
     expect(loadSessionEntry(scope)).toMatchObject({
       model: "sonnet-4.6",
@@ -323,7 +323,7 @@ describe("session accessor seam", () => {
       sessionId: "created-by-session",
       updatedAt: 10,
     } as SessionEntry & { createdBy: { id: string } });
-    await upsertSessionEntry({ sessionKey, storePath }, { label: "rewritten" });
+    await upsertSessionEntryCore({ sessionKey, storePath }, { label: "rewritten" });
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       "createdBy database path",
@@ -345,7 +345,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "history-old",
       updatedAt: 10,
       pluginOwnerId: "history-owner",
@@ -356,7 +356,7 @@ describe("session accessor seam", () => {
       { message: { role: "assistant", content: "old transcript" } },
     );
     await replaceSessionEntry(scope, { sessionId: "history-old", updatedAt: 15 });
-    await upsertSessionEntry(scope, { sessionId: "history-new", updatedAt: 20 });
+    await upsertSessionEntryCore(scope, { sessionId: "history-new", updatedAt: 20 });
     await appendTranscriptMessage(
       { ...scope, sessionId: "history-new" },
       { message: { role: "assistant", content: "new transcript" } },
@@ -385,7 +385,7 @@ describe("session accessor seam", () => {
     const transcriptTimes = new Map(
       instances.map((instance) => [instance.sessionId, instance.updatedAtMs]),
     );
-    await upsertSessionEntry(scope, { label: "renamed", updatedAt: Date.now() + 60_000 });
+    await upsertSessionEntryCore(scope, { label: "renamed", updatedAt: Date.now() + 60_000 });
     expect(
       new Map(
         listSessionTranscriptInstances({ agentId: "main", storePath }).map((instance) => [
@@ -481,7 +481,7 @@ describe("session accessor seam", () => {
 
   it("keeps migrated unknown provenance unknown while the session remains current", async () => {
     const sessionKey = "agent:main:migrated-plugin";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionId: "migrated-plugin-session",
@@ -517,7 +517,7 @@ describe("session accessor seam", () => {
       ]),
     );
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionId: "migrated-plugin-session",
@@ -536,7 +536,7 @@ describe("session accessor seam", () => {
       ]),
     );
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
     );
@@ -556,7 +556,7 @@ describe("session accessor seam", () => {
 
     // Transcript reads resolve to the SQLite transcript rows for the resolved
     // agent-scoped session; there is no legacy custom sessionFile read path.
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: "agent:main:main", storePath },
       { sessionId: "session-events", updatedAt: 10 },
     );
@@ -583,7 +583,7 @@ describe("session accessor seam", () => {
     const header = { type: "session", id: "session-find", timestamp: 1 };
     const older = { type: "message", id: "m1", message: { role: "assistant", tag: "old" } };
     const newer = { type: "message", id: "m2", message: { role: "assistant", tag: "new" } };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: "agent:main:main", storePath },
       { sessionId: "session-find", updatedAt: 10 },
     );
@@ -623,7 +623,7 @@ describe("session accessor seam", () => {
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {
     const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: mixedKey, storePath },
       { sessionId: "mixed-session", updatedAt: 10 },
     );
@@ -646,11 +646,11 @@ describe("session accessor seam", () => {
     const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
     const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: mixedKey, storePath },
       { sessionId: "mixed-session", updatedAt: 10 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: lowerKey, storePath },
       { sessionId: "lower-session", updatedAt: 20 },
     );
@@ -932,7 +932,7 @@ describe("session accessor seam", () => {
 
   it("does not parse unrelated blobs across canonical candidate and transcript reads", async () => {
     const sessionKey = "agent:main:focused-session";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "focused-session", updatedAt: 42 },
     );
@@ -982,7 +982,7 @@ describe("session accessor seam", () => {
   it("resolves non-main candidate entries from custom agent store templates", async () => {
     const storeTemplate = path.join(tempDir, "{agentId}.json");
     const supportStorePath = path.join(tempDir, "support.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "support",
         sessionKey: "agent:support:main",
@@ -1015,7 +1015,7 @@ describe("session accessor seam", () => {
   it("resolves non-main logical entries from custom agent store templates", async () => {
     const storeTemplate = path.join(tempDir, "{agentId}.json");
     const supportStorePath = path.join(tempDir, "support.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       {
         agentId: "support",
         sessionKey: "agent:support:main",
@@ -1050,7 +1050,7 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    const inserted = await upsertSessionEntry(scope, { model: "gpt-5.5" });
+    const inserted = await upsertSessionEntryCore(scope, { model: "gpt-5.5" });
 
     expect(inserted?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
@@ -1105,7 +1105,7 @@ describe("session accessor seam", () => {
       sessionId: "default-store-turn-session",
       sessionKey: "agent:main:default-store-turn",
     };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { ...scope, storePath: expectedStorePath },
       {
         sessionId: scope.sessionId,
@@ -1440,7 +1440,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "pending-session",
       updatedAt: 10,
       initializationPending: true,
@@ -1468,7 +1468,7 @@ describe("session accessor seam", () => {
 
   it("rejects stale reply session initialization snapshots without writing", async () => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "first-session",
@@ -1476,7 +1476,7 @@ describe("session accessor seam", () => {
       },
     );
     const snapshot = loadMainInitializationSnapshot(sessionKey);
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "second-session",
@@ -1530,7 +1530,7 @@ describe("session accessor seam", () => {
   ] as const)("$name", async ({ initial, concurrent, prepared, expected }) => {
     const sessionKey = "agent:main:main";
     const scope = { sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "existing-session",
       updatedAt: 10,
       ...initial,
@@ -1567,7 +1567,7 @@ describe("session accessor seam", () => {
 
   it("does not restore pending final delivery metadata cleared after the snapshot", async () => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "existing-session",
@@ -1620,7 +1620,7 @@ describe("session accessor seam", () => {
 
   it("does not merge old-session delivery metadata into a rotated session", async () => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "old-session",
@@ -1714,20 +1714,20 @@ describe("session accessor seam", () => {
   it("normalizes alias inputs before writes and rejects invalid owners", async () => {
     for (const sessionKey of ["main", "agent:ops:main ", "agent:OPS:upper"]) {
       await expect(
-        upsertSessionEntry(
+        upsertSessionEntryCore(
           { agentId: "ops", sessionKey, storePath },
           { sessionId: "legacy-ops-session", updatedAt: 10 },
         ),
       ).resolves.toMatchObject({ sessionId: "legacy-ops-session" });
     }
     await expect(
-      upsertSessionEntry(
+      upsertSessionEntryCore(
         { agentId: "ops", sessionKey: "", storePath },
         { sessionId: "empty-session", updatedAt: 10 },
       ),
     ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
     await expect(
-      upsertSessionEntry(
+      upsertSessionEntryCore(
         { agentId: "ops", sessionKey: "agent:main:wrong-owner", storePath },
         { sessionId: "wrong-owner-session", updatedAt: 10 },
       ),
@@ -1752,7 +1752,7 @@ describe("session accessor seam", () => {
       const sessionId = `${canonicalKey}-session`;
       insertRawEntry(storedKey, sessionId, 5);
       await expect(
-        upsertSessionEntry(
+        upsertSessionEntryCore(
           { agentId: "ops", sessionKey: canonicalKey, storePath },
           { sessionId: "new-session", updatedAt: 10 },
         ),
@@ -1769,11 +1769,11 @@ describe("session accessor seam", () => {
 
   it("supports multiple logical agents in an explicit shared SQLite store", async () => {
     const sharedStorePath = path.join(tempDir, "shared.sqlite");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:shared", storePath: sharedStorePath },
       { sessionId: "main-shared", updatedAt: 10 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "agent:ops:shared", storePath: sharedStorePath },
       { sessionId: "ops-shared", updatedAt: 20 },
     );
@@ -1787,7 +1787,7 @@ describe("session accessor seam", () => {
 
   it("rejects reply session initialization when the entry is deleted during prepare", async () => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "first-session",
@@ -1831,7 +1831,7 @@ describe("session accessor seam", () => {
     await expect(updateSessionEntry(scope, () => ({ model: "gpt-5.5" }))).resolves.toBeNull();
     expect(listSessionEntriesCore({ storePath })).toEqual([]);
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "session-1",
       updatedAt: 10,
     });
@@ -1856,7 +1856,7 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       model: "gpt-5.5",
       providerOverride: "openai",
       sessionId: "session-1",
@@ -1929,7 +1929,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "session-1",
       updatedAt: 10,
     });
@@ -1951,7 +1951,7 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "session-1",
       updatedAt: 10,
     });
@@ -2120,11 +2120,11 @@ describe("session accessor seam", () => {
   it("ignores runtime-only alias rekey fields on public exact replacements", async () => {
     const canonicalKey = "agent:main:runtime-canonical";
     const aliasKey = "agent:main:runtime-alias";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: canonicalKey, storePath },
       { sessionId: "runtime-canonical", updatedAt: 1 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: aliasKey, storePath },
       { sessionId: "runtime-alias", updatedAt: 2 },
     );
@@ -2152,7 +2152,7 @@ describe("session accessor seam", () => {
   it("projects ordered patches against one mutable store view", async () => {
     const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
     for (const [index, sessionKey] of keys.entries()) {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { sessionKey, storePath },
         { sessionId: `batch-${index}`, updatedAt: index + 1 },
       );
@@ -2221,11 +2221,11 @@ describe("session accessor seam", () => {
 
     const canonicalKey = "agent:main:replacement-canonical";
     const previousKey = "agent:main:replacement-previous";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: canonicalKey, storePath },
       { sessionId: "canonical-older", updatedAt: 10 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: previousKey, storePath },
       { sessionId: "rekeyed", updatedAt: 20 },
     );
@@ -2279,11 +2279,11 @@ describe("session accessor seam", () => {
   it("rejects internal canonical targets and alias sources without changing rows or events", async () => {
     const visibleKey = "agent:main:replacement-visible";
     const internalKey = "agent:main:internal-session-effects:replacement-guard";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: visibleKey, storePath },
       { label: "Visible", sessionId: "replacement-visible", updatedAt: 10 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: internalKey, storePath },
       { label: "Internal", sessionId: "replacement-internal", updatedAt: 20 },
     );
@@ -2327,15 +2327,15 @@ describe("session accessor seam", () => {
     const exactKey = "agent:main:replacement-rollback-exact";
     const canonicalKey = "agent:main:replacement-rollback-canonical";
     const previousKey = "agent:main:replacement-rollback-previous";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: exactKey, storePath },
       { label: "Exact original", sessionId: "rollback-exact", updatedAt: 10 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: canonicalKey, storePath },
       { label: "Canonical original", sessionId: "rollback-canonical", updatedAt: 20 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: previousKey, storePath },
       { label: "Previous original", sessionId: "rollback-previous", updatedAt: 30 },
     );
@@ -2409,7 +2409,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:replacement-prepare",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       model: "base",
       sessionId: "replacement-prepare",
       updatedAt: 10,
@@ -2465,7 +2465,7 @@ describe("session accessor seam", () => {
 
   it("does not hold a write transaction while awaiting a lifecycle entry builder", async () => {
     const sessionKey = "agent:main:lifecycle-prepare";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       { model: "base", sessionId: "lifecycle-prepare", updatedAt: 10 },
     );
@@ -2511,7 +2511,7 @@ describe("session accessor seam", () => {
 
   it("rejects a lifecycle projection when its source row changes", async () => {
     const scope = { sessionKey: "agent:main:lifecycle-stale", storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       model: "base",
       sessionId: "lifecycle-stale",
       updatedAt: 10,
@@ -2570,7 +2570,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:preserve",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       restartRecoveryDeliveryContext: {
         channel: "whatsapp",
         to: "+15551234567",
@@ -2613,7 +2613,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:cleanup",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -2680,7 +2680,7 @@ describe("session accessor seam", () => {
         sessionKey: "agent:main:guarded-delete",
         storePath,
       };
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         lifecycleRevision: "original-revision",
         sessionId: scope.sessionId,
         updatedAt: 10,
@@ -2732,7 +2732,7 @@ describe("session accessor seam", () => {
       messageCount: 1,
       unwindowedMessageCount: 1,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       contextBudgetStatus,
       inputTokens: 10,
       outputTokens: 20,
@@ -2811,7 +2811,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
     };
     const records = createManualCompactRecords(sessionId);
-    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
     await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
     const archiveDirPath = path.join(stateDir, "agents", "main", "sessions");
     fs.writeFileSync(archiveDirPath, "not a directory");
@@ -2846,7 +2846,7 @@ describe("session accessor seam", () => {
       storePath,
     };
     const records = createManualCompactRecords(sessionId);
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       inputTokens: 10,
       outputTokens: 20,
       sessionId,
@@ -2909,7 +2909,7 @@ describe("session accessor seam", () => {
     const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
     const records = createManualCompactRecords(sessionId);
     const archiveContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       scope,
       conflict === "metadata"
         ? { sessionId, totalTokens: 30, totalTokensFresh: true, updatedAt: 100 }
@@ -3035,7 +3035,7 @@ describe("session accessor seam", () => {
         message: { role: "user", content: "kept after", timestamp: 5 },
       },
     ];
-    await upsertSessionEntry(scope, { sessionFile, sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(scope, { sessionFile, sessionId, updatedAt: 1 });
     await replaceTranscriptEvents(scope, records as Parameters<typeof replaceTranscriptEvents>[1]);
 
     await expect(
@@ -3063,7 +3063,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:lock-order",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3134,7 +3134,7 @@ describe("session accessor seam", () => {
         sessionKey: `agent:main:ordered-turn-${guarded ? "guarded" : "ordinary"}`,
         storePath,
       };
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         lifecycleRevision: "ordered-turn-revision",
         sessionId: scope.sessionId,
         updatedAt: 10,
@@ -3276,7 +3276,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:legacy-unsequenced-turn",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       lifecycleRevision: "legacy-unsequenced-revision",
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -3381,7 +3381,7 @@ describe("session accessor seam", () => {
       sessionKey: `agent:main:diverging-turn-${guarded ? "guarded" : "ordinary"}`,
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       lifecycleRevision: "diverging-turn-revision",
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -3467,7 +3467,7 @@ describe("session accessor seam", () => {
       sessionKey: `agent:main:replayed-turn-${guarded ? "guarded" : "ordinary"}`,
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3530,7 +3530,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:reordered-replay",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3570,7 +3570,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:redacted-replay",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3604,7 +3604,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3669,7 +3669,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:expected",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3709,7 +3709,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:admission",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       status: "done",
       updatedAt: 10,
@@ -3847,7 +3847,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -3893,7 +3893,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:predicate-rebind",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       lifecycleRevision: "predicate-revision",
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -3950,7 +3950,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:predicate-context",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
       lastRunError: "private entry state",
@@ -3981,7 +3981,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:same-owner",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       abortedLastRun: true,
       restartRecoveryDeliveryRunId: "recovery-run",
@@ -4059,7 +4059,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       lifecycleRevision: "original-revision",
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -4187,7 +4187,7 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       sessionFile: staleSessionFile,
       updatedAt: 10,
@@ -4231,7 +4231,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
@@ -4331,7 +4331,7 @@ describe("session accessor seam", () => {
   it("does not expose legacy custom transcript paths as read fallbacks after SQLite migration", async () => {
     const legacyTranscript = path.join(tempDir, "custom-topic-transcript.jsonl");
     const sessionKey = "agent:main:telegram:group:1:topic:9";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "custom-topic-session",
@@ -4375,7 +4375,7 @@ describe("session accessor seam", () => {
 
   it("does not trust a preloaded entry for a different session id", async () => {
     const sessionKey = "agent:main:mismatched-preloaded-read";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId: "stored-session",

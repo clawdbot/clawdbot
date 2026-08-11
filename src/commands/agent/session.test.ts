@@ -25,7 +25,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 
 vi.mock("../../agents/agent-scope.js", async () => {

@@ -224,7 +224,7 @@ async function resolveDefaultRouteHints(params: {
   return [];
 }
 
-export async function resolveAdvertisedLanHost(
+export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
   const candidates = listAdvertisedLanHostCandidates(

@@ -12,7 +12,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
@@ -494,7 +494,7 @@ export function buildGatewayCronService(params: {
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
-    resolveStorePath(params.cfg.session?.store, {
+    resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);

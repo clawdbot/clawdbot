@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -689,7 +689,7 @@ describe("gateway usage helpers", () => {
   });
 
   it("does not project local avatar bytes for usage-only agent enumeration", async () => {
-    await withTempDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
+    await withTestDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
       await fs.writeFile(`${workspace}/avatar.png`, "avatar");
       const config: OpenClawConfig = {
         agents: {

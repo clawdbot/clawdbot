@@ -7,7 +7,7 @@ import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routi
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
@@ -34,7 +34,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import type {
   SessionAccessScope,
@@ -88,7 +88,7 @@ export {
   // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
   resolveSessionEntryFromStore,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 };
 
 /** Resolves a session directly through canonical SQLite row and alias ownership. */
@@ -115,7 +115,10 @@ function resolveLogicalSessionStoreCandidates(params: {
   const storeConfig = params.cfg.session?.store;
   const defaultTarget = {
     agentId: params.agentId,
-    storePath: resolveStorePath(storeConfig, { agentId: params.agentId, env: params.env }),
+    storePath: resolveSessionStorePathCore(storeConfig, {
+      agentId: params.agentId,
+      env: params.env,
+    }),
   };
   if (!isStorePathTemplate(storeConfig)) {
     return [defaultTarget];
@@ -212,7 +215,7 @@ export function resolveSessionEntryCandidateTarget(
   const incognitoAgentId = incognitoKey ? resolveAgentIdFromSessionKey(incognitoKey) : undefined;
   const storePath = incognitoAgentId
     ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
-    : resolveStorePath(scope.cfg.session?.store, {
+    : resolveSessionStorePathCore(scope.cfg.session?.store, {
         agentId: scope.agentId,
         env: scope.env,
       });
@@ -294,7 +297,7 @@ function resolveSessionEntryStoreTarget(
   });
   const fallback = candidates[0] ?? {
     agentId,
-    storePath: resolveStorePath(scope.cfg.session?.store, { agentId, env: scope.env }),
+    storePath: resolveSessionStorePathCore(scope.cfg.session?.store, { agentId, env: scope.env }),
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findCanonicalSessionEntryMatch(

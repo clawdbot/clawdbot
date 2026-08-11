@@ -6,7 +6,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { saveJsonFile } from "../infra/json-file.js";
+import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
@@ -241,7 +241,7 @@ function removeManagedNpmDependency(params: {
           ...packageJson,
           dependencies,
         };
-  saveJsonFile(npmPackageJsonPath, nextPackageJson);
+  writeJsonTarget(npmPackageJsonPath, nextPackageJson);
   removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
@@ -288,7 +288,7 @@ function removeManagedNpmPackageLockDependency(params: {
   }
 
   if (changed) {
-    saveJsonFile(packageLockPath, packageLock);
+    writeJsonTarget(packageLockPath, packageLock);
   }
 }
 

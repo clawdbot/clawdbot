@@ -14,7 +14,7 @@ import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.j
 import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
 import { spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -213,7 +213,7 @@ async function waitForSessionEntry(params: {
   timeoutMs?: number;
 }): Promise<SessionEntry> {
   const timeoutMs = params.timeoutMs ?? 20_000;
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: "codex" });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId: "codex" });
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const entry = loadSessionEntry({

@@ -20,7 +20,10 @@ import {
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
-import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
+import {
+  loadSessionStoreEntry,
+  resolveSessionStorePathCore,
+} from "./dispatch-from-config.runtime.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 
@@ -163,7 +166,7 @@ function resolveStoredModelCandidate(params: {
         config: params.cfg,
         fallbackAgentId: params.sessionAgentId,
       });
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
       return loadSessionStoreEntry({
         agentId,
         storePath,

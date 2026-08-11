@@ -3,7 +3,7 @@ import path from "node:path";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptReadTarget,
@@ -115,8 +115,8 @@ export async function exportTrajectoryCommand(
   }
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolvedOpts.store
-    ? resolveStorePath(resolvedOpts.store, { agentId: targetAgentId })
-    : resolveStorePath(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+    ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
+    : resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: targetAgentId });
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
   const entry = loadSessionEntryReadOnly({
     agentId: targetAgentId,

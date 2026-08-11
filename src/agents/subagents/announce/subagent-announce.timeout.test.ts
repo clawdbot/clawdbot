@@ -91,7 +91,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     loadSessionStore: () => sessionStore,
     resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
+    resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
     isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
     queueEmbeddedAgentMessageWithOutcome: (sessionId: string) => ({
       queued: false,
@@ -190,7 +190,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
   readSubagentSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/sessions-main.json",
+  resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
   waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveMediaBufferPath, saveMediaBuffer, type SavedMedia } from "../../media/store.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 
@@ -16,7 +16,7 @@ async function expectSavedMediaMissing(saved: SavedMedia): Promise<void> {
 
 describe("persistGeneratedMediaBatch filesystem rollback", () => {
   it("removes a real file when a later sequential save fails", async () => {
-    await withTempDir({ prefix: "openclaw-generated-media-batch-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-generated-media-batch-" }, async (stateDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         const payload = Buffer.from("persisted before failure");
         let saved: SavedMedia | undefined;
@@ -47,7 +47,7 @@ describe("persistGeneratedMediaBatch filesystem rollback", () => {
   });
 
   it("drains and removes a real concurrent write that finishes after failure", async () => {
-    await withTempDir({ prefix: "openclaw-generated-media-batch-" }, async (stateDir) => {
+    await withTestDir({ prefix: "openclaw-generated-media-batch-" }, async (stateDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         const releaseLateSave = createDeferred();
         const payload = Buffer.from("persisted after failure");

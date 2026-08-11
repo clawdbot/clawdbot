@@ -11,7 +11,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
@@ -1250,7 +1250,7 @@ describe("gateway agent handler", () => {
   });
 
   it("does not pass a text-only user-turn recorder for offloaded image agent runs", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-offloaded-image-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-offloaded-image-" }, async (root) => {
       useTestStateDir(root);
       mockMainSessionEntry({
         sessionId: "existing-session-id",
@@ -1465,7 +1465,7 @@ describe("gateway agent handler", () => {
         sizeBytes: 64,
       });
 
-      await withTempDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
         const sessionsDir = `${root}/sessions`;
         const sessionFile = "terminal-main-session.jsonl";
         mocks.loadSessionEntry.mockReturnValue({
@@ -1524,7 +1524,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-terminal-main-fresh-marker-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-terminal-main-fresh-marker-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = "terminal-main-session.jsonl";
@@ -1590,7 +1590,7 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-gateway-terminal-main-explicit-resume-" },
       async (root) => {
         const sessionsDir = `${root}/sessions`;
@@ -1662,7 +1662,7 @@ describe("gateway agent handler", () => {
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
 
-      await withTempDir(
+      await withTestDir(
         { prefix: `openclaw-gateway-terminal-main-${runKind}-reuse-` },
         async (root) => {
           const sessionsDir = `${root}/sessions`;
