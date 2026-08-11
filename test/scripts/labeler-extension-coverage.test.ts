@@ -17,11 +17,11 @@ const labelerPath = path.join(repoRoot, ".github/labeler.yml");
 const extensionDirectories = readdirSync(extensionsRoot, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
-  .sort();
+  .toSorted();
 const extensionDirectorySet = new Set(extensionDirectories);
 const labeler = parse(readFileSync(labelerPath, "utf8")) as Record<string, LabelerRule>;
 const extensionGlobDirectories = Object.values(labeler)
-  .flatMap((rules) => rules)
+  .flat()
   .flatMap((rule) => rule["changed-files"] ?? [])
   .flatMap((changedFiles) => changedFiles["any-glob-to-any-file"] ?? [])
   .flatMap((glob) => glob.match(/^extensions\/([^/]+)\//)?.[1] ?? []);

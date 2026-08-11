@@ -38,8 +38,8 @@ import { MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS } from "../media-genera
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
-} from "../subagent-announce-delivery.js";
-import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
+} from "../subagents/announce/subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;

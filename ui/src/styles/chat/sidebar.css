@@ -103,7 +103,7 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 550;
   transition:
     background var(--duration-fast) ease,
@@ -269,7 +269,7 @@ openclaw-chat-sidebar-region,
   height: 100%;
   padding: 0 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -700,7 +700,7 @@ openclaw-chat-sidebar-region,
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-  font-size: 12px; /* was 10px */
+  font-size: var(--control-ui-text-sm); /* was 10px */
   line-height: 1.2;
 }
 
@@ -1346,7 +1346,7 @@ openclaw-chat-sidebar-region,
 /* Smaller close button for sidebar */
 .sidebar-header .btn {
   padding: 4px 8px;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   min-width: auto;
   line-height: 1;
 }
@@ -1449,7 +1449,7 @@ openclaw-session-discussion {
   flex: 1;
   overflow: hidden;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1501,7 +1501,7 @@ openclaw-session-discussion {
 
 .sidebar-file-view__editor-item {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
 }
 
@@ -1527,7 +1527,13 @@ openclaw-session-discussion {
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .file-view__search input {
+    font-size: max(16px, var(--control-ui-text-sm));
+  }
 }
 
 .file-view__search input:focus-visible {
@@ -1539,7 +1545,7 @@ openclaw-session-discussion {
   min-width: 4.5ch;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-align: right;
 }
 
@@ -1577,7 +1583,7 @@ openclaw-session-discussion {
   background: transparent;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.6;
 }
 
@@ -1731,7 +1737,7 @@ openclaw-session-discussion {
   border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
   background: color-mix(in srgb, var(--warn) 10%, var(--panel));
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .file-view__save-notice-actions {
@@ -1774,7 +1780,7 @@ openclaw-session-discussion {
   gap: 8px;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm); /* was 11px */
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;

@@ -1,5 +1,5 @@
-// Restart method tests cover safe restart scheduling, deferral flags, and
-// response payloads returned by gateway.restart.request.
+// Restart method tests cover the read-only compatibility preview plus safe
+// restart scheduling, deferral flags, and request response payloads.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -7,10 +7,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 
 const requestSafeGatewayRestart = vi.hoisted(() => vi.fn());
+const createSafeGatewayRestartPreflight = vi.hoisted(() => vi.fn());
 const requestGatewayRestartWithSignalAdmission = vi.hoisted(() => vi.fn());
 const readActiveGatewayLockIdentity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart-coordinator.js", () => ({
+  createSafeGatewayRestartPreflight: () => createSafeGatewayRestartPreflight(),
   requestSafeGatewayRestart: (opts: unknown) => requestSafeGatewayRestart(opts),
 }));
 
@@ -34,6 +36,20 @@ function invokeRestartRequest(params: unknown) {
       respond,
       params,
       // The handler only reads `params` and `respond`; remaining fields are unused.
+    } as unknown as Parameters<typeof handler>[0]),
+  ).then(() => respond);
+}
+
+function invokeRestartPreflight() {
+  const respond = vi.fn();
+  const handler = expectDefined(
+    restartHandlers["gateway.restart.preflight"],
+    'restartHandlers["gateway.restart.preflight"] test invariant',
+  );
+  return Promise.resolve(
+    handler({
+      respond,
+      params: {},
     } as unknown as Parameters<typeof handler>[0]),
   ).then(() => respond);
 }
@@ -63,9 +79,10 @@ function expectRestartRequest(skipDeferral: boolean) {
   });
 }
 
-describe("gateway.restart.request handler", () => {
+describe("gateway restart handlers", () => {
   beforeEach(() => {
     requestSafeGatewayRestart.mockClear();
+    createSafeGatewayRestartPreflight.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReturnValue({ status: "emitted" });
     readActiveGatewayLockIdentity.mockReset();
@@ -75,6 +92,31 @@ describe("gateway.restart.request handler", () => {
       createdAt: "2026-07-16T12:00:00.000Z",
       port: 18_789,
     });
+  });
+
+  it("keeps the deprecated read-only preflight response shape", async () => {
+    const preflight = {
+      safe: false,
+      counts: {
+        queueSize: 1,
+        pendingReplies: 2,
+        embeddedRuns: 3,
+        cronRuns: 4,
+        backgroundExecSessions: 5,
+        rootRequests: 6,
+        activeTasks: 7,
+        totalActive: 28,
+      },
+      blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],
+      summary: "restart deferred: 1 queued or active operation(s)",
+    };
+    createSafeGatewayRestartPreflight.mockReturnValueOnce(preflight);
+
+    const respond = await invokeRestartPreflight();
+
+    expect(respond).toHaveBeenCalledWith(true, preflight);
+    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
   });
 
   it("defaults to skipDeferral: false when the param is absent", async () => {

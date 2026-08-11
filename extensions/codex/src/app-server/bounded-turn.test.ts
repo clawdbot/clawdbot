@@ -104,6 +104,7 @@ function createClientFactory(
     errorBeforeCompletion?: { message: string; willRetry: boolean };
     terminalStatus?: "completed" | "interrupted";
     assistantDelta?: string;
+    emptyAnswer?: boolean;
     completeTurn?: boolean;
   } = {},
 ) {
@@ -209,7 +210,9 @@ function createClientFactory(
               turn: {
                 ...completedTurnResult().turn,
                 status: options.terminalStatus ?? "completed",
-                ...(options.terminalStatus === "interrupted" ? { items: [] } : {}),
+                ...(options.terminalStatus === "interrupted" || options.emptyAnswer
+                  ? { items: [] }
+                  : {}),
               },
             },
           });
@@ -328,6 +331,42 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requireNoExternalCapabilities: true,
       }),
     ).resolves.toMatchObject({ text: "The message was sent successfully." });
+  });
+
+  it("can return a completed turn without text when the finalization caller opts in", async () => {
+    const fake = createClientFactory({ emptyAnswer: true });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+        allowEmptyText: true,
+      }),
+    ).resolves.toMatchObject({ text: "", model: "gpt-5.4" });
+  });
+
+  it("rejects a completed turn without text for ordinary bounded callers", async () => {
+    const fake = createClientFactory({ emptyAnswer: true });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toThrow("hosted search turn returned no text");
   });
 
   it("still fails on a terminal error notification", async () => {

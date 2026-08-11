@@ -230,16 +230,6 @@ suite.define(() => {
           }),
         )
         .toBe("connected");
-      await page.evaluate((selectedSessionKey) => {
-        const pane = document.querySelector("openclaw-chat-pane") as unknown as HTMLElement & {
-          state: { chatMessages: unknown[]; chatMessagesBySession: Map<string, unknown> };
-          switchPaneSession: (sessionKey: string) => void;
-        };
-        pane.state.chatMessages = [];
-        pane.state.chatMessagesBySession.clear();
-        pane.switchPaneSession("agent:main:temporary-session");
-        pane.switchPaneSession(selectedSessionKey);
-      }, sessionKey);
       if (captureUiProofEnabled) {
         await mkdir(reconnectProofArtifactDir, { recursive: true });
         await page.screenshot({

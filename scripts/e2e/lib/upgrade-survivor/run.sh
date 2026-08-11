@@ -1544,7 +1544,7 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
   fi
   phase assert-prepublish-requests node \
     "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$candidate_version" "$clawhub_security_mode"
+    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/matrix" "$candidate_version" "$clawhub_security_mode"
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor

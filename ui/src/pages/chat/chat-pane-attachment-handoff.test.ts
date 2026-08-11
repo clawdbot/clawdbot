@@ -45,11 +45,13 @@ function state(attachments: ChatAttachment[], sessionKey = "agent:main:one") {
 describe("staged chat attachment pane handoff", () => {
   it("discards a mounted package before clearing a closed pane handoff", () => {
     const calls: string[] = [];
-    const pane = {
-      paneId: "p1",
-      discardStagedAttachments: () => calls.push("discard"),
-    };
-    const root = { querySelectorAll: () => [pane] } as unknown as ParentNode;
+    const root = {
+      querySelectorAll: () => [
+        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-one") },
+        { paneId: "p1", discardStagedAttachments: () => calls.push("discard-two") },
+        { paneId: "p2", discardStagedAttachments: () => calls.push("wrong-pane") },
+      ],
+    } as unknown as ParentNode;
     const context = {
       chatAttachmentHandoff: { clearPane: () => calls.push("clear") },
     } as unknown as ApplicationContext;
@@ -69,7 +71,7 @@ describe("staged chat attachment pane handoff", () => {
     } satisfies ChatSplitLayout;
 
     expect(closeStagedPane(context, root, layout, "p1")?.id).toBe("p2");
-    expect(calls).toEqual(["discard", "clear"]);
+    expect(calls).toEqual(["discard-one", "discard-two", "clear"]);
   });
 
   it("does not restage a closed pane when its id is reused after disconnect", () => {
@@ -211,10 +213,11 @@ describe("staged chat attachment pane handoff", () => {
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const displaced = storedAttachment("displaced");
     const mounted = storedAttachment("mounted");
+    const remount = state([]);
     handoff.prepare({
       owner,
       paneId: "p1",
-      scopeKey: "active",
+      scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(remount, remount.sessionKey)),
       attachments: [],
       fallbacks: {
         collision: {
@@ -225,7 +228,6 @@ describe("staged chat attachment pane handoff", () => {
         },
       },
     });
-    const remount = state([]);
     remount.chatComposerFallbackByScope = {
       collision: {
         attachments: [mounted],

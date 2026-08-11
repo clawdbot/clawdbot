@@ -21,16 +21,17 @@ if (!hasModeOverride) {
   configureFsSafeNative({ mode: "off" });
 }
 
-/** True for missing-file errors emitted by Node or fs-safe. */
+/** True when a requested file is missing or cannot exist below a non-directory parent. */
 export function isFileMissingError(
   err: unknown,
-): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-found" } {
+): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-file" | "not-found" } {
   return Boolean(
     err &&
     typeof err === "object" &&
     "code" in err &&
     ((err as Partial<NodeJS.ErrnoException>).code === "ENOENT" ||
       (err as Partial<NodeJS.ErrnoException>).code === "ENOTDIR" ||
+      (err as { code?: unknown }).code === "not-file" ||
       (err as { code?: unknown }).code === "not-found"),
   );
 }

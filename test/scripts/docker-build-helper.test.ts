@@ -2370,6 +2370,9 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase assert-prepublish-requests node"),
     );
     expect(publishedRunner).toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
+    expect(publishedRunner).toContain(
+      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/matrix" "$candidate_version"',
+    );
     expect(publishedRunner).toContain('"$clawhub_security_mode"');
     expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
       publishedRunner.indexOf("phase doctor run_doctor"),
@@ -2476,6 +2479,21 @@ docker_e2e_docker_run_cmd run demo
       encoding: "utf8",
     });
     expect(inner.status, inner.stderr).toBe(0);
+  });
+
+  it("selects the live model test runner shipped by the staged candidate", () => {
+    for (const scriptPath of [
+      "scripts/test-live-gateway-models-docker.sh",
+      "scripts/test-live-models-docker.sh",
+    ]) {
+      const script = readFileSync(scriptPath, "utf8");
+      const legacyRunnerIndex = script.indexOf("node scripts/test-live.mjs --");
+      const currentRunnerIndex = script.indexOf("node --import tsx scripts/test-live.mts --");
+
+      expect(script).toContain("if [[ -f scripts/test-live.mjs ]]; then");
+      expect(legacyRunnerIndex).toBeGreaterThan(-1);
+      expect(currentRunnerIndex).toBeGreaterThan(legacyRunnerIndex);
+    }
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {

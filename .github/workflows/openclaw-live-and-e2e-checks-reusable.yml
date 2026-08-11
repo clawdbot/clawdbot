@@ -542,6 +542,7 @@ env:
 jobs:
   validate_selected_ref:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -776,6 +777,7 @@ jobs:
   validate_live_suite_filter:
     runs-on: ubuntu-24.04
     if: inputs.live_suite_filter != ''
+    timeout-minutes: 10
     steps:
       - name: Validate focused live suite filter
         shell: bash
@@ -892,6 +894,7 @@ jobs:
   plan_release_workflow_matrices:
     needs: validate_selected_ref
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
       docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}

@@ -1,9 +1,9 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
-import { resolveSubagentDisplayStatus } from "../../../agents/subagent-session-metrics.js";
+import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";

@@ -4,7 +4,7 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   resolveCorrelatedSubagentDelivery,
   settleCorrelatedSubagentDelivery,
-} from "../agents/subagent-completion-delivery.js";
+} from "../agents/subagents/completion/subagent-completion-delivery.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";

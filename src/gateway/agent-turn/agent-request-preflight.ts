@@ -7,7 +7,7 @@ import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
   findAuthorizedSwarmCollectorRequest,
   findSwarmCollectorSession,
-} from "../../agents/subagent-registry-memory.js";
+} from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";

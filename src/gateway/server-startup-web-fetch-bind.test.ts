@@ -33,7 +33,7 @@ vi.mock("./server-chat-metadata-lifecycle.js", () => ({
   })),
 }));
 
-vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markStartupOrphanedMainSessionsForRecovery: vi.fn(async () => ({ marked: 0, skipped: 0 })),
 }));
 

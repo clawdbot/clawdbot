@@ -3,8 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
+  getActivePluginRegistry: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
+  promoteMatchingRuntimeContextEngineRegistrations: vi.fn(),
   resolveAgentRuntimePluginLoadPlan: vi.fn(),
+}));
+
+vi.mock("../context-engine/registry.js", () => ({
+  promoteMatchingRuntimeContextEngineRegistrations:
+    hoisted.promoteMatchingRuntimeContextEngineRegistrations,
+}));
+
+vi.mock("../plugins/runtime.js", () => ({
+  getActivePluginRegistry: hoisted.getActivePluginRegistry,
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -19,16 +30,32 @@ vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
   resolveAgentRuntimePluginLoadPlan: hoisted.resolveAgentRuntimePluginLoadPlan,
 }));
 
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 describe("agent runtime plugin registries", () => {
   beforeEach(() => {
     hoisted.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
+    hoisted.getActivePluginRegistry.mockReset().mockReturnValue(undefined);
     hoisted.loadPluginRegistryHandle.mockReset().mockReturnValue({ handle: true });
+    hoisted.promoteMatchingRuntimeContextEngineRegistrations.mockReset();
     hoisted.resolveAgentRuntimePluginLoadPlan.mockReset().mockImplementation(({ config }) => ({
       config,
       pluginIds: ["codex", "memory-core"],
     }));
+  });
+
+  it("promotes matching active context engines into the prepared registry", () => {
+    const activeRegistry = { active: true };
+    hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
+
+    expect(
+      loadAgentRuntimePluginRegistryHandle({ config: {} as never, workspaceDir: "/tmp/workspace" }),
+    ).toEqual({ handle: true });
+    expect(hoisted.promoteMatchingRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
+      { handle: true },
+      activeRegistry,
+    );
   });
 
   it("returns a non-activating handle for a prepared runtime", () => {
@@ -101,6 +128,30 @@ describe("agent runtime plugin registries", () => {
         channelPluginLoadIntent: "full",
       }),
     );
+  });
+
+  it("inherits the current request registry before process-wide startup metadata", () => {
+    const config = {} as never;
+    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
+      startup: { pluginIds: ["telegram", "memory-core"] },
+    });
+    const requestRegistry = {
+      plugins: [
+        { id: "memory-core", status: "loaded" },
+        { id: "deferred", status: "loaded", format: "openclaw", imported: false },
+      ],
+    } as never;
+
+    withPluginRuntimeRegistryScope(requestRegistry, () =>
+      loadAgentRuntimePluginRegistryHandle({ config, workspaceDir: "/tmp/workspace" }),
+    );
+
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: ["memory-core"],
+      selections: [],
+    });
   });
 
   it("lets direct local hosts bound the registry to configured runtime owners", () => {

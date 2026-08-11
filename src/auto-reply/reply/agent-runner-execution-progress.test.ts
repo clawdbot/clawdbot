@@ -127,7 +127,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
     await Promise.all(pendingToolTasks);
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).toHaveBeenCalledWith({
+    expect(onItemEvent.mock.calls[0]?.[0]).toMatchObject({
       itemId: "tool:read-1",
       toolCallId: "read-1",
       kind: "tool",
@@ -135,6 +135,12 @@ describe("executeAgentTurn: lifecycle progress", () => {
       name: "read",
       phase: "start",
       status: "running",
+      summary: undefined,
+      progressText: undefined,
+      meta: undefined,
+      commandBearing: false,
+      approvalId: undefined,
+      approvalSlug: undefined,
     });
   });
 
@@ -218,7 +224,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).toHaveBeenCalledWith({
+    expect(onItemEvent.mock.calls[0]?.[0]).toMatchObject({
       itemId: "cmd-1",
       toolCallId: "cmd-1",
       kind: "command",
@@ -226,6 +232,12 @@ describe("executeAgentTurn: lifecycle progress", () => {
       name: "bash",
       phase: "start",
       status: "running",
+      summary: undefined,
+      progressText: undefined,
+      meta: undefined,
+      commandBearing: false,
+      approvalId: undefined,
+      approvalSlug: undefined,
     });
   });
 

@@ -3,12 +3,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
-import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
-import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
-import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
+import type { ResolvedSubagentController } from "../../../agents/subagents/registry/subagent-control.js";
+import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
+import { resolveStoredSubagentCapabilities } from "../../../agents/subagents/spawn/subagent-capabilities.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,

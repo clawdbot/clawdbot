@@ -829,55 +829,16 @@ function runConcurrentSchemaProbe(params: {
 }): string[] {
   const workerSource = `
     import fs from "node:fs";
-    import { DatabaseSync } from "node:sqlite";
-
-    const pageBarrierDir = process.env.OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR;
-    if (pageBarrierDir) {
-      const pageReadyPath = process.env.OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH;
-      const workerCount = Number(process.env.OPENCLAW_SCHEMA_TEST_WORKER_COUNT);
-      const originalPrepare = DatabaseSync.prototype.prepare;
-      const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
-      DatabaseSync.prototype.prepare = function (sql) {
-        const statement = originalPrepare.call(this, sql);
-        if (sql !== "PRAGMA page_count") {
-          return statement;
-        }
-        return new Proxy(statement, {
-          get(target, property) {
-            if (property === "get") {
-              return (...args) => {
-                const row = target.get(...args);
-                if (row?.page_count !== 0) {
-                  throw new Error("fresh database acquired pages before the initialization barrier");
-                }
-                fs.writeFileSync(pageReadyPath, "ready");
-                const deadline = Date.now() + 15_000;
-                while (
-                  fs.readdirSync(pageBarrierDir).filter((name) => name.startsWith("page-ready-"))
-                    .length < workerCount
-                ) {
-                  if (Date.now() >= deadline) {
-                    throw new Error("timed out waiting for fresh database page-count barrier");
-                  }
-                  Atomics.wait(sleepBuffer, 0, 0, 2);
-                }
-                return row;
-              };
-            }
-            const value = Reflect.get(target, property, target);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        });
-      };
-    }
 
     const {
       closeOpenClawStateDatabaseForTest,
       openOpenClawStateDatabase,
     } = await import(process.env.OPENCLAW_SCHEMA_TEST_MODULE_URL);
     const databasePath = process.env.OPENCLAW_SCHEMA_TEST_DATABASE_PATH;
+    const enteringPath = process.env.OPENCLAW_SCHEMA_TEST_ENTERING_PATH;
     const readyPath = process.env.OPENCLAW_SCHEMA_TEST_READY_PATH;
     const startPath = process.env.OPENCLAW_SCHEMA_TEST_START_PATH;
+    const workerIndex = process.env.OPENCLAW_SCHEMA_TEST_WORKER_INDEX;
     fs.writeFileSync(readyPath, "ready");
     const deadline = Date.now() + 15_000;
     while (!fs.existsSync(startPath)) {
@@ -886,6 +847,7 @@ function runConcurrentSchemaProbe(params: {
       }
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
+    fs.writeFileSync(enteringPath, \`entering-\${workerIndex}\`);
     try {
       const database = openOpenClawStateDatabase({ path: databasePath });
       const integrity = database.db.prepare("PRAGMA integrity_check").get();
@@ -897,6 +859,7 @@ function runConcurrentSchemaProbe(params: {
     }
   `;
   const orchestratorSource = `
+    import assert from "node:assert/strict";
     import { spawn } from "node:child_process";
     import fs from "node:fs";
     import path from "node:path";
@@ -906,12 +869,21 @@ function runConcurrentSchemaProbe(params: {
     const rootDir = ${JSON.stringify(params.rootDir)};
     const mode = ${JSON.stringify(params.mode)};
     const workerSource = ${JSON.stringify(workerSource)};
-    // The barriers deterministically overlap both openers. Two contenders prove
-    // serialization without repeating the same child-process stress.
     const workerCount = 2;
     const roundCount = 1;
     const databasePaths = [];
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const coordinatorContracts =
+      mode === "fresh"
+        ? await Promise.all([
+            import(new URL("../config/paths.ts", moduleUrl).href),
+            import(new URL("../infra/boundary-path.ts", moduleUrl).href),
+            import(new URL("../infra/crypto-digest.ts", moduleUrl).href),
+            import(new URL("../infra/sqlite-coordinator.ts", moduleUrl).href),
+            import(new URL("./openclaw-state-db-contract.ts", moduleUrl).href),
+            import(new URL("./openclaw-state-db.paths.ts", moduleUrl).href),
+          ])
+        : undefined;
 
     function waitForChild(child) {
       let stdout = "";
@@ -922,10 +894,107 @@ function runConcurrentSchemaProbe(params: {
       child.stderr.on("data", (chunk) => {
         stderr += chunk;
       });
-      return new Promise((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (code, signal) => resolve({ code, signal, stderr, stdout }));
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result) => {
+          if (!settled) {
+            settled = true;
+            resolve({ ...result, stderr, stdout });
+          }
+        };
+        child.once("error", (error) => finish({ code: null, error: String(error), signal: null }));
+        child.once("close", (code, signal) => finish({ code, signal }));
       });
+    }
+
+    async function waitForMarkers(workers, markerPaths, label, round) {
+      const deadline = Date.now() + 15_000;
+      while (!markerPaths.every((markerPath) => fs.existsSync(markerPath))) {
+        const exitedIndex = workers.findIndex(
+          (worker) => worker.exitCode !== null || worker.signalCode !== null,
+        );
+        if (exitedIndex >= 0) {
+          throw new Error(\`round \${round} worker \${exitedIndex} exited before \${label}\`);
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(\`round \${round} timed out waiting for \${label}\`);
+        }
+        await sleep(2);
+      }
+    }
+
+    async function waitForOutcomes(outcomes, round) {
+      let timeout;
+      try {
+        return await Promise.race([
+          Promise.all(outcomes),
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(\`round \${round} timed out waiting for workers to exit\`)),
+              15_000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    function openFreshInitializationCoordinator(databasePath) {
+      if (!coordinatorContracts) {
+        throw new Error("fresh initialization coordinator contracts are unavailable");
+      }
+      const [
+        { resolveGatewayLockDir },
+        { resolvePathViaExistingAncestorSync },
+        { sha256HexPrefix },
+        { ensurePrivateSqliteCoordinatorDirectory },
+        { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+        { resolveOpenClawStateDirForDatabasePath },
+      ] = coordinatorContracts;
+      const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
+      const stateDir = resolveOpenClawStateDirForDatabasePath(canonicalDatabasePath);
+      const coordinatorPath = path.join(
+        resolveGatewayLockDir(stateDir),
+        \`state-ownership.\${sha256HexPrefix(canonicalDatabasePath, 8)}.lock.sqlite\`,
+      );
+      ensurePrivateSqliteCoordinatorDirectory(
+        path.dirname(coordinatorPath),
+        "state ownership coordinator test",
+      );
+      const coordinator = new DatabaseSync(coordinatorPath);
+      try {
+        coordinator.exec(
+          \`PRAGMA busy_timeout = \${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN EXCLUSIVE;\`,
+        );
+      } catch (error) {
+        coordinator.close();
+        throw error;
+      }
+      return coordinator;
+    }
+
+    function releaseCoordinator(coordinator) {
+      if (!coordinator) {
+        return;
+      }
+      const errors = [];
+      try {
+        coordinator.exec("ROLLBACK");
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        coordinator.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "coordinator rollback and close failed");
+      }
     }
 
     for (let round = 0; round < roundCount; round += 1) {
@@ -990,9 +1059,13 @@ function runConcurrentSchemaProbe(params: {
       }
 
       const startPath = path.join(barrierDir, "start");
+      const enteringPaths = Array.from({ length: workerCount }, (_, index) =>
+        path.join(barrierDir, \`entering-\${index}\`),
+      );
+      const readyPaths = Array.from({ length: workerCount }, (_, index) =>
+        path.join(barrierDir, \`ready-\${index}\`),
+      );
       const workers = Array.from({ length: workerCount }, (_, index) => {
-        const readyPath = path.join(barrierDir, \`ready-\${index}\`);
-        const pageReadyPath = path.join(barrierDir, \`page-ready-\${index}\`);
         return spawn(
           process.execPath,
           ["--import", "tsx", "--input-type=module", "-e", workerSource],
@@ -1000,50 +1073,85 @@ function runConcurrentSchemaProbe(params: {
             env: {
               ...process.env,
               OPENCLAW_SCHEMA_TEST_DATABASE_PATH: databasePath,
+              OPENCLAW_SCHEMA_TEST_ENTERING_PATH: enteringPaths[index],
               OPENCLAW_SCHEMA_TEST_MODULE_URL: moduleUrl,
-              OPENCLAW_SCHEMA_TEST_READY_PATH: readyPath,
+              OPENCLAW_SCHEMA_TEST_READY_PATH: readyPaths[index],
               OPENCLAW_SCHEMA_TEST_START_PATH: startPath,
-              ...(mode === "fresh"
-                ? {
-                    OPENCLAW_SCHEMA_TEST_PAGE_BARRIER_DIR: barrierDir,
-                    OPENCLAW_SCHEMA_TEST_PAGE_READY_PATH: pageReadyPath,
-                    OPENCLAW_SCHEMA_TEST_WORKER_COUNT: String(workerCount),
-                  }
-                : {}),
+              OPENCLAW_SCHEMA_TEST_WORKER_INDEX: String(index),
             },
             stdio: ["ignore", "pipe", "pipe"],
           },
         );
       });
       const outcomes = workers.map(waitForChild);
+      let coordinator;
+      let roundError;
       try {
-        const readyDeadline = Date.now() + 15_000;
-        while (
-          !workers.every((_worker, index) =>
-            fs.existsSync(path.join(barrierDir, \`ready-\${index}\`)),
-          )
-        ) {
-          if (workers.some((worker) => worker.exitCode !== null || worker.signalCode !== null)) {
-            break;
-          }
-          if (Date.now() >= readyDeadline) {
-            throw new Error(\`round \${round} timed out waiting for workers\`);
-          }
-          await sleep(2);
+        await waitForMarkers(workers, readyPaths, "ready markers", round);
+        if (mode === "fresh") {
+          coordinator = openFreshInitializationCoordinator(databasePath);
         }
         fs.writeFileSync(startPath, "start");
-        const results = await Promise.all(outcomes);
-        const failures = results.filter((result) => result.code !== 0);
-        if (failures.length > 0) {
-          throw new Error(\`round \${round} worker failures: \${JSON.stringify(failures)}\`);
+
+        if (mode === "fresh") {
+          await waitForMarkers(workers, enteringPaths, "entering markers", round);
+          // Both children have reached the synchronous open behind the exact production
+          // coordinator; target absence while it is held proves contention, not scheduling.
+          await sleep(250);
+          assert.equal(
+            fs.existsSync(databasePath),
+            false,
+            \`round \${round} database was created while the ownership coordinator was held\`,
+          );
+          for (const [index, worker] of workers.entries()) {
+            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited early\`);
+            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled early\`);
+          }
         }
+      } catch (error) {
+        roundError = error;
       } finally {
+        try {
+          releaseCoordinator(coordinator);
+        } catch (error) {
+          roundError = roundError
+            ? new AggregateError(
+                [roundError, error],
+                \`round \${round} probe and coordinator release failed\`,
+              )
+            : error;
+        }
+        if (roundError) {
+          for (const worker of workers) {
+            if (worker.exitCode === null && worker.signalCode === null) {
+              worker.kill();
+            }
+          }
+        }
+      }
+      let results;
+      try {
+        results = await waitForOutcomes(outcomes, round);
+      } catch (error) {
+        roundError = roundError
+          ? new AggregateError([roundError, error], \`round \${round} probe and worker wait failed\`)
+          : error;
         for (const worker of workers) {
           if (worker.exitCode === null && worker.signalCode === null) {
             worker.kill();
           }
         }
-        await Promise.allSettled(outcomes);
+        results = await Promise.all(outcomes);
+      }
+      if (roundError) {
+        throw new Error(
+          \`round \${round} probe failed: \${String(roundError)}; workers: \${JSON.stringify(results)}\`,
+          { cause: roundError },
+        );
+      }
+      const failures = results.filter((result) => result.error || result.code !== 0);
+      if (failures.length > 0) {
+        throw new Error(\`round \${round} worker failures: \${JSON.stringify(failures)}\`);
       }
       databasePaths.push(databasePath);
     }

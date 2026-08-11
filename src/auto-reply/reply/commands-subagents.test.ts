@@ -7,18 +7,18 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagent-lifecycle-events.js";
-import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRunsFromRuns,
   listRunsForControllerFromRuns,
-} from "../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../agents/subagent-registry-state.js";
+} from "../../agents/subagents/registry/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { failTaskRunByRunId } from "../../tasks/task-executor.js";
 import { createTaskRecord } from "../../tasks/task-registry.js";

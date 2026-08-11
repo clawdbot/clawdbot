@@ -60,11 +60,6 @@
     "wrapper": "src/plugin-sdk/extension-shared.ts"
   },
   {
-    "name": "createSessionSlug",
-    "wrapped": "src/agents/session-slug.ts",
-    "wrapper": "src/agents/bash-process-registry.ts"
-  },
-  {
     "name": "DEFAULT_PROGRESS_DRAFT_LABELS",
     "wrapped": "src/shared/progress-labels.ts",
     "wrapper": "src/channels/streaming.ts"
@@ -349,11 +344,6 @@
     "name": "resolveSessionStoreEntry",
     "wrapped": "src/config/sessions/store-entry.ts",
     "wrapper": "src/plugin-sdk/session-store-runtime.ts"
-  },
-  {
-    "name": "resolveSessionTranscriptActiveLeafEntryId",
-    "wrapped": "src/config/sessions/session-accessor.sqlite-message-cut.ts",
-    "wrapper": "src/config/sessions/session-accessor.message-cut.ts"
   },
   {
     "name": "resolveStorePath",

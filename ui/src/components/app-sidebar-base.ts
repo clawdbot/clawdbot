@@ -14,7 +14,7 @@ import type { ThemeMode } from "../app/theme.ts";
 import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
@@ -105,6 +105,13 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
       this.setApplicationSession(sessionKey, fallbackAgentId);
     }
+  }
+
+  protected sessionMainKey(): string {
+    return resolveUiConfiguredMainKey({
+      agentsList: this.context?.agents.state.agentsList,
+      hello: this.context?.gateway.snapshot.hello,
+    });
   }
 
   readNewSessionAccess(): SessionMethodAccess {

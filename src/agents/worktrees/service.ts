@@ -770,6 +770,11 @@ export class ManagedWorktreeService {
     return findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
   }
 
+  findLiveById(id: string): ManagedWorktreeRecord | undefined {
+    const record = getRegistryWorktree(this.env, id);
+    return record?.removedAt === undefined ? record : undefined;
+  }
+
   /** Resolves the canonical registry root and the caller's own checkout root. */
   async resolveRepositoryPaths(repoRoot: string): Promise<{
     canonicalRoot: string;

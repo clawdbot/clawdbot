@@ -1469,10 +1469,10 @@ create` validates the written archive by default; `--no-verify` is the
   bridge; they are not a second canonical transcript store.
 - QMD's own `index.sqlite`, YAML collection config, and model downloads remain
   external-tool artifacts under `~/.openclaw/agents/<agentId>/qmd`; they are not
-  mirrored into `plugin_blob_entries`. OpenClaw-owned QMD coordination is
-  database-first: shared `state_leases` serialize embeds globally and per-agent
-  `state_leases` serialize collection/update/embed writers. Runtime creates no
-  QMD lock sidecars.
+  mirrored into `plugin_blob_entries`. Current host-owned lease consumers use
+  shared `state_leases`; the per-agent `state_leases` table remains in the
+  canonical schema but has no runtime tenants. Runtime creates no QMD lock
+  sidecars.
 - The optional `memory-lancedb` plugin no longer creates
   `~/.openclaw/memory/lancedb` as an implicit OpenClaw-managed store. It is an
   external LanceDB backend and stays disabled until the operator configures an
@@ -2044,8 +2044,7 @@ payload.
      `gateway_locks` and no longer exposes a file-lock directory seam.
    - Generic plugin SDK dedupe persistence no longer uses file locks or JSON
      files; it writes shared SQLite plugin-state rows. Done.
-   - QMD coordination uses a shared SQLite lease for embeds and a per-agent
-     SQLite lease for every collection/update/embed writer. Runtime no longer
+   - QMD writers no longer take OpenClaw state leases. Runtime no longer
      creates `qmd/embed.lock.lock` or `agents/<agentId>/qmd-write.lock.lock`;
      Doctor removes only definitely stale retired sidecars. Done.
 

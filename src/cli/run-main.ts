@@ -265,45 +265,45 @@ async function tryRunGatewayRunFastPath(
   return true;
 }
 
-async function closeCliMemoryManagers(): Promise<void> {
-  try {
-    const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
-    if (!hasMemoryRuntime()) {
-      return;
-    }
-    const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
-    await closeActiveMemorySearchManagers();
-  } catch {
-    // Best-effort teardown for short-lived CLI processes. Package updates can
-    // replace hashed chunks before this finalizer runs.
-  }
-}
-
-async function disposeCliAgentHarnesses(): Promise<void> {
-  try {
-    const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
-      await import("../agents/harness/registry.js");
-    if (listRegisteredAgentHarnesses().length === 0) {
-      return;
-    }
-    await disposeRegisteredAgentHarnesses();
-  } catch {
-    // Best-effort teardown for short-lived CLI commands. Harness plugins may
-    // own subprocesses, but cleanup must not hide the command's real outcome.
-  }
-}
-
-async function closeCliMcpLoopbackServer(): Promise<void> {
-  try {
-    const { getActiveMcpLoopbackRuntime } = await import("../gateway/mcp-http.loopback-runtime.js");
-    if (!getActiveMcpLoopbackRuntime()) {
-      return;
-    }
-    const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-    await closeMcpLoopbackServer();
-  } catch {
-    // Best-effort teardown for short-lived CLI commands. A command result is
-    // already final, so cleanup must not replace its outcome.
+async function closeCliResources(): Promise<void> {
+  const finalizers = [
+    async () => {
+      const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
+        await import("../agents/harness/registry.js");
+      if (listRegisteredAgentHarnesses().length > 0) {
+        await disposeRegisteredAgentHarnesses();
+      }
+    },
+    async () => {
+      const { stopManagedProviderLocalServices } =
+        await import("../agents/provider-local-service.js");
+      stopManagedProviderLocalServices();
+    },
+    async () => {
+      const { closeProviderTransportDispatcherPool } =
+        await import("../agents/provider-transport-dispatcher-pool.js");
+      await closeProviderTransportDispatcherPool();
+    },
+    async () => {
+      const { getActiveMcpLoopbackRuntime } =
+        await import("../gateway/mcp-http.loopback-runtime.js");
+      if (getActiveMcpLoopbackRuntime()) {
+        const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+        await closeMcpLoopbackServer();
+      }
+    },
+    async () => {
+      const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
+      if (hasMemoryRuntime()) {
+        const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
+        await closeActiveMemorySearchManagers();
+      }
+    },
+  ];
+  // Teardown is sequential and best-effort so one stale lazy chunk or plugin
+  // failure cannot mask the CLI command's result or skip later resources.
+  for (const finalize of finalizers) {
+    await finalize().catch(() => undefined);
   }
 }
 
@@ -1675,9 +1675,7 @@ async function runCliWithPreparedOutputMode(
   } finally {
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
-    await disposeCliAgentHarnesses();
-    await closeCliMcpLoopbackServer();
-    await closeCliMemoryManagers();
+    await closeCliResources();
     pauseNonTtyStdinForCliExit();
   }
 }

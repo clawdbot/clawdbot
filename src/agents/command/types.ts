@@ -21,9 +21,9 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
-import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
+import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
-import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import { deleteSubagentSessionForCleanup } from "../../subagent-session-cleanup.js";
+import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;

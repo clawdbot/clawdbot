@@ -56,7 +56,7 @@ const bindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn(() => []),
 }));
 
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
 function getGatewayRequests(): GatewayRequest[] {

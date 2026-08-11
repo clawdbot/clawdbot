@@ -870,6 +870,19 @@ unrelated inbound runtime helpers.
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    If a channel intentionally applies stricter DM session routing than the
+    global config, expose that behavior through `security.dmRouting` so Doctor
+    and security audit resolve the same session owner as runtime. The optional
+    `resolveDmScope` callback runs before core route resolution; its context
+    includes `cfg`, `accountId`, the resolved `account`, and a `principalId`
+    for finite allowlist entries. `resolveDmRoute` receives those fields plus
+    the resolved core `route`; it may return `{ sessionKey }` for a shared final
+    bucket, `{ kind: "isolated" }` for an unknown peer, or `{ kind: "core" }`
+    to preserve core `dmScope` namespace analysis. For wildcard/open policy,
+    `principalId` is absent and an undefined result is reported as unverified.
+    Diagnostics never invent a peer ID. Keep both callbacks pure and
+    import-safe because read-only diagnostics run without channel runtime.
+
     <Accordion title="What createChatChannelPlugin does for you">
       Instead of implementing low-level adapter interfaces manually, you pass
       declarative options and the builder composes them:

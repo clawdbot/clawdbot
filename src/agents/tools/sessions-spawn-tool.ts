@@ -22,14 +22,14 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
-import { getSubagentDeliveryBacklogPressure } from "../subagent-registry.js";
-import { normalizeSubagentTaskName } from "../subagent-task-name.js";
+import { getSubagentDeliveryBacklogPressure } from "../subagents/registry/subagent-registry.js";
+import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagents/spawn/subagent-spawn.js";
+import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,

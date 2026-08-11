@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAllCodeModeRuns: vi.fn(),
   disposeAgentHarnesses: vi.fn(async () => undefined),
+  closeProviderTransportDispatcherPool: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
@@ -65,6 +66,10 @@ vi.mock("../agents/harness/registry.js", () => ({
 
 vi.mock("../agents/code-mode-state.js", () => ({
   disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
+}));
+
+vi.mock("../agents/provider-transport-dispatcher-pool.js", () => ({
+  closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
 }));
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
@@ -1674,6 +1679,9 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAgentHarnesses.mockImplementation(async () => {
       closeOrder.push("agent-harnesses");
     });
+    mocks.closeProviderTransportDispatcherPool.mockImplementation(async () => {
+      closeOrder.push("provider-transport-dispatchers");
+    });
     mocks.disposeAllSessionMcpRuntimes.mockImplementation(async () => {
       closeOrder.push("bundle-mcp");
     });
@@ -1717,6 +1725,7 @@ describe("createGatewayCloseHandler", () => {
     expect(closeOrder).toEqual([
       "code-mode-runs",
       "agent-harnesses",
+      "provider-transport-dispatchers",
       "bundle-mcp",
       "bundle-lsp",
       "http-server",

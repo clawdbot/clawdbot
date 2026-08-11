@@ -28,7 +28,6 @@ import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
   extractAssistantTextForPhase,
   parseAssistantTextSignature,
@@ -38,7 +37,6 @@ import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../../../shared/text/assistant-visible-text.js";
-import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -63,7 +61,6 @@ import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
 
-type ToolMetaEntry = { toolName: string; meta?: string };
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
@@ -152,30 +149,6 @@ function normalizeReplyTextForComparison(text: string): string {
   return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
 }
 
-function shouldIncludeToolErrorDetails(params: {
-  lastToolError: ToolErrorSummary;
-  isCronTrigger?: boolean;
-  isHeartbeatTrigger?: boolean;
-  sessionKey: string;
-  verboseLevel?: VerboseLevel;
-}): boolean {
-  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
-    return true;
-  }
-  if (!isExecLikeToolName(params.lastToolError.toolName)) {
-    return false;
-  }
-  // Heartbeat runs usually have no assistant reply to carry the command
-  // output, so keep exec details in the warning instead of a generic label.
-  if (params.isHeartbeatTrigger === true) {
-    return true;
-  }
-  return (
-    params.lastToolError.timedOut === true &&
-    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
-  );
-}
-
 function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
   return lastToolError.middlewareError === true;
 }
@@ -187,9 +160,11 @@ function formatToolErrorWarningText(params: {
 }): string {
   const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
   if (terminalDiagnostic?.kind === "process") {
-    const toolLabel = formatToolAggregate("process", [terminalDiagnostic.sessionId], {
-      markdown: params.useMarkdown,
-    });
+    const toolLabel = formatToolAggregate(
+      "process",
+      params.includeDetails ? [terminalDiagnostic.sessionId] : undefined,
+      { markdown: params.useMarkdown },
+    );
     const reason =
       terminalDiagnostic.reason.kind === "exit"
         ? `exit ${terminalDiagnostic.reason.exitCode}`
@@ -208,7 +183,9 @@ function formatToolErrorWarningText(params: {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
     });
-    const subject = formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown);
+    const subject = params.includeDetails
+      ? formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown)
+      : "";
     const conciseExitSuffix = params.includeDetails
       ? ""
       : formatConciseExecExitSuffix(params.lastToolError.error);
@@ -221,7 +198,7 @@ function formatToolErrorWarningText(params: {
 
   const toolSummary = formatToolAggregate(
     params.lastToolError.toolName,
-    params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+    params.includeDetails && params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
     { markdown: params.useMarkdown },
   );
   const errorSuffix =
@@ -455,9 +432,6 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-  isCronTrigger?: boolean;
-  isHeartbeatTrigger?: boolean;
-  sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
@@ -469,10 +443,8 @@ function resolveToolErrorWarningPolicy(params: {
   } else {
     toolErrorWarningOverride = params.suppressToolErrorWarnings;
   }
-  const includeDetails = shouldIncludeToolErrorDetails({
-    ...params,
-    verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
-  });
+  const includeDetails =
+    !dynamicToolErrorWarningsDisabled && isVerboseToolDetailEnabled(params.verboseLevel);
   const suppressToolErrorWarnings = toolErrorWarningOverride === true;
   if (suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
@@ -523,7 +495,6 @@ export function buildEmbeddedRunPayloads(params: {
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
-  toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
@@ -540,7 +511,6 @@ export function buildEmbeddedRunPayloads(params: {
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
-  inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -643,29 +613,6 @@ export function buildEmbeddedRunPayloads(params: {
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
-  }
-  const inlineToolResults =
-    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
-  if (inlineToolResults) {
-    for (const { toolName, meta } of params.toolMetas) {
-      const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
-        markdown: useMarkdown,
-      });
-      const parsedAggregate = parseInlineDirectives(agg, {
-        stripAudioTag: true,
-        stripReplyTags: true,
-      });
-      const cleanedText = parsedAggregate.text;
-      if (cleanedText) {
-        replyItems.push({
-          text: cleanedText,
-          audioAsVoice: parsedAggregate.audioAsVoice,
-          replyToId: parsedAggregate.replyToId,
-          replyToTag: parsedAggregate.hasReplyTag,
-          replyToCurrent: parsedAggregate.replyToCurrent,
-        });
-      }
-    }
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
@@ -814,9 +761,6 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
-      isCronTrigger: params.isCronTrigger,
-      isHeartbeatTrigger: params.isHeartbeatTrigger,
-      sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.

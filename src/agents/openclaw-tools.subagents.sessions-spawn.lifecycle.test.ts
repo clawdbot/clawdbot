@@ -19,7 +19,7 @@ import {
 import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-} from "./subagent-registry.test-helpers.js";
+} from "./subagents/registry/subagent-registry.test-helpers.js";
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;

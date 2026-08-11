@@ -70,7 +70,16 @@ export interface AiTransportPluginHost {
         transport: "stream" | "websocket";
       };
     },
-  ): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
+  ):
+    | {
+        headers?: Record<string, string>;
+        metadata?: Record<string, string>;
+        websocket?: {
+          headers?: Record<string, string>;
+          degradeCooldownMs?: number;
+        };
+      }
+    | undefined;
   wrapSimpleCompletionStream(
     this: void,
     params: {

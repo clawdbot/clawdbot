@@ -1,4 +1,8 @@
 /** Persisted and wire-visible failover reason codes. Spellings are frozen. */
+// Retry accounting owners: per-attempt LLM retry — src/llm/utils/retry.ts.
+// Per-run attempt/profile/model rotation — embedded-agent-runner/run/retry-budget.ts.
+// Cross-run process probe throttle — model-fallback-cooldown.ts.
+// Persisted auth-profile cooldowns — auth-profiles/usage.ts.
 export const FAILOVER_REASONS = [
   "auth",
   "auth_permanent",

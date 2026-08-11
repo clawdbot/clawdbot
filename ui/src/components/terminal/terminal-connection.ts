@@ -59,8 +59,13 @@ type TerminalExitInfo = {
 
 type SessionSink = {
   onData: (data: string) => void;
-  /** Clears emulator state before replaying the authoritative ring snapshot. */
-  onReplay?: (data: string, newlyObservedFrom: number) => void;
+  /** Replays a ring snapshot into a fresh sink or replaces a gapped live sink. */
+  onReplay?: (
+    data: string,
+    newlyObservedFrom: number,
+    mode: "initial" | "recovery",
+    isCurrent: () => boolean,
+  ) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
 
@@ -208,7 +213,7 @@ export class TerminalConnection {
       }
       throw new TerminalOpenTimeoutError(error);
     }
-    this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
+    await this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
     return result;
   }
 
@@ -219,7 +224,7 @@ export class TerminalConnection {
     );
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
-    this.adoptSession(
+    await this.adoptSession(
       sessionId,
       sink,
       offset !== null
@@ -252,24 +257,42 @@ export class TerminalConnection {
     }
   }
 
-  /** Registers a sink, then flushes events that raced after open/attach. */
-  private adoptSession(
+  /** Registers a sink, applies authoritative replay, then flushes raced events. */
+  private async adoptSession(
     sessionId: string,
     sink: SessionSink,
     baseline: Pick<StreamState, "seqMode" | "expectedSeq">,
     replay?: string,
     coveredThroughSeq?: number,
-  ): void {
-    const stream: StreamState = { sink, ...baseline, recovering: false };
+  ): Promise<void> {
+    const stream: StreamState = { sink, ...baseline, recovering: replay !== undefined };
     this.streams.set(sessionId, stream);
     this.lastTerminalActivityAtMs = Date.now();
-    if (replay !== undefined) {
-      if (sink.onReplay) {
-        sink.onReplay(replay, replay.length);
-      } else {
-        sink.onData(replay);
+    try {
+      if (replay !== undefined) {
+        if (sink.onReplay) {
+          await sink.onReplay(
+            replay,
+            replay.length,
+            "initial",
+            () => this.streams.get(sessionId) === stream,
+          );
+        } else {
+          sink.onData(replay);
+        }
       }
+    } catch (error) {
+      if (this.streams.get(sessionId) === stream) {
+        this.streams.delete(sessionId);
+        this.pending.delete(sessionId);
+        this.maybeUnsubscribe();
+      }
+      throw error;
     }
+    if (this.streams.get(sessionId) !== stream) {
+      return;
+    }
+    stream.recovering = false;
     this.flushPending(sessionId, stream, coveredThroughSeq, replay !== undefined);
     this.scheduleLivenessCheck();
   }
@@ -326,7 +349,7 @@ export class TerminalConnection {
     stream.recovering = true;
     void this.client
       .request<TerminalAttachResult>("terminal.attach", { sessionId })
-      .then((result) => {
+      .then(async (result) => {
         if (this.streams.get(sessionId) !== stream) {
           return;
         }
@@ -361,7 +384,15 @@ export class TerminalConnection {
           typeof previouslyObservedThrough === "number"
             ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
             : 0;
-        stream.sink.onReplay(result.buffer, newlyObservedFrom);
+        await stream.sink.onReplay(
+          result.buffer,
+          newlyObservedFrom,
+          "recovery",
+          () => this.streams.get(sessionId) === stream,
+        );
+        if (this.streams.get(sessionId) !== stream) {
+          return;
+        }
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })

@@ -15,6 +15,7 @@ import {
   sanitizeAssistantVisibleText,
 } from "../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
@@ -41,7 +42,9 @@ export function sanitizeAssistantVisibleStreamText(text: string): string {
 
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
   const errorContext = msg.stopReason === "error";
-  return sanitizeUserFacingText(extracted, { errorContext });
+  return errorContext
+    ? renderUserFacingText(extracted, { errorContext: true })
+    : sanitizeUserFacingText(extracted);
 }
 
 type AssistantTextExtractionResult = {

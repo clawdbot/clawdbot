@@ -50,7 +50,7 @@ import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SessionManager } from "../../sessions/index.js";
-import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -181,6 +181,8 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
   /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
+  /** Restrict Skill Workshop to one atomic collection reconciliation. */
+  skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */

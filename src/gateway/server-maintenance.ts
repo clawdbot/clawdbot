@@ -13,7 +13,10 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
-import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
+import {
+  runScheduledSkillCollectionReviews,
+  startSkillCollectionMaintenance,
+} from "../skills/workshop/collection-review.js";
 import {
   abortTrackedChatRunById,
   type ChatAbortControllerEntry,
@@ -83,8 +86,7 @@ export function startGatewayMaintenanceTimers(params: {
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
-  runSkillCuratorSweep?: () => Promise<unknown>;
-  registerSkillUsageTracking?: () => () => void;
+  runSkillCollectionReconcile?: () => Promise<unknown>;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -167,10 +169,19 @@ export function startGatewayMaintenanceTimers(params: {
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCuratorMaintenance({
-      onError: (err) => params.logHealth.error(`skill curator sweep failed: ${formatError(err)}`),
-      registerUsageTracking: params.registerSkillUsageTracking,
-      runSweep: params.runSkillCuratorSweep,
+    skillCuratorCleanup = startSkillCollectionMaintenance({
+      onError: (err) =>
+        params.logHealth.error(`skill collection review failed: ${formatError(err)}`),
+      run:
+        params.runSkillCollectionReconcile ??
+        (() =>
+          runScheduledSkillCollectionReviews({
+            config: params.getRuntimeConfig(),
+            onError: (err, workspaceDir) =>
+              params.logHealth.error(
+                `skill collection review failed for ${workspaceDir}: ${formatError(err)}`,
+              ),
+          })),
     });
   }
 

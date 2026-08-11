@@ -240,13 +240,14 @@ export function observeEmbeddedAttemptPrompt(input: {
       note: `images: prompt=${input.imageCount}`,
     });
     const providerVisibleTools = toTrajectoryToolDefinitions(input.effectiveTools);
+    const trajectoryTools = input.toolSearchCompacted
+      ? toTrajectoryToolDefinitions(input.uncompactedEffectiveTools)
+      : providerVisibleTools;
     input.trajectoryRecorder?.recordEvent("context.compiled", {
       systemPrompt: input.systemPromptForHook,
       prompt: input.promptForModel,
       messages: input.sessionMessages,
-      tools: toTrajectoryToolDefinitions(
-        input.toolSearchCompacted ? input.uncompactedEffectiveTools : input.effectiveTools,
-      ),
+      tools: trajectoryTools,
       ...(input.toolSearchCompacted ? { providerVisibleTools } : {}),
       imagesCount: input.imageCount,
       streamStrategy: input.streamStrategy,

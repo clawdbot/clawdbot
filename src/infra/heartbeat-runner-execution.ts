@@ -4,7 +4,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
-import { transitionMainSessionRecovery } from "../agents/main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,

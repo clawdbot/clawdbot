@@ -132,11 +132,6 @@ describe("chat task suggestions", () => {
     expect(copy?.textContent?.trim()).toBe("Copied");
   });
 
-  it("renders no card icon column", () => {
-    const { container } = renderSuggestion();
-    expect(container.querySelector(".task-suggestion__icon")).toBeNull();
-  });
-
   it("offers no acceptance-mode actions when modes are not advertised", () => {
     const { container, onAccept } = renderSuggestion({
       canAcceptTaskSuggestionModes: false,

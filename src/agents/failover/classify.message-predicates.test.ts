@@ -1,6 +1,5 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
-import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
@@ -12,6 +11,7 @@ import {
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./classify.js";
+import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 describe("matchesFormatErrorPattern", () => {
   it("retains the direct format compatibility predicate", () => {
@@ -276,16 +276,17 @@ describe("HTTP 429 overload wording (#98101)", () => {
       '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
     expect(classifyFailoverReason(message)).toBe("rate_limit");
     expect(classifyFailoverReason(`HTTP 429: ${message}`)).toBe("rate_limit");
-    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
     );
   });
 
   it("preserves actionable retry details when a rate limit also mentions overload", () => {
     expect(
-      formatRateLimitOrOverloadedErrorCopy(
-        "429 rate limit: service overloaded, try again in 30 seconds",
-      ),
+      renderRateLimitOrOverloadedCopy({
+        reason: "rate_limit",
+        raw: "429 rate limit: service overloaded, try again in 30 seconds",
+      }),
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });

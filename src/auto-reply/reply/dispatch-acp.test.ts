@@ -396,6 +396,7 @@ async function runDispatch(params: {
         }
       : {}),
     shouldSendToolSummaries: true,
+    shouldSendFullToolDetails: false,
     bypassForCommand: false,
     toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),

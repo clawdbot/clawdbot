@@ -11,6 +11,7 @@ extension OnboardingAISetupModel {
     struct AttemptContext: Equatable {
         let token: UUID
         let routeIdentity: String
+        let supersededAttemptDeadline: Date?
     }
 
     struct PendingVerification {
@@ -191,6 +192,11 @@ extension OnboardingAISetupModel {
             self.pendingActivationVerification
     }
 
+    func canSelectCandidate(kind: String) -> Bool {
+        guard !self.connected else { return false }
+        return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
+    }
+
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
@@ -275,6 +281,13 @@ extension OnboardingAISetupModel {
         return error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError ||
             error is OpenClawChatTransportSendError
+    }
+
+    static func activationAdmissionIsBusy(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        return response.method == "openclaw.setup.activate" &&
+            response.code.uppercased() == "UNAVAILABLE" &&
+            response.details["retryable"]?.value as? Bool == true
     }
 
     static func activationParams(

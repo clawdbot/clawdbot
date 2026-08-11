@@ -4,8 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { setSubagentRegistryDepsForTest } from "../../agents/subagent-registry-deps.js";
-import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.test-helpers.js";
+import { setSubagentRegistryDepsForTest } from "../../agents/subagents/registry/subagent-registry-deps.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -227,12 +227,14 @@ vi.mock("../../infra/agent-run-registry.js", () => ({
 // Only the lookup this harness asserts on is stubbed; the rest of the read
 // surface stays real so registry paths reached through the gateway (paused-run
 // adoption, descendant queries) observe the runs these tests seed.
-vi.mock("../../agents/subagent-registry-read.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/subagent-registry-read.js")>()),
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
   getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
 }));
 
-vi.mock("../../agents/subagent-registry-runtime.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 

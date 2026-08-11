@@ -431,6 +431,10 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 ```json5
 {
+  // Session tools can reveal transcript data. Default scope is current + spawned;
+  // reads also include same-agent groups watched through ambient group awareness.
+  // Use visibility: "self" to exclude those watched sessions.
+  tools: { sessions: { visibility: "tree" } }, // self | tree | agent | all
   agents: {
     entries: {
       public: {
@@ -438,10 +442,6 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
-          // Session tools can reveal transcript data. Default scope is current + spawned;
-          // reads also include same-agent groups watched through ambient group awareness.
-          // Use visibility: "self" to exclude those watched sessions.
-          sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
             "sessions_history",

@@ -12,13 +12,13 @@ import {
   type ExecApprovalContinuationPromptRange,
 } from "../../agents/bash-tools.exec-approval-output.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery-lifecycle.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery-store.js";
+} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";

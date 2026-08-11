@@ -1,8 +1,8 @@
 // Lists available agents for subagent spawn and focus commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagents/registry/subagent-registry-state.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";

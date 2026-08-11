@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -135,6 +136,50 @@ export function actionOpacity(button: Locator): Promise<string> {
 
 export function actionPointerEvents(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
+}
+
+/**
+ * Opens a session-menu submenu through the keyboard path. Submenu ARIA is ready
+ * before Web Awesome finishes opening the dropdown, so hovering alone races the
+ * menu; waiting on its focus contract first keeps navigation keys in order.
+ */
+export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
+  const parent = page.getByRole("menuitem", { name });
+  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
+  const index = await parent.evaluate((element) =>
+    [...(element.parentElement?.children ?? [])]
+      .filter(
+        (item) =>
+          item.localName === "wa-dropdown-item" &&
+          item.getAttribute("slot") !== "submenu" &&
+          !(item as HTMLElement & { disabled?: boolean }).disabled,
+      )
+      .indexOf(element),
+  );
+  expect(index).toBeGreaterThanOrEqual(0);
+  await expect
+    .poll(() =>
+      page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+    )
+    .toBe(1);
+  await page.keyboard.press("Home");
+  for (let step = 0; step < index; step += 1) {
+    await page.keyboard.press("ArrowDown");
+  }
+  await expect
+    .poll(() => parent.evaluate((element) => element === document.activeElement))
+    .toBe(true);
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+}
+
+/** Fills the owned input dialog and submits it the way Enter does. */
+export async function submitInputDialog(page: Page, value: string): Promise<void> {
+  const field = page.locator("openclaw-modal-dialog input");
+  await field.waitFor({ state: "visible" });
+  await field.fill(value);
+  await field.press("Enter");
+  await field.waitFor({ state: "detached" });
 }
 
 export async function captureUiProof(page: Page, fileName: string) {

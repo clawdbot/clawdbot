@@ -82,7 +82,7 @@ suite.define(() => {
     }
   });
 
-  it("restores a scrolled session after switching away while new messages arrive", async () => {
+  it("retains scrolled and end-anchored sessions without history reloads", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -123,7 +123,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForChatScrollIdle(page);
-      const thread = page.locator(".chat-thread");
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       await expect.poll(() => thread.count()).toBe(1);
       const initialDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
@@ -151,17 +151,11 @@ suite.define(() => {
       });
       expect(firstVisitDistance).toBeLessThanOrEqual(8);
 
-      const messagesAWithNewTail = messages("A", 78);
-      const updatedResponses = responseCases(messagesAWithNewTail);
-      await gateway.setMethodResponse("chat.history", updatedResponses);
-      await gateway.setMethodResponse("chat.startup", updatedResponses);
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionA).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeReturn);
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
 
       const restored = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
@@ -177,17 +171,13 @@ suite.define(() => {
       ).toBeLessThanOrEqual(120);
       expect(restored.distanceFromBottom).toBeGreaterThan(8);
 
-      const messagesBWithNewTail = messages("B", 36);
-      const endAnchoredResponses = responseCases(messagesAWithNewTail, messagesBWithNewTail);
-      await gateway.setMethodResponse("chat.history", endAnchoredResponses);
-      await gateway.setMethodResponse("chat.startup", endAnchoredResponses);
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeEndReturn);
       await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("chat.history")).toHaveLength(
+        historyRequestsBeforeEndReturn,
+      );
       const endAnchoredDistance = await thread.evaluate((element) => {
         const transcript = element as HTMLElement;
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
@@ -727,7 +717,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
-      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await page
+        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
+        .getByText("Instant A")
+        .waitFor();
       await page.waitForTimeout(500);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
       const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
@@ -738,7 +731,10 @@ suite.define(() => {
           `.sidebar-recent-session[data-session-key="${secondKey}"] a.sidebar-recent-session__link`,
         )
         .click();
-      await page.locator(".chat-pane__session-title").getByText("Instant B").waitFor();
+      await page
+        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
+        .getByText("Instant B")
+        .waitFor();
       const emptyOutboxListRequests = (await gateway.getRequests("sessions.list")).slice(
         initialListCount,
       );
@@ -746,7 +742,7 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
       const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
 
-      await page.locator("openclaw-chat-pane").evaluate((pane, targetKey) => {
+      await page.locator('openclaw-chat-pane[aria-hidden="false"]').evaluate((pane, targetKey) => {
         const state = (
           pane as HTMLElement & {
             state: {
@@ -785,7 +781,10 @@ suite.define(() => {
           `.sidebar-recent-session[data-session-key="${firstKey}"] a.sidebar-recent-session__link`,
         )
         .click();
-      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await page
+        .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
+        .getByText("Instant A")
+        .waitFor();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBe(emptyOutboxListCount + 1);

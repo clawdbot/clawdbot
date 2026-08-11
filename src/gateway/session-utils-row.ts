@@ -12,7 +12,7 @@ import {
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry-read.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {

@@ -9,6 +9,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
+  classifyFailoverReason,
   isBilling429MessageForProvider,
   isBillingErrorMessage,
   isContextOverflowError,
@@ -18,26 +19,23 @@ import {
   isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
+import {
+  AUTH_INVALID_TOKEN_USER_TEXT,
+  formatBillingErrorMessage,
+  formatDiskSpaceErrorCopy,
+  formatTransportErrorCopy,
+  isInvalidStreamingEventOrderError,
+  isLikelyHttpErrorText,
+  isRawApiErrorPayload,
+  isStreamingJsonParseError,
+  renderRateLimitOrOverloadedCopy,
+} from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
-import {
-  formatBillingErrorMessage,
-  formatDiskSpaceErrorCopy,
-  formatRateLimitOrOverloadedErrorCopy,
-  formatTransportErrorCopy,
-  isInvalidStreamingEventOrderError,
-  isLikelyHttpErrorText as isLikelyHttpErrorTextFromSanitizer,
-  isRawApiErrorPayload,
-  isStreamingJsonParseError,
-} from "./sanitize-user-facing-text.js";
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
-export const AUTH_INVALID_TOKEN_USER_TEXT =
-  "Authentication failed (provider returned HTTP 401). " +
-  "Your provider token may have expired — try the request again in a moment. " +
-  "If the failure persists, re-authenticate this provider.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -217,7 +215,11 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
+  const failoverReason = classifyFailoverReason(raw, { provider: opts?.provider });
+  const transientCopy =
+    failoverReason === "rate_limit" || failoverReason === "overloaded"
+      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      : undefined;
   if (transientCopy) {
     return transientCopy;
   }
@@ -249,7 +251,7 @@ export function formatAssistantErrorText(
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 
-  if (isLikelyHttpErrorTextFromSanitizer(raw) || isRawApiErrorPayload(raw)) {
+  if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
 

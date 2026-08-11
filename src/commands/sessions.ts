@@ -9,7 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
@@ -80,27 +80,7 @@ const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agent
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
-/**
- * Inline ACP model overlay — catalog #20.
- *
- * When a session ran via the ACP control plane (e.g. key =
- * `agent:copilot:acp:<uuid>` AND ACP metadata is persisted), the agent's
- * configured model is irrelevant: the actual model is selected inside the ACP
- * child process. We overlay a sentinel `{ provider: "acpx",
- * model: "<agentId>-acp" }` so the listing clearly signals "ACP runtime" and
- * does not mislead operators into thinking the configured model ran.
- *
- * Key-shape alone is not sufficient: ACP bridge sessions (translator.ts) also
- * use ACP-shaped keys but never persist `SessionAcpMeta` — they run the
- * normal configured model and must not receive the sentinel. The `acpRuntime`
- * flag is set at row-construction time from SQLite metadata.
- *
- * The resolver (`resolveSessionDisplayModelRef`) stays pure; this overlay
- * applies only at the emit sites in this file.
- *
- * NOTE: Will be replaced by a shared `applyAcpModelOverlay` helper from
- * `src/agents/acp-runtime-overlay.ts` once PR 2 lands.
- */
+/** True ACP sessions use the child runtime's model, not the configured fallback. */
 function applyAcpModelOverlayIfNeeded(
   modelRef: { provider: string; model: string },
   sessionKey: string,
@@ -372,16 +352,14 @@ export async function sessionsCommand(
   }
 
   const classifyCliProvider = prepareCliProviderClassifier(cfg);
-
-  const allRows = targets.flatMap((target) => {
+  const activeSince = activeMinutes === undefined ? undefined : Date.now() - activeMinutes * 60_000;
+  const sessionEntries = targets.flatMap((target) => {
     return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
-      .filter(({ entry }) => {
-        if (activeMinutes === undefined) {
-          return true;
-        }
-        const updatedAt = entry?.updatedAt;
-        return typeof updatedAt === "number" && Date.now() - updatedAt <= activeMinutes * 60_000;
-      })
+      .filter(
+        ({ entry }) =>
+          activeSince === undefined ||
+          (typeof entry.updatedAt === "number" && entry.updatedAt >= activeSince),
+      )
       .map(({ sessionKey, entry }) => {
         const row = toSessionDisplayRow(sessionKey, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
@@ -390,48 +368,54 @@ export async function sessionsCommand(
           agentId,
           sessionKey: row.key,
         });
-        const acpMeta = readAcpSessionMetaForEntry({
-          sessionKey: acpSessionKey,
-          entry,
-        });
-        const acpRuntime = acpMeta != null;
-        // ACP rows need stored-key metadata before model/runtime resolution so
-        // bridge sessions and true ACP runtime sessions display differently.
-        const modelRef = applyAcpModelOverlayIfNeeded(
-          resolveSessionDisplayModelRef(cfg, row, classifyCliProvider),
-          acpSessionKey,
-          acpRuntime,
-        );
-        const agentRuntime = resolveModelAgentRuntimeMetadata({
-          cfg,
-          agentId,
-          sessionEntry: entry,
-          provider: modelRef.provider,
-          model: modelRef.model,
-          sessionKey: acpSessionKey,
-          acpRuntime,
-          acpBackend: acpMeta?.backend,
-        });
-        return Object.assign({}, row, {
-          agentId,
-          acpRuntime,
-          agentRuntime,
-          displayModelRef: modelRef,
-          kind: classifySessionKind(row.key, entry),
-          runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
-            cfg,
-            key: row.key,
-            entry,
-          }),
-          runtimeLabel: resolveSessionRuntimeLabel({
-            cfg,
-            entry,
-            agentRuntime,
-            modelProvider: modelRef.provider,
-            classifyCliProvider,
-          }),
-        });
+        return { acpSessionKey, agentId, entry, row };
       });
+  });
+  const acpSessionMetaByEntry = readAcpSessionMetaBatch({
+    entries: sessionEntries.map(({ acpSessionKey, entry }) => ({
+      sessionKey: acpSessionKey,
+      entry,
+    })),
+  });
+  const allRows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
+    const acpMeta = acpSessionMetaByEntry.get(entry);
+    const acpRuntime = acpMeta != null;
+    // ACP rows need stored-key metadata before model/runtime resolution so
+    // bridge sessions and true ACP runtime sessions display differently.
+    const modelRef = applyAcpModelOverlayIfNeeded(
+      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider),
+      acpSessionKey,
+      acpRuntime,
+    );
+    const agentRuntime = resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      sessionEntry: entry,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      sessionKey: acpSessionKey,
+      acpRuntime,
+      acpBackend: acpMeta?.backend,
+    });
+    return Object.assign({}, row, {
+      agentId,
+      acpRuntime,
+      agentRuntime,
+      displayModelRef: modelRef,
+      kind: classifySessionKind(row.key, entry),
+      runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
+        cfg,
+        key: row.key,
+        entry,
+      }),
+      runtimeLabel: resolveSessionRuntimeLabel({
+        cfg,
+        entry,
+        agentRuntime,
+        modelProvider: modelRef.provider,
+        classifyCliProvider,
+      }),
+    });
   });
   const totalCount = allRows.length;
   const rows = selectNewestSessionRows(allRows, limit);

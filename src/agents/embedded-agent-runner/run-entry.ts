@@ -356,7 +356,6 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
               host,
               operation: "agent-run",
               requiresDurableCommit: false,
-              hasAdmissionFence: false,
             });
           } catch {
             contextEngineLogicalTurnLease.degradeBeforeStart(

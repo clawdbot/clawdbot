@@ -29,7 +29,10 @@ import type {
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
+import {
+  runExclusiveSystemAgentSetupActivation,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -406,6 +409,7 @@ describe("openclaw.setup", () => {
     });
     await session.answer(first.step.id, null);
     await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    await whenAdmittedWizardSessionSettled(session);
   });
   it("runs the selected provider method in a shared wizard session and commits its config", async () => {
     const preparedConfig: OpenClawConfig = {
@@ -459,6 +463,7 @@ describe("openclaw.setup", () => {
       status: "done",
       preparedModelRef: "ollama/qwen3:0.6b",
     });
+    await whenAdmittedWizardSessionSettled(session);
     expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
       allowConfigSizeDrop: false,
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
