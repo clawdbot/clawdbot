@@ -16,7 +16,7 @@ import {
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
 import {
-  applyQaMergePatch,
+  applyQaSuiteGatewayConfigPatches,
   collectQaSuiteTransportPolicy,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
@@ -145,7 +145,7 @@ export async function runQaFlowSuiteStandard(
         gatewayConfigPatch || params?.mutateConfig
           ? (cfg) => {
               const patchedConfig = gatewayConfigPatch
-                ? (applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig)
+                ? (applyQaSuiteGatewayConfigPatches(cfg, gatewayConfigPatch) as OpenClawConfig)
                 : cfg;
               return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
             }
