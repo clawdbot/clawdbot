@@ -53,6 +53,15 @@ threads. Core passes `params.pluginHarnessToolPolicyRestricted` as the prepared
 decision that the native surface must be isolated. Default tool-profile narrowing
 does not set this flag.
 
+Harnesses with an independently managed native surface can also declare
+`conversationToolPolicyNativeTools` using canonical OpenClaw tool names. A deny
+policy limited to other known OpenClaw tools is then enforced on the OpenClaw
+tool surface without isolating unrelated native tools. Finite allowlists, denies
+that overlap the declared native names, wildcards, groups that include a native
+name, and unknown tool names remain native-surface restrictions. Omit the list
+to retain the conservative behavior where every explicit restriction isolates
+the native surface.
+
 Omit the declaration when any native capability can bypass those layers.
 OpenClaw then visibly rejects explicitly restricted turns before invoking the
 harness. The operator can switch the session to the embedded runtime or upgrade

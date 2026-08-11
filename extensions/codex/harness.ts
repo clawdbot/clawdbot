@@ -17,6 +17,27 @@ import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js"
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
+const CODEX_NATIVE_TOOL_POLICY_NAMES = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "web_search",
+  "sessions_send",
+  "sessions_spawn",
+  "agents_wait",
+  "agents_list",
+  "subagents",
+  "get_goal",
+  "create_goal",
+  "update_goal",
+  "update_plan",
+  "ask_user",
+  "image",
+  "image_generate",
+] as const;
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -103,6 +124,7 @@ export function createCodexAppServerAgentHarness(options: {
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
+    conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_POLICY_NAMES,
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },
