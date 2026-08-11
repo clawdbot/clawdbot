@@ -43,6 +43,26 @@ describe("Claw tool policy consent provenance", () => {
     expect(existsSync(join(root, "state"))).toBe(false);
   });
 
+  it("fails closed before consent provenance is initialized", () => {
+    const root = tempDirs.make("openclaw-uninitialized-claw-tool-consent-");
+    const stateDir = join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        list: [{ id: "worker", tools: { profile: "full" as const, allow: ["read"] } }],
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+
+    expect(() =>
+      resolveConversationCapabilityProfile({
+        agentId: "worker",
+        config,
+      }),
+    ).toThrow("Cannot verify the installed tool authority");
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
   it("fails closed without mutating unreadable consent provenance", () => {
     const root = tempDirs.make("openclaw-unreadable-claw-tool-consent-");
     const stateDir = join(root, "state");

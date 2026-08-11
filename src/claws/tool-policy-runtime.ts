@@ -18,6 +18,9 @@ type ClawToolPolicyCandidate = { agentId: string; tools: object };
 let preparedCandidates: ClawToolPolicyCandidate[] = [];
 let preparedStateOptions: OpenClawStateDatabaseOptions = {};
 let readPreparedSchemaVersions = readCachedClawInstallSchemaVersions;
+const uninitializedStateError = new Error(
+  "OpenClaw state database has not initialized Claw consent provenance.",
+);
 
 export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
   if (policy) {
@@ -33,7 +36,10 @@ function applyPreparedClawToolPolicyConsent(): void {
   const snapshot = readPreparedSchemaVersions(preparedStateOptions);
   for (const candidate of preparedCandidates) {
     if (snapshot.kind === "uninitialized") {
-      preparedClawToolPolicies.delete(candidate.tools);
+      preparedClawToolPolicies.set(candidate.tools, {
+        kind: "state-error",
+        error: uninitializedStateError,
+      });
       continue;
     }
     if (snapshot.kind === "state-error") {
