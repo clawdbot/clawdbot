@@ -753,6 +753,30 @@ describe("Google embedding-batch bounded JSON reads", () => {
     );
   });
 
+  it("rejects conflicting legacy output aliases without a canonical output", async () => {
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "create"
+        ? jsonResponse({
+            name: "batches/b-0",
+            done: true,
+            state: "BATCH_STATE_SUCCEEDED",
+            metadata: {
+              state: "BATCH_STATE_SUCCEEDED",
+              output: { responsesFile: "files/metadata-output" },
+            },
+            response: { responsesFile: "files/response-output" },
+          })
+        : undefined,
+    );
+
+    await expect(runBatch()).rejects.toThrow(
+      "gemini batch operation returned conflicting output files",
+    );
+    expect(
+      fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input))),
+    ).not.toContain("download");
+  });
+
   it("reports terminal success when the provider omits output metadata", async () => {
     stubBatchFetch((stage) =>
       stage === "create"

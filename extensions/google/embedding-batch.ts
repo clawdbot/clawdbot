@@ -271,6 +271,9 @@ function getGeminiBatchOutputFileId(operation: GeminiBatchOperation): string | u
   const outputFile = operation.output?.responsesFile;
   const responseFile = operation.response?.responsesFile;
   const metadataFile = operation.metadata?.output?.responsesFile;
+  if (!outputFile && responseFile && metadataFile && responseFile !== metadataFile) {
+    throw new Error("gemini batch operation returned conflicting output files");
+  }
   return outputFile ?? responseFile ?? metadataFile;
 }
 
