@@ -270,8 +270,8 @@ export async function saveCronJobsStore(
       updateCronRuntimeRows(database.db, storeKey, store);
       return;
     }
-    replaceCronRows(database.db, storeKey, store);
-    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: store.jobs });
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
   });
   noteCronJobsStoreCommit(storeKey);
 }
@@ -298,8 +298,8 @@ export async function saveCronJobsStoreWithMetadata(
         database,
       });
     }
-    replaceCronRows(database.db, storeKey, store);
-    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: store.jobs });
+    const normalizedJobs = replaceCronRows(database.db, storeKey, store);
+    replaceCronRuntimeAuthorityRows({ db: database.db, storeKey, jobs: normalizedJobs });
     return true;
   });
   if (committed) {

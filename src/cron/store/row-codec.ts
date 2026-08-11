@@ -409,8 +409,12 @@ export function deleteStaleCronJobFamilyRows(
   return staleRows.length;
 }
 
-/** Replaces all persisted cron rows for one store key from the config store snapshot. */
-export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
+/** Replaces all persisted cron rows and returns the canonical jobs that were written. */
+export function replaceCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  store: CronStoreFile,
+): CronStoredJob[] {
   const existingRows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
@@ -418,10 +422,11 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
       .select("job_id")
       .where("store_key", "=", storeKey),
   ).rows;
-  const nextJobIds = new Set(store.jobs.map((job) => job.id));
+  const normalizedJobs: CronStoredJob[] = [];
   for (const [index, job] of store.jobs.entries()) {
-    upsertCronJobRow(db, storeKey, job, index);
+    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index));
   }
+  const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
   for (const row of existingRows) {
     if (nextJobIds.has(row.job_id)) {
       continue;
@@ -436,6 +441,7 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
         .where("job_id", "=", row.job_id),
     );
   }
+  return normalizedJobs;
 }
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
@@ -444,7 +450,7 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
-): void {
+): CronStoredJob {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
@@ -457,6 +463,7 @@ export function upsertCronJobRow(
       .values(values)
       .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
   );
+  return normalized;
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
