@@ -231,6 +231,23 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
     expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
   });
+  it("uses prepared provider ownership for billing classification", () => {
+    const provider = "custom-openrouter";
+    const model = "anthropic/claude-sonnet-4";
+    const result = formatAssistantErrorText(
+      makeAssistantError("HTTP 403: API key budget limit exceeded"),
+      {
+        provider,
+        providerOwner: {
+          id: "openrouter",
+          classifyFailoverReason: ({ provider: owner, errorMessage }) =>
+            owner === "openrouter" && errorMessage.includes("budget limit") ? "billing" : undefined,
+        },
+        model,
+      },
+    );
+    expect(result).toBe(formatBillingErrorMessage(provider, model));
+  });
   it("returns generic billing message when provider is not given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
