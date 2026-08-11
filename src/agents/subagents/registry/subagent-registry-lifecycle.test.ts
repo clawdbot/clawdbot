@@ -978,7 +978,7 @@ describe("subagent registry lifecycle hardening", () => {
       expectsCompletionMessage: false,
       retainAttachmentsOnKeep: false,
     });
-    helperMocks.safeRemoveAttachmentsDir.mockRejectedValueOnce(new Error("cleanup failed"));
+    helperMocks.safeRemoveAttachmentsDir.mockResolvedValueOnce(false);
     const resumeSubagentRun = vi.fn((runId: string) => {
       controller.startSubagentAnnounceCleanupFlow(runId, entry);
     });
@@ -3032,14 +3032,18 @@ describe("subagent registry lifecycle hardening", () => {
     const runs = new Map([[entry.runId, entry]]);
     const controller = createLifecycleController({ entry, runs });
 
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() =>
-      expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry),
-    );
+    try {
+      await completeRun(controller, entry, { triggerCleanup: true });
+      await waitForLifecycleState(() =>
+        expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry),
+      );
 
-    expect(runs.get(entry.runId)).toBe(entry);
-    expect(entry.cleanupCompletedAt).toBeUndefined();
-    await waitForLifecycleState(() => expect(entry.cleanupHandled).toBe(false));
+      expect(runs.get(entry.runId)).toBe(entry);
+      expect(entry.cleanupCompletedAt).toBeUndefined();
+      await waitForLifecycleState(() => expect(entry.cleanupHandled).toBe(false));
+    } finally {
+      controller.clearScheduledResumeTimers();
+    }
   });
 
   it("treats accepted structured output as success for a tool-only collector turn", async () => {

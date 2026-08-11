@@ -240,6 +240,45 @@ describe("atomic subagent completion admission store", () => {
     );
   });
 
+  it("keeps a suspended completion retryable when dismissal cannot remove attachments", async () => {
+    const input = records();
+    const now = Date.now();
+    Object.assign(input.subagent, {
+      cleanup: "delete" as const,
+      attachmentsRootDir: tempDir,
+      attachmentsDir: path.join(tempDir, "invalid-attachment-owner"),
+    });
+    Object.assign(input.subagent.delivery!, {
+      status: "suspended" as const,
+      disposition: "permanent_failure" as const,
+      suspendedAt: now,
+      suspendedReason: "permanent_failure" as const,
+    });
+    Object.assign(input.task, {
+      deliveryStatus: "failed" as const,
+      terminalOutcome: "blocked" as const,
+    });
+    settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    publishTaskRecordAfterAtomicStore(input.task);
+    const discard = vi.fn(discardTerminalDelivery);
+
+    await expect(
+      dismissSubagentCompletionDelivery(input.task.taskId, {
+        discardTerminalDelivery: discard,
+        databaseOptions: { database },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "attachment cleanup failed; retry dismissal",
+    });
+
+    expect(discard).not.toHaveBeenCalled();
+    expect(subagentRuns.get(input.subagent.runId)?.cleanupCompletedAt).toBeUndefined();
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("suspended");
+    expect(getTaskById(input.task.taskId)).toMatchObject({ deliveryStatus: "failed" });
+  });
+
   it("reloads a blocked text completion from SQLite before canonical owner redrive", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
       closeOpenClawStateDatabaseForTest();
@@ -443,7 +482,7 @@ describe("atomic subagent completion admission store", () => {
         .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
         .get(input.task.taskId) as { delivery_status: string };
       expect(rolledBackTask.delivery_status).toBe("failed");
-      await expect(fs.stat(attachmentsDir)).resolves.toBeDefined();
+      await expect(fs.stat(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
       database.db.exec("DROP TRIGGER fail_dismissed_task_persist");
 
       const dismissed = await dismissSubagentCompletionDelivery(input.task.taskId, {

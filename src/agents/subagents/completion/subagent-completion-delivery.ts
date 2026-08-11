@@ -326,15 +326,41 @@ export async function dismissSubagentCompletionDelivery(
   if (!task || !current || current.delivery?.status !== "suspended") {
     return { ok: false, reason: "completion delivery is not blocked" };
   }
+  const expectedRunId = current.runId;
+  const expectedTaskRunId = current.taskRunId ?? current.runId;
+  const expectedDeliveryGeneration = current.delivery.generation;
+  const expectedQueueId = current.delivery.queueId;
+  if (
+    (current.cleanup === "delete" || !current.retainAttachmentsOnKeep) &&
+    !(await safeRemoveAttachmentsDir(current))
+  ) {
+    return { ok: false, reason: "attachment cleanup failed; retry dismissal" };
+  }
+  // Attachment removal crosses a filesystem boundary. Revalidate the exact
+  // suspended owner before committing its terminal delivery state.
+  const authoritativeTask = getTaskById(taskId);
+  const authoritative = subagentRuns.get(expectedRunId);
+  if (
+    !authoritativeTask ||
+    authoritativeTask.runId !== expectedTaskRunId ||
+    !authoritative ||
+    (authoritative.taskRunId ?? authoritative.runId) !== expectedTaskRunId ||
+    authoritative.delivery?.status !== "suspended" ||
+    authoritative.delivery.generation !== expectedDeliveryGeneration ||
+    authoritative.delivery.queueId !== expectedQueueId
+  ) {
+    return { ok: false, reason: "completion delivery changed during cleanup; retry dismissal" };
+  }
   const now = Date.now();
-  const subagent = structuredClone(current);
+  const subagent = structuredClone(authoritative);
   const projectedTask: TaskRecord = {
-    ...task,
+    ...authoritativeTask,
     deliveryStatus: "dismissed",
     terminalOutcome: "blocked",
     terminalSummary: "Task completed; result delivery was dismissed by the operator.",
-    progressSummary: resolveSubagentCompletionResultText(subagent) ?? task.progressSummary,
-    cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
+    progressSummary:
+      resolveSubagentCompletionResultText(subagent) ?? authoritativeTask.progressSummary,
+    cleanupAfter: Math.max(authoritativeTask.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
     lastEventAt: now,
   };
   settleSubagentCompletionDelivery({
@@ -344,8 +370,5 @@ export async function dismissSubagentCompletionDelivery(
     mutateSubagent: (entry) => options.discardTerminalDelivery(entry, now),
   });
   publishCommittedRecords(subagent, projectedTask);
-  if (subagent.cleanup === "delete" || !subagent.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(subagent);
-  }
   return { ok: true, task: getTaskById(taskId) };
 }
