@@ -308,7 +308,6 @@ packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/ai/src/transports/anthropic-transport-stream.ts
-packages/ai/src/transports/openai-completions-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
@@ -414,12 +413,8 @@ src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-transport-stream.base.test.ts
-src/agents/openai-transport-stream.deepseek-and-shaping.test.ts
-src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts
-src/agents/openai-transport-stream.reasoning-and-cache.test.ts
 src/agents/openai-transport-stream.replay-and-tools.test.ts
 src/agents/openai-transport-stream.streaming.test.ts
-src/agents/openai-transport-stream.usage-and-calls.test.ts
 src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts

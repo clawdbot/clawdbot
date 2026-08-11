@@ -296,5 +296,3 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
     return eventStream as unknown as ReturnType<StreamFn>;
   };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
